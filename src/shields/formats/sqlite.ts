@@ -1,18 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { getDatabaseSyncClass } from "../../core/sqlite-runtime.js";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
-
-const require = createRequire(import.meta.url);
-
-function getDatabaseSyncClass(): typeof DatabaseSyncType {
-  const mod = require("node:sqlite") as { DatabaseSync: typeof DatabaseSyncType };
-  return mod.DatabaseSync;
-}
 
 export interface SqliteInspectionSummary {
   readonly validSqlite: boolean;

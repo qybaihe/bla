@@ -54,7 +54,7 @@
     "DISCLAIMER.md"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",

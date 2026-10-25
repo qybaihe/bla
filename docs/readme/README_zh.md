@@ -10,7 +10,7 @@
 
 [![npm version](https://img.shields.io/badge/npm-bla--shield-cb3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-shield)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%3E%3D22.5-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#你可以保护哪些目标)
+[![Node.js requirements](https://img.shields.io/badge/Node.js-22.13%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#你可以保护哪些目标)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-100%25_Verified-10b981?style=flat-square)](#实战案例与基准测试)
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](../../LICENSE)
 
@@ -141,7 +141,7 @@ npx bla-shield@latest setup
 
 ## 你可以保护哪些目标
 
-BLA 仅需 Node.js 22.5+（或 24.x+）与 npm，所有格式护盾完全内置，无需任何外部二进制依赖：
+BLA 仅需 Node.js 22.x（22.13.0 或更新版本）或 Node.js 24+ 与 npm，所有格式护盾完全内置，无需任何外部二进制依赖：
 
 | 保护目标                | BLA 注入内容与 REA 失效方式                                                                       | 对应命令与说明                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |

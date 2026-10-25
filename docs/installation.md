@@ -1,6 +1,8 @@
 # Installation & Setup Guide
 
-**BLA (`bla-shield` — Blind LLM Agents / Block Anything)** is distributed as a zero-config Node.js CLI and MCP server that runs anywhere Node.js `>= 18.0.0` (or Bun) is installed.
+**BLA (`bla-shield` — Blind LLM Agents / Block Anything)** is distributed as a zero-config Node.js CLI and MCP server requiring Node.js 22.x (22.13.0 or newer) or Node.js 24+, with npm. Node.js 18, 20, older 22.x releases, and 23.x are not supported; Bun is not a supported runtime.
+
+The SQLite integration requires the built-in `node:sqlite` module and `DatabaseSync.function`, available without an opt-in flag starting in [Node.js 22.13.0](https://nodejs.org/download/release/v22.13.0/docs/api/sqlite.html). Do not disable SQLite with `--no-experimental-sqlite`. CI tests the minimum version, latest 22.x, and latest 24.x.
 
 ---
 
