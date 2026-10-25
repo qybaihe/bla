@@ -75,7 +75,7 @@ export const BLA_MCP_TOOLS = Object.freeze([
   {
     name: "bla_verify",
     description:
-      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification.",
+      "Reports local heuristic indicators and hypothetical amplification. Does not execute REA or runtime equivalence checks; empirical verification remains unverified.",
     inputSchema: {
       type: "object",
       properties: {
@@ -94,7 +94,7 @@ export const BLA_MCP_TOOLS = Object.freeze([
   {
     name: "bla_benchmark",
     description:
-      "Runs the 5-target Counter-REA Showcase Benchmark (DX-Ball Sound-Pan, Notion Electron Clipboard ASAR, Enterprise License Guard, WebAssembly Crypto Core, and Native ELF64 Binary) and returns Before vs. After metrics.",
+      "Runs eight synthetic fixtures with hypothetical cost estimates and explicitly bounded runtime samples. Does not run REA or any LLM.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -183,7 +183,7 @@ export async function handleMcpRequest(
               {
                 name: "shield-against-rea",
                 description:
-                  "Audit a build artifact for REA exposure, apply BLA's adversarial shield, and verify the token bankruptcy factor.",
+                  "Audit a build artifact for REA exposure, apply BLA's adversarial shield, and inspect hypothetical token amplification (not measured).",
                 arguments: [
                   {
                     name: "target_path",

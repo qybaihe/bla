@@ -1,3 +1,5 @@
+> **Evidence correction (English fallback):** Translations below may retain outdated efficacy claims. The [current English evidence limits](../../README.md#showcases) supersede claims of “100% verified”, guaranteed runtime equivalence, zero overhead, measured token multipliers, or actual REA/LLM outcomes. These tools use local heuristics and hypothetical estimates, not REA/LLM runs.
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · **Ελληνικά** · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
@@ -11,7 +13,6 @@
 [![npm version](https://img.shields.io/badge/npm-bla--shield-cb3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-shield)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5?style=flat-square)](../cli-and-mcp.md)
 [![Node.js requirements](https://img.shields.io/badge/Node.js-22.13%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
-[![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-100%25_Verified-10b981?style=flat-square)](#showcases)
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](../../LICENSE)
 
 [Γρήγορη εκκίνηση](#quick-start) · [Πώς λειτουργεί το BLA](#how-bla-works) · [Τι μπορείτε να προστατέψετε](#what-you-can-protect) · [Παρουσιάσεις & Benchmarks](#showcases) · [Συχνές Ερωτήσεις (FAQ)](#faq) · [Τεκμηρίωση](#documentation)
@@ -27,7 +28,7 @@
 
 <br />
 
-<img src="../assets/bla-vs-rea-showcase.svg" alt="Before BLA vs After npx bla-shield protect" width="1200" />
+
 
 <br />
 

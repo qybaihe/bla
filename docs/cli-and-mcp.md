@@ -2,6 +2,8 @@
 
 This document specifies all command-line flags and Model Context Protocol (MCP) tool contracts provided by **BLA (`bla-shield`)**.
 
+> **Evidence limits:** This is a research prototype. Audit/verify use local heuristics, not REA execution. Token, cost, and timing numbers are hypothetical estimates with fixed assumptions, not measurements. No LLM is run. Runtime checks cover only the explicitly listed synthetic samples; they do not establish general equivalence, zero overhead, or reconstruction resistance. Test copies with your own application before deployment.
+
 ---
 
 ## 1. CLI Commands
@@ -41,22 +43,22 @@ bla protect <target> [options]
 
 ---
 
-### `bla verify <original> <protected>`
+### `bla verify <protected> [original]`
 
-Verifies that `<protected>` preserves runtime exports and structural validity while neutralizing REA's static and semantic analyzers.
+Reports local heuristics only. `overallPassed` is false, `verificationStatus` is `unverified`, and `functionalIntegrityStatus` is `not-run`; the CLI exits 2. `heuristicMatched` and `heuristicChecksPassed` retain local indicator results. Parsing is not functional equivalence. Amplification is hypothetical; `baselineBasis` identifies whether an original or assumed default was used.
 
 ```bash
-bla verify <original> <protected> [--json]
+bla verify <protected> [original] [--json]
 ```
 
 ---
 
-### `bla benchmark [target]`
+### `bla benchmark`
 
-Runs the empirical before/after Counter-REA benchmark suite across JavaScript, Electron IPC, Python, WebAssembly, and Native Rust/Go ELF binaries (or against a specific `<target>`).
+Runs eight synthetic fixtures with hypothetical cost estimates. Only three fixtures run bounded runtime samples; five report `not-run`. REA and LLMs are not executed.
 
 ```bash
-bla benchmark [target] [--mode stealth|balanced|bankrupt] [--json]
+bla benchmark [--json]
 ```
 
 ---
@@ -106,17 +108,16 @@ BLA runs a standards-compliant JSON-RPC 2.0 MCP server over `stdio` (`npx bla-sh
 
 ### `bla_verify`
 
-- **Description**: Verify that a protected artifact preserves functional behavior while defeating REA's static & semantic analyzers.
+- **Description**: Report heuristic indicators, not functional integrity or measured REA resistance.
 - **Input Schema**:
-  - `originalPath` (`string`, required)
-  - `protectedPath` (`string`, required)
+  - `target_path` (`string`, required)
+  - `original_path` (`string`, optional)
 
 ### `bla_benchmark`
 
-- **Description**: Run the empirical before/after benchmark suite across JS, Electron, Python, WASM, and Native ELF binaries.
+- **Description**: Run synthetic fixtures with hypothetical estimates and bounded runtime samples.
 - **Input Schema**:
-  - `targetPath` (`string`, optional)
-  - `mode` (`"stealth" | "balanced" | "bankrupt"`, optional)
+  - No inputs.
 
 ### `bla_emit_headers`
 

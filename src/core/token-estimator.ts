@@ -33,7 +33,8 @@ const AGENT_MODELS: readonly AgentModelPricing[] = [
 ];
 
 /**
- * Models REA's exact investigation workflow:
+ * Hypothetical, uncalibrated cost model (no REA or agent is executed).
+ * Pricing and timing are fixed scenario assumptions, not current quotes or measurements:
  * 1. Initial `analyze_javascript_application` / `open_binary` / `inspect_*` summary call
  * 2. Paging `inspect_analysis_view` across modules/functions (`limit: 16`)
  * 3. Calling `trace_application_feature` / `analyze_function` for each obligation node
@@ -69,8 +70,10 @@ export function estimateAgentReverseEngineeringCosts(
         estimatedMcpToolCalls: totalMcpCalls,
         estimatedWallClockSeconds: Math.round(totalMcpCalls * model.secondsPerMcpRoundtrip),
         estimatedCostUsd: cost,
-        contextWindowOverflowProbability: 0.02,
-        outcomeVerdict: "TRIVIAL_CLONE",
+        evidenceBasis: "hypothetical-estimate",
+        assumptions: "Fixed pricing, token and retry assumptions; not calibrated against agent runs.",
+        contextWindowOverflowProbability: null,
+        outcomeVerdict: "NOT_MEASURED",
       };
     });
   }
@@ -110,12 +113,10 @@ export function estimateAgentReverseEngineeringCosts(
       estimatedMcpToolCalls: totalMcpCalls,
       estimatedWallClockSeconds: wallClockSeconds,
       estimatedCostUsd: Math.max(1.5, totalCostUsd),
-      contextWindowOverflowProbability:
-        sim.decoyFunctionsDetectedAsReal >= 10 ? 0.98 : 0.84,
-      outcomeVerdict:
-        sim.examinationStatus === "limited" && sim.decoyFunctionsDetectedAsReal >= 8
-          ? "AGENT_HALLUCINATION_AND_BANKRUPTCY"
-          : "HIGH_FRICTION",
+      evidenceBasis: "hypothetical-estimate",
+      assumptions: "Fixed pricing, token and retry assumptions; not calibrated against agent runs.",
+      contextWindowOverflowProbability: null,
+      outcomeVerdict: "NOT_MEASURED",
     };
   });
 }

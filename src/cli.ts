@@ -36,8 +36,8 @@ Commands:
   setup                       Configure agent MCP integrations & install the BLA skill
   audit <target>              Pre-flight REA exposure & vulnerability scan
   protect <target>            Inject multi-layer Counter-REA adversarial shield
-  verify <target> [original]  Verify Counter-REA defense invariants & token amplification
-  benchmark                   Run the 8-target Counter-REA Showcase Benchmark suite
+  verify <target> [original]  Report heuristic indicators (empirical verification not run; exits 2)
+  benchmark                   Run 8 synthetic fixtures, hypothetical estimates and bounded samples
   emit-headers                Generate compile-time C/C++, Rust, or Go defense headers
   doctor                      Check readiness of BLA engines & agent registrations
   update                      Update global bla-shield installation & print setup refresh instructions

@@ -176,7 +176,9 @@ describe("JavaScript, TypeScript & Electron AST Shield", () => {
       expect(unpackedAfter.length).toBeGreaterThan(unpackedBefore.length);
 
       const verification = verifyTarget(outAsarFile, asarFile);
-      expect(verification.overallPassed).toBe(true);
+      expect(verification.overallPassed).toBe(false);
+      expect(verification.heuristicChecksPassed).toBe(true);
+      expect(verification.functionalIntegrityVerified).toBe(false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

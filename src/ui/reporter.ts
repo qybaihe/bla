@@ -41,32 +41,28 @@ export function formatAuditReport(report: AuditReport): string {
   const est = report.agentEstimates[0]!;
   const lines: string[] = [
     formatBanner(),
+    "Evidence: local heuristics and hypothetical estimates; REA/LLM not executed. Runtime integrity is unverified unless a bounded sample check is stated.",
     "",
     `${ANSI.bold}Target Artifact:${ANSI.reset}    ${report.targetPath}`,
     `${ANSI.bold}Detected Format:${ANSI.reset}    ${ANSI.cyan}${report.detectedFormat}${ANSI.reset} (${report.byteSize.toLocaleString()} bytes, sha256: ${report.sha256.slice(0, 16)}...)`,
-    `${ANSI.bold}Protection Status:${ANSI.reset}  ${statusColor}${ANSI.bold}${report.protectionStatus}${ANSI.reset} (REA Exposure Score: ${statusColor}${report.exposureScore}/100${ANSI.reset})`,
-    `${ANSI.bold}REA Examination:${ANSI.reset}    ${report.reaSimulation.examinationStatus === "limited" ? `${ANSI.green}LIMITED (Semantic Budgets Exhausted)${ANSI.reset}` : `${ANSI.red}COMPLETE (100% Exposed to Static Pass)${ANSI.reset}`}`,
+    `${ANSI.bold}Protection Status:${ANSI.reset}  ${statusColor}${ANSI.bold}${report.protectionStatus}${ANSI.reset} (Heuristic Exposure Score: ${statusColor}${report.exposureScore}/100${ANSI.reset})`,
+    `${ANSI.bold}Simulated Examination:${ANSI.reset}    ${report.reaSimulation.examinationStatus === "limited" ? `${ANSI.green}LIMITED (local indicators)${ANSI.reset}` : `${ANSI.red}COMPLETE (local inspection)${ANSI.reset}`}`,
   ];
 
   if (report.reaSimulation.triggeredResourceLimits.length > 0) {
     lines.push(
-      `${ANSI.bold}Triggered Limits:${ANSI.reset}   ${ANSI.green}${report.reaSimulation.triggeredResourceLimits.join(", ")}${ANSI.reset}`,
+      `${ANSI.bold}Inferred Limits:${ANSI.reset}   ${ANSI.green}${report.reaSimulation.triggeredResourceLimits.join(", ")}${ANSI.reset}`,
     );
   }
 
   lines.push(
     `${ANSI.bold}Obligation Graph:${ANSI.reset}   ${report.reaSimulation.obligationLedgerNodes} nodes (${report.reaSimulation.decoyFunctionsDetectedAsReal} decoy tarpit nodes, ${report.reaSimulation.architecturalChaffPayloads} chaff manifests)`,
     "",
-    `${ANSI.bold}${ANSI.magenta}── Estimated REA + Coding Agent Reconstruction Cost ───────────────────────────${ANSI.reset}`,
+    `${ANSI.bold}${ANSI.magenta}── Hypothetical Cost Scenario (fixed assumptions, not measured) ───────────────────────────${ANSI.reset}`,
   );
 
   for (const agent of report.agentEstimates) {
-    const verdictColor =
-      agent.outcomeVerdict === "AGENT_HALLUCINATION_AND_BANKRUPTCY"
-        ? ANSI.green
-        : agent.outcomeVerdict === "TRIVIAL_CLONE"
-          ? ANSI.red
-          : ANSI.yellow;
+    const verdictColor = ANSI.yellow;
     lines.push(
       `  • ${ANSI.bold}${agent.modelName.padEnd(42)}${ANSI.reset} | Tokens: ${agent.estimatedInputTokens.toLocaleString().padStart(9)} | Calls: ${String(agent.estimatedMcpToolCalls).padStart(3)} | Time: ${String(agent.estimatedWallClockSeconds + "s").padStart(5)} | Cost: ${ANSI.bold}$${agent.estimatedCostUsd.toFixed(2).padStart(6)}${ANSI.reset} | ${verdictColor}${agent.outcomeVerdict}${ANSI.reset}`,
     );
@@ -106,6 +102,7 @@ export function formatProtectionResult(res: ProtectionResult): string {
 
   return [
     formatBanner(),
+    "Evidence: local heuristics and hypothetical estimates; REA/LLM not executed. Runtime integrity is unverified unless a bounded sample check is stated.",
     "",
     `${ANSI.bold}${ANSI.green}🛡️  BLA Adversarial Shield Successfully Injected!${ANSI.reset} (${res.elapsedMs} ms)`,
     "",
@@ -120,29 +117,31 @@ export function formatProtectionResult(res: ProtectionResult): string {
     `  • IPC Ambiguity Sites / Decoy Routes: ${ANSI.bold}${res.metrics.ipcAmbiguitySitesInjected}${ANSI.reset} IPC sites / ${ANSI.bold}${res.metrics.decoyRoutesInjected}${ANSI.reset} decoy routes`,
     `  • Enclave Chaff Manifests Embedded:   ${ANSI.bold}${res.metrics.chaffPayloadsEmbedded}${ANSI.reset}`,
     "",
-    `${ANSI.bold}${ANSI.cyan}── Before vs. After BLA Impact (Claude Opus 4 / REA Loop) ──────────────────────${ANSI.reset}`,
-    `  • REA Exposure Score:       ${ANSI.red}${res.beforeAudit.exposureScore}/100 (${res.beforeAudit.protectionStatus})${ANSI.reset}  -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.exposureScore}/100 (${res.afterAudit.protectionStatus})${ANSI.reset}`,
-    `  • REA Examination Status:   ${ANSI.red}${res.beforeAudit.reaSimulation.examinationStatus.toUpperCase()}${ANSI.reset}                   -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.reaSimulation.examinationStatus.toUpperCase()} (${res.afterAudit.reaSimulation.triggeredResourceLimits.join(", ")})${ANSI.reset}`,
+    `${ANSI.bold}${ANSI.cyan}── Before vs. After Hypothetical Scenario (not a REA run) ──────────────────────${ANSI.reset}`,
+    `  • Heuristic Exposure Score:       ${ANSI.red}${res.beforeAudit.exposureScore}/100 (${res.beforeAudit.protectionStatus})${ANSI.reset}  -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.exposureScore}/100 (${res.afterAudit.protectionStatus})${ANSI.reset}`,
+    `  • Simulated Examination Status:   ${ANSI.red}${res.beforeAudit.reaSimulation.examinationStatus.toUpperCase()}${ANSI.reset}                   -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.reaSimulation.examinationStatus.toUpperCase()} (${res.afterAudit.reaSimulation.triggeredResourceLimits.join(", ")})${ANSI.reset}`,
     `  • Obligation Graph Nodes:   ${res.beforeAudit.reaSimulation.obligationLedgerNodes} nodes                    -->  ${ANSI.bold}${res.afterAudit.reaSimulation.obligationLedgerNodes} nodes${ANSI.reset}`,
-    `  • Attacker Token Burn:      ${bEst.estimatedInputTokens.toLocaleString()} tokens                -->  ${ANSI.yellow}${ANSI.bold}${aEst.estimatedInputTokens.toLocaleString()} tokens (${tokenMult}x amplification)${ANSI.reset}`,
-    `  • Attacker API Bill:        $${bEst.estimatedCostUsd.toFixed(2)}                      -->  ${ANSI.yellow}${ANSI.bold}$${aEst.estimatedCostUsd.toFixed(2)} (${costMult}x bankruptcy multiplier)${ANSI.reset}`,
-    `  • Agent Verdict:            ${ANSI.red}${bEst.outcomeVerdict}${ANSI.reset}              -->  ${ANSI.green}${ANSI.bold}${aEst.outcomeVerdict}${ANSI.reset}`,
+    `  • Projected Tokens:      ${bEst.estimatedInputTokens.toLocaleString()} tokens                -->  ${ANSI.yellow}${ANSI.bold}${aEst.estimatedInputTokens.toLocaleString()} tokens (${tokenMult}x amplification)${ANSI.reset}`,
+    `  • Projected Cost:        $${bEst.estimatedCostUsd.toFixed(2)}                      -->  ${ANSI.yellow}${ANSI.bold}$${aEst.estimatedCostUsd.toFixed(2)} (${costMult}x scenario multiplier)${ANSI.reset}`,
+    `  • Observed Agent Outcome:            ${ANSI.red}${bEst.outcomeVerdict}${ANSI.reset}              -->  ${ANSI.green}${ANSI.bold}${aEst.outcomeVerdict}${ANSI.reset}`,
   ].join("\n");
 }
 
 export function formatVerificationReport(report: VerificationReport): string {
   const lines: string[] = [
     formatBanner(),
+    "Evidence: local heuristics and hypothetical estimates; REA/LLM not executed. Runtime integrity is unverified unless a bounded sample check is stated.",
     "",
     `${ANSI.bold}Verification Target:${ANSI.reset} ${report.targetPath}`,
-    `${ANSI.bold}Defense Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (${report.overallPassed ? "ALL COUNTER-REA GATES PASSED" : "PARTIAL PASS"})`,
-    `${ANSI.bold}Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
+    `${ANSI.bold}Heuristic Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (UNVERIFIED — empirical checks not run)`,
+    `${ANSI.bold}Projected Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
     "",
-    `${ANSI.bold}Counter-REA Invariant Checks:${ANSI.reset}`,
+    `Baseline: ${report.baselineBasis}; functional integrity: ${report.functionalIntegrityStatus}`,
+    `${ANSI.bold}Local Heuristic Indicators (not empirical verification):${ANSI.reset}`,
   ];
 
   for (const check of report.checks) {
-    const icon = check.passed ? `${ANSI.green}✓ PASS${ANSI.reset}` : `${ANSI.red}✗ FAIL${ANSI.reset}`;
+    const icon = `${ANSI.yellow}NOT RUN; heuristic ${check.heuristicMatched ? "matched" : "not matched"}${ANSI.reset}`;
     lines.push(`  [${icon}] ${ANSI.bold}${check.name}${ANSI.reset} (${ANSI.dim}${check.targetReaComponent}${ANSI.reset})`);
     lines.push(`         ${check.details}`);
   }
@@ -153,26 +152,28 @@ export function formatVerificationReport(report: VerificationReport): string {
 export function formatBenchmarkReport(bench: BenchmarkReport): string {
   const lines: string[] = [
     formatBanner(),
+    "Evidence: local heuristics and hypothetical estimates; REA/LLM not executed. Runtime integrity is unverified unless a bounded sample check is stated.",
     "",
-    `${ANSI.bold}${ANSI.magenta}⚡ BLA vs. REA — ${bench.cases.length}-Target Counter-Showcase Benchmark Suite${ANSI.reset}`,
+    `${ANSI.bold}${ANSI.magenta}⚡ BLA — ${bench.cases.length} Synthetic Fixtures (not a REA/LLM benchmark)${ANSI.reset}`,
     "",
-    `${ANSI.bold}Showcase Target                          | Before BLA (REA Alone)        | After BLA Shield (Poison + Tarpit)       | Token Mult | Runtime Check${ANSI.reset}`,
+    `${ANSI.bold}Showcase Target                          | Before (projected)        | After (projected)       | Token Mult | Runtime Check${ANSI.reset}`,
     `─────────────────────────────────────────┼───────────────────────────────┼──────────────────────────────────────────┼────────────┼──────────────`,
   ];
 
   for (const c of bench.cases) {
     const beforeCol = `${String(c.before.exposureScore).padStart(2)}/100 | ${c.before.estimatedTokens.toLocaleString().padStart(6)} tok | $${c.before.estimatedCostUsd.toFixed(2).padStart(5)}`;
-    const afterCol = `${ANSI.green}${String(c.after.exposureScore).padStart(2)}/100 | ${c.after.estimatedTokens.toLocaleString().padStart(7)} tok | $${c.after.estimatedCostUsd.toFixed(2).padStart(6)} | LIMITED${ANSI.reset}`;
+    const afterCol = `${ANSI.green}${String(c.after.exposureScore).padStart(2)}/100 | ${c.after.estimatedTokens.toLocaleString().padStart(7)} tok | $${c.after.estimatedCostUsd.toFixed(2).padStart(6)} | ${c.after.examinationStatus.toUpperCase()} (simulated)${ANSI.reset}`;
     const multCol = `${ANSI.yellow}${ANSI.bold}${String(c.tokenMultiplier + "x").padStart(8)}${ANSI.reset}`;
-    const fnCol = c.functionalCheckPassed ? `${ANSI.green}✓ 100% EXACT${ANSI.reset}` : `${ANSI.red}✗ FAILED${ANSI.reset}`;
+    const fnCol = c.functionalCheckStatus === "not-run" ? `${ANSI.yellow}NOT RUN${ANSI.reset}` : c.functionalCheckPassed ? `${ANSI.green}SAMPLE PASSED${ANSI.reset}` : `${ANSI.red}SAMPLE FAILED${ANSI.reset}`;
     lines.push(
       `${c.title.padEnd(40)} | ${beforeCol.padEnd(29)} | ${afterCol} | ${multCol}   | ${fnCol}`,
     );
+    lines.push(`  Scope: ${c.functionalCheckScope}`);
   }
 
   lines.push(
     `─────────────────────────────────────────┴───────────────────────────────┴──────────────────────────────────────────┴────────────┴──────────────`,
-    `${ANSI.bold}Aggregate Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${ANSI.green}${ANSI.bold}All ${bench.cases.length} Targets: 100% Runtime-Equivalent & REA-Resistant${ANSI.reset}`,
+    `${ANSI.bold}Aggregate Projected Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${ANSI.green}${ANSI.bold}Bounded runtime samples: ${bench.cases.filter((c) => c.functionalCheckStatus === "passed").length}/${bench.cases.length} passed; no general equivalence or REA resistance claim${ANSI.reset}`,
   );
 
   return lines.join("\n");

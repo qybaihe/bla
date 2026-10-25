@@ -9,6 +9,8 @@ metadata:
 
 Use BLA when the user wants to evaluate how exposed a software build artifact is to automated AI reverse-engineering tools (such as REA — Reverse Engineer Anything), inject adversarial software protection shields before shipping, verify defense effectiveness, or generate compile-time native C/C++, Rust, or Go defense headers.
 
+> **Evidence limits:** This is a research prototype. Audit/verify use local heuristics, not REA execution. Token, cost, and timing numbers are hypothetical estimates with fixed assumptions, not measurements. No LLM is run. Runtime checks cover only the explicitly listed synthetic samples; they do not establish general equivalence, zero overhead, or reconstruction resistance. Test copies with your own application before deployment.
+
 ## Core Workflow: Audit -> Protect -> Verify
 
 1. **Audit (`bla_audit` or `npx bla-shield audit <target>`)**:
@@ -21,7 +23,7 @@ Use BLA when the user wants to evaluate how exposed a software build artifact is
      - **Layer 3 (Electron IPC Ambiguity & Route/SourceMap Mirage)**: De-literalizes IPC channels, registers duplicate decoy IPC handlers to defeat REA's unique-literal pairing rule, plants decoy routes, and replaces source maps with valid VLQ Honey Source Maps.
      - **Layer 4 (Binary Container & Section Shields)**: Protects `.asar`, `.wasm` (custom `"name"` & attestation sections), `.py`/`.pyc` (marshal constant pool & tarpit), and Native ELF/Mach-O/PE binaries (exceeding REA's `MAX_RUSTC_HASHES = 64` capacity limit and injecting decoy `.dep-v0` / Go buildinfo metadata).
 3. **Verify (`bla_verify` or `npx bla-shield verify <protected> [original]`)**:
-   - Confirms that all Counter-REA gates pass and reports the exact Token & API Cost Amplification factor.
+   - Reports local heuristic indicators and hypothetical amplification only. Empirical verification is unverified (CLI exits 2); never treat parsing or marker matches as functional equivalence.
 
 ## CLI Fallback Commands
 

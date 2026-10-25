@@ -7,7 +7,6 @@ import type { BenchmarkReport, ShowcaseCaseResult } from "../core/types.js";
 import { packAsarBuffer } from "../shields/formats/asar.js";
 import { buildSampleSqliteDatabase } from "../shields/formats/sqlite.js";
 import { buildSafetensorsBuffer } from "../shields/formats/model.js";
-import { auditTarget } from "./auditor.js";
 import { protectTarget } from "./protector.js";
 
 /**
@@ -189,7 +188,7 @@ function runCommonJsModule(code: string): Record<string, unknown> {
 }
 
 /**
- * Runs the 5-Target Counter-REA Showcase Benchmark (`bla benchmark`).
+ * Runs eight synthetic fixtures with hypothetical costs and bounded runtime samples (`bla benchmark`).
  */
 export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
   const tempDir = mkdtempSync(join(tmpdir(), "bla-benchmark-"));
@@ -216,7 +215,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         origExports.calculateSoundPan(100, 50, 640) ===
           protExports.calculateSoundPan(100, 50, 640);
 
-      cases.push(buildCaseResult("dx-ball", "DX-Ball Sound-Pan Calculation", "REA Showcase #1 (dx-ball)", res, functionalOk));
+      cases.push(buildCaseResult("dx-ball", "DX-Ball Sound-Pan Calculation", "REA Showcase #1 (dx-ball)", res, functionalOk, "Two calculateSoundPan input/output comparisons in a VM; not exhaustive equivalence."));
     }
 
     // 2. Notion Electron Clipboard Bridge (.asar)
@@ -233,7 +232,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       ]);
       writeFileSync(asarPath, rawAsar);
       const res = protectTarget({ inputPath: asarPath, outputPath: outAsarPath, intensity: "bankrupt" });
-      cases.push(buildCaseResult("notion-electron", "Notion Electron Clipboard Bridge (.asar)", "REA Showcase #2 (notion)", res, true));
+      cases.push(buildCaseResult("notion-electron", "Notion Electron Clipboard Bridge (.asar)", "REA Showcase #2 (notion)", res, null, "Not run: no Electron runtime or IPC behavior comparison."));
     }
 
     // 3. Enterprise Offline License & Crypto Guard
@@ -254,7 +253,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const protCheck = protExports.validateEnterpriseLicense("ENT-9942-ABCD", "pro-suite", expectedSum);
       const functionalOk = origCheck.valid === true && protCheck.valid === true && origCheck.tier === protCheck.tier;
 
-      cases.push(buildCaseResult("license-guard", "Enterprise License & Crypto Validator", "SaaS Client Entitlement Core", res, functionalOk));
+      cases.push(buildCaseResult("license-guard", "Enterprise License & Crypto Validator", "SaaS Client Entitlement Core", res, functionalOk, "One license input: valid and tier fields compared; not exhaustive equivalence."));
     }
 
     // 4. WebAssembly Crypto Module (.wasm)
@@ -275,7 +274,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const protFn = protInst.exports.computeDigest as (a: number, b: number) => number;
       const functionalOk = validWasm && origFn(17, 29) === protFn(17, 29);
 
-      cases.push(buildCaseResult("wasm-core", "WebAssembly Crypto Kernel (.wasm)", "REA inspect_wasm_artifact", res, functionalOk));
+      cases.push(buildCaseResult("wasm-core", "WebAssembly Crypto Kernel (.wasm)", "REA inspect_wasm_artifact", res, functionalOk, "WebAssembly validation and one computeDigest input/output comparison; not exhaustive equivalence."));
     }
 
     // 5. Native ELF64 Rust/Go Binary
@@ -284,11 +283,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const outElfPath = join(tempDir, "enclave-daemon.shielded.elf");
       writeFileSync(elfPath, buildSampleElf64Binary());
       const res = protectTarget({ inputPath: elfPath, outputPath: outElfPath, intensity: "bankrupt" });
-      const afterAudit = auditTarget(outElfPath);
-      const functionalOk = afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-        l.includes("maximum_rustc_hashes"),
-      );
-      cases.push(buildCaseResult("native-elf", "Native ELF64 Rust/Go/Electron/Dart Binary", "REA inspect_rust_binary / inspect_electron_fuses / identify_flutter_build", res, functionalOk));
+      cases.push(buildCaseResult("native-elf", "Native ELF64 Rust/Go/Electron/Dart Binary", "REA inspect_rust_binary / inspect_electron_fuses / identify_flutter_build", res, null, "Not run: no independent runtime behavior comparison."));
     }
 
     // 6. Local SQLite 3 Entitlement Database (.sqlite)
@@ -297,11 +292,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const outDbPath = join(tempDir, "entitlements.shielded.sqlite");
       writeFileSync(dbPath, buildSampleSqliteDatabase());
       const res = protectTarget({ inputPath: dbPath, outputPath: outDbPath, intensity: "bankrupt" });
-      const afterAudit = auditTarget(outDbPath);
-      const functionalOk = afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-        l.includes("SqliteColumnEvaluationFailure"),
-      );
-      cases.push(buildCaseResult("sqlite-db", "Local SQLite Entitlement Database (.sqlite)", "REA inspect_sqlite_database", res, functionalOk));
+      cases.push(buildCaseResult("sqlite-db", "Local SQLite Entitlement Database (.sqlite)", "REA inspect_sqlite_database", res, null, "Not run: no independent runtime behavior comparison."));
     }
 
     // 7. Edge AI Safetensors Model (.safetensors)
@@ -315,11 +306,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         }),
       );
       const res = protectTarget({ inputPath: modelPath, outputPath: outModelPath, intensity: "bankrupt" });
-      const afterAudit = auditTarget(outModelPath);
-      const functionalOk = afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-        l.includes("MODEL_JSON_NESTING"),
-      );
-      cases.push(buildCaseResult("safetensors-model", "Proprietary Edge AI Model (.safetensors)", "REA inspect_model_artifact", res, functionalOk));
+      cases.push(buildCaseResult("safetensors-model", "Proprietary Edge AI Model (.safetensors)", "REA inspect_model_artifact", res, null, "Not run: no independent runtime behavior comparison."));
     }
 
     // 8. Android Dalvik Bytecode (classes.dex)
@@ -333,9 +320,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       baseDex.writeUInt32LE(0x12345678, 40);
       writeFileSync(dexPath, baseDex);
       const res = protectTarget({ inputPath: dexPath, outputPath: outDexPath, intensity: "bankrupt" });
-      const afterAudit = auditTarget(outDexPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
-      cases.push(buildCaseResult("android-dex", "Android Dalvik Bytecode (classes.dex)", "REA search_android_classes (JADX/JEB)", res, functionalOk));
+      cases.push(buildCaseResult("android-dex", "Android Dalvik Bytecode (classes.dex)", "REA search_android_classes (JADX/JEB)", res, null, "Not run: no independent runtime behavior comparison."));
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -347,6 +332,9 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
   const totalAfterCost = cases.reduce((acc, c) => acc + c.after.estimatedCostUsd, 0);
 
   return {
+    evidenceBasis: "synthetic-fixtures-and-hypothetical-estimates",
+    reaExecuted: false,
+    agentExecuted: false,
     timestamp: new Date().toISOString(),
     blaVersion: BLA_IDENTITY.version,
     cases,
@@ -360,7 +348,8 @@ function buildCaseResult(
   title: string,
   reaShowcaseReference: string,
   res: ReturnType<typeof protectTarget>,
-  functionalCheckPassed: boolean,
+  functionalCheckPassed: boolean | null,
+  functionalCheckScope: string,
 ): ShowcaseCaseResult {
   const bEst = res.beforeAudit.agentEstimates[0]!;
   const aEst = res.afterAudit.agentEstimates[0]!;
@@ -390,6 +379,8 @@ function buildCaseResult(
     },
     tokenMultiplier: Number((aEst.estimatedInputTokens / Math.max(1, bEst.estimatedInputTokens)).toFixed(1)),
     costMultiplier: Number((aEst.estimatedCostUsd / Math.max(0.01, bEst.estimatedCostUsd)).toFixed(1)),
-    functionalCheckPassed,
+    functionalCheckPassed: functionalCheckPassed === true,
+    functionalCheckStatus: functionalCheckPassed === null ? "not-run" : functionalCheckPassed ? "passed" : "failed",
+    functionalCheckScope,
   };
 }

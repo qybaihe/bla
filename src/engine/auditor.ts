@@ -760,16 +760,13 @@ export function auditTarget(targetPath: string): AuditReport {
         : "UNPROTECTED";
 
   const agentEstimates = estimateAgentReverseEngineeringCosts(sim, byteSize);
-  const primaryEstimate = agentEstimates[0]!;
-  const primaryModule = exposedItems[0]?.name ?? basename(absPath);
-
   const recommendedCommand = `npx bla-shield protect ${targetPath}`;
-  const headlineWarning =
-    protectionStatus === "BLA_PROTECTED"
-      ? `SHIELD ACTIVE: ${basename(absPath)} triggers ${sim.triggeredResourceLimits.length} REA resource limits and forces ~${primaryEstimate.estimatedInputTokens.toLocaleString()} tokens ($${primaryEstimate.estimatedCostUsd.toFixed(2)}) of agent tarpit exhaustion.`
-      : `DANGER: Module "${primaryModule}" in ${basename(absPath)} is exposed to REA (${exposureScore}/100 exposure). Estimated Claude Code time: ${primaryEstimate.estimatedWallClockSeconds}s, cost: $${primaryEstimate.estimatedCostUsd.toFixed(2)} to reconstruct. Run "${recommendedCommand}" to inject AI Tarpit & Semantic Shield.`;
+  const headlineWarning = "Local heuristic inspection only. REA resistance, agent behavior, and runtime integrity have not been verified.";
 
   return {
+    evidenceBasis: "local-heuristic",
+    reaExecuted: false,
+    agentExecuted: false,
     targetPath: absPath,
     detectedFormat: format,
     sha256,
