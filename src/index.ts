@@ -84,3 +84,5 @@ export {
 export { runSetup, runUninstall } from "./setup/setup.js";
 export { runDoctor } from "./setup/doctor.js";
 export { handleMcpRequest, startMcpStdioServer, BLA_MCP_TOOLS } from "./mcp/server.js";
+
+export { inspectReleaseExposure, type ReleaseExposureReport, type ReleaseExposureFinding } from "./core/release-exposure.js";
