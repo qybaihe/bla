@@ -106,6 +106,16 @@ npm install --global bla-shield
 bla --help
 ```
 
+### Output path safety
+
+Directory protection requires a **new output path outside the input tree**. Existing
+output directories and in-place directory protection are rejected without deleting
+or merging files. Symlink aliases in existing path components are resolved before
+checking containment. File outputs that refer to the input (including symlinks or
+hard links) require explicit `--in-place` / `inPlace: true`. These admission checks
+assume no other process changes filesystem paths during protection; they are not a
+filesystem sandbox.
+
 ### Use in your build bundler
 
 Import `bla-shield/bundler` in Vite, Rollup, Webpack, or esbuild to automatically shield emitted JavaScript chunks, Honey Source Maps, and `.wasm` assets at build time:

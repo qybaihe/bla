@@ -122,7 +122,9 @@ export interface AuditReport {
 
 export interface ProtectionOptions {
   readonly inputPath: string;
+  /** Directories require a new destination outside the input tree. */
   readonly outputPath?: string;
+  /** Explicit overwrite permission for files only; unsupported for directories. */
   readonly inPlace?: boolean;
   readonly intensity?: ProtectionIntensity;
   readonly seed?: string | number;

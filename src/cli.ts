@@ -46,7 +46,7 @@ Commands:
 
 Options:
   -o, --output <path>         Output file or directory path (for protect / emit-headers)
-  --in-place                  Overwrite input target in-place (for protect)
+  --in-place                  Overwrite input file in-place (not directories)
   --intensity <preset>        Protection preset: stealth | balanced | maximum | bankrupt (default: balanced)
   --seed <seed>               Deterministic PRNG seed for reproducible protection
   --lang <c|rust|go>          Target language for emit-headers (default: c)
