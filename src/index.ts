@@ -54,6 +54,7 @@ export {
   inspectModelBuffer,
   protectSafetensorsBuffer,
   protectGgufBuffer,
+  UnsupportedGgufProtectionError,
   type ModelInspectionSummary,
 } from "./shields/formats/model.js";
 export {

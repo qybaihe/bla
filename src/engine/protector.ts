@@ -24,7 +24,7 @@ import { protectPythonPycBuffer, protectPythonSource } from "../shields/formats/
 import { protectNativeBinary } from "../shields/formats/native.js";
 import { protectZipOrApkBuffer } from "../shields/formats/archive.js";
 import { protectSqliteBuffer } from "../shields/formats/sqlite.js";
-import { protectGgufBuffer, protectSafetensorsBuffer } from "../shields/formats/model.js";
+import { UnsupportedGgufProtectionError, protectSafetensorsBuffer } from "../shields/formats/model.js";
 import { protectAndroidDexBuffer, protectIl2cppMetadataBuffer } from "../shields/formats/mobile-game.js";
 import { auditTarget } from "./auditor.js";
 
@@ -47,6 +47,11 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
   const format = detectArtifactFormat(absInput);
   if (format === "unknown") {
     throw new Error(`Unsupported or missing target path: ${absInput}`);
+  }
+
+  // Reject before auditing, generating payloads, or creating any output paths.
+  if (format === "model-gguf") {
+    throw new UnsupportedGgufProtectionError();
   }
 
   const intensity = options.intensity ?? "balanced";
@@ -277,14 +282,6 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
     decoyFunctionsInjected = 16;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.triggeredJsonNestingBreaker ? 2 : 1;
-    counteredVectors.add("model-artifact-inspection");
-  } else if (format === "model-gguf") {
-    const rawModel = readFileSync(absInput);
-    const res = protectGgufBuffer(rawModel, { intensity, seed });
-    writeFileSync(absOutput, res.buffer);
-    decoyFunctionsInjected = 16;
-    chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
-    binarySectionsPatched = res.triggeredMetadataNestingBreaker ? 2 : 1;
     counteredVectors.add("model-artifact-inspection");
   } else if (format === "android-dex") {
     const rawDex = readFileSync(absInput);

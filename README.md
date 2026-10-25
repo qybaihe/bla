@@ -160,7 +160,7 @@ BLA requires Node.js 22.x (22.13.0 or newer) or Node.js 24+ and npm. All shields
 | WASM artifacts          | Strips debug sections; injects honey `"name"` section (`tee_hardware_enclave_stub`) + custom chaff | `bla protect core.wasm` · Built-in LEB128 binary parser; preserves 100% `WebAssembly.validate`        |
 | Python & `.pyc`         | Injects Python tarpit state machines into `.py` & `TYPE_ASCII` marshal chaff into `.pyc` pools    | `bla protect module.pyc` · Built-in CPython 3.7–3.14 `.pyc` header & marshal framing shield           |
 | SQLite databases        | Injects 3 enclave honey tables with `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` traps | `bla protect data.sqlite` · Real tables stay 100% queryable; REA crashes with `SqliteColumnEvaluationFailure` |
-| Model artifacts         | Injects `35 > 32` nested JSON/ARRAY headers into `.safetensors` and `.gguf` model headers         | `bla protect weights.safetensors` · Trips `ModelFormatFailure (json-nesting / metadata-nesting > 32)` |
+| Model artifacts         | Safetensors metadata transformation; GGUF protection is disabled to prevent tensor data loss | `bla protect weights.gguf` fails without writing output; GGUF inspection remains available |
 | Android DEX & APKs      | Injects `Lcom/enclave/sgx/...` decoy classes into `classes.dex` and recomputes SHA-1 & Adler32    | `bla protect classes.dex` or `app.apk` · Valid Dalvik/ART verification; pollutes JADX/JEB class trees |
 | Unity IL2CPP metadata   | Appends enclave bridge metadata and method-topology tarpits to `global-metadata.dat` (`0xFAB11BAF`) | `bla protect global-metadata.dat` · Pollutes REA `inspect_il2cpp_metadata` type/method recovery       |
 | C / C++ / Rust / Go src | Generates compile-time `bla_shield.h`, `bla_shield.rs`, or `bla_shield.go` with `used, noinline` tarpits | `bla emit-headers --lang c\|rust\|go` ·Compiles directly into Ghidra/Hopper/IDA decompiler views      |
@@ -218,7 +218,7 @@ Traditional obfuscators rename variables (`calculatePrice` $\rightarrow$ `_0x1a2
 <details>
 <summary><strong>Do I need Hopper, Ghidra, IDA, or WABT installed to protect my files?</strong></summary>
 
-No. All 19 format shields (Babel AST, Chromium `.asar`, LEB128 `.wasm`, CPython `.pyc`, ELF/Mach-O/PE, SQLite3, `.safetensors`/`.gguf`, and `.dex`/`Il2Cpp`) are built directly into `bla-shield` with zero external binary dependencies.
+No. Implemented format shields (Babel AST, Chromium `.asar`, LEB128 `.wasm`, CPython `.pyc`, ELF/Mach-O/PE, SQLite3, `.safetensors`, and `.dex`/`Il2Cpp`) are built directly into `bla-shield` with zero external binary dependencies. GGUF protection is unsupported until tensor-preserving rewriting is implemented: the buffer API throws `UnsupportedGgufProtectionError`, the CLI exits with status 1, and MCP returns `isError: true`. No protected GGUF output is produced, and existing input/output files are left unchanged.
 
 </details>
 

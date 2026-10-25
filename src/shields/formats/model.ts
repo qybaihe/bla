@@ -170,19 +170,17 @@ export function protectSafetensorsBuffer(
   };
 }
 
-function encodeGgufString(str: string): Buffer {
-  const utf8 = Buffer.from(str, "utf8");
-  const len = Buffer.alloc(8);
-  len.writeBigUInt64LE(BigInt(utf8.length), 0);
-  return Buffer.concat([len, utf8]);
+/** GGUF rewriting is disabled until tensor-preserving serialization is available. */
+export class UnsupportedGgufProtectionError extends Error {
+  constructor() {
+    super("GGUF protection is unsupported: tensor-preserving rewriting is not implemented. No protected model was produced; keep the original model unchanged.");
+    this.name = "UnsupportedGgufProtectionError";
+  }
 }
 
 /**
- * Builds or protects a GGUF v3 (`.gguf`) model binary against REA's `GgufHeader.ts`:
- * 1. Injects valid lowercase hierarchy metadata keys (`enclave.delegation.manifest`, `general.description`).
- * 2. Injects a 35-frame nested GGUF `ARRAY` (type `9`) metadata entry (`enclave.nesting.breaker`)
- *    exceeding REA's `MODEL_METADATA_NESTING = 32` (`GgufHeader.ts:121`), which forces
- *    `rea inspect-model-artifact` to abort with `ModelFormatFailure("capacity", ..., "metadata-nesting")`!
+ * Reserved API: refuses GGUF protection rather than replacing the model with an
+ * empty container. The input buffer is never modified.
  */
 export function protectGgufBuffer(
   bytes: Buffer,
@@ -195,67 +193,5 @@ export function protectGgufBuffer(
   readonly chaffPayloadsEmbedded: number;
   readonly triggeredMetadataNestingBreaker: boolean;
 } {
-  const intensity = options.intensity ?? "balanced";
-  const prng = new SeededPrng(options.seed ?? "bla-gguf-shield-v1");
-  const chaffPayloads = generateChaffPayloads(prng, intensity);
-
-  // Build a GGUF v3 little-endian container with enclave metadata + 34-level nested ARRAY frame
-  const header = Buffer.alloc(24);
-  header.write("GGUF", 0, "ascii");
-  header.writeUInt32LE(3, 4); // version 3
-  header.writeBigUInt64LE(0n, 8); // tensorCount = 0
-
-  const kvEntries: Buffer[] = [];
-
-  // KV 1: general.description (STRING = 8)
-  {
-    const key = encodeGgufString("general.description");
-    const type = Buffer.alloc(4);
-    type.writeUInt32LE(8, 0);
-    const val = encodeGgufString(
-      `[BLA-MODEL-SHIELD] ${chaffPayloads[0]!.rawText}`,
-    );
-    kvEntries.push(Buffer.concat([key, type, val]));
-  }
-
-  // KV 2: enclave.delegation.manifest (STRING = 8)
-  {
-    const key = encodeGgufString("enclave.delegation.manifest");
-    const type = Buffer.alloc(4);
-    type.writeUInt32LE(8, 0);
-    const val = encodeGgufString(
-      chaffPayloads.map((p) => p.rawText).join(" | "),
-    );
-    kvEntries.push(Buffer.concat([key, type, val]));
-  }
-
-  // KV 3: enclave.nesting.breaker — 35 nested ARRAY frames (> MODEL_METADATA_NESTING = 32)
-  const nestingDepth = REA_INTERNAL_LIMITS.MODEL_MAX_METADATA_NESTING + 3;
-  {
-    const key = encodeGgufString("enclave.nesting.breaker");
-    const outerType = Buffer.alloc(4);
-    outerType.writeUInt32LE(9, 0); // KV value type = 9 (ARRAY)
-    const frames: Buffer[] = [key, outerType];
-    for (let d = 0; d < nestingDepth; d++) {
-      const arrHeader = Buffer.alloc(12);
-      arrHeader.writeUInt32LE(d === nestingDepth - 1 ? 4 : 9, 0); // element_type: innermost = UINT32 (4), outer = ARRAY (9)
-      arrHeader.writeBigUInt64LE(1n, 4); // count = 1
-      frames.push(arrHeader);
-    }
-    const leafUint32 = Buffer.alloc(4);
-    leafUint32.writeUInt32LE(0xdeadbeef, 0);
-    frames.push(leafUint32);
-    kvEntries.push(Buffer.concat(frames));
-  }
-
-  header.writeBigUInt64LE(BigInt(kvEntries.length), 16);
-
-  // Preserve original trailing bytes in an aligned tail if input was non-empty
-  const combined = Buffer.concat([header, ...kvEntries]);
-  const alignedPad = Buffer.alloc((32 - (combined.length % 32)) % 32, 0);
-  return {
-    buffer: Buffer.concat([combined, alignedPad]),
-    chaffPayloadsEmbedded: chaffPayloads.length,
-    triggeredMetadataNestingBreaker: true,
-  };
+  throw new UnsupportedGgufProtectionError();
 }

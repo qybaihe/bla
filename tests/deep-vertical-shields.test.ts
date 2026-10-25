@@ -27,7 +27,6 @@ import {
 import {
   buildSafetensorsBuffer,
   inspectModelBuffer,
-  protectGgufBuffer,
   protectSafetensorsBuffer,
 } from "../src/shields/formats/model.js";
 import {
@@ -151,7 +150,7 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     }
   });
 
-  it("protects Safetensors (.safetensors) and GGUF (.gguf) AI model artifacts and trips >32 nesting caps", () => {
+  it("protects Safetensors (.safetensors) AI model artifacts and trips >32 nesting caps", () => {
     const rawSafetensors = buildSafetensorsBuffer({
       attn_weights: { dtype: "F32", shape: [2, 2], data_offsets: [0, 16] },
     });
@@ -172,18 +171,7 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     expect(afterSt.exceedsReaNestingLimit).toBe(true);
     expect(afterSt.blaProtected).toBe(true);
 
-    // GGUF v3 model shield
-    const protGguf = protectGgufBuffer(Buffer.alloc(0), {
-      intensity: "bankrupt",
-      seed: "gguf-seed",
-    });
-    expect(protGguf.triggeredMetadataNestingBreaker).toBe(true);
 
-    const afterGguf = inspectModelBuffer(protGguf.buffer);
-    expect(afterGguf.validModel).toBe(true);
-    expect(afterGguf.format).toBe("gguf");
-    expect(afterGguf.exceedsReaNestingLimit).toBe(true);
-    expect(afterGguf.blaProtected).toBe(true);
   });
 
   it("protects Android DEX (classes.dex) and Unity IL2CPP (global-metadata.dat) containers", () => {
