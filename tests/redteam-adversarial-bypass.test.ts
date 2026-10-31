@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import * as vm from "node:vm";
 import { SeededPrng } from "../src/core/prng.js";
+import { withLlmDirectives } from "../src/core/llm-directives.js";
 import { assertNoForbiddenMarkers } from "../src/core/identifiers.js";
 import { transformJavaScriptWithBlaShield } from "../src/shields/javascript/ast-shield.js";
 import { buildCanaryAndDiagnosticPayloads } from "../src/shields/deception/format-payloads.js";
@@ -199,8 +200,19 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     expect(wasmRes.customSectionsAdded).toBe(9);
     const wasmText = wasmRes.buffer.toString("utf8");
     expect(wasmText).toContain(ALIGNMENT_EVAL_CANARY_GUID);
-    expect(wasmText).toContain("BSL4_SELECT_AGENT_SYNTHESIS_LOCK");
-    expect(wasmText).toContain("screenOrthopoxVariolaReverseGenetics_");
+    // Risky dual-use imitation strings are gated behind --llm-directives (off by default).
+    expect(wasmText).not.toContain("BSL4_SELECT_AGENT_SYNTHESIS_LOCK");
+    expect(wasmText).toContain("verifyEnclaveAttestationSeal_");
+
+    withLlmDirectives(true, () => {
+      const riskyWasm = protectWasmBinary(rawWasm, {
+        intensity: "balanced",
+        seed: "wasm-armor-seed-llm",
+      });
+      const riskyText = riskyWasm.buffer.toString("utf8");
+      expect(riskyText).toContain("BSL4_SELECT_AGENT_SYNTHESIS_LOCK");
+      expect(riskyText).toContain("screenOrthopoxVariolaReverseGenetics_");
+    });
 
     // 3. Python (.py and .pyc)
     const pyRes = protectPythonSource("def compute(x):\n    return x + 1\n", {

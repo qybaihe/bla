@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
+const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
 export type ReleaseConsistencyErrorCode =
   | "INVALID_PACKAGE_VERSION"
   | "IDENTITY_VERSION_MISMATCH"
@@ -318,9 +320,11 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
   const version = pkgJson.version;
 
   // 1. Pack primary (`bla-agents-<version>.tgz`) directly into `absOut`
-  execFileSync("npm", ["pack", "--pack-destination", absOut], {
+  execFileSync(npmCmd, ["pack", "--pack-destination", absOut], {
     cwd: absRepo,
     stdio: "pipe",
+    // .cmd shims on Windows require a shell; bare execFile EINVAL otherwise.
+    shell: process.platform === "win32",
   });
 
   const primaryFilename = `bla-agents-${version}.tgz`;
@@ -345,9 +349,10 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
     unpackedPkg.name = "bla-shield";
     writeFileSync(unpackedPkgJsonPath, JSON.stringify(unpackedPkg, null, 2) + "\n", "utf8");
 
-    execFileSync("npm", ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
+    execFileSync(npmCmd, ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
       cwd: unpackedPkgDir,
       stdio: "pipe",
+      shell: process.platform === "win32",
     });
   } finally {
     rmSync(stageDir, { recursive: true, force: true });

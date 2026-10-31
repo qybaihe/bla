@@ -41,6 +41,8 @@ import {
   runUninstall,
 } from "../src/setup/setup.js";
 
+const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
 const tempDirs: string[] = [];
 
 function makeTempDir(prefix: string = "bla-issue-8-12-"): string {
@@ -568,9 +570,10 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
 
     const cliPath = resolve(process.cwd(), "dist/cli.js");
     if (!existsSync(cliPath)) {
-      const buildRes = spawnSync("npm", ["run", "build"], {
+      const buildRes = spawnSync(npmCmd, ["run", "build"], {
         cwd: process.cwd(),
         stdio: "pipe",
+        shell: process.platform === "win32",
       });
       expect(buildRes.status).toBe(0);
     }

@@ -23,6 +23,7 @@ export interface OneClickDefenseOptions {
   readonly intensity?: ProtectionIntensity;
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
+  readonly llmDirectives?: boolean;
 }
 
 export interface OneClickDefenseStageSummary {
@@ -98,6 +99,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.inPlace !== undefined ? { inPlace: options.inPlace } : {}),
     intensity,
     ...(options.seed !== undefined ? { seed: options.seed } : {}),
+    ...(options.llmDirectives !== undefined
+      ? { llmDirectives: options.llmDirectives }
+      : {}),
     honeySourceMaps: true,
   });
 
@@ -157,6 +161,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       schema: "https://bla.tools/schemas/defense-manifest-v1.json",
       blaVersion: BLA_IDENTITY.version,
       protectedAt: new Date().toISOString(),
+      // Honesty: this JSON is an attestation record, not a cryptographic signature.
+      // Set attestationKind to "ed25519" only when a real signature is attached.
+      attestationKind: "unsigned",
       inputSha256: protection.originalSha256,
       protectedSha256: protection.protectedSha256,
       detectedFormat: protection.detectedFormat,
@@ -171,7 +178,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     stages.push({
       stage: "5-defense-attestation-manifest",
       status: "passed",
-      headline: `Emitted signed Counter-REA attestation manifest to ${manifestPath}`,
+      headline: `Emitted unsigned Counter-REA attestation manifest (not ed25519-signed) to ${manifestPath}`,
     });
   }
 

@@ -2,7 +2,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
-import { initBlaConfig, loadBlaConfig } from "./core/config.js";
+import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "./core/config.js";
 import { inspectReleaseExposure } from "./core/release-exposure.js";
 import { buildSarifReport } from "./core/sarif.js";
 import type { ProtectionIntensity } from "./core/types.js";
@@ -64,7 +64,9 @@ Options:
   --in-place                  Overwrite input target in-place (for protect)
   --intensity <preset>        stealth | balanced | maximum | bankrupt
                             (harden/defend default: bankrupt; protect default: balanced)
-  --seed <seed>               Deterministic PRNG seed for reproducible protection
+  --seed <seed>               Deterministic PRNG seed (default: per-project random in .blarc)
+  --manifest                  Emit unsigned .bla-manifest.json next to protected artifacts (opt-in)
+  --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -84,6 +86,8 @@ interface ParsedCliArgs {
   readonly inPlace: boolean;
   readonly intensity: ProtectionIntensity;
   readonly seed?: string;
+  readonly manifest: boolean;
+  readonly llmDirectives: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -105,6 +109,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let inPlace = false;
   let intensity: ProtectionIntensity = "balanced";
   let seed: string | undefined;
+  let manifest = false;
+  let llmDirectives = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -137,6 +143,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       inPlace = true;
     } else if (arg === "--no-honey-maps") {
       honeyMaps = false;
+    } else if (arg === "--manifest") {
+      manifest = true;
+    } else if (arg === "--llm-directives") {
+      llmDirectives = true;
     } else if (arg === "--mcp") {
       command = "mcp";
     } else if (arg === "--update") {
@@ -176,6 +186,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     inPlace,
     intensity,
     ...(seed !== undefined ? { seed } : {}),
+    manifest,
+    llmDirectives,
     lang,
     clients,
     allDetected,
@@ -284,13 +296,17 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const explicitIntensity = argv.includes("--intensity")
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
+        const resolved = resolveProjectSeed(
+          typeof directory === "string" ? directory : process.cwd(),
+          parsed.seed,
+          parsed.configPath,
+        );
         const report = hardenProject({
           directory,
           intensity: explicitIntensity,
-          ...((parsed.seed ?? loaded.config.seed) !== undefined
-            ? { seed: (parsed.seed ?? loaded.config.seed)! }
-            : {}),
-          emitManifest: argv.includes("--manifest") || loaded.config.emitManifest !== false,
+          seed: resolved.seed,
+          emitManifest: parsed.manifest || loaded.config.emitManifest === true,
+          llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -311,6 +327,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const explicitIntensity = argv.includes("--intensity")
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
+        const resolved = resolveProjectSeed(process.cwd(), parsed.seed, parsed.configPath);
         const report = defendTarget({
           inputPath: target,
           ...((parsed.output ?? loaded.config.output) !== undefined
@@ -318,10 +335,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             : {}),
           inPlace: parsed.inPlace,
           intensity: explicitIntensity,
-          ...((parsed.seed ?? loaded.config.seed) !== undefined
-            ? { seed: (parsed.seed ?? loaded.config.seed)! }
-            : {}),
-          emitManifest: argv.includes("--manifest") || Boolean(loaded.config.emitManifest),
+          seed: resolved.seed,
+          emitManifest: parsed.manifest || loaded.config.emitManifest === true,
+          llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -364,6 +380,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.error("Error: Missing <target> path for `bla protect <target>`.");
           return 1;
         }
+        const resolved = resolveProjectSeed(process.cwd(), parsed.seed, parsed.configPath);
         const res = protectTarget({
           inputPath: target,
           ...((parsed.output ?? loaded.config.output) !== undefined
@@ -373,10 +390,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           intensity: argv.includes("--intensity")
             ? parsed.intensity
             : (loaded.config.intensity ?? parsed.intensity),
-          ...((parsed.seed ?? loaded.config.seed) !== undefined
-            ? { seed: (parsed.seed ?? loaded.config.seed)! }
-            : {}),
+          seed: resolved.seed,
           honeySourceMaps: parsed.honeyMaps,
+          llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

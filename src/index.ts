@@ -164,6 +164,10 @@ export * from "./shields/formats/apple-plist.js";
 export * from "./shields/formats/dotnet-managed.js";
 export * from "./shields/formats/jvm-bytecode.js";
 export * from "./core/config.js";
+export {
+  withLlmDirectives,
+  areLlmDirectivesEnabled,
+} from "./core/llm-directives.js";
 export * from "./core/sarif.js";
 export * from "./core/release-plan.js";
 export * from "./core/debug-posture.js";

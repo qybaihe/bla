@@ -20,7 +20,7 @@ describe("SQLite runtime floor", () => {
     ) as {
       engines?: { node?: string };
     };
-    expect(pkg.engines?.node).toBe("^22.13.0 || >=24.0.0");
+    expect(pkg.engines?.node).toBe("^22.23.4 || >=24.0.0");
   });
 
   it("exposes an availability probe that matches getDatabaseSyncClass success", () => {

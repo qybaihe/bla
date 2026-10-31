@@ -18,14 +18,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [24]
+        include:
+          - os: ubuntu-latest
+            node: 24
+          - os: macos-latest
+            node: 24
+          - os: windows-latest
+            node: 24
+          - os: ubuntu-latest
+            node: 22
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -46,6 +53,7 @@ jobs:
         run: npm run benchmark
 
       - name: Verify CLI doctor & update commands
+        shell: bash
         run: |
           node dist/cli.js --version
           node dist/cli.js doctor --json
@@ -55,7 +63,6 @@ jobs:
         id: rea
         shell: bash
         run: |
-          # Sibling checkout patterns: ../rea (monorepo-style) or $REA_ROOT.
           REA_CANDIDATE="${REA_ROOT:-$(dirname "$GITHUB_WORKSPACE")/rea}"
           if [ -d "$REA_CANDIDATE/src" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -68,6 +75,7 @@ jobs:
           fi
 
       - name: Verify REA constant alignment (skip if REA absent)
+        shell: bash
         env:
           REA_ROOT: ${{ steps.rea.outputs.root }}
         run: |
@@ -78,6 +86,7 @@ jobs:
           npm run verify:rea
 
       - name: Empirical REA red-team (skip if REA absent)
+        shell: bash
         env:
           REA_ROOT: ${{ steps.rea.outputs.root }}
         run: |
@@ -85,7 +94,6 @@ jobs:
             echo "SKIP: npm run redteam:rea (sibling REA not checked out alongside BLA)"
             exit 0
           fi
-          # Ensure REA dist is built when the sibling tree is present.
           if [ ! -f "${REA_ROOT}/dist/go/GoBinaryImage.js" ]; then
             echo "Building REA dist for red-team…"
             (cd "$REA_ROOT" && npm install --ignore-scripts && npx tsc -p tsconfig.build.json)
