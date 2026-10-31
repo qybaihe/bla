@@ -19,7 +19,7 @@
         <a href="./" class="brand">
           <img src="assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
           <span>BLA</span>
-          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.1</span>
+          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.5</span>
         </a>
         <nav class="nav-links">
           <a href="./" class="nav-link active" data-i18n="nav.overview">Overview</a>
@@ -67,10 +67,10 @@
           </p>
 
           <div class="command-box">
-            <code class="command-code">npx bla-agents@latest setup &amp;&amp; npx bla-agents@latest defend ./dist</code>
+            <code class="command-code">npx bla-agents@latest setup &amp;&amp; npx bla-agents@latest harden .</code>
             <button
               class="copy-btn"
-              data-copy="npx bla-agents@latest setup && npx bla-agents@latest defend ./dist --manifest"
+              data-copy="npx bla-agents@latest setup && npx bla-agents@latest harden ."
               data-i18n="hero.copy"
             >
               Copy
@@ -102,7 +102,7 @@
             <div class="eyebrow" data-i18n="sim.eyebrow">Static &amp; Semantic Analysis Comparison</div>
             <h2 class="section-title" data-i18n="sim.title">Unprotected Baseline vs. Protected with BLA (`bla-agents`)</h2>
             <p class="section-lead" data-i18n-html="sim.lead">
-              Select a target format below to see how <code>npx bla-agents defend</code> changes static analyzer output, resource budget consumption, and reconstruction status.
+              Select a target format below to see how <code>npx bla-agents harden</code> changes static analyzer output, resource budget consumption, and reconstruction status.
             </p>
           </div>
 
@@ -197,7 +197,7 @@
               <span class="card-tag" data-i18n="pillars.c3.tag">03 · One-Command Workflow</span>
               <h3 data-i18n="pillars.c3.title">MCP Server, CLI &amp; Bundler Plugins</h3>
               <p data-i18n-html="pillars.c3.desc">
-                Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_defend</code> or <code>npx bla-agents defend</code>.
+                Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_harden</code> or <code>npx bla-agents harden</code>.
               </p>
             </div>
           </div>
