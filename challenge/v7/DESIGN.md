@@ -39,7 +39,7 @@ Owner writeup against v6, mapped to design constraints:
 ## Architecture
 
 ```
-challenge/v7/dist/
+challenge/v7/hardened/
   cli/meridian.cjs      ← hardened CLI
   core/expr.cjs         ← hardened expression engine
   core/units.cjs        ← hardened unit converter (reads catalog.json)
@@ -117,7 +117,7 @@ Out of scope: attacking npm, GitHub, or unrelated software; enabling
 ```bash
 # in the private store tree (not in git):
 set -a; . secrets/crackme-v7-release.env; set +a
-BLA_ROOT=/path/to/bla node gen.mjs /path/to/bla/challenge/v7/dist
+BLA_ROOT=/path/to/bla node gen.mjs /path/to/bla/challenge/v7/hardened
 # then fold build-info → SEAL.json (scripts/crackme/v7-seal.mjs --write-seal)
 ```
 

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
-const cli = join(root, "dist", "cli", "meridian.cjs");
+const cli = join(root, "hardened", "cli", "meridian.cjs");
 const env = { ...process.env };
 delete env.NODE_OPTIONS;
 const r = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], {

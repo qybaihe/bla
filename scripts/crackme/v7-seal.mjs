@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V7 = join(ROOT, "challenge", "v7");
-const DIST = join(V7, "dist");
+const DIST = join(V7, "hardened");
 const SEAL = join(V7, "SEAL.json");
 const MODULES = ["cli/meridian.cjs", "core/expr.cjs", "core/units.cjs", "core/stats.cjs", "core/license.cjs"];
 const sha = (b) => createHash("sha256").update(b).digest("hex");

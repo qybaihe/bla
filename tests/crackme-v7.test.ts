@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..");
 const V7 = join(ROOT, "challenge", "v7");
-const DIST = join(V7, "dist");
+const DIST = join(V7, "hardened");
 const SEAL_PATH = join(V7, "SEAL.json");
 const MODULES = ["cli/meridian.cjs", "core/expr.cjs", "core/units.cjs", "core/stats.cjs", "core/license.cjs"] as const;
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
