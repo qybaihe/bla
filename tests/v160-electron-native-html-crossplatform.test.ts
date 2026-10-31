@@ -724,7 +724,7 @@ describe("v1.6.0 Cross-Platform Windows SARIF & CrackMe v5.2 Anti-Virtualization
   });
 
   it("verifies CrackMe v5.2 unlocks identically under LF and Windows CRLF checkouts while rejecting fs.readFileSync redirect virtualization", () => {
-    const crackmePath = resolve(process.cwd(), "challenge/v5/bla-crackme.cjs");
+    const crackmePath = resolve(process.cwd(), "challenge/archive/v5/bla-crackme.cjs");
     const rawLf = readFileSync(crackmePath, "utf8").replace(/\r\n/g, "\n");
     const cleanEnv = { ...process.env };
     delete cleanEnv.NODE_OPTIONS;

@@ -1,3 +1,5 @@
+> **Archived.** Legacy v5.2 hand-crafted challenge; current target is [`../../v6/`](../../v6/).
+
 > **Archived.** Prefer [CrackMe v6](../v6/README.md) — BLA-generated tiered challenge.
 
 # 🛡️ BLA CrackMe 公开挑战赛 v5.2 — Cognitive-Armor & Non-Bijective Coupled Edition

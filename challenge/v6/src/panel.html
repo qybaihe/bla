@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BLA CrackMe v6 — Entitlement Panel</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; background: #0b1020; color: #e8eefc; }
+    input, button { font: inherit; padding: 0.5rem 0.75rem; }
+    #out { margin-top: 1rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Entitlement Panel (stage-B)</h1>
+  <p>Derive the panel token for a key. The hardened vault runs this same script.</p>
+  <input id="key" maxlength="16" size="20" placeholder="16-char key" />
+  <button id="go" type="button">Derive</button>
+  <div id="out"></div>
+  <script>
+    function fnvLane(text, basis, prime) {
+      var h = basis >>> 0;
+      for (var i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, prime) >>> 0;
+        h ^= h >>> 15;
+      }
+      return (h >>> 0).toString(16).padStart(8, "0");
+    }
+    function derive(key) {
+      var text = "panel|" + String(key);
+      return fnvLane(text, 0x811c9dc5, 0x01000193) + fnvLane(text.split("").reverse().join(""), 0x9e3779b9, 0x85ebca6b);
+    }
+    globalThis.__vaultPanelDerive_v6 = derive;
+    if (typeof document !== "undefined" && document.getElementById) {
+      document.getElementById("go").addEventListener("click", function () {
+        var key = document.getElementById("key").value;
+        document.getElementById("out").textContent = "panel-token: " + derive(key);
+      });
+    }
+  </script>
+</body>
+</html>

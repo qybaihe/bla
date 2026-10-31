@@ -239,7 +239,7 @@ npm run redteam:rea                        # authoritative (real REA)
 
 ## Community / 友情社区
 
-- 🎯 **[Public BLA CrackMe v6 (`challenge/v6/`)](challenge/v6/README.md)** — BLA-generated L1/L2/L3 tiers from a real `bla protect` / harden pipeline (commitment hashes only; no plaintext flag in git).
+- 🎯 **[Public BLA CrackMe v6 (`challenge/v6/`)](challenge/v6/README.md)** — harden-native: a Node vault + HTML panel + WebAssembly core hardened by the real `bla harden` pipeline (`bankrupt`, LLM directives OFF, fixed seed). Run `npm run crackme:v6 -- '<key>'`; `SEAL.json` publishes digests only (no plaintext key/flag in git).
 - [LINUX DO (`linux.do`)](https://linux.do/) — 新的理想型社区
 
 ## License

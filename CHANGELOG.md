@@ -8,12 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **CrackMe v6 — BLA-generated tiered challenge** (`challenge/v6/`, `scripts/crackme/`,
-  `tests/crackme-v6.test.ts`, `.github/ISSUE_TEMPLATE/crackme-v6-solve.yml`, `website/crackme/`) —
-  archives hand-crafted v5.2 under `challenge/v5/`, ships a clean Node.js license-gate template
-  hardened by the real protector API (`balanced` / `maximum` / `bankrupt`+`--llm-directives`) via
-  `npm run crackme:build`, publishes L1/L2/L3 artifacts with SHA-256 commitment (key/flag plaintext
-  kept out of git), adds CI `crackme:seal`, and documents honest BLA scope on the website (en + zh-CN).
+- **CrackMe v6 — Harden-Native Edition** (`challenge/v6/`, `scripts/crackme/`,
+  `tests/crackme-v6.test.ts`, `website/crackme/`, `.github/ISSUE_TEMPLATE/crackme-v6-solve.yml`) —
+  the public challenge is now literally `bla harden` output: a public multi-format template
+  (Node `vault.cjs` + HTML `panel.html` whose script the vault executes + WebAssembly `core.wasm`)
+  is filled with per-build constants from `CRACKME_V6_KEY` / `CRACKME_V6_FLAG` and hardened by
+  `hardenProject()` at `bankrupt`, `llmDirectives=false`, `emitManifest=false`, fixed seed.
+  Three stages (16 WASM key lanes, HTML panel token, key-decrypted flag) with a single uniform
+  `DENIED` (no per-stage oracle) and honeypot keys. `SEAL.json` publishes knobs, key/flag
+  SHA-256 and artifact/template digests only — no plaintext key or flag in git.
+  `npm run crackme:v6 -- '<key>'` runs it; `npm run crackme:build [-- --fixture]` rebuilds;
+  `npm run crackme:seal` (CI, all matrix jobs) checks digests, deny/honeypot behaviour, fixture
+  re-harden unlock + byte-for-byte reproducibility, anti-strip, and — when repo secrets match
+  `SEAL.json` — release unlock and exact re-harden reproduction.
+
+### Changed
+
+- The first v6 draft (PR #38, single-file L1/L2/L3 `protect` tiers incl. an `--llm-directives`
+  tier) is archived under `challenge/archive/v6-tiered-protect/` and no longer built or tested;
+  v5.2 moves to `challenge/archive/v5/`.
 
 ## [1.6.0] — 2026-11-01
 

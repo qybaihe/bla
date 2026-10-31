@@ -1,62 +1,78 @@
-# BLA CrackMe v6 — BLA-generated tiered challenge
+# BLA CrackMe v6 — Harden-Native Edition
 
-This is the public Counter-REA challenge for **bla-agents**.
-Unlike v5.x (hand-written crypto sponge), **v6 artifacts are produced by running the real BLA protector** (`bla protect` / the same engine as `bla harden`) on a small clean Node.js license gate.
+The public target **is `bla harden` output**. No hand-written obfuscation, no
+custom CTF crypto: a small multi-format app is hardened by `hardenProject()`
+(the exact pipeline behind `bla harden <dir>`), and the result is published as-is.
 
-## Tiers
+| File | What it is | Hardened by |
+|------|------------|-------------|
+| [`hardened/vault.cjs`](./hardened/vault.cjs) | Node.js entitlement gate (entry point) | JS AST shield + exhaustion / deception suites + anti-strip interlock |
+| [`hardened/panel.html`](./hardened/panel.html) | HTML panel whose inline script derives the stage-B token (the vault executes it) | HTML multi-script shield |
+| [`hardened/core.wasm.gz`](./hardened/core.wasm.gz) | WebAssembly `mix` / `seal` core (gzipped; ~7 MB raw) | WASM shield (decoy exports / bloat) |
+| [`SEAL.json`](./SEAL.json) | Public commitment: knobs, `keySha256`, `flagSha256`, artifact + template digests | — |
 
-| Tier | Profile | What it adds |
-|------|---------|--------------|
-| **L1** | `balanced` | AST opaque ternaries, tarpit/budget breakers, exhaustion suite, deception suite (llmDirectives OFF), honey source maps |
-| **L2** | `maximum` | Same families at higher decoy / alias / obligation budgets |
-| **L3** | `bankrupt` + `--llm-directives` | Strongest JS profile BLA ships, including opt-in LLM-facing cognitive-armor layers |
-
-Artifacts: [`artifacts/L1.cjs`](./artifacts/L1.cjs), [`L2.cjs`](./artifacts/L2.cjs), [`L3.cjs`](./artifacts/L3.cjs).
-
-Public commitment (hashes only): [`commitment.json`](./commitment.json).
+Harden knobs (pinned in `SEAL.json`, enforced by CI): `intensity=bankrupt`,
+`llmDirectives=false` (risky LLM-directive layers OFF), `emitManifest=false`,
+fixed seed → byte-for-byte reproducible.
 
 ## Run
 
 ```bash
-env -u NODE_OPTIONS node challenge/v6/artifacts/L1.cjs '<authorization-key>'
-# try L2 / L3 the same way
+npm run crackme:v6 -- '<16-char-key>'
+# or: node challenge/v6/run.mjs '<16-char-key>'
 ```
 
-On success the program prints `FLAG{...}`.
+`run.mjs` copies the bundle to a temp dir, gunzips `core.wasm`, clears
+`NODE_OPTIONS`, and runs `vault.cjs`. Success prints `FLAG{...}`; anything else
+prints a single uniform `[vault] DENIED` (no per-stage oracle).
+
+## Rules of the game
+
+The cleartext **template is public** ([`src/`](./src/)) — reading it tells you the
+*shape* of the gate, not the answer. Every build fills in fresh constants (16 WASM
+lane targets, the panel token, the encrypted flag) from maintainer secrets, then
+hardens. To win you must recover those constants and the real logic from the
+hardened output, i.e. defeat BLA:
+
+- **Stage A** — each key byte goes through `seal(mix(byte, tweak_i))` in the hardened
+  `core.wasm` and must hit a hidden 32-bit lane target.
+- **Stage B** — the vault executes the hardened `panel.html` script; its token must match.
+- **Stage C** — the key decrypts the flag; `SHA-256(flag)` must equal `flagSha256`.
+- Retired keys (v4.1 / v5.2) are honeypots that print decoy flags.
 
 ## Prove a solve
-
-1. Compute `SHA-256(FLAG{...})` (UTF-8, exact bytes):
 
 ```bash
 node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' 'FLAG{...}'
 ```
 
-2. It must equal `flagSha256` in [`commitment.json`](./commitment.json).
-3. Open a GitHub issue with the **CrackMe v6 solve** template (paste the hash, tier broken, and a short method note). **Do not** paste the raw FLAG in public if you want coordinated disclosure — the hash is the proof.
+It must equal `flagSha256` in [`SEAL.json`](./SEAL.json). Open an issue with the
+**CrackMe v6 solve** template (hash + method notes). A *general* bypass of BLA's
+hardening is worth more than a one-off patch of this fixture — say so in the issue.
 
-## What counts as a break
+## Honest scope
 
-- Recovering a key/flag that unlocks a published tier and matches `flagSha256`.
-- Showing a **general** bypass of BLA's JS hardening (not a one-off patch of this fixture) is even more valuable — describe it in the issue.
+BLA raises the cost for **automated** AI reverse-engineering agents and plants
+decoys. It does not claim immunity to patient interactive reversing (debuggers,
+Frida, manual analysis). Known gap surfaced by this challenge: numeric literals
+are not de-literalized by the JS shield, so the template keeps constants in
+strings (which BLA does split / decoy).
 
-## What BLA claims (honest)
-
-- BLA raises cost for **automated** AI reverse-engineering agents (e.g. REA-style obligation / semantic budgets) and plants decoys.
-- BLA is **not** a magic anti-RE seal against patient interactive reversing (Ghidra / Frida / LLDB / manual debugging).
-- v6 showcases **BLA-generated** defenses. It is not a custom CTF crypto construction.
-
-## Reproducible rebuild (maintainers)
+## Reproducible build (maintainers)
 
 ```bash
 npm run build
-CRACKME_V6_KEY='…' CRACKME_V6_FLAG='FLAG{…}' npm run crackme:build
-npm run crackme:seal
+npm run crackme:build -- --fixture          # public demo secret → challenge/v6/.fixture (gitignored)
+CRACKME_V6_KEY='<16 chars>' CRACKME_V6_FLAG='FLAG{…}' npm run crackme:build   # release → hardened/ + SEAL.json
+npm run crackme:seal                        # CI gate: digests, deny/honeypot, fixture re-harden + reproducibility,
+                                            # and (if secrets match SEAL) release unlock + byte-for-byte rebuild
 ```
 
-Clean template (no secrets): [`clean/target.template.cjs`](./clean/target.template.cjs).  
-Profiles: [`profiles.json`](./profiles.json).
+Equivalent CLI recipe: materialize the template into `app/` (see
+`scripts/crackme/lib.mjs#materializeVault`), copy `src/panel.html` and
+`src/core.wasm`, then `bla harden app --intensity bankrupt --seed <SEAL.seed>`.
 
-## Legacy
+## History
 
-v5.2 is archived under [`../v5/`](../v5/) for history. New attempts should target **v6**.
+- [`../archive/v6-tiered-protect/`](../archive/v6-tiered-protect/) — first v6 draft (PR #38): single-file L1/L2/L3 `protect` tiers.
+- [`../archive/v5/`](../archive/v5/) — v5.2 hand-crafted Cognitive-Armor sponge.

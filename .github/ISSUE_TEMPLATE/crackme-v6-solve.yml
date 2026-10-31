@@ -1,17 +1,17 @@
 name: CrackMe v6 solve
 description: Submit a proof-of-solve for the public BLA-generated CrackMe v6 challenge
-title: "CrackMe v6 solve: <tier> <short method>"
+title: "CrackMe v6 solve: <short method>"
 labels: ["crackme", "challenge"]
 body:
   - type: markdown
     attributes:
       value: |
-        Prove a break of [CrackMe v6](https://github.com/qybaihe/bla/tree/main/challenge/v6) by posting the **SHA-256 of the FLAG** (not necessarily the raw FLAG). It must match `flagSha256` in `challenge/v6/commitment.json`.
+        Prove a break of [CrackMe v6](https://github.com/qybaihe/bla/tree/main/challenge/v6) by posting the **SHA-256 of the FLAG** (not necessarily the raw FLAG). It must match `flagSha256` in `challenge/v6/SEAL.json`.
   - type: dropdown
-    id: tier
+    id: stage
     attributes:
-      label: Tier broken
-      options: [L1, L2, L3, multiple]
+      label: Furthest stage understood
+      options: [Stage A (WASM lanes), Stage B (HTML panel), Stage C (full unlock), general BLA bypass]
     validations:
       required: true
   - type: input

@@ -73,7 +73,8 @@
     "redteam:rea": "node scripts/redteam/run.mjs",
     "verify:rea:drift": "node scripts/verify-rea-constants.mjs",
     "crackme:build": "node scripts/crackme/build.mjs",
-    "crackme:seal": "node scripts/crackme/seal.mjs"
+    "crackme:seal": "node scripts/crackme/seal.mjs",
+    "crackme:v6": "node challenge/v6/run.mjs"
   },
   "dependencies": {
     "@babel/generator": "^7.26.0",

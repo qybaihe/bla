@@ -18,3 +18,6 @@ bla.config.json
 challenge/v6/clean/target.materialized.cjs
 challenge/v6/artifacts/.fixture/
 challenge/v6/artifacts/commitment.fixture.json
+# CrackMe v6 (harden-native): fixture builds + raw (ungzipped) hardened WASM stay local
+challenge/v6/.fixture/
+challenge/v6/hardened/core.wasm
