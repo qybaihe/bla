@@ -256,7 +256,7 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     assertNoForbiddenMarkers(directArmor.code, "cognitive-armor");
   });
 
-  it("verifies challenge/bla-crackme.cjs v5.1 true key, honeypot keys, zero 128-char hex leaks, and anti-tamper seal", () => {
+  it("verifies challenge/bla-crackme.cjs v5.2 true key, honeypot keys, zero 128-char hex leaks, and anti-tamper seal", () => {
     const crackmePath = path.resolve(process.cwd(), "challenge/bla-crackme.cjs");
     const crackmeSource = fs.readFileSync(crackmePath, "utf8");
 

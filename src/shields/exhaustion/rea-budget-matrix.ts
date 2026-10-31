@@ -355,7 +355,7 @@ export function getExhaustionProfileForIntensity(intensity: ProtectionIntensity)
         aliasSelectorCount: 640,
         cartesianBranchCount: 36,
         cartesianStringLength: 260,
-        obligationDecoyFamilies: 25,
+        obligationDecoyFamilies: 26,
         sccClusterCount: 8,
       };
   }

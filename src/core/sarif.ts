@@ -80,8 +80,12 @@ export function buildSarifReport(
       });
     }
 
-    const [uriPart, linePart] = item.location.split(":");
-    const startLine = linePart ? Number.parseInt(linePart, 10) : undefined;
+    const lineMatch = /:(\d+)$/.exec(item.location);
+    const uriPart = lineMatch
+      ? item.location.slice(0, lineMatch.index)
+      : item.location;
+    const startLine = lineMatch ? Number.parseInt(lineMatch[1]!, 10) : undefined;
+    const normalizedUri = (uriPart || audit.targetPath).replace(/\\/g, "/");
 
     results.push({
       ruleId,
@@ -92,7 +96,7 @@ export function buildSarifReport(
       locations: [
         {
           physicalLocation: {
-            artifactLocation: { uri: uriPart || audit.targetPath },
+            artifactLocation: { uri: normalizedUri },
             ...(startLine && Number.isFinite(startLine) ? { region: { startLine } } : {}),
           },
         },
@@ -122,7 +126,7 @@ export function buildSarifReport(
         locations: [
           {
             physicalLocation: {
-              artifactLocation: { uri: f.file },
+              artifactLocation: { uri: f.file.replace(/\\/g, "/") },
             },
           },
         ],

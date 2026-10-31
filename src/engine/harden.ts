@@ -179,12 +179,13 @@ function walkCollect(
     // Skip already-shielded outputs to avoid re-hardening loops.
     if (/\.shielded(\.|$)/i.test(entry.name)) continue;
     if (entry.name.endsWith(".bla-manifest.json")) continue;
+    if (entry.name.endsWith(".bunfs-snapshot")) continue;
     out.push({
       path: full,
       format,
       // Normalize to POSIX separators so reports, manifests, and MCP
       // structuredContent stay platform-independent (`dist/app.js`).
-      relativePath: relative(root, full).split(sep).join("/") || basename(full),
+      relativePath: (relative(root, full) || basename(full)).split(sep).join("/"),
     });
   }
 }

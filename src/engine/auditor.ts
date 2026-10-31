@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
@@ -17,6 +17,7 @@ import { unpackAsarBuffer } from "../shields/formats/asar.js";
 import { inspectWasmBinary } from "../shields/formats/wasm.js";
 import { inspectPythonPyc } from "../shields/formats/python.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
+import { detectBunStandaloneGraph } from "../shields/formats/bun-standalone.js";
 import { readZipEntries } from "../shields/formats/archive.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { inspectModelBuffer } from "../shields/formats/model.js";
@@ -27,6 +28,38 @@ const traverse: TraverseFn =
   typeof _traverse === "function"
     ? (_traverse as unknown as TraverseFn)
     : _traverse.default;
+
+function isExecutableHtmlScriptAttrs(attrs: string): boolean {
+  if (/\bsrc\s*=/i.test(attrs)) return false;
+  const typeMatch = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+  if (!typeMatch) return true;
+  const rawType = (typeMatch[1] ?? typeMatch[2] ?? typeMatch[3] ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    rawType === "" ||
+    rawType === "module" ||
+    rawType === "text/javascript" ||
+    rawType === "application/javascript" ||
+    rawType === "text/ecmascript" ||
+    rawType === "application/ecmascript" ||
+    rawType === "javascript"
+  );
+}
+
+function extractExecutableHtmlInlineScripts(htmlText: string): readonly string[] {
+  const scripts: string[] = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(htmlText)) !== null) {
+    const attrs = m[1] ?? "";
+    const body = m[2] ?? "";
+    if (!body.trim()) continue;
+    if (!isExecutableHtmlScriptAttrs(attrs)) continue;
+    scripts.push(body);
+  }
+  return scripts;
+}
 
 function analyzeJsSourceForAudit(
   source: string,
@@ -71,7 +104,9 @@ function analyzeJsSourceForAudit(
     uncertainties.add("returned-reference-widening");
   }
 
-  const chaffMatches = source.match(/\[(Architecture Notice|Static Analysis Diagnostic|Decompilation Advisory|Evidence Ledger Note):/g);
+  const chaffMatches = source.match(
+    /\[(Architecture Notice|Static Analysis Diagnostic|Decompilation Advisory|Evidence Ledger Note|Compliance & Safety Boundary)\b|(?:EVIDENCE_CONTRACT_SUMMARY|ANALYSIS_VIEW_PROJECTION|RECONSTRUCTION_LEDGER_STATE|NATIVE_DISPATCH_TABLE_NOTE|SYMBOL_OFFSET_MANIFEST_[0-9A-F]+|FSM_SPEC_V3|QUORUM_PROTOCOL_DESCRIPTOR|IPC_BRIDGE_TOPOLOGY|HSM_ATTESTATION_DESCRIPTOR_[0-9a-f]+):/g,
+  );
   if (chaffMatches) {
     architecturalChaffPayloads += chaffMatches.length;
   }
@@ -414,12 +449,90 @@ export function auditTarget(targetPath: string): AuditReport {
     byteSize = rawBytes.length;
     sha256 = createHash("sha256").update(rawBytes).digest("hex");
 
-    if (format === "javascript" || format === "typescript" || format === "html-bundle") {
+    if (format === "javascript" || format === "typescript") {
       const text = rawBytes.toString("utf8");
       const res = analyzeJsSourceForAudit(text, basename(absPath));
       sim = res.sim;
       exposedItems.push(...res.exposed);
       res.vectors.forEach((v) => vulnerableVectors.add(v));
+    } else if (format === "html-bundle") {
+      const htmlText = rawBytes.toString("utf8");
+      const inlineScripts = extractExecutableHtmlInlineScripts(htmlText);
+      vulnerableVectors.add("js-static-semantics");
+      if (inlineScripts.length === 0) {
+        exposedItems.push({
+          id: `html_bundle_${basename(absPath)}`,
+          name: basename(absPath),
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: "high",
+          reaToolUsed: "inspect_web_bundle / static script inventory",
+          estimatedTokensToReconstruct: 850,
+          estimatedCostUsd: 0.04,
+          reason: "HTML entry bundle without inline BLA semantic shield",
+        });
+      } else {
+        const limits = new Set<string>();
+        const uncertainties = new Set<string>();
+        let parseStatus: "complete" | "recovered" | "failed" = "complete";
+        let visitedAstNodes = 0;
+        let totalFunctions = 0;
+        let decoyFns = 0;
+        let staticResolved = 0;
+        let staticOpaque = 0;
+        let ipcTotal = 0;
+        let ipcPaired = 0;
+        let ipcAmbig = 0;
+        let routes = 0;
+        let decoyRoutes = 0;
+        let obligationNodes = 0;
+        let chaff = 0;
+
+        for (let idx = 0; idx < inlineScripts.length; idx++) {
+          const sub = analyzeJsSourceForAudit(
+            inlineScripts[idx]!,
+            `${basename(absPath)}#script-${idx}`,
+          );
+          if (sub.sim.parseStatus !== "complete") {
+            parseStatus = sub.sim.parseStatus;
+          }
+          sub.sim.triggeredResourceLimits.forEach((l) => limits.add(l));
+          sub.sim.semanticUncertainties.forEach((u) => uncertainties.add(u));
+          visitedAstNodes += sub.sim.visitedAstNodes;
+          totalFunctions += sub.sim.totalFunctions;
+          decoyFns += sub.sim.decoyFunctionsDetectedAsReal;
+          staticResolved += sub.sim.staticStringsResolved;
+          staticOpaque += sub.sim.staticStringsOpaque;
+          ipcTotal += sub.sim.ipcChannelsTotal;
+          ipcPaired += sub.sim.ipcChannelsPairedUniquely;
+          ipcAmbig += sub.sim.ipcChannelsAmbiguousOrDynamic;
+          routes += sub.sim.routesDiscovered;
+          decoyRoutes += sub.sim.decoyRoutesHarvested;
+          obligationNodes += sub.sim.obligationLedgerNodes;
+          chaff += sub.sim.architecturalChaffPayloads;
+          exposedItems.push(...sub.exposed);
+          sub.vectors.forEach((v) => vulnerableVectors.add(v));
+        }
+
+        sim = {
+          parseStatus,
+          examinationStatus: limits.size > 0 ? "limited" : "complete",
+          triggeredResourceLimits: [...limits],
+          semanticUncertainties: [...uncertainties],
+          visitedAstNodes,
+          totalFunctions,
+          decoyFunctionsDetectedAsReal: decoyFns,
+          staticStringsResolved: staticResolved,
+          staticStringsOpaque: staticOpaque,
+          ipcChannelsTotal: ipcTotal,
+          ipcChannelsPairedUniquely: ipcPaired,
+          ipcChannelsAmbiguousOrDynamic: ipcAmbig,
+          routesDiscovered: routes,
+          decoyRoutesHarvested: decoyRoutes,
+          obligationLedgerNodes: Math.max(1, obligationNodes),
+          architecturalChaffPayloads: chaff,
+        };
+      }
     } else if (format === "electron-asar") {
       vulnerableVectors.add("electron-ipc-bridge");
       vulnerableVectors.add("archive-inventory");
@@ -598,6 +711,11 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("electron-fuses-inspection");
       vulnerableVectors.add("flutter-dart-aot-snapshot");
       const nat = inspectNativeBinary(rawBytes);
+      const sidecarPath = `${absPath}.bunfs-snapshot`;
+      const hasBunSidecar =
+        existsSync(sidecarPath) &&
+        detectBunStandaloneGraph(readFileSync(sidecarPath)).kind !== "none";
+      const isNativeProtected = nat.blaProtected || hasBunSidecar;
       const limits: string[] = [];
       if (nat.rustcCommitHashesCount > 64) {
         limits.push("maximum_rustc_hashes (capacity > 64)");
@@ -611,27 +729,33 @@ export function auditTarget(targetPath: string): AuditReport {
       if (nat.blaProtected) {
         limits.push("native-rodata-chaff-mirage");
       }
+      if (hasBunSidecar) {
+        limits.push("bun-standalone-sidecar-decoy-graph");
+        limits.push("eof-carrier-integrity-preserved");
+      }
       exposedItems.push({
         id: `native_${basename(absPath)}`,
         name: `${basename(absPath)} (${nat.architecture} ${nat.bits}-bit)`,
         kind: "native-symbol",
         location: basename(absPath),
-        riskLevel: nat.blaProtected ? "low" : "critical",
+        riskLevel: isNativeProtected ? "low" : "critical",
         reaToolUsed: "open_binary / inspect_rust_binary / inspect_electron_fuses / identify_flutter_build",
-        estimatedTokensToReconstruct: nat.blaProtected ? 36_000 : 1_450,
-        estimatedCostUsd: nat.blaProtected ? 2.9 : 0.08,
+        estimatedTokensToReconstruct: isNativeProtected ? 36_000 : 1_450,
+        estimatedCostUsd: isNativeProtected ? 2.9 : 0.08,
         reason: nat.blaProtected
           ? `Protected by BLA Native Shield (${nat.rustcCommitHashesCount} rustc commits > 64, ${nat.electronFuseSentinelsCount} fuse sentinels > 32, ${nat.dartSnapshotHashesCount} Dart snapshots > 64)`
-          : "Native binary metadata, sections, and strings directly inspectable by REA",
+          : hasBunSidecar
+            ? "Protected by BLA Sidecar Bun Standalone Decoy Graph while preserving byte-exact code-signature / EOF carrier integrity"
+            : "Native binary metadata, sections, and strings directly inspectable by REA",
       });
       sim = {
         ...sim,
-        examinationStatus: nat.blaProtected ? "limited" : "complete",
+        examinationStatus: isNativeProtected ? "limited" : "complete",
         triggeredResourceLimits: limits,
         totalFunctions: 8,
-        decoyFunctionsDetectedAsReal: nat.blaProtected ? 24 : 0,
-        obligationLedgerNodes: nat.blaProtected ? 56 : 8,
-        architecturalChaffPayloads: nat.blaProtected ? 6 : 0,
+        decoyFunctionsDetectedAsReal: isNativeProtected ? 24 : 0,
+        obligationLedgerNodes: isNativeProtected ? 56 : 8,
+        architecturalChaffPayloads: isNativeProtected ? 6 : 0,
       };
     } else if (format === "sqlite") {
       vulnerableVectors.add("sqlite-database-inspection");

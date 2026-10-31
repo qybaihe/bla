@@ -300,6 +300,18 @@ function sha256File(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
+function resolveTarCommand(): string {
+  if (process.platform === "win32") {
+    const winSystemTar = join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "tar.exe",
+    );
+    if (existsSync(winSystemTar)) return winSystemTar;
+  }
+  return "tar";
+}
+
 /**
  * Packs both `bla-agents` (primary) and `bla-shield` (alias) tarballs into `outDir`
  * without mutating the repository working tree, and writes `SHA256SUMS.txt`.
@@ -336,8 +348,9 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
 
   // 2. Build alias (`bla-shield-<version>.tgz`) in an isolated temp staging directory
   const stageDir = mkdtempSync(join(tmpdir(), "bla-alias-pack-"));
+  const tarCmd = resolveTarCommand();
   try {
-    execFileSync("tar", ["-xzf", primaryPath, "-C", stageDir], {
+    execFileSync(tarCmd, ["-xzf", primaryPath, "-C", stageDir], {
       stdio: "pipe",
     });
     const unpackedPkgDir = join(stageDir, "package");
