@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CrackMe v7 — Meridian**: real offline engineering calculator (`calc` /
+  `convert` / `stats` / `license activate`) shipped as `bla harden` bankrupt
+  output. Whole-key chained ARX (no independent lanes), runtime self-integrity
+  over five modules, feature fingerprint + environment binding, sealed
+  certificate in `data/catalog.json`. Design in `challenge/v7/DESIGN.md`.
+  Supersedes v6 as the product challenge (v6 retained under `challenge/v6/`
+  as the 1.6.1 interim snapshot).
+
 ## [1.6.2] — 2026-11-01
 
 ### Added

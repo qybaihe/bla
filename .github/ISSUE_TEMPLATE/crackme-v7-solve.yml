@@ -1,0 +1,44 @@
+name: CrackMe v7 solve (Meridian)
+description: Submit a proof-of-solve for Meridian (CrackMe v7)
+title: "CrackMe v7 solve: <short method>"
+labels: ["crackme", "challenge"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prove a break of [Meridian / CrackMe v7](https://github.com/qybaihe/bla/tree/main/challenge/v7) by posting the **SHA-256 of the activation certificate** (not necessarily the raw certificate). It must match `certSha256` in `challenge/v7/SEAL.json`.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface used
+      options:
+        - Executed hardened app (intended)
+        - Rehosted integrity + fingerprint offline
+        - Pure-static recovery (no execute)
+        - BLA product gap / generic harden bypass
+    validations:
+      required: true
+  - type: input
+    id: cert_sha256
+    attributes:
+      label: SHA-256 of the activation certificate
+      description: Lowercase hex. Prefer not to paste the raw certificate unless you intend public disclosure.
+      placeholder: a1b2c3…
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method notes
+      description: Short write-up (tooling, whether chained ARX / self-integrity / env binding mattered, suggested product fix). Link related issues if this was a generic harden bypass.
+    validations:
+      required: true
+  - type: checkboxes
+    id: honesty
+    attributes:
+      label: Confirmation
+      options:
+        - label: I did not use a leaked maintainer secret / CI secret.
+          required: true
+        - label: I understand BLA does not claim immunity to interactive human RE.
+          required: true

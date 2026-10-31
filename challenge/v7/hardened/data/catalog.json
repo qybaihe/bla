@@ -1,0 +1,166 @@
+{
+  "schema": "meridian-catalog/3",
+  "revision": "d6ae4dc4b5d0f4632d1c411e0b71ca1c",
+  "signature": "9a2d1656815ac64fd220c72ae459a72e762f792b68b95e9231ced3c84e097cb3c3c93b0437",
+  "units": {
+    "m": {
+      "dim": "length",
+      "factor": 1,
+      "aliases": [
+        "meter",
+        "metre"
+      ]
+    },
+    "km": {
+      "dim": "length",
+      "factor": 1000
+    },
+    "cm": {
+      "dim": "length",
+      "factor": 0.01
+    },
+    "mm": {
+      "dim": "length",
+      "factor": 0.001
+    },
+    "in": {
+      "dim": "length",
+      "factor": 0.0254,
+      "aliases": [
+        "inch"
+      ]
+    },
+    "ft": {
+      "dim": "length",
+      "factor": 0.3048,
+      "aliases": [
+        "foot",
+        "feet"
+      ]
+    },
+    "yd": {
+      "dim": "length",
+      "factor": 0.9144
+    },
+    "mi": {
+      "dim": "length",
+      "factor": 1609.344,
+      "aliases": [
+        "mile"
+      ]
+    },
+    "nmi": {
+      "dim": "length",
+      "factor": 1852
+    },
+    "kg": {
+      "dim": "mass",
+      "factor": 1
+    },
+    "g": {
+      "dim": "mass",
+      "factor": 0.001
+    },
+    "t": {
+      "dim": "mass",
+      "factor": 1000,
+      "aliases": [
+        "tonne"
+      ]
+    },
+    "lb": {
+      "dim": "mass",
+      "factor": 0.45359237,
+      "aliases": [
+        "lbs"
+      ]
+    },
+    "oz": {
+      "dim": "mass",
+      "factor": 0.028349523125
+    },
+    "s": {
+      "dim": "time",
+      "factor": 1,
+      "aliases": [
+        "sec"
+      ]
+    },
+    "ms": {
+      "dim": "time",
+      "factor": 0.001
+    },
+    "min": {
+      "dim": "time",
+      "factor": 60
+    },
+    "h": {
+      "dim": "time",
+      "factor": 3600,
+      "aliases": [
+        "hr"
+      ]
+    },
+    "d": {
+      "dim": "time",
+      "factor": 86400,
+      "aliases": [
+        "day"
+      ]
+    },
+    "B": {
+      "dim": "data",
+      "factor": 1,
+      "aliases": [
+        "byte"
+      ]
+    },
+    "KB": {
+      "dim": "data",
+      "factor": 1000
+    },
+    "MB": {
+      "dim": "data",
+      "factor": 1000000
+    },
+    "GB": {
+      "dim": "data",
+      "factor": 1000000000
+    },
+    "KiB": {
+      "dim": "data",
+      "factor": 1024
+    },
+    "MiB": {
+      "dim": "data",
+      "factor": 1048576
+    },
+    "GiB": {
+      "dim": "data",
+      "factor": 1073741824
+    },
+    "K": {
+      "dim": "temperature",
+      "factor": 1,
+      "aliases": [
+        "kelvin"
+      ]
+    },
+    "degC": {
+      "dim": "temperature",
+      "factor": 1,
+      "aliases": [
+        "C"
+      ],
+      "offset": 273.15
+    },
+    "degF": {
+      "dim": "temperature",
+      "factor": 0.5555555555555556,
+      "aliases": [
+        "F"
+      ],
+      "offset": 255.3722222222222
+    }
+  }
+}

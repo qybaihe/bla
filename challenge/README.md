@@ -1,19 +1,24 @@
-# 🛡️ BLA CrackMe — 公开 Counter-REA 挑战 / Public Challenge
+# BLA CrackMe
 
-## 当前：v6 Harden-Native（推荐）
+BLA 对外发布的逆向 / 防护挑战。当前主挑战是 **v7 Meridian**。
 
-**→ [`v6/README.md`](./v6/README.md)**
+## v7 — Meridian（当前）
 
-v6 的靶机就是 `bla harden` 的真实产物：Node vault + HTML 面板 + WebAssembly 核心组成的多格式小应用，
-以 `bankrupt` 强度、固定种子、**关闭高风险 LLM 指令层** 加固后原样发布。明文模板公开，挑战是从加固产物中还原每次构建的常量与逻辑。
+真实小型工程计算器，经 `bla harden`（bankrupt、llm-directives OFF）硬化后发布。
+通过 `license activate` 解锁 Meridian Pro，打印激活证书。
 
 ```bash
-npm run crackme:v6 -- '<16位密钥>'
+npm run crackme:v7 -- calc "sqrt(2)*sin(pi/4)"
+npm run crackme:v7 -- license activate 'XXXXX-XXXXX-XXXXX-XXXXX'
 ```
 
-通关证明：`SHA-256(FLAG{...})` 等于 [`v6/SEAL.json`](./v6/SEAL.json) 中的 `flagSha256`（仓库内无明文密钥 / FLAG）。
+设计说明：[`v7/DESIGN.md`](./v7/DESIGN.md) · 承诺摘要：[`v7/SEAL.json`](./v7/SEAL.json)
 
-## 历史归档
+## 历史
 
-- [`archive/v6-tiered-protect/`](./archive/v6-tiered-protect/) — v6 初稿（PR #38）：单文件 L1/L2/L3 protect 档位，已被 harden-native 版取代。
-- [`archive/v5/`](./archive/v5/) — v5.2 手写 Cognitive-Armor 海绵，仅供历史参考。
+| 版本 | 状态 | 说明 |
+|---|---|---|
+| v7 Meridian | **当前** | 真实应用 + 整钥链式 ARX + 自完整性 |
+| v6 Harden-Native | 快照（1.6.1） | `challenge/v6/`，已被 v7 取代 |
+| v6-tiered-protect | 归档 | `challenge/archive/v6-tiered-protect/`（#38） |
+| v5.2 | 归档 | `challenge/archive/v5/` |

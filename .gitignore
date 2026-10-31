@@ -21,3 +21,6 @@ challenge/v6/artifacts/commitment.fixture.json
 # CrackMe v6 (harden-native): fixture builds + raw (ungzipped) hardened WASM stay local
 challenge/v6/.fixture/
 challenge/v6/hardened/core.wasm
+
+# CrackMe v7 private fixture
+challenge/v7/.fixture/

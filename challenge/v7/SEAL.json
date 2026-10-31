@@ -1,0 +1,81 @@
+{
+  "schema": "bla-crackme-v7-seal/v1",
+  "mode": "release",
+  "product": "Meridian",
+  "blaVersion": "1.6.1",
+  "hardenSeedLabel": "bound-at-build-into-opaque-predicates",
+  "intensity": "bankrupt",
+  "llmDirectives": false,
+  "emitManifest": false,
+  "integrity": "7b9d28e5a5f957c2e585554894e0d04a95f5d9b68a94cdcf84f792d53d05dc77",
+  "source": {
+    "sha256": "8f64c0c58b705662f96ca9735225668cf8d18c2ee4966988ea62e9ca023f86e2",
+    "files": 8
+  },
+  "files": {
+    "cli/meridian.cjs": {
+      "sha256": "f388db79e3691a3923421f7dce0ae2fee59df86c4a8cdc3b66a1d1b990757333",
+      "bytes": 173770
+    },
+    "core/expr.cjs": {
+      "sha256": "1806b2155942d9e1a16e394eec1f6579ed17e8a9fb87251efd8003f865de4a01",
+      "bytes": 150724
+    },
+    "core/units.cjs": {
+      "sha256": "52c264dc8bc10e699476ad906ca92ebcedacd6250df6bcd11996c16adaa34100",
+      "bytes": 134950
+    },
+    "core/stats.cjs": {
+      "sha256": "f6583623fdb4ee74c6b1dad2fc08e3b553f25f963e8a85f01d508a9e6494edd3",
+      "bytes": 128247
+    },
+    "core/license.cjs": {
+      "sha256": "37390abce6c4275cc29f7b2f4eb7588bb215e007dd8cfaf9cee8b544fbaeb913",
+      "bytes": 173472
+    },
+    "data/catalog.json": {
+      "sha256": "7a11eb1da546ae0be9c9241385fb2a0fd6d244b63d7b411b77146dbf9277b552",
+      "bytes": 2692
+    }
+  },
+  "hardenSummary": [
+    {
+      "relativePath": "cli/meridian.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "core/expr.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "core/license.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "core/stats.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "core/units.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    }
+  ],
+  "notes": [
+    "No plaintext activation key or certificate is published.",
+    "data/catalog.json revision is the expected 128-bit ARX digest; signature is the certificate XOR keystream.",
+    "Self-integrity hashes the five hardened .cjs modules; tampering any byte invalidates activation."
+  ],
+  "keySha256": "dd207870ad4e5a88c9b543d818ca430d056eaace3259217c6fe46d0430e716ff",
+  "certSha256": "504640dadf9cc8a5db84f86db7744321389ba2e441fab7b041e3d3bc8d706546",
+  "hardenSeedSha256": "8bcb78e76c107127213409e0637808a50ab11323575f98347a652419ee80dd62"
+}
