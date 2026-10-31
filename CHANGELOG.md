@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-01
+
 Counters REA `47fa6ab37` (`feat(electron): report custom URL protocol registrations`
 and its new 26th `"url-scheme"` `ReconstructionObligationLedger` family), closes
 real-world production red-lines on code-signed Mach-O / Authenticode PE /
