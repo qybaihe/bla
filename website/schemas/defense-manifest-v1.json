@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bla.tools/schemas/defense-manifest-v1.json",
+  "title": "BLA Counter-REA defense attestation manifest v1",
+  "description": "Unsigned attestation record emitted next to a protected artifact when --manifest / emitManifest is opted in. Not an ed25519 signature; attestationKind is \"unsigned\" unless a real signature is attached.",
+  "type": "object",
+  "required": [
+    "schema",
+    "blaVersion",
+    "protectedAt",
+    "attestationKind",
+    "inputSha256",
+    "protectedSha256",
+    "detectedFormat",
+    "intensity",
+    "defenseScore"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "https://bla.tools/schemas/defense-manifest-v1.json"
+    },
+    "blaVersion": {
+      "type": "string"
+    },
+    "protectedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "attestationKind": {
+      "type": "string",
+      "enum": [
+        "unsigned",
+        "ed25519"
+      ]
+    },
+    "inputSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "protectedSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "detectedFormat": {
+      "type": "string"
+    },
+    "intensity": {
+      "type": "string",
+      "enum": [
+        "stealth",
+        "balanced",
+        "maximum",
+        "bankrupt"
+      ]
+    },
+    "defenseScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "counteredReaVectors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reaBudgetsTargeted": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exhaustionSummary": {
+      "type": "object"
+    },
+    "deceptionSummary": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

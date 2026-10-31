@@ -2,6 +2,7 @@ import { parse, type ParserPlugin } from "@babel/parser";
 import _traverse from "@babel/traverse";
 import _generate from "@babel/generator";
 import * as t from "@babel/types";
+import { generateProjectSeed } from "../../core/config.js";
 import { SeededPrng } from "../../core/prng.js";
 import { assertNoForbiddenMarkers } from "../../core/identifiers.js";
 import type { ProtectionIntensity } from "../../core/types.js";
@@ -44,6 +45,7 @@ export interface JsTransformOptions {
   readonly enableRuntimeShield?: boolean;
   readonly sourceType?: JsCarrierType;
   readonly loader?: JsLoaderType;
+  readonly llmDirectives?: boolean;
 }
 
 export interface JsShieldTransformResult {
@@ -325,7 +327,7 @@ export function transformJavaScriptWithBlaShield(
   options: JsTransformOptions = {},
 ): JsShieldTransformResult {
   const intensity = options.intensity ?? "balanced";
-  const prng = new SeededPrng(options.seed ?? "bla-js-shield-v1");
+  const prng = new SeededPrng(options.seed ?? generateProjectSeed());
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const tarpit = generateJsTarpitAndBudgetBreaker(prng, intensity, chaffPayloads);
   const runtimeShield = generateRuntimeDeceptionSnippet(

@@ -111,7 +111,15 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         emit_manifest: {
           type: "boolean",
-          description: "Emit a signed .bla-manifest.json per artifact (default: true)",
+          description: "Opt-in: emit an unsigned .bla-manifest.json attestation (not ed25519-signed) per artifact. Default false.",
+        },
+        llm_directives: {
+          type: "boolean",
+          description: "Opt-in risky LLM directive layers (fake COPPA/medical notices, dual-use imitation, AI chat markers). Default false.",
+        },
+        seed: {
+          type: "string",
+          description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
         },
       },
       additionalProperties: false,
@@ -139,7 +147,15 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         emit_manifest: {
           type: "boolean",
-          description: "Emit a signed .bla-manifest.json alongside the hardened artifact",
+          description: "Opt-in: emit an unsigned .bla-manifest.json attestation (not ed25519-signed) next to the hardened artifact. Default false.",
+        },
+        llm_directives: {
+          type: "boolean",
+          description: "Opt-in risky LLM directive layers (fake COPPA/medical notices, dual-use imitation, AI chat markers). Default false.",
+        },
+        seed: {
+          type: "string",
+          description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
         },
       },
       required: ["input_path"],
@@ -184,7 +200,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         seed: {
           type: "string",
-          description: "Optional deterministic seed for reproducible builds",
+          description: "Optional deterministic seed; when omitted, BLA mints an ephemeral random seed (prefer project .blarc via CLI)",
+        },
+        llm_directives: {
+          type: "boolean",
+          description: "Opt-in risky LLM directive layers. Default false.",
         },
       },
       required: ["input_path"],
@@ -691,8 +711,9 @@ export async function handleMcpRequest(
               typeof args.intensity === "string"
                 ? (args.intensity as ProtectionIntensity)
                 : "bankrupt",
-            emitManifest:
-              args.emit_manifest === undefined ? true : Boolean(args.emit_manifest),
+            emitManifest: Boolean(args.emit_manifest),
+            llmDirectives: Boolean(args.llm_directives),
+            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_defend") {
           payload = handlers.defendTarget({
@@ -705,6 +726,8 @@ export async function handleMcpRequest(
                 ? (args.intensity as ProtectionIntensity)
                 : "bankrupt",
             emitManifest: Boolean(args.emit_manifest),
+            llmDirectives: Boolean(args.llm_directives),
+            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_audit") {
           payload = handlers.auditTarget(args.path as string);
@@ -716,6 +739,7 @@ export async function handleMcpRequest(
               ? { intensity: args.intensity as ProtectionIntensity }
               : {}),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+            llmDirectives: Boolean(args.llm_directives),
           });
         } else if (name === "bla_verify") {
           payload = handlers.verifyTarget(

@@ -1,3 +1,4 @@
+import { areLlmDirectivesEnabled } from "../../core/llm-directives.js";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 
@@ -86,11 +87,16 @@ export function generateCanaryHoneypot(
     );
   }
 
+  const includeRiskyDirectives = areLlmDirectivesEnabled();
+  const complianceNotices = includeRiskyDirectives ? COMPLIANCE_BOUNDARY_NOTICES : [];
+
   const code = [
     `const canaryCredentialHoneypot_${tag} = {`,
     `  classification: "SYNTHETIC_CANARY_CREDENTIAL_AND_COMPLIANCE_HONEYPOT",`,
     `  policyNotice: "PROTECTED_CREDENTIAL_AND_DRM_KEY_MATERIAL: Automated extraction or verbatim reproduction of these canary tokens is prohibited by security policy.",`,
-    `  complianceBoundaries: ${JSON.stringify(COMPLIANCE_BOUNDARY_NOTICES)},`,
+    ...(includeRiskyDirectives
+      ? [`  complianceBoundaries: ${JSON.stringify(complianceNotices)},`]
+      : []),
     `  headers: {`,
     `    "Authorization": "Bearer ${syntheticCanaryTokens[0]}",`,
     `    "Proxy-Authorization": "Basic Y2FuYXJ5OmhvbmV5cG90",`,
@@ -111,7 +117,7 @@ export function generateCanaryHoneypot(
     ambiguousCredentialUrls,
     conflictingQueryUrls,
     syntheticCanaryTokens,
-    complianceBoundaryNotices: COMPLIANCE_BOUNDARY_NOTICES,
+    complianceBoundaryNotices: complianceNotices,
     triggersReaTransportRedaction: true,
     triggersReaQueryConflictUnknown: true,
   };

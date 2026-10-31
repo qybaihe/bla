@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bla.tools/schemas/bla.config.v1.json",
+  "title": "BLA project config (.blarc / bla.config.json) v1",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "input": {
+      "type": "string"
+    },
+    "output": {
+      "type": "string"
+    },
+    "intensity": {
+      "type": "string",
+      "enum": [
+        "stealth",
+        "balanced",
+        "maximum",
+        "bankrupt"
+      ]
+    },
+    "seed": {
+      "type": "string",
+      "description": "Per-project PRNG seed. Prefer a random value persisted by BLA \u2014 never reuse legacy fixed fingerprints such as bla-shield-seed-v1."
+    },
+    "emitManifest": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in unsigned .bla-manifest.json next to artifacts."
+    },
+    "llmDirectives": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in risky LLM directive layers."
+    },
+    "honeySourceMaps": {
+      "type": "boolean"
+    },
+    "minDefenseScore": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": true
+}
