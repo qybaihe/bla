@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-11-01
+
+Patch release shipping CrackMe v6 Harden-Native Edition (challenge, scripts, tests, docs, website). No library or CLI behavior changes.
+
 ### Added
 
 - **CrackMe v6 — Harden-Native Edition** (`challenge/v6/`, `scripts/crackme/`,
