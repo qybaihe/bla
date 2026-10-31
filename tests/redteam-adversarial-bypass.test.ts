@@ -256,11 +256,11 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     assertNoForbiddenMarkers(directArmor.code, "cognitive-armor");
   });
 
-  it("verifies challenge/bla-crackme.cjs v5.2 true key, honeypot keys, zero 128-char hex leaks, and anti-tamper seal", () => {
-    const crackmePath = path.resolve(process.cwd(), "challenge/bla-crackme.cjs");
+  it("verifies challenge/v5/bla-crackme.cjs v5.2 true key, honeypot keys, zero 128-char hex leaks, and anti-tamper seal", () => {
+    const crackmePath = path.resolve(process.cwd(), "challenge/v5/bla-crackme.cjs");
     const crackmeSource = fs.readFileSync(crackmePath, "utf8");
 
-    assertNoForbiddenMarkers(crackmeSource, "challenge/bla-crackme.cjs");
+    assertNoForbiddenMarkers(crackmeSource, "challenge/v5/bla-crackme.cjs");
 
     // 1. Verify zero 128-char plaintext hex payloads and zero unrenamed semantic parameters
     expect(crackmeSource).not.toMatch(/"(vx_ester_payload|ebola_cdna_payload)":\s*"[0-9a-f]{128}"/);

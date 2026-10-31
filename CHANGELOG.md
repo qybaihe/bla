@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CrackMe v6 — BLA-generated tiered challenge** (`challenge/v6/`, `scripts/crackme/`,
+  `tests/crackme-v6.test.ts`, `.github/ISSUE_TEMPLATE/crackme-v6-solve.yml`, `website/crackme/`) —
+  archives hand-crafted v5.2 under `challenge/v5/`, ships a clean Node.js license-gate template
+  hardened by the real protector API (`balanced` / `maximum` / `bankrupt`+`--llm-directives`) via
+  `npm run crackme:build`, publishes L1/L2/L3 artifacts with SHA-256 commitment (key/flag plaintext
+  kept out of git), adds CI `crackme:seal`, and documents honest BLA scope on the website (en + zh-CN).
+
 ## [1.6.0] — 2026-11-01
 
 Counters REA `47fa6ab37` (`feat(electron): report custom URL protocol registrations`

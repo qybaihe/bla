@@ -1,0 +1,15 @@
+{
+  "version": 6,
+  "scope": "bla-crackme-v6",
+  "seed": "bla-crackme-v6-seed-2026-11-01",
+  "mode": "release",
+  "keySha256": "bf2d33447878e533f039bd17b8e84dcd6de9c6deed1fdb63f135e146a5815595",
+  "flagSha256": "85df157736596e50cdac9dffad1098a83cc03011d24da62a33cab2b48de95c1c",
+  "artifactSha256": {
+    "L1": "b5afb315e193bb6f3f98ef0c4be0e86f4b36ceb32c1b6f14d76d3ffbea7f1892",
+    "L2": "7ff91aa77246dbbe762da0d5e7ac5e3d05a01240d97d7bd25d15f79281909dde",
+    "L3": "9b372c94a85dfaa441df54f4a793547749e12f7883bc1eab33b5af6f391fbdef"
+  },
+  "builtAt": "2026-10-31T16:41:40.946Z",
+  "note": "Public commitment: prove a break by publishing SHA-256(FLAG{...}) matching flagSha256."
+}

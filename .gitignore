@@ -13,3 +13,8 @@ tmp/
 .blarc
 .blarc.json
 bla.config.json
+
+# CrackMe v6 — never commit secrets or materialized clean / fixture rebuilds
+challenge/v6/clean/target.materialized.cjs
+challenge/v6/artifacts/.fixture/
+challenge/v6/artifacts/commitment.fixture.json

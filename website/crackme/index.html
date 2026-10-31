@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CrackMe v6 — BLA (bla-agents)</title>
+    <meta
+      name="description"
+      content="Public BLA CrackMe v6: a clean license gate hardened by the real bla protect / harden pipeline across L1/L2/L3 tiers."
+    />
+    <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container nav-bar">
+        <a href="../" class="brand">
+          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <span>BLA</span>
+          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.5</span>
+        </a>
+        <nav class="nav-links">
+          <a href="../" class="nav-link" data-i18n="nav.overview">Overview</a>
+          <a href="../get-started/" class="nav-link" data-i18n="nav.getStarted">Get Started</a>
+          <a href="../showcase/" class="nav-link" data-i18n="nav.showcase">Benchmarks</a>
+          <a href="./" class="nav-link active" data-i18n="nav.crackme">CrackMe</a>
+          <a href="../guides/" class="nav-link" data-i18n="nav.guides">Guides</a>
+          <a href="../faq/" class="nav-link" data-i18n="nav.faq">FAQ</a>
+        </nav>
+        <div class="nav-actions">
+          <select id="bla-lang-select" class="lang-select" aria-label="Select Language">
+            <option value="en">🌐 English</option>
+            <option value="zh-CN">🌐 简体中文</option>
+            <option value="zh-TW">🌐 繁體中文</option>
+            <option value="ja">🌐 日本語</option>
+            <option value="ko">🌐 한국어</option>
+            <option value="es">🌐 Español</option>
+            <option value="fr">🌐 Français</option>
+            <option value="de">🌐 Deutsch</option>
+          </select>
+          <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
+            <span>★</span>
+            <span data-i18n="nav.star">Star</span>
+            <span class="star-pill" data-gh-stars>★</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <h1 data-i18n="crackme.title">CrackMe v6 — BLA-generated challenge</h1>
+          <p class="lede" data-i18n="crackme.lede">
+            Test a target that was genuinely hardened by BLA — not a hand-written CTF sponge.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container prose">
+          <h2 data-i18n="crackme.why.title">Why v6</h2>
+          <p data-i18n="crackme.why.body">
+            CrackMe v5.x was a custom crypto construction. v6 rebuilds the challenge around the product claim:
+            run <code>bla protect</code> / the <code>bla harden</code> engine on a clean Node.js license gate and publish the output.
+          </p>
+
+          <h2 data-i18n="crackme.tiers.title">Tiers</h2>
+          <ul>
+            <li data-i18n="crackme.tiers.l1"><strong>L1</strong> — <code>balanced</code> (default harden surface)</li>
+            <li data-i18n="crackme.tiers.l2"><strong>L2</strong> — <code>maximum</code></li>
+            <li data-i18n="crackme.tiers.l3"><strong>L3</strong> — <code>bankrupt</code> + <code>--llm-directives</code></li>
+          </ul>
+
+          <h2 data-i18n="crackme.run.title">Run</h2>
+          <pre><code>env -u NODE_OPTIONS node challenge/v6/artifacts/L1.cjs '&lt;authorization-key&gt;'</code></pre>
+
+          <h2 data-i18n="crackme.submit.title">Submit a solve</h2>
+          <p data-i18n="crackme.submit.body">
+            Hash the FLAG with SHA-256 and open a GitHub issue using the CrackMe v6 solve template.
+            The hash must match <code>flagSha256</code> in the public commitment file (plaintext FLAG is not in git).
+          </p>
+
+          <p>
+            <a class="nav-cta" href="https://github.com/qybaihe/bla/tree/main/challenge/v6" target="_blank" rel="noopener" data-i18n="crackme.cta">
+              Open challenge/v6 on GitHub
+            </a>
+          </p>
+
+          <h2 data-i18n="crackme.honest.title">Honest scope</h2>
+          <p data-i18n="crackme.honest.body">
+            BLA raises cost for automated AI reverse-engineering agents and plants decoys.
+            It does not claim immunity to patient interactive human reverse engineering.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <script src="../assets/i18n.js"></script>
+    <script src="../assets/main.js"></script>
+  </body>
+</html>
