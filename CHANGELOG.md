@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] — 2026-11-01
+
+Patch release shipping CrackMe v7 Meridian (challenge, scripts, tests, docs, website) on top of the 1.6.2 UF2 firmware shield. No library or CLI behavior changes.
+
 ### Added
 
 - **CrackMe v7 — Meridian**: real offline engineering calculator (`calc` /
