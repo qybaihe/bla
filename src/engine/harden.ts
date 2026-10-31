@@ -5,7 +5,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
@@ -181,7 +181,9 @@ function walkCollect(
     out.push({
       path: full,
       format,
-      relativePath: relative(root, full) || basename(full),
+      // Normalize to POSIX separators so reports, manifests, and MCP
+      // structuredContent stay platform-independent (`dist/app.js`).
+      relativePath: relative(root, full).split(sep).join("/") || basename(full),
     });
   }
 }
