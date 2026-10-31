@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
 export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -85,7 +85,8 @@ export function ensureDistBuilt() {
 
 export async function protectTier({ cleanPath, outPath, tier, seed }) {
   ensureDistBuilt();
-  const { protectTarget } = await import(join(ROOT, "dist", "engine", "protector.js"));
+  const protectorUrl = pathToFileURL(join(ROOT, "dist", "engine", "protector.js")).href;
+  const { protectTarget } = await import(protectorUrl);
   mkdirSync(dirname(outPath), { recursive: true });
   const result = protectTarget({
     inputPath: cleanPath,
