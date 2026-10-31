@@ -4,6 +4,17 @@ All notable changes to **bla-agents** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] — 2026-11-01
+
+Trust, supply-chain and distribution hardening (P0, #23 #24 #25).
+
+- Per-project random seed persisted in `.blarc` (no shared default fingerprint).
+- Risky LLM directive layers are now opt-in via `--llm-directives` / MCP `llm_directives`.
+- Defense manifest no longer claims to be signed and is not written beside hardened artifacts by default; JSON schemas published under `website/schemas/`.
+- Website refreshed for `bla harden`, current format/benchmark counts and honest limits.
+- zod bumped; tag-only releases with mandatory npm provenance via Trusted Publishing (OIDC); Actions pinned to SHAs; Dependabot.
+- CI adds Windows (Node 24) and Node 22; Windows path fixes (#24); Indonesian README (#23).
+
 ## [1.5.2] — 2026-10-31
 
 Counters REA #8154 (`feat(android): trace callers of external DEX methods` —
