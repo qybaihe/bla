@@ -8,3 +8,8 @@ coverage/
 .env.*
 tmp/
 .bla-cache/
+
+# Per-project BLA config / seed (local)
+.blarc
+.blarc.json
+bla.config.json
