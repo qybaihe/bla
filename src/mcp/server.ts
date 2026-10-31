@@ -816,17 +816,62 @@ export async function handleMcpRequest(
 /**
  * Starts the BLA MCP server over stdio (supporting newline-delimited JSON-RPC 2.0).
  */
-export function startMcpStdioServer(): void {
+/** Largest single stdio line accepted before the client is treated as misbehaving. */
+export const MAX_STDIO_LINE_BYTES = 1_048_576;
+
+export interface StdioLineProcessorHooks {
+  readonly onLine: (line: string) => void;
+  readonly onOversizedLine?: () => void;
+}
+
+export interface StdioLineProcessor {
+  readonly push: (chunk: string) => void;
+}
+
+/**
+ * Newline-delimited stdio line splitter with a hard per-line size cap so a
+ * client that streams an unterminated giant line cannot grow the buffer without
+ * bound. Blank lines and `Content-Length:` framing lines are skipped, matching
+ * the previous server behavior.
+ */
+export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioLineProcessor {
   let buffer = "";
+  let discarding = false;
+  return {
+    push(chunk: string): void {
+      if (discarding) {
+        // The remainder of an oversized line is still in flight; resume at its newline.
+        const nl = chunk.indexOf("\n");
+        if (nl < 0) return;
+        discarding = false;
+        buffer = chunk.slice(nl + 1);
+      } else {
+        buffer += chunk;
+      }
+      let newlineIdx: number;
+      while ((newlineIdx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newlineIdx).trim();
+        buffer = buffer.slice(newlineIdx + 1);
+        if (!line || line.startsWith("Content-Length:")) continue;
+        if (line.length > MAX_STDIO_LINE_BYTES) {
+          hooks.onOversizedLine?.();
+          continue;
+        }
+        hooks.onLine(line);
+      }
+      if (buffer.length > MAX_STDIO_LINE_BYTES) {
+        buffer = "";
+        discarding = true;
+        hooks.onOversizedLine?.();
+      }
+    },
+  };
+}
+
+export function startMcpStdioServer(): void {
   let processingQueue = Promise.resolve();
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk: string) => {
-    buffer += chunk;
-    let newlineIdx: number;
-    while ((newlineIdx = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, newlineIdx).trim();
-      buffer = buffer.slice(newlineIdx + 1);
-      if (!line || line.startsWith("Content-Length:")) continue;
+  const processor = createStdioLineProcessor({
+    onLine: (line: string) => {
       processingQueue = processingQueue.then(async () => {
         try {
           const req = JSON.parse(line) as JsonRpcRequest;
@@ -846,6 +891,19 @@ export function startMcpStdioServer(): void {
           process.stdout.write(JSON.stringify(parseErr) + "\n");
         }
       });
-    }
+    },
+    onOversizedLine: () => {
+      const parseErr: JsonRpcResponse = {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32700,
+          message: `Parse error: line exceeds ${MAX_STDIO_LINE_BYTES} byte limit`,
+        },
+      };
+      process.stdout.write(JSON.stringify(parseErr) + "\n");
+    },
   });
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk: string) => processor.push(chunk));
 }
