@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "mode": "release",
+  "tiers": {
+    "L1": {
+      "intensity": "balanced",
+      "llmDirectives": false,
+      "honeySourceMaps": true,
+      "originalBytes": 3185,
+      "protectedBytes": 78614,
+      "decoyFunctionsInjected": 45,
+      "artifactSha256": "b5afb315e193bb6f3f98ef0c4be0e86f4b36ceb32c1b6f14d76d3ffbea7f1892",
+      "seedUsed": "bla-crackme-v6-seed-2026-11-01:balanced:std"
+    },
+    "L2": {
+      "intensity": "maximum",
+      "llmDirectives": false,
+      "honeySourceMaps": true,
+      "originalBytes": 3185,
+      "protectedBytes": 163626,
+      "decoyFunctionsInjected": 68,
+      "artifactSha256": "7ff91aa77246dbbe762da0d5e7ac5e3d05a01240d97d7bd25d15f79281909dde",
+      "seedUsed": "bla-crackme-v6-seed-2026-11-01:maximum:std"
+    },
+    "L3": {
+      "intensity": "bankrupt",
+      "llmDirectives": true,
+      "honeySourceMaps": true,
+      "originalBytes": 3185,
+      "protectedBytes": 189095,
+      "decoyFunctionsInjected": 93,
+      "artifactSha256": "9b372c94a85dfaa441df54f4a793547749e12f7883bc1eab33b5af6f391fbdef",
+      "seedUsed": "bla-crackme-v6-seed-2026-11-01:bankrupt:llm"
+    }
+  },
+  "commitmentPath": "/workspace/bla-dev/bla-crackme6/challenge/v6/commitment.json"
+}

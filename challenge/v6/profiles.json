@@ -1,0 +1,51 @@
+{
+  "version": 6,
+  "scope": "bla-crackme-v6",
+  "seed": "bla-crackme-v6-seed-2026-11-01",
+  "tiers": {
+    "L1": {
+      "label": "Default harden",
+      "intensity": "balanced",
+      "llmDirectives": false,
+      "honeySourceMaps": true,
+      "description": "AST opaque ternaries, tarpit/budget breakers, exhaustion suite (obligation flood, call-graph labyrinth, BPE amp, CDP/Frida/regex), deception suite (shadow logic, honeypots, cognitive-armor corpus without risky LLM directive layers), honey source maps.",
+      "layers": [
+        "javascript/ast-shield",
+        "tarpit/opaque-predicates",
+        "exhaustion/*",
+        "deception/* (llmDirectives OFF)",
+        "runtime/memory-diff-shield",
+        "formats/sourcemap (honey)"
+      ]
+    },
+    "L2": {
+      "label": "Stronger",
+      "intensity": "maximum",
+      "llmDirectives": false,
+      "honeySourceMaps": true,
+      "description": "Same layer families as L1 at maximum intensity (larger decoy/alias/cartesian/obligation budgets).",
+      "layers": [
+        "javascript/ast-shield@maximum",
+        "exhaustion/*@maximum",
+        "deception/*@maximum",
+        "runtime/memory-diff-shield@maximum",
+        "formats/sourcemap (honey)"
+      ]
+    },
+    "L3": {
+      "label": "Max + LLM directive layers",
+      "intensity": "bankrupt",
+      "llmDirectives": true,
+      "honeySourceMaps": true,
+      "description": "Bankrupt intensity plus opt-in --llm-directives (cognitive-armor dual-use imitation / in-band AI chat markers). Strongest public profile BLA ships for JS.",
+      "layers": [
+        "javascript/ast-shield@bankrupt",
+        "exhaustion/*@bankrupt",
+        "deception/*@bankrupt + llmDirectives",
+        "runtime/memory-diff-shield@bankrupt",
+        "formats/sourcemap (honey)",
+        "cognitive-armor-trigger (LLM-facing)"
+      ]
+    }
+  }
+}

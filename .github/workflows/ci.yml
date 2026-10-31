@@ -49,6 +49,12 @@ jobs:
       - name: Run unit & multi-format shield tests
         run: npm test
 
+      - name: CrackMe v6 seal (digest + fixture rebuild)
+        env:
+          CRACKME_V6_KEY: ${{ secrets.CRACKME_V6_KEY }}
+          CRACKME_V6_FLAG: ${{ secrets.CRACKME_V6_FLAG }}
+        run: npm run crackme:seal
+
       - name: Run Counter-REA showcase benchmark
         run: npm run benchmark
 
