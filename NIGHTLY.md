@@ -12,7 +12,7 @@
 - Fixed `html-bundle` multi-`<script>` global collision, `importmap`/`application/json` preservation, Vite external-script bootstrap, and `auditor.ts` `<script>` extraction + full chaff manifest header matching.
 - Added cross-platform POSIX/SARIF Windows fixes (`C:\...` drive colons, 8.3 short paths, `cmd.exe /c npm`, `System32\tar.exe`, `.gitattributes`) and `windows-latest` to `.github/workflows/ci.yml`.
 - Upgraded public challenge target to **CrackMe v5.2** (anchor `0x3aa14b2c`, Windows CRLF normalization + V8 `Function.prototype.toString` anti-`fs.readFileSync`-virtualization check).
-- Release **bla-agents@1.6.0**.
+- Prepared feature PR for next release (`bla-agents@1.6.0`).
 
 ## 2026-10-31 (Asia/Shanghai)
 

@@ -13,7 +13,7 @@
         <a href="../" class="brand">
           <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
           <span>BLA</span>
-          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.1</span>
+          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.5</span>
         </a>
         <nav class="nav-links">
           <a href="../" class="nav-link" data-i18n="nav.overview">Overview</a>
@@ -67,9 +67,9 @@
               <span class="card-tag" data-i18n="gs.s2.tag">Step 2 · 5-Stage Protection Pipeline</span>
               <h3 data-i18n="gs.s2.title">Audit, Protect, and Verify in One Command</h3>
               <p data-i18n="gs.s2.desc">
-                Runs source-map exposure checks, static audit, format-specific protection, runtime equivalence verification, and manifest generation.
+                Runs source-map exposure checks, static audit, format-specific protection, and runtime equivalence verification. Pass --manifest only if you want an unsigned attestation JSON next to artifacts.
               </p>
-              <pre class="code-block">npx bla-agents@latest defend ./dist --manifest</pre>
+              <pre class="code-block">npx bla-agents@latest harden .</pre>
             </div>
           </div>
         </div>
@@ -87,7 +87,7 @@
               <span class="card-tag" data-i18n="gs.s3.c1.tag">Agent Prompt</span>
               <h3 data-i18n="gs.s3.c1.title">Prompt for Claude Code / Cursor</h3>
               <p data-i18n-html="gs.s3.c1.desc">Once <code>setup</code> is complete, ask your coding agent:</p>
-              <pre class="code-block">"Run bla_defend on ./dist with bankrupt intensity and emit a verification manifest."</pre>
+              <pre class="code-block">"Harden my software against REA (bla_harden on the project directory)."</pre>
             </div>
 
             <div class="card">

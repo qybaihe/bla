@@ -2,7 +2,7 @@
 
 欢迎来到 **BLA (`bla-agents`) 公开逆向挑战靶场 (v5.2 — Cognitive-Armor & Non-Bijective Coupled Edition)**！
 
-本目录下的 [`bla-crackme.cjs`](./bla-crackme.cjs) 是使用 `bla-agents v1.6.0` 全套武器库生成的独立 Node.js 靶机程序（零外部依赖，直接用 `node` 即可运行）。
+本目录下的 [`bla-crackme.cjs`](./bla-crackme.cjs) 是使用 `bla-agents` 全套武器库生成的独立 Node.js 靶机程序（零外部依赖，直接用 `node` 即可运行）。
 
 > **💡 环境提示**：本靶机内置了原生环境与 Preload Hook 完整性纠缠校验（检测 `--require` / `--import` / `NODE_OPTIONS` / `inspector.url()` / 非主模块加载 `require.main !== module` / `Function.prototype.toString` 金丝雀箭头函数反伪造、内存态 V8 函数源码反 `fs.readFileSync` 文件重定向虚拟化校验与 C++ 内置函数 `.prototype` 属性探测，并原生兼容 Windows CRLF 与 POSIX LF 换行符）。如果终端或 IDE 全局注入了 `NODE_OPTIONS`，请使用 `env -u NODE_OPTIONS node challenge/bla-crackme.cjs <16位密钥>` 运行。
 

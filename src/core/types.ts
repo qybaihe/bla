@@ -149,6 +149,11 @@ export interface ProtectionOptions {
   readonly injectRouteMirage?: boolean;
   readonly honeySourceMaps?: boolean;
   readonly runtimeDeception?: boolean;
+  /**
+   * When true, embed opt-in risky LLM directive layers (fake COPPA/medical notices,
+   * dual-use imitation vocabulary, in-band AI chat markers). Default false.
+   */
+  readonly llmDirectives?: boolean;
 }
 
 export interface ProtectionMetrics {

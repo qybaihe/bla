@@ -90,6 +90,7 @@ export interface HardenProjectOptions {
   readonly intensity?: ProtectionIntensity;
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
+  readonly llmDirectives?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -182,6 +183,8 @@ function walkCollect(
     out.push({
       path: full,
       format,
+      // Normalize to POSIX separators so reports, manifests, and MCP
+      // structuredContent stay platform-independent (`dist/app.js`).
       relativePath: (relative(root, full) || basename(full)).split(sep).join("/"),
     });
   }
@@ -258,7 +261,8 @@ export function hardenProject(
 ): HardenProjectReport {
   const absDir = resolve(options.directory ?? process.cwd());
   const intensity: ProtectionIntensity = options.intensity ?? "bankrupt";
-  const emitManifest = options.emitManifest !== false;
+  // Manifests are opt-in: do not ship `.bla-manifest.json` next to customer artifacts by default.
+  const emitManifest = options.emitManifest === true;
   const maxArtifacts = options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS;
 
   const discovered = discoverHardenableArtifacts(absDir, { maxArtifacts });
@@ -281,6 +285,9 @@ export function hardenProject(
         outputPath,
         intensity,
         ...(options.seed !== undefined ? { seed: options.seed } : {}),
+        ...(options.llmDirectives !== undefined
+          ? { llmDirectives: options.llmDirectives }
+          : {}),
         emitManifest,
       });
       summaries.push({

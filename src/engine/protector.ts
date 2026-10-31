@@ -11,7 +11,9 @@ import {
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
 import { assertSafeOutputPath } from "../core/output-path.js";
+import { withLlmDirectives } from "../core/llm-directives.js";
 import { SeededPrng } from "../core/prng.js";
+import { generateProjectSeed } from "../core/config.js";
 import type {
   ProtectionMetrics,
   ProtectionOptions,
@@ -90,6 +92,10 @@ function deriveDefaultOutputPath(inputPath: string, inPlace = false): string {
  * Python `.py`/`.pyc`, Native Binaries (ELF/Mach-O/PE), ZIP/APK archives, and directories.
  */
 export function protectTarget(options: ProtectionOptions): ProtectionResult {
+  return withLlmDirectives(options.llmDirectives === true, () => protectTargetInner(options));
+}
+
+function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   const startMs = Date.now();
   const absInput = resolve(options.inputPath);
   const format = detectArtifactFormat(absInput);
@@ -113,7 +119,9 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
   if (format === "native-elf") validateElf64Layout(readFileSync(absInput));
 
   const intensity = options.intensity ?? "balanced";
-  const seed = String(options.seed ?? "bla-shield-seed-v1");
+  // Prefer caller/CLI/project seed; mint an ephemeral random seed only as last resort
+  // (CLI resolves + persists per-project seeds via resolveProjectSeed / .blarc).
+  const seed = String(options.seed ?? generateProjectSeed());
   const prng = new SeededPrng(seed);
   const chaffPayloads = generateChaffPayloads(prng, intensity);
 

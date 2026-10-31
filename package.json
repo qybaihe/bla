@@ -1,7 +1,7 @@
 {
   "name": "bla-agents",
-  "version": "1.6.0",
-  "description": "BLA (Blind LLM Agents) \u2014 Adversarial defense shield that protects binaries, Electron apps, JS bundles, Python, WebAssembly, SQLite, AI Models, and Android DEX/IL2CPP against AI reverse-engineering agents like REA.",
+  "version": "1.5.2",
+  "description": "BLA (Blind LLM Agents) — Adversarial defense shield that protects binaries, Electron apps, JS bundles, Python, WebAssembly, SQLite, AI Models, and Android DEX/IL2CPP against AI reverse-engineering agents like REA.",
   "keywords": [
     "reverse-engineering-defense",
     "anti-rea",
@@ -55,7 +55,7 @@
     "DISCLAIMER.md"
   ],
   "engines": {
-    "node": "^22.13.0 || >=24.0.0"
+    "node": "^22.23.4 || >=24.0.0"
   },
   "scripts": {
     "build": "node scripts/sync-version.mjs && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
@@ -78,7 +78,7 @@
     "@babel/parser": "^7.26.0",
     "@babel/traverse": "^7.26.0",
     "@babel/types": "^7.26.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/babel__generator": "^7.6.8",

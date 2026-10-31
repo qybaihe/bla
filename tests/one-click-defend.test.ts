@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("One-Click Agent Defense Hardening (defendTarget / bla defend / bla_defend)", () => {
-  it("executes all 5 stages and emits a signed .bla-manifest.json", () => {
+  it("executes all 5 stages and emits an unsigned .bla-manifest.json when opted in", () => {
     const dir = createTempDir();
     const input = join(dir, "payment-engine.ts");
     writeFileSync(

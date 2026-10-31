@@ -17,7 +17,7 @@ jobs:
     name: Verify website HTML, assets & links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify required pages and assets exist
         run: |
@@ -34,7 +34,9 @@ jobs:
             website/assets/logo.png \
             website/assets/favicon.png \
             website/assets/favicon.svg \
-            website/assets/social-card.svg; do
+            website/assets/social-card.svg \
+            website/schemas/defense-manifest-v1.json \
+            website/schemas/bla.config.v1.json; do
             test -f "$f" || (echo "Missing required website file: $f" && exit 1)
           done
           echo "All website pages and assets verified."

@@ -181,6 +181,13 @@ Protections are format-native (no commercial packer / external LLVM required). R
 
 ---
 
+
+## Project config defaults (P0)
+
+- **Per-project seed** — BLA mints a random seed into `.blarc` / `bla.config.json` on first use. Legacy shared fingerprints (`bla-shield-seed-v1`, …) are no longer the default.
+- **`--llm-directives`** — risky LLM-facing bait (fake COPPA/medical notices, dual-use imitation, in-band AI chat markers) is **off by default**; pass the flag (or `llmDirectives: true` / MCP `llm_directives`) to opt in.
+- **`--manifest`** — `.bla-manifest.json` is an **unsigned** attestation (not ed25519-signed) and is **opt-in**; it is not shipped next to customer artifacts by default. Schema: [`defense-manifest-v1.json`](website/schemas/defense-manifest-v1.json).
+
 ## FAQ
 
 <details>

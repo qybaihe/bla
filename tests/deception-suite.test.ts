@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withLlmDirectives } from "../src/core/llm-directives.js";
 import { SeededPrng } from "../src/core/prng.js";
 import {
   generateArchitectureMirage,
@@ -57,7 +58,7 @@ describe("Counter-REA Model-Misjudgment Induction Suite", () => {
 
   it("generates Canary Credential Honeypots triggering REA recordedTransportUrl ambiguous redaction and System-Diagnostic Rabbit Holes", () => {
     const prng = new SeededPrng("canary-diag");
-    const canary = generateCanaryHoneypot(prng, "bankrupt");
+    const canary = withLlmDirectives(true, () => generateCanaryHoneypot(prng, "bankrupt"));
     expect(canary.syntheticCanaryTokens).toHaveLength(8);
     expect(canary.complianceBoundaryNotices).toHaveLength(3);
     expect(canary.code).toContain("COPPA_16_CFR_312");

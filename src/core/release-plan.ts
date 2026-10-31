@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
+const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
 export type ReleaseConsistencyErrorCode =
   | "INVALID_PACKAGE_VERSION"
   | "IDENTITY_VERSION_MISMATCH"
@@ -298,18 +300,6 @@ function sha256File(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
-function runNpmCommand(args: readonly string[], cwd: string): void {
-  if (process.platform === "win32") {
-    execFileSync(
-      process.env.ComSpec || "cmd.exe",
-      ["/d", "/s", "/c", "npm", ...args],
-      { cwd, stdio: "pipe" },
-    );
-    return;
-  }
-  execFileSync("npm", [...args], { cwd, stdio: "pipe" });
-}
-
 function resolveTarCommand(): string {
   if (process.platform === "win32") {
     const winSystemTar = join(
@@ -342,7 +332,12 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
   const version = pkgJson.version;
 
   // 1. Pack primary (`bla-agents-<version>.tgz`) directly into `absOut`
-  runNpmCommand(["pack", "--pack-destination", absOut], absRepo);
+  execFileSync(npmCmd, ["pack", "--pack-destination", absOut], {
+    cwd: absRepo,
+    stdio: "pipe",
+    // .cmd shims on Windows require a shell; bare execFile EINVAL otherwise.
+    shell: process.platform === "win32",
+  });
 
   const primaryFilename = `bla-agents-${version}.tgz`;
   const primaryPath = join(absOut, primaryFilename);
@@ -367,7 +362,11 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
     unpackedPkg.name = "bla-shield";
     writeFileSync(unpackedPkgJsonPath, JSON.stringify(unpackedPkg, null, 2) + "\n", "utf8");
 
-    runNpmCommand(["pack", "--pack-destination", absOut, "--ignore-scripts"], unpackedPkgDir);
+    execFileSync(npmCmd, ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
+      cwd: unpackedPkgDir,
+      stdio: "pipe",
+      shell: process.platform === "win32",
+    });
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
   }

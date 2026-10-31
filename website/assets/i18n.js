@@ -4,7 +4,7 @@
  */
 window.BLA_I18N = {
   en: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "Overview",
     "nav.getStarted": "Get Started",
     "nav.showcase": "Benchmarks",
@@ -25,7 +25,7 @@ window.BLA_I18N = {
     "sim.eyebrow": "Static & Semantic Analysis Comparison",
     "sim.title": "Unprotected Baseline vs. Protected with BLA (`bla-agents`)",
     "sim.lead":
-      'Select a target format below to see how <code>npx bla-agents defend</code> changes static analyzer output, resource budget consumption, and reconstruction status.',
+      'Select a target format below to see how <code>npx bla-agents harden</code> changes static analyzer output, resource budget consumption, and reconstruction status.',
     "sim.tab.electron": "Electron .asar",
     "sim.tab.dxball": "JavaScript / TypeScript",
     "sim.tab.native": "Native ELF / Mach-O / PE",
@@ -57,7 +57,7 @@ window.BLA_I18N = {
     "pillars.c3.tag": "03 · One-Command Workflow",
     "pillars.c3.title": "MCP Server, CLI & Bundler Plugins",
     "pillars.c3.desc":
-      'Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_defend</code> or <code>npx bla-agents defend</code>.',
+      'Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_harden</code> or <code>npx bla-agents harden</code>.',
     "formats.eyebrow": "19 Supported Artifact Formats",
     "formats.title": "Full-Stack & Binary Coverage, Zero External Dependencies",
     "formats.lead": "Every static, bytecode, database, model, and binary protection pass runs locally in Node.js 22.13+ / 24+.",
@@ -110,7 +110,10 @@ window.BLA_I18N = {
     "faq.q2": "Does BLA affect runtime performance or change program output?",
     "faq.a2": "No. Static budget guards and call-graph state machines are placed behind O(1) bitwise invariants (such as <code>(Math.imul(x, x + 1) &amp; 1) === 0</code>) inside unreachable branches, so hot-path execution remains unchanged.",
     "faq.q3": "How do I run the full protection workflow in one step?",
-    "faq.a3": "Run <code>npx bla-agents@latest defend ./dist --manifest</code> from your terminal, or ask your connected coding agent to call the <code>bla_defend</code> MCP tool. It executes release exposure checks, auditing, protection, and verification in sequence.",
+    "faq.a3": "Run <code>npx bla-agents@latest harden .</code> from your terminal, or ask your connected coding agent to call the <code>bla_harden</code> MCP tool. It executes release exposure checks, auditing, protection, and verification in sequence.",
+
+    "faq.q5": "What are BLA's honest limits?",
+    "faq.a5": "BLA raises analyzer cost and plants decoys; it is not a magic anti-RE seal. Traditional interactive reverse engineering (Ghidra, Frida, LLDB, JADX sessions) is out of scope of the commodity REA red-team numbers. Try the public <a href=\"https://github.com/qybaihe/bla/tree/main/challenge\">CrackMe challenge</a> to see how far an agent gets against a bankrupt-hardened fixture.",
     "faq.q4": "Does BLA preserve existing GGUF model tensors and binary checksums?",
     "faq.a4": "Yes. <code>protectGgufBuffer</code> preserves all original GGUF v2/v3 KV entries and trailing tensor slices while appending metadata entries, and Android DEX protection recomputes both the 20-byte SHA-1 signature and Adler32 checksum."
   },
@@ -136,7 +139,7 @@ window.BLA_I18N = {
     "sim.eyebrow": "静态与语义分析对比",
     "sim.title": "未保护基线 vs. BLA (`bla-agents`) 加固后",
     "sim.lead":
-      '选择下方目标产物类型，查看执行 <code>npx bla-agents defend</code> 前后静态分析器的解析状态与分析开销变化。',
+      '选择下方目标产物类型，查看执行 <code>npx bla-agents harden</code> 前后静态分析器的解析状态与分析开销变化。',
     "sim.tab.electron": "Electron .asar 桌面应用",
     "sim.tab.dxball": "JavaScript / TypeScript",
     "sim.tab.native": "原生二进制 ELF / Mach-O / PE",
@@ -168,7 +171,7 @@ window.BLA_I18N = {
     "pillars.c3.tag": "03 · 一键接入与加固流程",
     "pillars.c3.title": "支持 MCP 代理调用、CLI 与打包插件",
     "pillars.c3.desc":
-      '运行 <code>npx bla-agents setup</code> 即可注册至 Claude Code、Cursor、Codex、Windsurf 与 Gemini CLI，通过 <code>bla_defend</code> 或 <code>npx bla-agents defend</code> 一键完成 5 阶段加固与验证。',
+      '运行 <code>npx bla-agents setup</code> 即可注册至 Claude Code、Cursor、Codex、Windsurf 与 Gemini CLI，通过 <code>bla_harden</code> 或 <code>npx bla-agents harden</code> 一键完成 5 阶段加固与验证。',
     "formats.eyebrow": "支持 19 种软件与模型产物",
     "formats.title": "全栈与原生二进制覆盖，零外部编译依赖",
     "formats.lead": "所有源码、字节码、数据库、模型与原生二进制处理模块均在本地 Node.js 22.13+ / 24+ 运行。",
@@ -221,9 +224,11 @@ window.BLA_I18N = {
     "faq.q2": "使用 BLA 加固会影响软件运行性能或改变输出结果吗？",
     "faq.a2": "不会。所有静态预算守卫与扩展状态机均位于 O(1) 位运算不透明谓词（如 <code>(Math.imul(x, x + 1) &amp; 1) === 0</code>）保护的不可达分支中，不会在正常热路径上执行。",
     "faq.q3": "如何在配置完成后一键执行完整的保护流程？",
-    "faq.a3": "在终端运行 <code>npx bla-agents@latest defend ./dist --manifest</code>，或让已连接的编程代理调用 <code>bla_defend</code> MCP 工具，即可自动完成泄露检查、暴露审计、保护注入与结果验证。",
+    "faq.a3": "在终端运行 <code>npx bla-agents@latest harden .</code>，或让已连接的编程代理调用 <code>bla_harden</code> MCP 工具，即可自动完成泄露检查、暴露审计、保护注入与结果验证。",
     "faq.q4": "BLA 会影响 GGUF 模型权重或原生二进制的签名结构吗？",
     "faq.a4": "不会。<code>protectGgufBuffer</code> 会完整保留 GGUF v2/v3 原有的全部 KV 键值对与尾部张量数据，Android DEX 处理模块则会自动重新计算 20 字节 SHA-1 签名与 Adler32 校验和。"
+    "faq.q5": "BLA 的诚实边界是什么？",
+    "faq.a5": "BLA 提高自动化分析成本并投放诱饵，并非万能反逆向封印。传统交互式逆向（Ghidra / Frida / LLDB / JADX 人工会话）不在现有 REA 红队数字范围内。欢迎挑战公开 <a href=\"https://github.com/qybaihe/bla/tree/main/challenge\">CrackMe</a>，观察代理在 bankrupt 加固样本上的表现。",
   },
   "zh-TW": {
     "nav.badge": "藍軍防護 v1.1",
@@ -253,7 +258,7 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · 防禦性軟體保護工具 · MIT 開源協議"
   },
   ja: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "概要",
     "nav.getStarted": "クイックスタート",
     "nav.showcase": "ベンチマーク",
@@ -280,7 +285,7 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · MIT License"
   },
   ko: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "개요",
     "nav.getStarted": "시작하기",
     "nav.showcase": "벤치마크",
@@ -305,7 +310,7 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · MIT License"
   },
   es: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "Resumen",
     "nav.getStarted": "Empezar",
     "nav.showcase": "Benchmarks",
@@ -323,7 +328,7 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · Licencia MIT"
   },
   fr: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "Aperçu",
     "nav.getStarted": "Démarrer",
     "nav.showcase": "Benchmarks",
@@ -341,7 +346,7 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · Licence MIT"
   },
   de: {
-    "nav.badge": "BLUE SHIELD v1.1",
+    "nav.badge": "BLUE SHIELD v1.5",
     "nav.overview": "Übersicht",
     "nav.getStarted": "Schnellstart",
     "nav.showcase": "Benchmarks",
