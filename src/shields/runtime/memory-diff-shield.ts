@@ -85,7 +85,7 @@ export function generateShadowHeapChurnShield(
   }
 
   const decoySecret = encodeSplitShareString(
-    `BLA_ENCLAVE_MASTER_KEY_${tag}_SLOT_0x${prng.hex(8)}`,
+    `TEE_ENCLAVE_MASTER_KEY_${tag}_SLOT_0x${prng.hex(8)}`,
     prng,
   );
   const splitShareHelper = generateSplitShareRuntimeHelper(

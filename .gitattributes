@@ -1,4 +1,5 @@
 * text=auto eol=lf
+
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -6,5 +7,17 @@
 *.webp binary
 *.ico binary
 *.wasm binary
-*.tgz binary
+*.pyc binary
+*.dex binary
+*.sqlite binary
 *.asar binary
+*.gguf binary
+*.safetensors binary
+*.beam binary
+*.pcap binary
+*.tgz binary
+*.so binary
+*.dll binary
+*.exe binary
+*.dat binary
+*.class binary

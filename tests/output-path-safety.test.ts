@@ -58,7 +58,12 @@ describe("protectTarget output path safety", () => {
     const aliasParent = join(root, "alias");
     mkdirSync(insideDir, { recursive: true });
     writeFileSync(join(inputDir, "index.js"), "export const answer = 42;\n");
-    symlinkSync(insideDir, aliasParent, "dir");
+    try {
+      symlinkSync(insideDir, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (err) {
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") return;
+      throw err;
+    }
 
     expect(() =>
       protectTarget({
@@ -75,10 +80,22 @@ describe("protectTarget output path safety", () => {
     const hardlinkFile = join(root, "bundle.hardlink.js");
     const original = "export function calc(x) { return x + 1; }\n";
     writeFileSync(inputFile, original);
-    symlinkSync(inputFile, symlinkFile);
     linkSync(inputFile, hardlinkFile);
+    let hasFileSymlink = true;
+    try {
+      symlinkSync(inputFile, symlinkFile);
+    } catch (err) {
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
+        hasFileSymlink = false;
+      } else {
+        throw err;
+      }
+    }
 
-    for (const outputPath of [inputFile, symlinkFile, hardlinkFile]) {
+    const candidates = hasFileSymlink
+      ? [inputFile, symlinkFile, hardlinkFile]
+      : [inputFile, hardlinkFile];
+    for (const outputPath of candidates) {
       expect(() => protectTarget({ inputPath: inputFile, outputPath })).toThrow(
         /explicitly enable inPlace/,
       );
@@ -87,7 +104,7 @@ describe("protectTarget output path safety", () => {
 
     protectTarget({
       inputPath: inputFile,
-      outputPath: symlinkFile,
+      outputPath: hasFileSymlink ? symlinkFile : hardlinkFile,
       inPlace: true,
     });
     expect(readFileSync(inputFile, "utf8")).not.toBe(original);

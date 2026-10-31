@@ -140,7 +140,12 @@ describe("read-only release exposure observations", () => {
     const root = temp();
     const external = temp();
     writeFileSync(join(external, "private.map"), map);
-    symlinkSync(external, join(root, "linked"), "dir");
+    try {
+      symlinkSync(external, join(root, "linked"), "dir");
+    } catch (err) {
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") return;
+      throw err;
+    }
     expect(inspectReleaseExposure(root)).toMatchObject({
       status: "partial",
       filesInspected: 0,

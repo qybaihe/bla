@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -309,6 +309,14 @@ describe("P1 Format Contracts (#13 ASAR, #14 Python, #15 JS/Bundler, #16 ELF64, 
   });
 
   describe("Issue #14: Python module docstring and future-import prologue placement", () => {
+    const PYTHON_BIN =
+      ["python3", "python"].find((candidate) => {
+        const res = spawnSync(candidate, ["-c", "import sys; sys.exit(0)"], {
+          stdio: "pipe",
+        });
+        return res.status === 0;
+      }) ?? "python3";
+
     function verifyPythonAstAndDocstring(
       code: string,
       expectedDocstring: string | null,
@@ -330,7 +338,7 @@ describe("P1 Format Contracts (#13 ASAR, #14 Python, #15 JS/Bundler, #16 ELF64, 
           "        futures.extend(alias.name for alias in node.names)",
           "print(json.dumps({'doc': doc, 'futures': futures}))",
         ].join("\n");
-        const stdout = execFileSync("python3", ["-c", script, pyFile], {
+        const stdout = execFileSync(PYTHON_BIN, ["-c", script, pyFile], {
           encoding: "utf8",
         });
         const parsed = JSON.parse(stdout.trim()) as {

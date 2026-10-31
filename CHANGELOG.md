@@ -4,6 +4,76 @@ All notable changes to **bla-agents** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Counters REA `47fa6ab37` (`feat(electron): report custom URL protocol registrations`
+and its new 26th `"url-scheme"` `ReconstructionObligationLedger` family), closes
+real-world production red-lines on code-signed Mach-O / Authenticode PE /
+PyInstaller / Deno / ZIP-SFX native binaries and multi-script HTML bundles, adds
+full Windows CI & cross-platform POSIX/SARIF path support, and upgrades the
+public challenge target to **CrackMe v5.2**.
+
+### Added
+
+- **Counter-REA Electron Custom URL Protocol & Boundary Blackout**
+  (`src/shields/javascript/ast-shield.ts`, `src/shields/exhaustion/rea-budget-matrix.ts`,
+  `src/shields/exhaustion/obligation-flooder.ts`) — de-literalizes custom URL
+  protocol schemes (including 1–2 char schemes across all intensities) across
+  `app.setAsDefaultProtocolClient` / `removeAsDefaultProtocolClient` /
+  `isDefaultProtocolClient`, `protocol.handle` / `register*Protocol` /
+  `intercept*Protocol`, `session.*.protocol.*`, and
+  `protocol.registerSchemesAsPrivileged` (both `scheme` strings and all 9
+  `privileges` booleans so REA's `enabled_privileges` collapses to `null` and
+  `unknownFindings` increments). Wraps `contextBridge.exposeInMainWorld` API
+  objects in $O(1)$ opaque ternaries (`status: "dynamic", members: []`),
+  de-literalizes `BrowserWindow` `webPreferences` booleans & `preload` paths,
+  preserves TypeScript `as const` assertions, floods REA's 26th `"url-scheme"`
+  obligation family with proven `"electron"` dead-branch decoy protocols
+  (never injecting `require("electron")` into non-Electron web bundles), and
+  exposes `electronProtocolsProtected` on `JsShieldTransformResult`.
+- **Signed & Standalone Native Binary Integrity Guard**
+  (`src/shields/formats/native.ts`, `src/engine/protector.ts`, `src/engine/auditor.ts`) —
+  exports `detectNativeEofAppendHazard` (`"macho-code-signature"` `LC_CODE_SIGNATURE`,
+  `"pe-authenticode-signature"` `DataDirectory[4]`, `"pyinstaller-archive"`,
+  `"deno-standalone"`, `"zip-sfx-trailer"`). Preserves signed and EOF-indexed
+  standalone binaries byte-exact (`nativeBinaryPreserved: true`, passing strict
+  macOS `codesign -vvv --strict`), preserves executable file mode bits (`0o755`),
+  plants a `<binary>.bunfs-snapshot` decoy graph sidecar, and closes the
+  `auditTarget` / `verifyTarget` sidecar verification loop.
+- **Windows CI Matrix & Cross-Platform Support** (`.github/workflows/ci.yml`,
+  `.gitattributes`, `src/core/sarif.ts`, `src/core/release-plan.ts`,
+  `src/core/release-exposure.ts`, `src/engine/harden.ts`) — adds `windows-latest`
+  to GitHub Actions CI alongside `ubuntu-latest` and `macos-latest`.
+- **CrackMe v5.2** (`challenge/bla-crackme.cjs`, `challenge/README.md`) —
+  normalizes CRLF (`\r\n` → `\n`) before FNV-1a self-seal hashing (anchor
+  `0x3aa14b2c`) for Windows `core.autocrlf` resilience, and cross-verifies
+  in-memory V8 `Function.prototype.toString` of 4 core procedures against disk
+  bytes to defeat `fs.readFileSync(__filename)` redirection/virtualization hooks.
+- `tests/v160-electron-native-html-crossplatform.test.ts` — 8 end-to-end tests
+  covering Electron protocol/boundary blackout, signed Mach-O (`codesign --strict`) /
+  Authenticode PE / PyInstaller / Deno / ZIP-SFX preservation, HTML multi-script
+  isolation, Windows SARIF drive-letter URIs, and CrackMe v5.2 anti-virtualization.
+
+### Fixed
+
+- **HTML Web Bundle Multi-Script Isolation & Non-JS `<script>` Preservation**
+  (`src/engine/protector.ts`, `src/engine/auditor.ts`) — skips non-JS `<script>`
+  tags (`type="importmap"`, `type="application/json"`, `src=...`), assigns
+  per-script seeds (`${seed}:html-script-${i}`) and `module`/`script` carrier
+  modes to eliminate global scope identifier collisions across multiple `<script>`
+  tags, escapes `<\/script>`, injects an inert bootstrap `<script>` shield for
+  external-only Vite `index.html` bundles, and extracts inline `<script>` bodies
+  during `auditTarget` instead of feeding raw `<!DOCTYPE html>` to Babel.
+- **Auditor Chaff Manifest Recognition & Anti-Grep Stealth Scrub**
+  (`src/engine/auditor.ts`, `src/shields/deception/*`, `src/shields/runtime/*`) —
+  recognizes all 5 `ENCLAVE_MIRAGE_TEMPLATES` and chaff manifest prefixes
+  (eliminating seed-dependent `PARTIALLY_SHIELDED` flakes) and scrubs residual
+  `BLA-ENCLAVE` / `EV-BLA-` strings in favor of `TEE-*` / `EV-TEE-*`.
+- **Windows Drive-Letter SARIF Locations & 8.3 Short-Path Release Exposure**
+  (`src/core/sarif.ts`, `src/core/release-exposure.ts`) — prevents `C:\path:42`
+  from splitting on the drive colon (`uri: "C"`), normalizes POSIX `/` URIs, and
+  handles Windows `RUNNER~1` 8.3 short temp paths in `inspectReleaseExposure`.
+
 ## [1.5.3] — 2026-11-01
 
 Trust, supply-chain and distribution hardening (P0, #23 #24 #25).

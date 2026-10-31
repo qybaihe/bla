@@ -606,6 +606,147 @@ function injectMappedFlutterIsolatePool(
   };
 }
 
+export type NativeEofAppendHazard =
+  | "none"
+  | "macho-code-signature"
+  | "pe-authenticode-signature"
+  | "pyinstaller-archive"
+  | "deno-standalone"
+  | "zip-sfx-trailer";
+
+const PYINSTALLER_COOKIE_MAGIC = Buffer.from([
+  0x4d, 0x45, 0x49, 0x0c, 0x0b, 0x0a, 0x0b, 0x0e,
+]);
+const DENO_STANDALONE_MAGIC = Buffer.from("d3n0l4nd", "ascii");
+
+function machoSliceHasCodeSignature(bytes: Buffer, sliceOffset: number, sliceLength: number): boolean {
+  if (sliceOffset < 0 || sliceLength < 32 || sliceOffset + sliceLength > bytes.length) {
+    return false;
+  }
+  const magicBE = bytes.readUInt32BE(sliceOffset);
+  const is64LE = magicBE === 0xcffaedfe;
+  const is64BE = magicBE === 0xfeedfacf;
+  const is32LE = magicBE === 0xcefaedfe;
+  const is32BE = magicBE === 0xfeedface;
+  if (!is64LE && !is64BE && !is32LE && !is32BE) return false;
+
+  const isLE = is64LE || is32LE;
+  const headerSize = is64LE || is64BE ? 32 : 28;
+  const readU32 = (off: number) =>
+    isLE ? bytes.readUInt32LE(off) : bytes.readUInt32BE(off);
+
+  const ncmds = readU32(sliceOffset + 16);
+  const sizeofcmds = readU32(sliceOffset + 20);
+  if (ncmds === 0 || ncmds > 4096 || headerSize + sizeofcmds > sliceLength) {
+    return false;
+  }
+
+  let cur = sliceOffset + headerSize;
+  const end = cur + sizeofcmds;
+  for (let i = 0; i < ncmds && cur + 8 <= end; i++) {
+    const cmd = readU32(cur);
+    const cmdsize = readU32(cur + 4);
+    if (cmdsize < 8 || cur + cmdsize > end) break;
+    // LC_CODE_SIGNATURE === 0x1d (29)
+    if (cmd === 0x1d) return true;
+    cur += cmdsize;
+  }
+  return false;
+}
+
+/**
+ * Detects native executable formats where appending a raw EOF trailer would
+ * invalidate OS code-signing (`codesign --strict` / `WinVerifyTrust`) or break
+ * EOF-relative standalone runtime archives (PyInstaller, `deno compile`, ZIP-SFX).
+ */
+export function detectNativeEofAppendHazard(bytes: Buffer): NativeEofAppendHazard {
+  if (bytes.length < 16) return "none";
+
+  // 1. Mach-O thin or Universal Fat binary carrying LC_CODE_SIGNATURE (0x1d)
+  const magicBE = bytes.readUInt32BE(0);
+  if (
+    magicBE === 0xcffaedfe ||
+    magicBE === 0xfeedfacf ||
+    magicBE === 0xcefaedfe ||
+    magicBE === 0xfeedface
+  ) {
+    if (machoSliceHasCodeSignature(bytes, 0, bytes.length)) {
+      return "macho-code-signature";
+    }
+  } else if (magicBE === 0xcafebabe && bytes.length >= 28) {
+    const nfat = bytes.readUInt32BE(4);
+    if (nfat >= 1 && nfat <= 30 && 8 + nfat * 20 <= bytes.length) {
+      for (let i = 0; i < nfat; i++) {
+        const entryOff = 8 + i * 20;
+        const sliceOff = bytes.readUInt32BE(entryOff + 8);
+        const sliceSize = bytes.readUInt32BE(entryOff + 12);
+        if (machoSliceHasCodeSignature(bytes, sliceOff, sliceSize)) {
+          return "macho-code-signature";
+        }
+      }
+    }
+  }
+
+  // 2. PE32 / PE32+ carrying Authenticode IMAGE_DIRECTORY_ENTRY_SECURITY (DataDirectory[4])
+  if (bytes[0] === 0x4d && bytes[1] === 0x5a && bytes.length >= 0x40) {
+    const lfanew = bytes.readUInt32LE(0x3c);
+    if (
+      lfanew >= 0x40 &&
+      lfanew + 26 <= bytes.length &&
+      bytes.readUInt32LE(lfanew) === 0x00004550
+    ) {
+      const optOff = lfanew + 24;
+      const optMagic = bytes.readUInt16LE(optOff);
+      const rvaCountOff =
+        optMagic === 0x10b ? optOff + 92 : optMagic === 0x20b ? optOff + 108 : -1;
+      const dd4Off =
+        optMagic === 0x10b ? optOff + 128 : optMagic === 0x20b ? optOff + 144 : -1;
+      if (rvaCountOff > 0 && dd4Off + 8 <= bytes.length) {
+        const numRva = bytes.readUInt32LE(rvaCountOff);
+        if (numRva >= 5) {
+          const certOffset = bytes.readUInt32LE(dd4Off);
+          const certSize = bytes.readUInt32LE(dd4Off + 4);
+          if (certOffset > 0 && certSize > 0) {
+            return "pe-authenticode-signature";
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Deno `deno compile` standalone trailer (`d3n0l4nd` in trailing 64 bytes)
+  const tail64 = bytes.subarray(Math.max(0, bytes.length - 64));
+  if (tail64.includes(DENO_STANDALONE_MAGIC)) {
+    return "deno-standalone";
+  }
+
+  // 4. PyInstaller onefile CArchive cookie (`MEI\x0c\x0b\x0a\x0b\x0e` in trailing 64 KiB)
+  const tail64k = bytes.subarray(Math.max(0, bytes.length - 65_536));
+  if (tail64k.includes(PYINSTALLER_COOKIE_MAGIC)) {
+    return "pyinstaller-archive";
+  }
+
+  // 5. Self-extracting ZIP / AppImage with exact EOCD (`PK\x05\x06`) reaching EOF
+  if (bytes.length >= 22) {
+    const searchStart = Math.max(0, bytes.length - 65_557);
+    for (let pos = bytes.length - 22; pos >= searchStart; pos--) {
+      if (
+        bytes[pos] === 0x50 &&
+        bytes[pos + 1] === 0x4b &&
+        bytes[pos + 2] === 0x05 &&
+        bytes[pos + 3] === 0x06
+      ) {
+        const commentLen = bytes.readUInt16LE(pos + 20);
+        if (pos + 22 + commentLen === bytes.length) {
+          return "zip-sfx-trailer";
+        }
+      }
+    }
+  }
+
+  return "none";
+}
+
 /**
  * Protects a Native Binary (ELF / Mach-O / PE) against REA's native & desktop analyzers
  * while strictly preserving ELF64 `PT_LOAD` (`p_offset`, `p_filesz`, `p_memsz` / BSS) and
@@ -639,6 +780,8 @@ export function protectNativeBinary(
    */
   readonly bunStandaloneCarrier: BunCarrierDetection["kind"];
   readonly bunStandaloneGraphPreserved: boolean;
+  readonly nativeAppendHazard: NativeEofAppendHazard;
+  readonly nativeBinaryPreserved: boolean;
 } {
   const bunCarrier = detectBunStandaloneGraph(bytes);
   if (
@@ -659,6 +802,30 @@ export function protectNativeBinary(
       binarySectionsPatched: 0,
       bunStandaloneCarrier: bunCarrier.kind,
       bunStandaloneGraphPreserved: true,
+      nativeAppendHazard: "none",
+      nativeBinaryPreserved: true,
+    };
+  }
+  const appendHazard = options.electronHardeningContext
+    ? "none"
+    : detectNativeEofAppendHazard(bytes);
+  if (appendHazard !== "none") {
+    return {
+      buffer: Buffer.from(bytes),
+      rustcHashesInjected: 0,
+      electronFuseSentinelsInjected: 0,
+      dartSnapshotHashesInjected: 0,
+      dartPoolUrisInjected: 0,
+      dartPoolTokensInjected: 0,
+      goBuildInfoExceedsLimit: false,
+      mappedGoBuildInfoPlanted: false,
+      mappedFlutterPoolPlanted: false,
+      chaffPayloadsEmbedded: 0,
+      binarySectionsPatched: 0,
+      bunStandaloneCarrier: bunCarrier.kind,
+      bunStandaloneGraphPreserved: false,
+      nativeAppendHazard: appendHazard,
+      nativeBinaryPreserved: true,
     };
   }
   const isElfMagic =
@@ -814,6 +981,8 @@ export function protectNativeBinary(
     ...(electronHardeningReport ? { electronHardeningReport } : {}),
     bunStandaloneCarrier: bunCarrier.kind,
     bunStandaloneGraphPreserved: bunCarrier.kind !== "none",
+    nativeAppendHazard: "none",
+    nativeBinaryPreserved: false,
   };
 }
 
