@@ -1,0 +1,57 @@
+{
+  "schema": "bla-crackme-v6-seal/v2",
+  "mode": "release",
+  "blaVersion": "1.6.0",
+  "recipe": "npm run crackme:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <seed>`)",
+  "seed": "bla-crackme-v6-harden-native-2026-11",
+  "intensity": "bankrupt",
+  "llmDirectives": false,
+  "emitManifest": false,
+  "keySha256": "f8dbe1cfaf9b678dee320e8051d29daa2fd539409603aa217982456d917eef1a",
+  "flagSha256": "0b27343c545cab7505ab35f09e7a9afdb4a2c9e004d72281ef98cd56aeb710c5",
+  "templates": {
+    "src/vault.template.cjs": "df767cf0713f40c89be597c14a1188bba448e96d9c9e2597c599bd37c7d229a7",
+    "src/panel.html": "a3104735935e3b4fdc830d853792e0c27b27a79688b7ba475ab92ad83bc4109e",
+    "src/core.wasm": "c634aaa7c6a9829591477fd137ae2de7c4c3a806c77d0ae089c1130345cada0d"
+  },
+  "artifacts": {
+    "vault.cjs": {
+      "sha256": "71a9764007b5c0b8473fc22a46e45c3258660a8b0afe58c3be74a25fac97ecb7",
+      "bytes": 164580
+    },
+    "panel.html": {
+      "sha256": "bd1e64b391ac309e697fcb9d265715e66e2a593e54dd03cf45f639ec47d12631",
+      "bytes": 127931
+    },
+    "core.wasm.gz": {
+      "sha256": "5e3da1776dfeaba74d4cd3aeae3fe63e627ad92f5e437b2600b234a92158f6d4",
+      "bytes": 18121
+    },
+    "core.wasm": {
+      "sha256": "2c51117462b81f409ee80479f3d0abd83cbd267b9f51e1d5fa9f2c4cd34c1a7e",
+      "bytes": 6880354,
+      "note": "raw harden output; committed gzipped"
+    }
+  },
+  "hardenSummary": [
+    {
+      "relativePath": "core.wasm",
+      "format": "wasm",
+      "defenseScore": 98,
+      "success": true
+    },
+    {
+      "relativePath": "panel.html",
+      "format": "html-bundle",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "vault.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    }
+  ],
+  "note": "Public commitment: prove a solve by publishing SHA-256(FLAG{...}) matching flagSha256. Plaintext key/flag are not in git."
+}

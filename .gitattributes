@@ -21,3 +21,4 @@
 *.exe binary
 *.dat binary
 *.class binary
+*.wasm.gz binary

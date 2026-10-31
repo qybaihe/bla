@@ -6,7 +6,7 @@
     <title>CrackMe v6 — BLA (bla-agents)</title>
     <meta
       name="description"
-      content="Public BLA CrackMe v6: a clean license gate hardened by the real bla protect / harden pipeline across L1/L2/L3 tiers."
+      content="Public BLA CrackMe v6: a multi-format app (Node + HTML + WebAssembly) hardened by the real bla harden pipeline at bankrupt intensity."
     />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="stylesheet" href="../assets/styles.css" />
@@ -50,9 +50,9 @@
     <main>
       <section class="hero">
         <div class="container">
-          <h1 data-i18n="crackme.title">CrackMe v6 — BLA-generated challenge</h1>
+          <h1 data-i18n="crackme.title">CrackMe v6 — harden-native challenge</h1>
           <p class="lede" data-i18n="crackme.lede">
-            Test a target that was genuinely hardened by BLA — not a hand-written CTF sponge.
+            The public target is literally <code>bla harden</code> output: a small multi-format app (Node vault + HTML panel + WebAssembly core) hardened at bankrupt intensity.
           </p>
         </div>
       </section>
@@ -61,24 +61,22 @@
         <div class="container prose">
           <h2 data-i18n="crackme.why.title">Why v6</h2>
           <p data-i18n="crackme.why.body">
-            CrackMe v5.x was a custom crypto construction. v6 rebuilds the challenge around the product claim:
-            run <code>bla protect</code> / the <code>bla harden</code> engine on a clean Node.js license gate and publish the output.
+            v5.x was a hand-written crypto sponge. The harden-native edition runs <code>hardenProject()</code> — the same pipeline as <code>bla harden &lt;dir&gt; --intensity bankrupt</code> — over a real app tree, with risky LLM directive layers OFF. The cleartext template is public; the challenge is recovering the per-build constants and logic from the hardened output.
           </p>
 
-          <h2 data-i18n="crackme.tiers.title">Tiers</h2>
+          <h2 data-i18n="crackme.tiers.title">Stages</h2>
           <ul>
-            <li data-i18n="crackme.tiers.l1"><strong>L1</strong> — <code>balanced</code> (default harden surface)</li>
-            <li data-i18n="crackme.tiers.l2"><strong>L2</strong> — <code>maximum</code></li>
-            <li data-i18n="crackme.tiers.l3"><strong>L3</strong> — <code>bankrupt</code> + <code>--llm-directives</code></li>
+            <li data-i18n="crackme.tiers.l1"><strong>Stage A</strong> — 16 key-byte lanes sealed through the hardened <code>core.wasm</code></li>
+            <li data-i18n="crackme.tiers.l2"><strong>Stage B</strong> — the hardened <code>panel.html</code> derives an entitlement token</li>
+            <li data-i18n="crackme.tiers.l3"><strong>Stage C</strong> — the key decrypts the flag; one uniform DENIED</li>
           </ul>
 
           <h2 data-i18n="crackme.run.title">Run</h2>
-          <pre><code>env -u NODE_OPTIONS node challenge/v6/artifacts/L1.cjs '&lt;authorization-key&gt;'</code></pre>
+          <pre><code>npm run crackme:v6 -- '&lt;16-char-key&gt;'</code></pre>
 
           <h2 data-i18n="crackme.submit.title">Submit a solve</h2>
           <p data-i18n="crackme.submit.body">
-            Hash the FLAG with SHA-256 and open a GitHub issue using the CrackMe v6 solve template.
-            The hash must match <code>flagSha256</code> in the public commitment file (plaintext FLAG is not in git).
+            Hash the FLAG with SHA-256 and open a GitHub issue using the CrackMe v6 solve template. The hash must match <code>flagSha256</code> in <code>challenge/v6/SEAL.json</code> (plaintext key and FLAG are not in git).
           </p>
 
           <p>
