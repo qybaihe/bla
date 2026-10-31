@@ -188,6 +188,9 @@ const NUMERIC_EXPECTATIONS = [
   { name: "MAX_BUN_RETAINED_BYTES", expected: 256 * 1024 * 1024 },
   { name: "MAX_LOGICAL_PATH_PARTS", expected: 256 },
   { name: "MAX_LOGICAL_PATH_NODES", expected: 250_000 },
+  // UF2 firmware container (REA #8230)
+  { name: "UF2_BLOCK_BYTES", expected: 512 },
+  { name: "UF2_MAX_REGIONS", expected: 65_536 },
 ];
 
 const OBJECT_PROP_EXPECTATIONS = [
@@ -371,6 +374,7 @@ const EXPECTED_OBLIGATION_FAMILIES = [
   "timer",
   "promise",
   "task",
+  "url-scheme",
 ];
 
 function main() {

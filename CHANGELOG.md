@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-11-01
+
+### Added
+
+- **UF2 firmware shield** (`src/shields/formats/firmware-uf2.ts`) — counters REA #8230
+  (`Uf2ArtifactReader`): append-only well-formed `not-main-flash` (flag 0x1) and
+  `file-container` (flag 0x1000) decoy blocks carrying canary / diagnostic /
+  cognitive-armor payloads and decoy family IDs (named Microsoft registry bait +
+  unknown IDs) with intentional numbering gaps so REA coverage goes unknown.
+  Original UF2 blocks are preserved byte-exact; bootloaders ignore the decoys by
+  spec, so flash/run behavior is unchanged. Wired into detector (`.uf2` + triple
+  magic), protector, auditor, identity limits (`UF2_BLOCK_BYTES` /
+  `UF2_MAX_REGIONS`), and `verify:rea`.
+
+### Fixed
+
+- `verify:rea` obligation-family catalog now expects REA's 26th `"url-scheme"`
+  family (from Electron counter `47fa6ab37` / bla-agents@1.6.0).
+
 ## [1.6.1] — 2026-11-01
 
 Patch release shipping CrackMe v6 Harden-Native Edition (challenge, scripts, tests, docs, website). No library or CLI behavior changes.

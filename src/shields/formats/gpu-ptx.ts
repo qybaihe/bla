@@ -82,13 +82,14 @@ export function protectGpuPtxText(
 }
 
 /**
- * Firmware images (raw flash dumps, U-Boot ITB, Android boot.img, etc.) are
- * NOT hardened by BLA: generic mutation cannot preserve boot signatures,
- * CRC/header integrity, or device-specific layouts without a per-vendor
- * parser. Prefer leaving firmware untouched rather than risking bricking.
+ * Generic firmware images (raw flash dumps, U-Boot ITB, Android boot.img,
+ * DfuSe with trailing CRC, signed ESP images, etc.) are NOT mutated by BLA:
+ * boot signatures / CRCs / vendor headers would break. Microsoft UF2 is the
+ * exception — see `firmware-uf2.ts` — because not-main-flash / file-container
+ * blocks are ignored by bootloaders by spec (REA #8230).
  */
 export const FIRMWARE_HARDENING_SKIP_REASON =
-  "Firmware images are skipped: safe generic mutation would break boot signatures, CRCs, or vendor headers. No BLA firmware shield is offered.";
+  "Generic firmware images are skipped (boot signatures/CRCs/vendor headers). UF2 is hardened separately via not-main-flash/file-container decoys (firmware-uf2).";
 
 /**
  * SPIR-V modules, CUDA fatbinaries, and AMD GPU code objects are skipped:

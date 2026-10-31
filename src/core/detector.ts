@@ -198,7 +198,17 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
     }
   }
 
-  // 15. Extension-based formats
+  // 15. Microsoft UF2 firmware container (three magics on a complete first block)
+  if (
+    header.length >= 512 &&
+    header.readUInt32LE(0) === 0x0a324655 &&
+    header.readUInt32LE(4) === 0x9e5d5157 &&
+    header.readUInt32LE(508) === 0x0ab16f30
+  ) {
+    return "firmware-uf2";
+  }
+
+  // 16. Extension-based formats
 
   if ([".js", ".mjs", ".cjs", ".jsx"].includes(ext)) return "javascript";
   if ([".ts", ".mts", ".cts", ".tsx"].includes(ext)) return "typescript";
@@ -215,6 +225,7 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   if ([".evm", ".bin-evm", ".solidity-bin"].includes(ext)) return "evm-bytecode";
   if ([".pcap", ".pcapng", ".cap"].includes(ext)) return "pcap-capture";
   if (ext === ".ptx") return "gpu-ptx";
+  if (ext === ".uf2") return "firmware-uf2";
 
   return "unknown";
 }

@@ -209,6 +209,13 @@ export {
   GPU_OBJECT_HARDENING_SKIP_REASON,
 } from "./shields/formats/gpu-ptx.js";
 export {
+  inspectUf2Firmware,
+  protectUf2FirmwareBuffer,
+  isUf2Container,
+  UF2_SHIELD_MARKER,
+  UF2_BLOCK_BYTES,
+} from "./shields/formats/firmware-uf2.js";
+export {
   buildGoBuildInfoExhaustionPayload,
   buildFlutterPoolExhaustionPayload,
   buildMappedGoBuildInfoPlant,

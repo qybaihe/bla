@@ -40,6 +40,7 @@ import { protectErlangBeamBuffer } from "../shields/formats/erlang-beam.js";
 import { protectEvmBytecodeBuffer } from "../shields/formats/evm-bytecode.js";
 import { protectPcapCaptureBuffer } from "../shields/formats/pcap-capture.js";
 import { protectGpuPtxText } from "../shields/formats/gpu-ptx.js";
+import { protectUf2FirmwareBuffer } from "../shields/formats/firmware-uf2.js";
 import { auditTarget } from "./auditor.js";
 
 function classifyHtmlScriptTag(attrs: string): {
@@ -499,6 +500,14 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     chaffPayloadsEmbedded = res.canaryTokensEmbedded;
     binarySectionsPatched = 1;
     counteredVectors.add("gpu-ptx-inspection");
+  } else if (format === "firmware-uf2") {
+    const rawUf2 = readFileSync(absInput);
+    const res = protectUf2FirmwareBuffer(rawUf2, { intensity, seed });
+    writeFileSync(absOutput, res.buffer);
+    decoyFunctionsInjected = res.blocksInjected;
+    chaffPayloadsEmbedded = res.canaryTokensEmbedded;
+    binarySectionsPatched = res.blocksInjected;
+    counteredVectors.add("uf2-firmware-inspection");
   } else if (format === "directory") {
     mkdirSync(absOutput, { recursive: true });
     const walkAndProtect = (srcDir: string, dstDir: string): void => {

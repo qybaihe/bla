@@ -30,6 +30,12 @@ import {
   FIRMWARE_HARDENING_SKIP_REASON,
   GPU_OBJECT_HARDENING_SKIP_REASON,
 } from "../src/shields/formats/gpu-ptx.js";
+import {
+  inspectUf2Firmware,
+  protectUf2FirmwareBuffer,
+  UF2_BLOCK_BYTES,
+  UF2_SHIELD_MARKER,
+} from "../src/shields/formats/firmware-uf2.js";
 import { detectArtifactFormat } from "../src/core/detector.js";
 import { SeededPrng } from "../src/core/prng.js";
 import * as fs from "node:fs";
@@ -264,6 +270,56 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
     const tmp = path.join(os.tmpdir(), `bla-ptx-${Date.now()}.ptx`);
     fs.writeFileSync(tmp, res.text);
     expect(detectArtifactFormat(tmp)).toBe("gpu-ptx");
+    fs.unlinkSync(tmp);
+  });
+
+
+  it("protects UF2 firmware: original blocks byte-exact, only not-main/file-container decoys", () => {
+    // Minimal real main-flash block (RP2040 family) — must survive untouched.
+    const real = Buffer.alloc(UF2_BLOCK_BYTES, 0);
+    real.writeUInt32LE(0x0a324655, 0);
+    real.writeUInt32LE(0x9e5d5157, 4);
+    real.writeUInt32LE(0x00002000, 8); // familyId flag only (MAIN flash)
+    real.writeUInt32LE(0x10000000, 12);
+    real.writeUInt32LE(256, 16);
+    real.writeUInt32LE(0, 20);
+    real.writeUInt32LE(1, 24);
+    real.writeUInt32LE(0xe48bff56, 28); // RP2040
+    real.write("REAL_FLASH_PAYLOAD", 32, "utf8");
+    real.writeUInt32LE(0x0ab16f30, UF2_BLOCK_BYTES - 4);
+
+    const res = protectUf2FirmwareBuffer(real, {
+      intensity: "balanced",
+      seed: "uf2-test",
+    });
+    expect(res.originalBlocksPreserved).toBe(1);
+    expect(res.blocksInjected).toBeGreaterThanOrEqual(8);
+    expect(res.notMainFlashBlocks).toBeGreaterThan(0);
+    expect(res.fileContainerBlocks).toBeGreaterThan(0);
+    expect(res.canaryTokensEmbedded).toBeGreaterThan(0);
+    // Prefix byte-exact
+    expect(res.buffer.subarray(0, UF2_BLOCK_BYTES).equals(real)).toBe(true);
+    expect(res.buffer.includes(Buffer.from(UF2_SHIELD_MARKER, "utf8"))).toBe(true);
+    expect(res.buffer.includes(Buffer.from("REAL_FLASH_PAYLOAD", "utf8"))).toBe(true);
+
+    // Every injected block must carry not-main-flash and/or file-container.
+    for (let off = UF2_BLOCK_BYTES; off + UF2_BLOCK_BYTES <= res.buffer.length; off += UF2_BLOCK_BYTES) {
+      expect(res.buffer.readUInt32LE(off)).toBe(0x0a324655);
+      expect(res.buffer.readUInt32LE(off + 4)).toBe(0x9e5d5157);
+      expect(res.buffer.readUInt32LE(off + UF2_BLOCK_BYTES - 4)).toBe(0x0ab16f30);
+      const flags = res.buffer.readUInt32LE(off + 8);
+      const safe = (flags & 0x1) !== 0 || (flags & 0x1000) !== 0;
+      expect(safe).toBe(true);
+    }
+
+    const after = inspectUf2Firmware(res.buffer);
+    expect(after.validMagic).toBe(true);
+    expect(after.blaProtected).toBe(true);
+    expect(after.blockCount).toBe(1 + res.blocksInjected);
+
+    const tmp = path.join(os.tmpdir(), `bla-uf2-${Date.now()}.uf2`);
+    fs.writeFileSync(tmp, res.buffer);
+    expect(detectArtifactFormat(tmp)).toBe("firmware-uf2");
     fs.unlinkSync(tmp);
   });
 

@@ -1094,6 +1094,37 @@ export function auditTarget(targetPath: string): AuditReport {
         obligationLedgerNodes: isProtected ? 48 : 2,
         architecturalChaffPayloads: isProtected ? 5 : 0,
       };
+    } else if (format === "firmware-uf2") {
+      vulnerableVectors.add("uf2-firmware-inspection");
+      const isProtected = rawBytes.includes(Buffer.from("[BLA-UF2-SHIELD]", "utf8"));
+      exposedItems.push({
+        id: `uf2_${basename(absPath)}`,
+        name: basename(absPath),
+        kind: "metadata-section",
+        location: basename(absPath),
+        riskLevel: isProtected ? "low" : "medium",
+        reaToolUsed: "inspect_artifact / extract_artifact (Uf2ArtifactReader)",
+        estimatedTokensToReconstruct: isProtected ? 62_000 : 1_600,
+        estimatedCostUsd: isProtected ? 4.8 : 0.07,
+        reason: isProtected
+          ? "Protected by BLA UF2 not-main-flash + file-container decoy flood (REA #8230)"
+          : "UF2 main-flash regions fully inventoriable by REA Uf2ArtifactReader",
+      });
+      sim = {
+        ...sim,
+        examinationStatus: isProtected ? "limited" : "complete",
+        triggeredResourceLimits: isProtected
+          ? [
+              "uf2-not-main-flash-blocks",
+              "uf2-file-container-blocks",
+              "uf2-numbering-coverage-unknown",
+            ]
+          : [],
+        totalFunctions: isProtected ? 24 : 2,
+        decoyFunctionsDetectedAsReal: isProtected ? 24 : 0,
+        obligationLedgerNodes: isProtected ? 56 : 2,
+        architecturalChaffPayloads: isProtected ? 8 : 0,
+      };
     }
   }
 

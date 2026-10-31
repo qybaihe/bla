@@ -1,5 +1,35 @@
 # BLA nightly development log
 
+## 2026-11-01 ~02:10 (Asia/Singapore)
+
+### REA delta
+- Pulled `morluto/rea`: tip now `60149282f` (was ~`69bf61f7c` / `a989c0e45` era).
+- Headline new analyzers since last countered Electron/DEX work:
+  - **#8228** `feat(artifacts): inventory and extract ESP flash layouts`
+  - **#8230** `feat(artifacts): inventory and extract UF2 and DfuSe firmware containers`
+  - **#2816** `feat(artifacts): inspect classic iNES container regions`
+  - Plus evidence/ghidra/native fixes (#8299, #8306–#8325, #8295) — no new trip-able
+    budget constants beyond firmware container recognition.
+
+### Done tonight
+- Countered REA **#8230** with UF2 append-only not-main-flash / file-container
+  decoys (`src/shields/formats/firmware-uf2.ts` + detector/protector/auditor/
+  identity/`verify:rea`/tests). Red-line: never emit main-flash decoys; never
+  rewrite original blocks.
+- Fixed `verify:rea` obligation-family catalog (26 incl. `url-scheme`).
+- Gates: build OK, tests **247/247** (+1 skipped), benchmark 14/14 runtime-
+  equivalent, verify:rea **74/74**.
+- Release **bla-agents@1.6.2**.
+- Queued (not done): ESP flash image (#8228) trailing/partition deception;
+  DfuSe (CRC-sensitive); iNES (#2816, niche).
+
+### Next step (following night)
+1. ESP flash / esp-image (#8228) counter — unsigned only; trailing undescribed
+   bytes + partition-table decoys without breaking checksums/Secure Boot.
+2. Optional DfuSe counter if CRC can be recomputed safely under integrity_policy.
+3. Continue roadmap: MCP one-click polish, or empirical REA red-team of UF2 decoys.
+
+
 ## 2026-11-01 (Asia/Shanghai)
 
 ### REA delta

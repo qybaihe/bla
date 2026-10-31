@@ -1,6 +1,6 @@
 {
   "name": "bla-agents",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "BLA (Blind LLM Agents) \u2014 Adversarial defense shield that protects binaries, Electron apps, JS bundles, Python, WebAssembly, SQLite, AI Models, and Android DEX/IL2CPP against AI reverse-engineering agents like REA.",
   "keywords": [
     "reverse-engineering-defense",

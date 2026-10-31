@@ -84,6 +84,18 @@ describe("bla_harden auto-discovery + one-sentence UX", () => {
       join(dist, "kernels.ptx"),
       `.version 7.5\n.target sm_70\n.address_size 64\n.visible .entry k(.param .u64 a){ ret; }\n`,
     );
+    // Minimal well-formed UF2 block (not-main-flash decoy carrier)
+    const uf2 = Buffer.alloc(512, 0);
+    uf2.writeUInt32LE(0x0a324655, 0);
+    uf2.writeUInt32LE(0x9e5d5157, 4);
+    uf2.writeUInt32LE(0x00002001, 8); // familyId | notMainFlash
+    uf2.writeUInt32LE(0, 12);
+    uf2.writeUInt32LE(16, 16);
+    uf2.writeUInt32LE(0, 20);
+    uf2.writeUInt32LE(1, 24);
+    uf2.writeUInt32LE(0xe48bff56, 28);
+    uf2.writeUInt32LE(0x0ab16f30, 508);
+    writeFileSync(join(dist, "board.uf2"), uf2);
 
     writeFileSync(
       join(dist, "payload.py"),
@@ -107,6 +119,7 @@ describe("bla_harden auto-discovery + one-sentence UX", () => {
         "evm-bytecode",
         "pcap-capture",
         "gpu-ptx",
+        "firmware-uf2",
       ]),
     );
     expect(discovered.every((d) => !d.path.includes("node_modules"))).toBe(true);

@@ -24,6 +24,7 @@ export type ArtifactFormat =
   | "evm-bytecode"
   | "pcap-capture"
   | "gpu-ptx"
+  | "firmware-uf2"
   | "directory"
   | "unknown";
 
@@ -56,6 +57,7 @@ export type ReaAttackVectorId =
   | "evm-bytecode-inspection"
   | "pcap-capture-inspection"
   | "gpu-ptx-inspection"
+  | "uf2-firmware-inspection"
   | "bun-standalone-module-graph";
 
 export interface ExposedSymbolOrModule {

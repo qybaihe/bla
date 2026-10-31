@@ -5,7 +5,7 @@ export const BLA_IDENTITY = Object.freeze({
   packageAlias: "bla-shield",
   cliBinary: "bla",
   cliAlias: "bla-agents",
-  version: "1.6.1",
+  version: "1.6.2",
   slogan: "Poison -> Exhaust -> Hallucinate. Make Reverse Engineering Bankrupt Again.",
   counterpart: {
     name: "REA",
@@ -33,6 +33,7 @@ export const BLA_IDENTITY = Object.freeze({
  * - `src/domain/android/androidJniBindings.ts` & `src/android/AndroidJniLibraries.ts` (REA #7472)
  * - `src/domain/native/nativeExports.ts` (`MAX_NATIVE_EXPORT_ROWS`)
  * - `bridge/android/ReaJadxBridge.java` (`MAX_EXTERNAL_XREF_BYTES`, REA #8154)
+ * - `src/domain/firmware/uf2.ts` (`UF2_BLOCK_BYTES`, `UF2_MAX_REGIONS`, REA #8230)
  */
 export const REA_INTERNAL_LIMITS = Object.freeze({
   /** Maximum distinct alternatives retained in one normalized primitive value (`SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT`). */
@@ -177,4 +178,12 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   BUN_MAX_LOGICAL_PATH_NODES: 250_000,
   BUN_METADATA_CACHE_BYTES: 262_144,
   BUN_METADATA_CACHE_ENTRIES: 1_024,
+  /**
+   * UF2 firmware container decoder (`src/domain/firmware/uf2.ts`, REA #8230).
+   * `UF2_BLOCK_BYTES` / payload area are Microsoft UF2 constants; `UF2_MAX_REGIONS`
+   * is REA's retained address-discontiguous region ceiling.
+   */
+  UF2_BLOCK_BYTES: 512,
+  UF2_DATA_BYTES: 476,
+  UF2_MAX_REGIONS: 65_536,
 });
