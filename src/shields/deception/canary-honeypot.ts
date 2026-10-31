@@ -94,7 +94,7 @@ export function generateCanaryHoneypot(
     `  headers: {`,
     `    "Authorization": "Bearer ${syntheticCanaryTokens[0]}",`,
     `    "Proxy-Authorization": "Basic Y2FuYXJ5OmhvbmV5cG90",`,
-    `    "Cookie": "__Host-bla_canary_session=${prng.hex(12)}; Secure; HttpOnly"`,
+    `    "Cookie": "__Host-tee_quorum_session=${prng.hex(12)}; Secure; HttpOnly"`,
     `  },`,
     `  canaryTokens: ${JSON.stringify(syntheticCanaryTokens)},`,
     `  ambiguousTransportEndpoints: ${JSON.stringify(ambiguousCredentialUrls)},`,

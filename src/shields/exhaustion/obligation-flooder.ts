@@ -10,8 +10,9 @@ export interface ObligationFloodResult {
 }
 
 /**
- * All 25 REA Reconstruction Obligation Node Families from
- * `morluto/rea/src/application/ReconstructionObligationPolicies.ts`.
+ * All 26 REA Reconstruction Obligation Node Families from
+ * `morluto/rea/src/application/ReconstructionObligationPolicies.ts`
+ * (including `"url-scheme"` added in REA `47fa6ab37`).
  * Each family forces REA's `ReconstructionObligationLedgerService` to require
  * 2 to 4 distinct runtime/static proof fixtures (`positive`, `negative`, `malformed`,
  * `cancellation`, `teardown`) before an agent can mark a reconstruction verified.
@@ -22,6 +23,7 @@ export const REA_OBLIGATION_FAMILIES = [
   { kind: "context-bridge-api", layer: "electron", cases: 3 },
   { kind: "ipc-channel", layer: "electron", cases: 3 },
   { kind: "ipc-handler", layer: "electron", cases: 3 },
+  { kind: "url-scheme", layer: "electron", cases: 3 },
   { kind: "endpoint", layer: "protocol", cases: 3 },
   { kind: "storage", layer: "persistence", cases: 3 },
   { kind: "worker", layer: "process", cases: 3 },
@@ -97,6 +99,11 @@ export function generateObligationLedgerFlood(
           `  _g.ipcMain?.handle("enclave:verify-lease-${id}", async (_e, msg) => ({ ok: true, slot: "${id}", msg }));`,
         );
         break;
+      case "url-scheme":
+        stmts.push(
+          `  _g.app?.setAsDefaultProtocolClient?.("enclave-tee-${id}"); _g.protocol?.registerSchemesAsPrivileged?.([{ scheme: "enclave-tee-${id}", privileges: { secure: true, standard: true, supportFetchAPI: true } }]); _g.protocol?.handle?.("enclave-tee-${id}", () => null);`,
+        );
+        break;
       case "endpoint":
         stmts.push(
           `  _g.fetch?.("/api/v3/enclave/quorum-${id}", { method: "POST", headers: { "X-Enclave-Quote": "${id}" } });`,
@@ -104,7 +111,7 @@ export function generateObligationLedgerFlood(
         break;
       case "storage":
         stmts.push(
-          `  _g.localStorage?.setItem("bla.enclave.sealed.${id}", JSON.stringify({ epoch: ${1700000000 + i}, sig: "0x${prng.hex(8)}" }));`,
+          `  _g.localStorage?.setItem("tee.enclave.sealed.${id}", JSON.stringify({ epoch: ${1700000000 + i}, sig: "0x${prng.hex(8)}" }));`,
         );
         break;
       case "worker":
@@ -144,7 +151,7 @@ export function generateObligationLedgerFlood(
         break;
       case "config-source":
         stmts.push(
-          `  const _cfg_${id} = _g.process?.env?.["BLA_ENCLAVE_CONFIG_${id.toUpperCase()}"] ?? "default-sealed";`,
+          `  const _cfg_${id} = _g.process?.env?.["TEE_ENCLAVE_CONFIG_${id.toUpperCase()}"] ?? "default-sealed";`,
         );
         break;
       case "request":
@@ -169,7 +176,7 @@ export function generateObligationLedgerFlood(
         break;
       case "event":
         stmts.push(
-          `  _g.dispatchEvent?.(typeof CustomEvent === "function" ? new CustomEvent("bla:enclave-sync-${id}") : { type: "bla:${id}" });`,
+          `  _g.dispatchEvent?.(typeof CustomEvent === "function" ? new CustomEvent("tee:enclave-sync-${id}") : { type: "tee:${id}" });`,
         );
         break;
       case "timer":

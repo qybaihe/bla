@@ -5,7 +5,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
@@ -178,10 +178,11 @@ function walkCollect(
     // Skip already-shielded outputs to avoid re-hardening loops.
     if (/\.shielded(\.|$)/i.test(entry.name)) continue;
     if (entry.name.endsWith(".bla-manifest.json")) continue;
+    if (entry.name.endsWith(".bunfs-snapshot")) continue;
     out.push({
       path: full,
       format,
-      relativePath: relative(root, full) || basename(full),
+      relativePath: (relative(root, full) || basename(full)).split(sep).join("/"),
     });
   }
 }

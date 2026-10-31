@@ -571,6 +571,7 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
       const buildRes = spawnSync("npm", ["run", "build"], {
         cwd: process.cwd(),
         stdio: "pipe",
+        shell: process.platform === "win32",
       });
       expect(buildRes.status).toBe(0);
     }
@@ -884,16 +885,22 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
     expect(sumsText).toContain(`${packed.primary.sha256}  ${packed.primary.tarballFilename}`);
     expect(sumsText).toContain(`${packed.alias.sha256}  ${packed.alias.tarballFilename}`);
 
+    const tarBin =
+      process.platform === "win32" &&
+      existsSync(join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"))
+        ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
+        : "tar";
+
     for (const artifact of [packed.primary, packed.alias]) {
       const unpackDir = makeTempDir(`bla-unpack-${artifact.packageName}-`);
-      const tarRes = spawnSync("tar", ["-xzf", artifact.tarballPath, "-C", unpackDir], {
+      const tarRes = spawnSync(tarBin, ["-xzf", artifact.tarballPath, "-C", unpackDir], {
         stdio: "pipe",
       });
       expect(tarRes.status).toBe(0);
       symlinkSync(
         join(process.cwd(), "node_modules"),
         join(unpackDir, "node_modules"),
-        "dir",
+        process.platform === "win32" ? "junction" : "dir",
       );
 
       const pkgRoot = join(unpackDir, "package");
@@ -929,7 +936,12 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
         {
           encoding: "utf8",
           timeout: 5000,
-          env: { ...process.env, HOME: unpackDir },
+          env: {
+            ...process.env,
+            HOME: unpackDir,
+            USERPROFILE: unpackDir,
+            APPDATA: join(unpackDir, "AppData", "Roaming"),
+          },
         },
       );
       expect(docRun.status).toBe(0);

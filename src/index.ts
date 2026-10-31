@@ -67,8 +67,10 @@ export {
   validateElf64Layout,
   inspectNativeBinary,
   protectNativeBinary,
+  detectNativeEofAppendHazard,
   buildDecoyRustAuditablePayload,
   type Elf64LayoutSummary,
+  type NativeEofAppendHazard,
 } from "./shields/formats/native.js";
 export {
   BUN_TRAILER,

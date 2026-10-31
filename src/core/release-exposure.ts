@@ -8,7 +8,7 @@ import {
   readSync,
   realpathSync,
 } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 export interface ReleaseExposureFinding {
   file: string;
@@ -45,6 +45,15 @@ function isSameRealPath(path: string): boolean {
     const darwinNormalized = path.replace(/^\/(var|tmp|etc)(\/|$)/, "/private/$1$2");
     return real === darwinNormalized;
   }
+  if (process.platform === "win32") {
+    let cur = path;
+    while (true) {
+      if (lstatSync(cur).isSymbolicLink()) return false;
+      const parent = dirname(cur);
+      if (parent === cur) return true;
+      cur = parent;
+    }
+  }
   return false;
 }
 
@@ -65,7 +74,8 @@ export function inspectReleaseExposure(target: string): ReleaseExposureReport {
     networkAccessed: false,
     targetModified: false,
   };
-  const label = (path: string) => relative(root, path) || basename(root);
+  const label = (path: string) =>
+    (relative(root, path) || basename(root)).split(sep).join("/");
   const limit = (path: string, reason: string) => {
     report.status = "partial";
     report.limitations.push({ file: label(path), reason });

@@ -59,6 +59,7 @@ export interface JsShieldTransformResult {
   readonly decoyRoutesInjected: number;
   readonly chaffPayloadsEmbedded: number;
   readonly shadowHeapSlotsChurned: number;
+  readonly electronProtocolsProtected?: number;
   readonly memoryDiffShield: ShadowHeapChurnShieldResult;
 }
 
@@ -85,6 +86,88 @@ const IPC_METHODS = new Set([
   "sendSync",
   "sendToHost",
 ]);
+
+/**
+ * Electron custom URL protocol APIs inspected by REA `electronStaticAnalysisProtocol.ts` (`47fa6ab37`).
+ */
+const ELECTRON_PROTOCOL_SCHEME_METHODS = new Set([
+  "setAsDefaultProtocolClient",
+  "removeAsDefaultProtocolClient",
+  "isDefaultProtocolClient",
+  "handle",
+  "registerFileProtocol",
+  "registerHttpProtocol",
+  "registerStringProtocol",
+  "registerBufferProtocol",
+  "registerStreamProtocol",
+  "interceptFileProtocol",
+  "interceptHttpProtocol",
+  "interceptStringProtocol",
+  "interceptBufferProtocol",
+  "interceptStreamProtocol",
+  "unhandle",
+  "unregisterProtocol",
+  "uninterceptProtocol",
+  "isProtocolRegistered",
+  "isProtocolHandled",
+  "isProtocolIntercepted",
+]);
+
+const ELECTRON_PRIVILEGE_NAMES = new Set([
+  "allowExtensions",
+  "allowServiceWorkers",
+  "bypassCSP",
+  "codeCache",
+  "corsEnabled",
+  "secure",
+  "standard",
+  "stream",
+  "supportFetchAPI",
+]);
+
+function extractMemberChain(node: t.Node | null | undefined): string[] {
+  const parts: string[] = [];
+  let cur: t.Node | null | undefined = node;
+  while (
+    t.isMemberExpression(cur) ||
+    t.isOptionalMemberExpression(cur)
+  ) {
+    if (!cur.computed && t.isIdentifier(cur.property)) {
+      parts.unshift(cur.property.name);
+    } else if (cur.computed && t.isStringLiteral(cur.property)) {
+      parts.unshift(cur.property.value);
+    } else {
+      return [];
+    }
+    cur = cur.object;
+  }
+  if (t.isIdentifier(cur)) {
+    parts.unshift(cur.name);
+  }
+  return parts;
+}
+
+function getStaticPropName(prop: t.ObjectProperty): string | null {
+  if (!prop.computed && t.isIdentifier(prop.key)) return prop.key.name;
+  if (t.isStringLiteral(prop.key)) return prop.key.value;
+  return null;
+}
+
+function isInsideTsConstAssertion(path: { findParent: (cb: (p: any) => boolean) => any }): boolean {
+  return Boolean(
+    path.findParent((p) => {
+      if (p.isTSAsExpression?.() || p.isTSTypeAssertion?.()) {
+        const ann = p.node.typeAnnotation;
+        return (
+          t.isTSTypeReference(ann) &&
+          t.isIdentifier(ann.typeName) &&
+          ann.typeName.name === "const"
+        );
+      }
+      return false;
+    }),
+  );
+}
 
 export function inferJsLoaderFromPath(filename?: string): JsLoaderType {
   if (!filename) return "js";
@@ -385,6 +468,10 @@ export function transformJavaScriptWithBlaShield(
 
   const seedVarName = prng.identifier({ style: "camel", hint: "runtimeSeed", entropy: 4 });
   const observedIpcChannels = new Set<string>();
+  const observedProtocolSchemes = new Set<string>();
+  const electronEsmBindings = new Map<string, string>();
+  let hasProvenElectronRequire = false;
+  let electronProtocolsProtected = 0;
   let primitiveCandidateBranchesCreated = 512; // From tarpit budgetFn
   let fakeCrossReferencesCreated = tarpit.crossReferenceEdges;
   let ipcAmbiguitySitesInjected = 0;
@@ -393,7 +480,208 @@ export function transformJavaScriptWithBlaShield(
   // Track functions to weave tarpit calls into
   const functionBodies: t.BlockStatement[] = [];
 
+  const handleCallOrOptionalCall = (
+    path: {
+      node: t.CallExpression | t.OptionalCallExpression;
+      findParent: (cb: (p: any) => boolean) => any;
+    },
+  ): void => {
+    const callee = path.node.callee;
+    if (t.isIdentifier(callee) && callee.name === "require") {
+      usesCjsAst = true;
+      const reqArg = path.node.arguments[0];
+      if (t.isStringLiteral(reqArg) && reqArg.value === "electron") {
+        hasProvenElectronRequire = true;
+      }
+    }
+
+    const inTsConst =
+      (loader === "ts" || loader === "tsx") && isInsideTsConstAssertion(path);
+    const chain = extractMemberChain(callee);
+    const methodName = chain.length >= 2 ? chain[chain.length - 1]! : "";
+    const objName = chain.length >= 2 ? chain[chain.length - 2]! : "";
+    const rootName = chain.length >= 1 ? chain[0]! : "";
+
+    // 1. Check Electron IPC, contextBridge, and custom URL protocol calls
+    if (methodName && !inTsConst) {
+      // Electron custom URL protocol registrations (REA 47fa6ab37 `electronStaticAnalysisProtocol.ts`)
+      const isProtocolReceiver =
+        objName === "protocol" ||
+        objName === "app" ||
+        rootName === "protocol" ||
+        rootName === "app" ||
+        chain.includes("protocol") ||
+        chain.includes("defaultSession");
+
+      if (
+        methodName === "registerSchemesAsPrivileged" &&
+        isProtocolReceiver
+      ) {
+        const listArg = path.node.arguments[0];
+        const unwrappedList = t.isTSAsExpression(listArg)
+          ? listArg.expression
+          : listArg;
+        if (t.isArrayExpression(unwrappedList)) {
+          for (const elem of unwrappedList.elements) {
+            const obj = t.isTSAsExpression(elem) ? elem.expression : elem;
+            if (!t.isObjectExpression(obj)) continue;
+            for (const prop of obj.properties) {
+              if (!t.isObjectProperty(prop)) continue;
+              const pName = getStaticPropName(prop);
+              if (
+                pName === "scheme" &&
+                t.isStringLiteral(prop.value) &&
+                prop.value.value.length > 0
+              ) {
+                observedProtocolSchemes.add(prop.value.value);
+                prop.value = buildCombinatorialStringAst(
+                  prop.value.value,
+                  prng,
+                  seedVarName,
+                );
+                electronProtocolsProtected += 1;
+                primitiveCandidateBranchesCreated += 512;
+              } else if (
+                pName === "privileges" &&
+                t.isObjectExpression(prop.value)
+              ) {
+                for (const privProp of prop.value.properties) {
+                  if (!t.isObjectProperty(privProp)) continue;
+                  const privName = getStaticPropName(privProp);
+                  if (
+                    privName &&
+                    ELECTRON_PRIVILEGE_NAMES.has(privName) &&
+                    t.isBooleanLiteral(privProp.value)
+                  ) {
+                    privProp.value = privProp.value.value
+                      ? buildOpaqueTrueAst(prng, seedVarName)
+                      : buildOpaqueFalseAst(prng, seedVarName);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else if (
+        ELECTRON_PROTOCOL_SCHEME_METHODS.has(methodName) &&
+        isProtocolReceiver &&
+        !(methodName === "handle" && objName.toLowerCase().includes("ipc"))
+      ) {
+        const firstArg = path.node.arguments[0];
+        if (t.isStringLiteral(firstArg) && firstArg.value.length > 0) {
+          observedProtocolSchemes.add(firstArg.value);
+          path.node.arguments[0] = buildCombinatorialStringAst(
+            firstArg.value,
+            prng,
+            seedVarName,
+          );
+          electronProtocolsProtected += 1;
+          primitiveCandidateBranchesCreated += 512;
+        }
+      }
+
+      // Electron IPC calls: ipcMain.handle("channel", ...), ipcRenderer.invoke("channel", ...)
+      if (
+        IPC_METHODS.has(methodName) &&
+        (objName.toLowerCase().includes("ipc") ||
+          (methodName === "handle" && !isProtocolReceiver) ||
+          methodName === "invoke" ||
+          methodName === "sendToHost")
+      ) {
+        const firstArg = path.node.arguments[0];
+        if (t.isStringLiteral(firstArg) && firstArg.value.length > 0) {
+          observedIpcChannels.add(firstArg.value);
+          path.node.arguments[0] = buildCombinatorialStringAst(
+            firstArg.value,
+            prng,
+            seedVarName,
+          );
+          primitiveCandidateBranchesCreated += 512;
+        }
+      }
+
+      // Electron contextBridge.exposeInMainWorld("apiKey", apiObject)
+      if (methodName === "exposeInMainWorld") {
+        const firstArg = path.node.arguments[0];
+        if (t.isStringLiteral(firstArg) && firstArg.value.length > 0) {
+          observedIpcChannels.add(`bridge:${firstArg.value}`);
+          path.node.arguments[0] = buildCombinatorialStringAst(
+            firstArg.value,
+            prng,
+            seedVarName,
+          );
+          primitiveCandidateBranchesCreated += 512;
+        }
+        // Wrap literal API object in an O(1) opaque ternary so runtime passes the exact
+        // same object reference while REA's `collectContextBridgeMembers` sees a dynamic node.
+        const secondArg = path.node.arguments[1];
+        if (t.isObjectExpression(secondArg)) {
+          path.node.arguments[1] = t.conditionalExpression(
+            buildOpaqueTrueAst(prng, seedVarName),
+            secondArg,
+            t.objectExpression([]),
+          );
+        }
+      }
+    }
+
+    // 2. Check fetch / route / SQL / crypto calls with string literal first arg
+    const firstArg = path.node.arguments[0];
+    if (
+      !inTsConst &&
+      t.isStringLiteral(firstArg) &&
+      firstArg.value.length >= 4 &&
+      !t.isImport(callee) &&
+      !(t.isIdentifier(callee) && callee.name === "require")
+    ) {
+      const val = firstArg.value;
+      const looksSensitiveOrRoute =
+        val.startsWith("/") ||
+        val.startsWith("http") ||
+        val.includes("SELECT ") ||
+        val.includes("INSERT ") ||
+        val.includes("CREATE TABLE") ||
+        val.includes("license") ||
+        val.includes("secret") ||
+        val.includes("token") ||
+        val.includes("key") ||
+        val.includes("pan") ||
+        val.includes("clipboard") ||
+        val.endsWith(".wasm");
+
+      if (looksSensitiveOrRoute) {
+        path.node.arguments[0] = buildCombinatorialStringAst(
+          val,
+          prng,
+          seedVarName,
+        );
+        primitiveCandidateBranchesCreated += 512;
+      }
+    }
+  };
+
   traverse(ast, {
+    ImportDeclaration(path) {
+      if (
+        path.node.source.value === "electron" &&
+        (!path.node.importKind || path.node.importKind === "value")
+      ) {
+        for (const spec of path.node.specifiers) {
+          if (t.isImportSpecifier(spec)) {
+            if (spec.importKind === "type") continue;
+            const imported = t.isIdentifier(spec.imported)
+              ? spec.imported.name
+              : spec.imported.value;
+            electronEsmBindings.set(imported, spec.local.name);
+          } else if (
+            t.isImportDefaultSpecifier(spec) ||
+            t.isImportNamespaceSpecifier(spec)
+          ) {
+            electronEsmBindings.set("*", spec.local.name);
+          }
+        }
+      }
+    },
     Function(path) {
       if (t.isBlockStatement(path.node.body)) {
         functionBodies.push(path.node.body);
@@ -413,85 +701,61 @@ export function transformJavaScriptWithBlaShield(
       }
     },
     CallExpression(path) {
-      const callee = path.node.callee;
-      if (t.isIdentifier(callee) && callee.name === "require") {
-        usesCjsAst = true;
-      }
-      // 1. Check Electron IPC & contextBridge calls
-      if (t.isMemberExpression(callee) && t.isIdentifier(callee.property)) {
-        const methodName = callee.property.name;
-        const objName = t.isIdentifier(callee.object) ? callee.object.name : "";
-
-        // Electron IPC calls: ipcMain.handle("channel", ...), ipcRenderer.invoke("channel", ...)
-        if (
-          IPC_METHODS.has(methodName) &&
-          (objName.toLowerCase().includes("ipc") ||
-            methodName === "handle" ||
-            methodName === "invoke" ||
-            methodName === "sendToHost")
-        ) {
-          const firstArg = path.node.arguments[0];
-          if (t.isStringLiteral(firstArg) && firstArg.value.length > 0) {
-            observedIpcChannels.add(firstArg.value);
-            path.node.arguments[0] = buildCombinatorialStringAst(
-              firstArg.value,
-              prng,
-              seedVarName,
-            );
-            primitiveCandidateBranchesCreated += 512;
-          }
-        }
-
-        // Electron contextBridge.exposeInMainWorld("apiKey", ...)
-        if (methodName === "exposeInMainWorld") {
-          const firstArg = path.node.arguments[0];
-          if (t.isStringLiteral(firstArg) && firstArg.value.length > 0) {
-            observedIpcChannels.add(`bridge:${firstArg.value}`);
-            path.node.arguments[0] = buildCombinatorialStringAst(
-              firstArg.value,
-              prng,
-              seedVarName,
-            );
-            primitiveCandidateBranchesCreated += 512;
-          }
-        }
-      }
-
-      // 2. Check fetch / route / SQL / crypto calls with string literal first arg
-      const firstArg = path.node.arguments[0];
+      handleCallOrOptionalCall(path);
+    },
+    OptionalCallExpression(path) {
+      handleCallOrOptionalCall(path);
+    },
+    ObjectProperty(path) {
       if (
-        t.isStringLiteral(firstArg) &&
-        firstArg.value.length >= 4 &&
-        !t.isImport(callee) &&
-        !(t.isIdentifier(callee) && callee.name === "require")
+        (loader === "ts" || loader === "tsx") &&
+        isInsideTsConstAssertion(path)
       ) {
-        const val = firstArg.value;
-        const looksSensitiveOrRoute =
-          val.startsWith("/") ||
-          val.startsWith("http") ||
-          val.includes("SELECT ") ||
-          val.includes("INSERT ") ||
-          val.includes("CREATE TABLE") ||
-          val.includes("license") ||
-          val.includes("secret") ||
-          val.includes("token") ||
-          val.includes("key") ||
-          val.includes("pan") ||
-          val.includes("clipboard") ||
-          val.endsWith(".wasm");
-
-        if (looksSensitiveOrRoute) {
-          path.node.arguments[0] = buildCombinatorialStringAst(
-            val,
-            prng,
-            seedVarName,
-          );
-          primitiveCandidateBranchesCreated += 512;
+        return;
+      }
+      const propName = getStaticPropName(path.node);
+      if (
+        propName === "webPreferences" &&
+        t.isObjectExpression(path.node.value)
+      ) {
+        for (const pref of path.node.value.properties) {
+          if (!t.isObjectProperty(pref)) continue;
+          const prefKey = getStaticPropName(pref);
+          if (t.isBooleanLiteral(pref.value)) {
+            pref.value = pref.value.value
+              ? buildOpaqueTrueAst(prng, seedVarName)
+              : buildOpaqueFalseAst(prng, seedVarName);
+          } else if (prefKey === "preload") {
+            if (
+              t.isStringLiteral(pref.value) &&
+              pref.value.value.length > 0
+            ) {
+              pref.value = buildCombinatorialStringAst(
+                pref.value.value,
+                prng,
+                seedVarName,
+              );
+              primitiveCandidateBranchesCreated += 512;
+            } else if (t.isCallExpression(pref.value)) {
+              pref.value.arguments = pref.value.arguments.map((arg) =>
+                t.isStringLiteral(arg) && arg.value.length > 0
+                  ? buildCombinatorialStringAst(arg.value, prng, seedVarName)
+                  : arg,
+              );
+              primitiveCandidateBranchesCreated += 512;
+            }
+          }
         }
       }
     },
     StringLiteral(path) {
       if (intensity !== "bankrupt" && intensity !== "maximum") {
+        return;
+      }
+      if (
+        (loader === "ts" || loader === "tsx") &&
+        isInsideTsConstAssertion(path)
+      ) {
         return;
       }
       const val = path.node.value;
@@ -762,6 +1026,75 @@ export function transformJavaScriptWithBlaShield(
       `    _router?.post?.(${JSON.stringify(route)}, () => null);`,
     );
   }
+  const decoySchemes = [
+    "enclave-vsock",
+    "tee-attest",
+    "quorum-kms",
+    "sgx-bridge",
+    "hsm-lease",
+  ]
+    .filter((s) => !observedProtocolSchemes.has(s))
+    .slice(0, 4);
+  if (hasProvenElectronRequire && !hasEsmNodes) {
+    const elBind = prng.identifier({ style: "privateCamel", hint: "electronRef", entropy: 3 });
+    mirageLines.push(`    const ${elBind} = require("electron");`);
+    for (const sch of decoySchemes) {
+      mirageLines.push(
+        `    ${elBind}.app.setAsDefaultProtocolClient(${JSON.stringify(sch)});`,
+        `    ${elBind}.protocol.registerSchemesAsPrivileged([{ scheme: ${JSON.stringify(sch)}, privileges: { secure: true, standard: true, supportFetchAPI: true, stream: true } }]);`,
+        `    ${elBind}.protocol.handle(${JSON.stringify(sch)}, () => null);`,
+        `    ${elBind}.session.defaultSession.protocol.handle(${JSON.stringify(sch)}, () => null);`,
+      );
+      ipcAmbiguitySitesInjected += 4;
+    }
+    for (const ch of channelsToMirror.slice(0, 4)) {
+      mirageLines.push(
+        `    ${elBind}.ipcMain.handle(${JSON.stringify(ch)}, () => ({ delegatedToEnclave: true }));`,
+        `    ${elBind}.ipcRenderer.invoke(${JSON.stringify(ch)}, { probe: 1 });`,
+        `    ${elBind}.contextBridge.exposeInMainWorld(${JSON.stringify(`enclave_${prng.hex(2)}`)}, { attest: () => true, verifyLease: () => true });`,
+      );
+      ipcAmbiguitySitesInjected += 3;
+    }
+  } else if (electronEsmBindings.size > 0) {
+    const ns = electronEsmBindings.get("*");
+    const appId = electronEsmBindings.get("app") ?? (ns ? `${ns}.app` : null);
+    const protoId = electronEsmBindings.get("protocol") ?? (ns ? `${ns}.protocol` : null);
+    const sessId = electronEsmBindings.get("session") ?? (ns ? `${ns}.session` : null);
+    const ipcMainId = electronEsmBindings.get("ipcMain") ?? (ns ? `${ns}.ipcMain` : null);
+    const ipcRenId = electronEsmBindings.get("ipcRenderer") ?? (ns ? `${ns}.ipcRenderer` : null);
+    const cbId = electronEsmBindings.get("contextBridge") ?? (ns ? `${ns}.contextBridge` : null);
+    for (const sch of decoySchemes) {
+      if (appId) {
+        mirageLines.push(`    ${appId}.setAsDefaultProtocolClient(${JSON.stringify(sch)});`);
+        ipcAmbiguitySitesInjected += 1;
+      }
+      if (protoId) {
+        mirageLines.push(
+          `    ${protoId}.registerSchemesAsPrivileged([{ scheme: ${JSON.stringify(sch)}, privileges: { secure: true, standard: true, supportFetchAPI: true } }]);`,
+          `    ${protoId}.handle(${JSON.stringify(sch)}, () => null);`,
+        );
+        ipcAmbiguitySitesInjected += 2;
+      }
+      if (sessId) {
+        mirageLines.push(`    ${sessId}.defaultSession.protocol.handle(${JSON.stringify(sch)}, () => null);`);
+        ipcAmbiguitySitesInjected += 1;
+      }
+    }
+    for (const ch of channelsToMirror.slice(0, 4)) {
+      if (ipcMainId) {
+        mirageLines.push(`    ${ipcMainId}.handle(${JSON.stringify(ch)}, () => ({ delegatedToEnclave: true }));`);
+        ipcAmbiguitySitesInjected += 1;
+      }
+      if (ipcRenId) {
+        mirageLines.push(`    ${ipcRenId}.invoke(${JSON.stringify(ch)}, { probe: 1 });`);
+        ipcAmbiguitySitesInjected += 1;
+      }
+      if (cbId) {
+        mirageLines.push(`    ${cbId}.exposeInMainWorld(${JSON.stringify(`enclave_${prng.hex(2)}`)}, { attest: () => true });`);
+        ipcAmbiguitySitesInjected += 1;
+      }
+    }
+  }
   mirageLines.push(`  }`);
   mirageLines.push(`}`);
   mirageLines.push(`void ${decoyIpcFnName};`);
@@ -877,6 +1210,7 @@ export function transformJavaScriptWithBlaShield(
     chaffPayloadsEmbedded:
       chaffPayloads.length + deceptionSuite.evidencePoison.lures.length,
     shadowHeapSlotsChurned: memoryDiffShield.mutableSlotsCount,
+    electronProtocolsProtected,
     memoryDiffShield,
   };
 }

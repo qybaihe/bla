@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -37,6 +39,42 @@ import { protectEvmBytecodeBuffer } from "../shields/formats/evm-bytecode.js";
 import { protectPcapCaptureBuffer } from "../shields/formats/pcap-capture.js";
 import { protectGpuPtxText } from "../shields/formats/gpu-ptx.js";
 import { auditTarget } from "./auditor.js";
+
+function classifyHtmlScriptTag(attrs: string): {
+  readonly executable: boolean;
+  readonly isModule: boolean;
+} {
+  if (/\bsrc\s*=/i.test(attrs)) {
+    return { executable: false, isModule: false };
+  }
+  const typeMatch = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+  if (!typeMatch) {
+    return { executable: true, isModule: false };
+  }
+  const rawType = (typeMatch[1] ?? typeMatch[2] ?? typeMatch[3] ?? "")
+    .trim()
+    .toLowerCase();
+  if (rawType === "") {
+    return { executable: true, isModule: false };
+  }
+  if (rawType === "module") {
+    return { executable: true, isModule: true };
+  }
+  if (
+    rawType === "text/javascript" ||
+    rawType === "application/javascript" ||
+    rawType === "text/ecmascript" ||
+    rawType === "application/ecmascript" ||
+    rawType === "javascript"
+  ) {
+    return { executable: true, isModule: false };
+  }
+  return { executable: false, isModule: false };
+}
+
+function escapeHtmlInlineScriptBody(jsCode: string): string {
+  return jsCode.replace(/<\/(script)/gi, "<\\/$1");
+}
 
 function deriveDefaultOutputPath(inputPath: string, inPlace = false): string {
   if (inPlace) return inputPath;
@@ -139,15 +177,22 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "html-bundle") {
     const rawHtml = readFileSync(absInput, "utf8");
-    const transformedHtml = rawHtml.replace(
+    let inlineScriptsTransformed = 0;
+    let scriptIndex = 0;
+    let transformedHtml = rawHtml.replace(
       /<script\b([^>]*)>([\s\S]*?)<\/script>/gi,
       (fullMatch, attrs: string, scriptBody: string) => {
-        if (!scriptBody.trim() || /src\s*=/i.test(attrs)) return fullMatch;
+        if (!scriptBody.trim()) return fullMatch;
+        const tagKind = classifyHtmlScriptTag(attrs);
+        if (!tagKind.executable) return fullMatch;
+        const currentIndex = scriptIndex++;
         try {
           const res = transformJavaScriptWithBlaShield(scriptBody, {
             intensity,
-            seed,
+            seed: `${seed}:html-script-${currentIndex}`,
+            sourceType: tagKind.isModule ? "module" : "script",
           });
+          inlineScriptsTransformed++;
           decoyFunctionsInjected += res.decoyFunctionsInjected;
           fakeCrossReferencesCreated += res.fakeCrossReferencesCreated;
           primitiveCandidateBranchesCreated += res.primitiveCandidateBranchesCreated;
@@ -155,15 +200,38 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
           ipcAmbiguitySitesInjected += res.ipcAmbiguitySitesInjected;
           decoyRoutesInjected += res.decoyRoutesInjected;
           chaffPayloadsEmbedded += res.chaffPayloadsEmbedded;
-          return `<script${attrs}>\n${res.code}\n</script>`;
+          return `<script${attrs}>\n${escapeHtmlInlineScriptBody(res.code)}\n</script>`;
         } catch {
           return fullMatch;
         }
       },
     );
+    if (inlineScriptsTransformed === 0) {
+      const bootstrapRes = transformJavaScriptWithBlaShield("void 0;\n", {
+        intensity,
+        seed: `${seed}:html-bootstrap`,
+        sourceType: "script",
+      });
+      decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
+      fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
+      primitiveCandidateBranchesCreated += bootstrapRes.primitiveCandidateBranchesCreated;
+      aliasSelectionStatesCreated += bootstrapRes.aliasSelectionStatesCreated;
+      ipcAmbiguitySitesInjected += bootstrapRes.ipcAmbiguitySitesInjected;
+      decoyRoutesInjected += bootstrapRes.decoyRoutesInjected;
+      chaffPayloadsEmbedded += bootstrapRes.chaffPayloadsEmbedded;
+      const bootstrapTag = `<script>\n${escapeHtmlInlineScriptBody(bootstrapRes.code)}\n</script>`;
+      if (/<\/body>/i.test(transformedHtml)) {
+        transformedHtml = transformedHtml.replace(/<\/body>/i, `${bootstrapTag}\n</body>`);
+      } else if (/<\/head>/i.test(transformedHtml)) {
+        transformedHtml = transformedHtml.replace(/<\/head>/i, `${bootstrapTag}\n</head>`);
+      } else {
+        transformedHtml = `${transformedHtml}\n${bootstrapTag}\n`;
+      }
+    }
     writeFileSync(absOutput, transformedHtml, "utf8");
     counteredVectors.add("js-static-semantics");
     counteredVectors.add("call-graph-tracing");
+    counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "sourcemap") {
     const honey = generateHoneySourceMap(
       basename(absOutput).replace(/\.map$/, ""),
@@ -300,9 +368,11 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
       counteredVectors.add("electron-fuses-inspection");
       counteredVectors.add("flutter-dart-aot-snapshot");
     }
-    if (res.bunStandaloneCarrier !== "none") {
-      // REA #6998: the real Bun module graph is left byte-exact; plant a
-      // sidecar decoy graph (appended-trailer carrier) full of honeypots.
+    if (res.bunStandaloneCarrier !== "none" || res.nativeBinaryPreserved) {
+      // REA #6998 & EOF-sensitive/code-signed native carriers: leave the real
+      // binary byte-exact so OS code signatures (`codesign --strict` /
+      // Authenticode) and EOF-relative runtime archives (Bun, Deno, PyInstaller,
+      // ZIP-SFX) remain intact; plant a sidecar decoy graph full of honeypots.
       const decoy = generateBunStandaloneDecoyGraph(
         new SeededPrng(`${seed}:bun-standalone`),
         intensity,
@@ -488,6 +558,17 @@ export function protectTarget(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("sourcemap-recovery");
     counteredVectors.add("call-graph-tracing");
     counteredVectors.add("obligation-ledger-cloning");
+  }
+
+  if (format !== "directory" && absOutput !== absInput) {
+    try {
+      const inputMode = statSync(absInput).mode & 0o777;
+      if ((inputMode & 0o111) !== 0) {
+        chmodSync(absOutput, inputMode);
+      }
+    } catch {
+      /* POSIX permission bits may not apply on Windows */
+    }
   }
 
   const afterAudit = auditTarget(absOutput);

@@ -1,5 +1,19 @@
 # BLA nightly development log
 
+## 2026-11-01 (Asia/Shanghai)
+
+### REA delta
+- Inspected `morluto/rea`: `69bf61f7c` → `a989c0e45` (**17 commits**).
+- Headline new analyzer: **`47fa6ab37`** (`feat(electron): report custom URL protocol registrations` — `electronStaticAnalysisProtocol.ts`, `electronStaticAnalysisValues.ts`, `electronStaticAnalysisBrowser.ts`, and 26th `"url-scheme"` family in `ReconstructionObligationPolicies.ts`).
+
+### Done tonight
+- Countered REA `47fa6ab37` in `ast-shield.ts`, `rea-budget-matrix.ts`, and `obligation-flooder.ts` (custom URL scheme de-literalization incl. 1–2 char schemes, `registerSchemesAsPrivileged` boolean blackout, `contextBridge.exposeInMainWorld` member blackout, `BrowserWindow` `webPreferences` + `preload` blackout, proven `"electron"` dead-branch decoy protocols, and 26th `"url-scheme"` obligation flood).
+- Added `detectNativeEofAppendHazard` (`LC_CODE_SIGNATURE`, PE Authenticode `DataDirectory[4]`, PyInstaller, Deno standalone, ZIP-SFX) + executable mode preservation + `.bunfs-snapshot` sidecar audit verification loop.
+- Fixed `html-bundle` multi-`<script>` global collision, `importmap`/`application/json` preservation, Vite external-script bootstrap, and `auditor.ts` `<script>` extraction + full chaff manifest header matching.
+- Added cross-platform POSIX/SARIF Windows fixes (`C:\...` drive colons, 8.3 short paths, `cmd.exe /c npm`, `System32\tar.exe`, `.gitattributes`) and `windows-latest` to `.github/workflows/ci.yml`.
+- Upgraded public challenge target to **CrackMe v5.2** (anchor `0x3aa14b2c`, Windows CRLF normalization + V8 `Function.prototype.toString` anti-`fs.readFileSync`-virtualization check).
+- Release **bla-agents@1.6.0**.
+
 ## 2026-10-31 (Asia/Shanghai)
 
 ### Recovery

@@ -298,6 +298,30 @@ function sha256File(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
+function runNpmCommand(args: readonly string[], cwd: string): void {
+  if (process.platform === "win32") {
+    execFileSync(
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", "npm", ...args],
+      { cwd, stdio: "pipe" },
+    );
+    return;
+  }
+  execFileSync("npm", [...args], { cwd, stdio: "pipe" });
+}
+
+function resolveTarCommand(): string {
+  if (process.platform === "win32") {
+    const winSystemTar = join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "tar.exe",
+    );
+    if (existsSync(winSystemTar)) return winSystemTar;
+  }
+  return "tar";
+}
+
 /**
  * Packs both `bla-agents` (primary) and `bla-shield` (alias) tarballs into `outDir`
  * without mutating the repository working tree, and writes `SHA256SUMS.txt`.
@@ -318,10 +342,7 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
   const version = pkgJson.version;
 
   // 1. Pack primary (`bla-agents-<version>.tgz`) directly into `absOut`
-  execFileSync("npm", ["pack", "--pack-destination", absOut], {
-    cwd: absRepo,
-    stdio: "pipe",
-  });
+  runNpmCommand(["pack", "--pack-destination", absOut], absRepo);
 
   const primaryFilename = `bla-agents-${version}.tgz`;
   const primaryPath = join(absOut, primaryFilename);
@@ -332,8 +353,9 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
 
   // 2. Build alias (`bla-shield-<version>.tgz`) in an isolated temp staging directory
   const stageDir = mkdtempSync(join(tmpdir(), "bla-alias-pack-"));
+  const tarCmd = resolveTarCommand();
   try {
-    execFileSync("tar", ["-xzf", primaryPath, "-C", stageDir], {
+    execFileSync(tarCmd, ["-xzf", primaryPath, "-C", stageDir], {
       stdio: "pipe",
     });
     const unpackedPkgDir = join(stageDir, "package");
@@ -345,10 +367,7 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
     unpackedPkg.name = "bla-shield";
     writeFileSync(unpackedPkgJsonPath, JSON.stringify(unpackedPkg, null, 2) + "\n", "utf8");
 
-    execFileSync("npm", ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
-      cwd: unpackedPkgDir,
-      stdio: "pipe",
-    });
+    runNpmCommand(["pack", "--pack-destination", absOut, "--ignore-scripts"], unpackedPkgDir);
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
   }
