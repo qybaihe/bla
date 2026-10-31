@@ -9,6 +9,7 @@
 **Proteggi le funzionalità che hai creato. Acceca gli agenti che cercano di clonarle, fino al livello binario.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-0ea5e9?style=flat-square&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
 [![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#showcases)
