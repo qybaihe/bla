@@ -323,6 +323,8 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
   execFileSync(npmCmd, ["pack", "--pack-destination", absOut], {
     cwd: absRepo,
     stdio: "pipe",
+    // .cmd shims on Windows require a shell; bare execFile EINVAL otherwise.
+    shell: process.platform === "win32",
   });
 
   const primaryFilename = `bla-agents-${version}.tgz`;
@@ -350,6 +352,7 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
     execFileSync(npmCmd, ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
       cwd: unpackedPkgDir,
       stdio: "pipe",
+      shell: process.platform === "win32",
     });
   } finally {
     rmSync(stageDir, { recursive: true, force: true });

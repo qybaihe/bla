@@ -573,6 +573,7 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
       const buildRes = spawnSync(npmCmd, ["run", "build"], {
         cwd: process.cwd(),
         stdio: "pipe",
+        shell: process.platform === "win32",
       });
       expect(buildRes.status).toBe(0);
     }
