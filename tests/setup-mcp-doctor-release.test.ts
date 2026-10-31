@@ -58,7 +58,7 @@ function sha256File(filePath: string): string {
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -665,12 +665,25 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
       },
     ];
 
-    for (const req of requests) {
-      child.stdin.write(JSON.stringify(req) + "\n");
-    }
+    const waitForChildClose = new Promise<void>((resolveClose) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolveClose();
+        return;
+      }
+      child.once("close", () => resolveClose());
+    });
 
-    await collectResponses;
-    child.kill();
+    try {
+      for (const req of requests) {
+        child.stdin.write(JSON.stringify(req) + "\n");
+      }
+
+      await collectResponses;
+    } finally {
+      child.stdin.end();
+      child.kill();
+      await waitForChildClose;
+    }
 
     // Every line on stdout must be valid JSON-RPC 2.0
     expect(stdoutLines.length).toBe(5);
