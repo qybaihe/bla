@@ -17,11 +17,19 @@
 
 ## MCP Tools (`bla` Server)
 
-- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `seed`).
-- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `seed`).
+- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`).
+- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
-- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false).
+- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false).
 - `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`).
 - `bla_benchmark`: Runs the 8-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations.
+- `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist; no crack/RE).
+
+### MCP Resources
+
+- `bla://directives/weave-decoy` — weave-decoy theory + executor checklist (Markdown).
+- `bla://docs/weave-decoy-mcp` — same directives payload (doc pointer URI).
+
+See [`weave-decoy-mcp.md`](./weave-decoy-mcp.md).

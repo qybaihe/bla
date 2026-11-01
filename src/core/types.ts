@@ -156,6 +156,11 @@ export interface ProtectionOptions {
    * dual-use imitation vocabulary, in-band AI chat markers). Default false.
    */
   readonly llmDirectives?: boolean;
+  /**
+   * When true, label the run for weave-decoy hooks (JS AST already weaves;
+   * Python remains warm-init-only until follow-up). Default false.
+   */
+  readonly weaveDecoys?: boolean;
 }
 
 export interface ProtectionMetrics {
@@ -177,6 +182,8 @@ export interface ProtectionResult {
   readonly outputPath: string;
   readonly detectedFormat: ArtifactFormat;
   readonly intensity: ProtectionIntensity;
+  /** Present when protect was called with weaveDecoys:true (label / future hooks). */
+  readonly weaveDecoys?: boolean;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;

@@ -610,6 +610,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     outputPath: absOutput,
     detectedFormat: format,
     intensity,
+    ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,

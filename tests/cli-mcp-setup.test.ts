@@ -87,6 +87,7 @@ describe("CLI Setup, Doctor, Benchmark & MCP Server", () => {
         "bla_doctor",
         "bla_inspect_release",
         "bla_init",
+        "bla_weave_plan",
       ]);
 
       // Test bla_audit + bla_protect + bla_verify via MCP tool calls

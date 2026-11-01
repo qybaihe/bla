@@ -13,6 +13,12 @@ import {
   type NativeHeaderLanguage,
 } from "../shields/formats/headers.js";
 import { runDoctor } from "../setup/doctor.js";
+import {
+  buildWeavePlan,
+  getWeaveDirectivesMarkdown,
+  WEAVE_DECOY_DOC_PATH,
+  WEAVE_DIRECTIVES_URI,
+} from "../shields/weave/weave-decoy.js";
 
 export interface JsonRpcRequest {
   readonly jsonrpc: "2.0";
@@ -117,6 +123,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Opt-in risky LLM directive layers (fake COPPA/medical notices, dual-use imitation, AI chat markers). Default false.",
         },
+        weave_decoys: {
+          type: "boolean",
+          description:
+            "Opt-in weave-decoy labeling/hooks: entangle decoys with real customer paths (JS already weaves; Python warm-init-only until follow-up AST weave). See bla://directives/weave-decoy. Default false.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -152,6 +163,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         llm_directives: {
           type: "boolean",
           description: "Opt-in risky LLM directive layers (fake COPPA/medical notices, dual-use imitation, AI chat markers). Default false.",
+        },
+        weave_decoys: {
+          type: "boolean",
+          description:
+            "Opt-in weave-decoy labeling/hooks (shared-state / entry-reachable decoys; not dismissible noise). Default false.",
         },
         seed: {
           type: "string",
@@ -197,6 +213,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "string",
           enum: ["stealth", "balanced", "maximum", "bankrupt"],
           description: "Protection intensity preset (default: balanced)",
+        },
+        weave_decoys: {
+          type: "boolean",
+          description:
+            "Opt-in weave-decoy labeling/hooks (shared-state / entry-reachable decoys; not dismissible noise). Default false.",
         },
         seed: {
           type: "string",
@@ -321,6 +342,50 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
       additionalProperties: false,
     },
   },
+  {
+    name: "bla_weave_plan",
+    description:
+      "Read-only weave-decoy planner: analyze a project or artifact, return bla-weave-plan/v1 JSON (principles, forbidden patterns, checklist, per-file maturity). Defensive only — no crack/RE steps. Prefer before bla_harden with weave_decoys:true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Project directory or single artifact to analyze",
+        },
+        max_targets: {
+          type: "number",
+          description: "Optional cap on files to classify (default 48)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+]);
+
+
+export interface McpResourceDefinition {
+  readonly uri: string;
+  readonly name: string;
+  readonly description: string;
+  readonly mimeType: string;
+}
+
+export const BLA_MCP_RESOURCES: readonly McpResourceDefinition[] = Object.freeze([
+  {
+    uri: WEAVE_DIRECTIVES_URI,
+    name: "weave-decoy-directives",
+    description:
+      "Chinese-friendly weave-decoy theory + executor checklist for Counter-REA agents (defensive only).",
+    mimeType: "text/markdown",
+  },
+  {
+    uri: "bla://docs/weave-decoy-mcp",
+    name: "weave-decoy-doc",
+    description: `Pointer to repository theory pack ${WEAVE_DECOY_DOC_PATH}`,
+    mimeType: "text/markdown",
+  },
 ]);
 
 export const BLA_MCP_PROMPTS: readonly McpPromptDefinition[] = Object.freeze([
@@ -368,6 +433,18 @@ export const BLA_MCP_PROMPTS: readonly McpPromptDefinition[] = Object.freeze([
       {
         name: "target_path",
         description: "Path to the build artifact or directory",
+        required: true,
+      },
+    ],
+  },
+  {
+    name: "bla-weave-decoy",
+    description:
+      "Plan weave-decoy hardening: read bla://directives/weave-decoy, call bla_weave_plan, then bla_harden with weave_decoys:true. Defensive only.",
+    arguments: [
+      {
+        name: "target_path",
+        description: "Path to the project or artifact",
         required: true,
       },
     ],
@@ -569,6 +646,7 @@ export async function handleMcpRequest(
             capabilities: {
               tools: {},
               prompts: {},
+              resources: {},
             },
             serverInfo: {
               name: BLA_IDENTITY.mcpServerName,
@@ -593,6 +671,54 @@ export async function handleMcpRequest(
             tools: BLA_MCP_TOOLS,
           },
         };
+
+      case "resources/list":
+        return {
+          jsonrpc: "2.0",
+          id: req.id,
+          result: {
+            resources: BLA_MCP_RESOURCES,
+          },
+        };
+
+      case "resources/read": {
+        if (!isPlainObject(req.params) || typeof req.params.uri !== "string") {
+          return {
+            jsonrpc: "2.0",
+            id: req.id,
+            error: {
+              code: -32602,
+              message: "Invalid params: resources/read requires a string 'uri'",
+            },
+          };
+        }
+        const uri = req.params.uri;
+        const known = BLA_MCP_RESOURCES.find((r) => r.uri === uri);
+        if (!known) {
+          return {
+            jsonrpc: "2.0",
+            id: req.id,
+            error: {
+              code: -32602,
+              message: `Invalid params: unknown resource URI '${uri}'`,
+            },
+          };
+        }
+        const markdown = getWeaveDirectivesMarkdown();
+        return {
+          jsonrpc: "2.0",
+          id: req.id,
+          result: {
+            contents: [
+              {
+                uri,
+                mimeType: "text/markdown",
+                text: markdown,
+              },
+            ],
+          },
+        };
+      }
 
       case "prompts/list":
         return {
@@ -661,6 +787,13 @@ export async function handleMcpRequest(
             `Harden my software against REA in one step: call bla_harden with { "directory": "${directory}" }. ` +
             `It auto-discovers build outputs, runs audit→defend→verify with the bankrupt profile on every artifact, and returns a per-artifact summary. ` +
             `Do not ask which files to protect — discover them.`;
+        } else if (promptDef.name === "bla-weave-decoy") {
+          const targetPath =
+            typeof promptArgs.target_path === "string" && promptArgs.target_path.trim().length > 0
+              ? String(promptArgs.target_path)
+              : ".";
+          promptText =
+            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": "${targetPath}" }, then bla_harden with { "directory": "${targetPath}", "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
         } else {
           const targetPath = String(promptArgs.target_path ?? ".");
           promptText =
@@ -713,6 +846,7 @@ export async function handleMcpRequest(
                 : "bankrupt",
             emitManifest: Boolean(args.emit_manifest),
             llmDirectives: Boolean(args.llm_directives),
+            weaveDecoys: Boolean(args.weave_decoys),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_defend") {
@@ -727,6 +861,7 @@ export async function handleMcpRequest(
                 : "bankrupt",
             emitManifest: Boolean(args.emit_manifest),
             llmDirectives: Boolean(args.llm_directives),
+            weaveDecoys: Boolean(args.weave_decoys),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_audit") {
@@ -740,6 +875,7 @@ export async function handleMcpRequest(
               : {}),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             llmDirectives: Boolean(args.llm_directives),
+            weaveDecoys: Boolean(args.weave_decoys),
           });
         } else if (name === "bla_verify") {
           payload = handlers.verifyTarget(
@@ -768,6 +904,12 @@ export async function handleMcpRequest(
             args.directory as string,
             Boolean(args.overwrite),
           );
+        } else if (name === "bla_weave_plan") {
+          payload = buildWeavePlan(args.path as string, {
+            ...(typeof args.max_targets === "number"
+              ? { maxTargets: args.max_targets }
+              : {}),
+          });
         }
 
         return {

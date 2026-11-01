@@ -24,6 +24,7 @@ export interface OneClickDefenseOptions {
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
   readonly llmDirectives?: boolean;
+  readonly weaveDecoys?: boolean;
 }
 
 export interface OneClickDefenseStageSummary {
@@ -42,6 +43,8 @@ export interface OneClickDefenseReport {
   readonly inputPath: string;
   readonly outputPath: string;
   readonly intensity: ProtectionIntensity;
+  /** True when caller opted into weave-decoy labeling/hooks. */
+  readonly weaveDecoys: boolean;
   readonly overallSuccess: boolean;
   readonly stages: readonly OneClickDefenseStageSummary[];
   readonly releaseExposure: ReleaseExposureReport | null;
@@ -101,6 +104,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.seed !== undefined ? { seed: options.seed } : {}),
     ...(options.llmDirectives !== undefined
       ? { llmDirectives: options.llmDirectives }
+      : {}),
+    ...(options.weaveDecoys !== undefined
+      ? { weaveDecoys: options.weaveDecoys }
       : {}),
     honeySourceMaps: true,
   });
@@ -187,6 +193,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     inputPath: absInput,
     outputPath: protection.outputPath,
     intensity,
+    weaveDecoys: options.weaveDecoys === true,
     overallSuccess: verification.overallPassed,
     stages,
     releaseExposure,
