@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for containers/CODE; copy shared `co_consts` before mutate) and append unused decoy
   `TYPE_CODE` into module + customer `co_consts` (no `FLAG_REF` on decoys; original
   `co_code` preserved). Trailer canary/diagnostic honey still applied. Planner maturity
-  for `python-pyc` is now `woven`.
+  for `python-pyc` is now `woven`. Magic map covers CPython 3.11–3.14
+  (incl. Ubuntu 26 runners / magic 3627) plus 3.15 headroom.
 
 ## [1.6.3] — 2026-11-01
 

@@ -47,12 +47,15 @@ const TYPE_SHORT_ASCII = 0x7a;
 const TYPE_SHORT_ASCII_INTERNED = 0x5a;
 
 const MAGIC_LAYOUT: ReadonlyMap<number, PythonPycCodeLayout> = new Map([
+  // CPython marshal CODE layout families (see Include/internal/pycore_magic_number.h).
   ...range(3390, 3394, "py37"),
   ...range(3400, 3401, "py37"),
-  ...range(3410, 3439, "py38"),
-  ...range(3494, 3495, "py311"),
-  ...range(3500, 3531, "py311"),
-  ...range(3550, 3571, "py311"),
+  ...range(3410, 3439, "py38"), // 3.8–3.10 (posonly + nlocals/varnames)
+  ...range(3450, 3495, "py311"), // 3.11 (localsplus; nlocals dropped)
+  ...range(3500, 3531, "py311"), // 3.12
+  ...range(3550, 3571, "py311"), // 3.13
+  ...range(3600, 3627, "py311"), // 3.14 (Ubuntu 26+ runners)
+  ...range(3650, 3699, "py311"), // 3.15 headroom
 ]);
 
 function range(
