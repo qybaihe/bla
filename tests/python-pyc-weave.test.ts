@@ -101,10 +101,16 @@ print(n)
 }
 
 describe("python-pyc-weave", () => {
+  it("maps CPython 3.11–3.14 magic numbers to the py311 CODE layout", () => {
+    for (const magic of [3495, 3531, 3571, 3627]) {
+      expect(layoutForPycMagic(magic)).toBe("py311");
+    }
+  });
+
   it("maps current CPython magic to a known layout", () => {
     const pyc = compileSamplePyc();
     const magic = pyc.readUInt16LE(0);
-    expect(layoutForPycMagic(magic)).toBe("py311");
+    expect(layoutForPycMagic(magic)).toBe("py311"); // 3.11+ marshal CODE layout (3.11–3.15 magics)
   });
 
   it("weave_decoys:true injects decoy TYPE_CODE into customer co_consts without breaking import", () => {
