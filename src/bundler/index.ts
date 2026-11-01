@@ -19,6 +19,12 @@ export interface BlaBundlerPluginOptions {
   readonly include?: RegExp;
   /** Emit a companion `.map` honey source map for each protected chunk (default: `true`). */
   readonly honeySourceMap?: boolean;
+  /**
+   * When `true`, a transform failure throws and fails the build. When `false`
+   * (the default), a transform failure logs a warning and passes the chunk
+   * through unshielded so one bad module does not break the whole build.
+   */
+  readonly failBuildOnError?: boolean;
 }
 
 /**
@@ -61,6 +67,30 @@ export function inferCarrierFromRollupFormat(
 }
 
 /**
+ * Runs a transform and either returns its code or, when
+ * `failBuildOnError` is false, warns and returns `null` so the caller can
+ * pass the original code through unshielded.
+ */
+function shieldOrPassThrough(
+  transform: () => { code: string },
+  ctx: {
+    readonly fileName: string;
+    readonly failBuildOnError: boolean;
+  },
+): string | null {
+  try {
+    return transform().code;
+  } catch (err) {
+    if (ctx.failBuildOnError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[bla-shield] skipped protection for ${ctx.fileName}: ${message}`,
+    );
+    return null;
+  }
+}
+
+/**
  * Vite & Rollup plugin (`blaVitePlugin` / `blaRollupPlugin`) that automatically
  * injects BLA's three-stage adversarial shield into generated JS chunks during `renderChunk`.
  *
@@ -78,6 +108,7 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
   const intensity = options.intensity ?? "balanced";
   const include = options.include ?? /\.(?:m?js|cjs)$/i;
   const emitMap = options.honeySourceMap ?? true;
+  const failBuildOnError = options.failBuildOnError ?? false;
 
   return {
     name: "bla-shield-rollup-plugin",
@@ -95,13 +126,21 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
         chunk.fileName,
       );
       const loader = inferEsbuildLoader(chunk.fileName);
-      const transformed = transformJavaScriptWithBlaShield(code, {
-        intensity,
-        seed,
-        filename: chunk.fileName,
-        sourceType,
-        loader,
-      });
+      const shieldedCode = shieldOrPassThrough(
+        () =>
+          transformJavaScriptWithBlaShield(code, {
+            intensity,
+            seed,
+            filename: chunk.fileName,
+            sourceType,
+            loader,
+          }),
+        { fileName: chunk.fileName, failBuildOnError },
+      );
+      if (shieldedCode === null) {
+        return null; // Rollup treats null as "no change": chunk passes through.
+      }
+      const transformed = { code: shieldedCode };
 
       if (!emitMap) {
         return { code: transformed.code, map: null };
@@ -176,6 +215,7 @@ export class BlaWebpackPlugin {
   }): void {
     const intensity = this.options.intensity ?? "balanced";
     const include = this.options.include ?? /\.(?:m?js|cjs)$/i;
+    const failBuildOnError = this.options.failBuildOnError ?? false;
 
     compiler.hooks.compilation.tap("BlaWebpackPlugin", (compilation) => {
       compilation.hooks.processAssets.tap(
@@ -191,14 +231,20 @@ export class BlaWebpackPlugin {
             const rawSource = rawAsset.source().toString("utf8");
             const sourceType = inferJsCarrierFromPath(assetName);
             const loader = inferEsbuildLoader(assetName);
-            const transformed = transformJavaScriptWithBlaShield(rawSource, {
-              intensity,
-              seed: `${this.options.seed ?? "bla-webpack"}:${assetName}`,
-              filename: assetName,
-              sourceType,
-              loader,
-            });
-            const shieldedCode = transformed.code;
+            const shieldedCode = shieldOrPassThrough(
+              () =>
+                transformJavaScriptWithBlaShield(rawSource, {
+                  intensity,
+                  seed: `${this.options.seed ?? "bla-webpack"}:${assetName}`,
+                  filename: assetName,
+                  sourceType,
+                  loader,
+                }),
+              { fileName: assetName, failBuildOnError },
+            );
+            if (shieldedCode === null) {
+              continue; // Webpack leaves the already-emitted asset untouched.
+            }
             compilation.updateAsset(assetName, {
               source: () => shieldedCode,
               size: () => Buffer.byteLength(shieldedCode, "utf8"),
@@ -217,6 +263,7 @@ export class BlaWebpackPlugin {
 export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
   const intensity = options.intensity ?? "balanced";
   const include = options.include ?? /\.(?:[cm]?[jt]sx?)$/i;
+  const failBuildOnError = options.failBuildOnError ?? false;
 
   return {
     name: "bla-shield-esbuild-plugin",
@@ -234,15 +281,22 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
         const source = await fs.readFile(args.path, "utf8");
         const loader = inferEsbuildLoader(args.path);
         const sourceType = inferJsCarrierFromPath(args.path);
-        const transformed = transformJavaScriptWithBlaShield(source, {
-          intensity,
-          seed: `${options.seed ?? "bla-esbuild"}:${args.path}`,
-          filename: args.path,
-          loader,
-          sourceType,
-        });
+        const shieldedCode = shieldOrPassThrough(
+          () =>
+            transformJavaScriptWithBlaShield(source, {
+              intensity,
+              seed: `${options.seed ?? "bla-esbuild"}:${args.path}`,
+              filename: args.path,
+              loader,
+              sourceType,
+            }),
+          { fileName: args.path, failBuildOnError },
+        );
+        if (shieldedCode === null) {
+          return null; // esbuild falls back to reading the file as-is.
+        }
         return {
-          contents: transformed.code,
+          contents: shieldedCode,
           loader,
         };
       });
