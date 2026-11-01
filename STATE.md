@@ -1,8 +1,8 @@
 # BLA state of the project
 
-**Version:** 1.4.6 (`package.json` ↔ `src/identity.ts`, verified by build)  
-**Status:** Launch-ready locally. Gates green on Node 22.23.4 and Node 24.22.1.  
-**Blocker to publish:** GitHub token (no push / tag / npm publish / GitHub Release yet).
+**Version:** 1.6.3 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
+**Publishing:** tag-only releases (`git tag bla-agents-<version>`); see `CHANGELOG.md` and GitHub Releases.
 
 ## One-sentence usage
 
@@ -30,7 +30,8 @@ Also: `bla_harden` MCP tool with `{ "directory": "." }`.
 | PCAP | ✓ | **verified** — `TSHARK_JSON_MAX_BYTES` (needs tshark) | |
 | GPU PTX | ✓ canary/exhaustion | soft — REA still `after=ok` | densifies but no hard budget trip |
 | DEX / IL2CPP / bplist / .NET / JVM / ZIP / **Android R8+JNI** | ✓ | designed-for (R8/JNI new in 1.4.6) | signed APK refused (by design); unsigned APK gets mapping.txt + decoy JNI .so |
-| Firmware / SPIR-V / CUDA / AMD GPU objects | — | **skipped** | no stable REA analyzer / not in scope yet |
+| Firmware UF2 | ✓ canary/exhaustion | designed-for — counters REA #8230 (not-main-flash / file-container decoys) | added in 1.6.2 |
+| SPIR-V / CUDA / AMD GPU objects | — | **skipped** | no stable REA analyzer / not in scope yet |
 
 **Designed-for but not empirically verified here** (need native tooling on the REA side): Ghidra, Frida, LLDB, Rizin, JADX.
 
