@@ -721,6 +721,10 @@ export function detectNativeEofAppendHazard(bytes: Buffer): NativeEofAppendHazar
   }
 
   // 4. PyInstaller onefile CArchive cookie (`MEI\x0c\x0b\x0a\x0b\x0e` in trailing 64 KiB)
+  // Honesty: detecting this hazard means we MUST NOT append EOF trailers that
+  // break the cookie. Onefile peel (extract CArchive / entry pyc) remains
+  // expected — densify by shielding `.py`/`.pyc` *before* `pyinstaller`, not
+  // by rewriting the packed archive here.
   const tail64k = bytes.subarray(Math.max(0, bytes.length - 65_536));
   if (tail64k.includes(PYINSTALLER_COOKIE_MAGIC)) {
     return "pyinstaller-archive";

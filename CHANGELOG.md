@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Python tarpit densification** (`tarpit-generator.ts`, `python.ts`): decoys
+  no longer look like empty `_bla_*` honeypots — mixed mundane/scare stems,
+  heterogeneous always-executed bodies that mutate shared state, and a live
+  module-level warm initializer so xref tools see real reachability. Dropped
+  greppable `BLA-SHIELD` banner (auditor still matches `runtime attestation
+  boundary`).
+- **Chaff vocabulary diversification** (`chaff-generator.ts`): alternate
+  billing / cache / scheduler / observability / locale / storage mirages so
+  `TPM2_` / `NitroEnclave` / `hardware_enclave_stub` is not the only family.
+
+### Docs
+
+- Document PyInstaller onefile honesty limits: CArchive peel is expected;
+  densify by shielding `.py`/`.pyc` before bundling (`python.ts` /
+  `native.ts` notes + `docs/counter-rea-deception.md`).
+
 ## [1.6.3] — 2026-11-01
 
 Patch release shipping CrackMe v7 Meridian (challenge, scripts, tests, docs, website) on top of the 1.6.2 UF2 firmware shield. No library or CLI behavior changes.

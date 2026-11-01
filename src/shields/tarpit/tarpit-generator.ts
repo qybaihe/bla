@@ -13,23 +13,39 @@ export interface TarpitGenerationResult {
   readonly semanticBudgetTriggers: readonly string[];
 }
 
-const DECOY_DOMAIN_PREFIXES: readonly string[] = [
+/** Mixed honey + mundane stems so a single TEE/TPM grep cannot dismiss the whole tarpit. */
+const SCARE_DECOY_PREFIXES: readonly string[] = [
   "verifyEnclaveAttestation",
   "deriveHardwareKdfSchedule",
-  "reconcileQuorumLedger",
-  "validateZeroKnowledgeEpoch",
-  "dispatchSealedStateTransition",
-  "computeMerkleInclusionProof",
-  "synchronizeHsmKeySlot",
-  "decodeRingBufferEnvelope",
   "authenticateTpmQuoteDigest",
-  "evaluateLicenseEntitlementMatrix",
   "negotiateVsockChannelCipher",
-  "projectShadowCapabilityGraph",
-  "resolveCryptographicLeaseTicket",
-  "auditMonotonicCounterState",
+  "synchronizeHsmKeySlot",
   "unsealProtectedMemoryPage",
-  "verifySchnorrTranscriptBatch",
+];
+
+const MUNDANE_DECOY_PREFIXES: readonly string[] = [
+  "reconcileInvoiceBatch",
+  "hydrateSessionCache",
+  "flushTelemetryBuffer",
+  "normalizeLocaleBundle",
+  "scheduleBackoffRetry",
+  "compactWalSegment",
+  "projectCatalogFacet",
+  "bindWorkerPoolSlot",
+  "materializeReportCursor",
+  "encodeTransportFrame",
+  "observeMetricHistogram",
+  "adaptGatewayPolicy",
+  "reducePipelineShard",
+  "captureAuditSample",
+  "primeConnectionPool",
+  "transformLookupVector",
+];
+
+/** @deprecated Prefer the split scare/mundane pools; kept for callers that iterate a flat list. */
+const DECOY_DOMAIN_PREFIXES: readonly string[] = [
+  ...SCARE_DECOY_PREFIXES,
+  ...MUNDANE_DECOY_PREFIXES,
 ];
 
 /**
@@ -64,7 +80,9 @@ export function generateJsTarpitAndBudgetBreaker(
 
   const decoyNames: string[] = [];
   for (let i = 0; i < decoyCount; i++) {
-    const base = DECOY_DOMAIN_PREFIXES[i % DECOY_DOMAIN_PREFIXES.length]!;
+    const useScare = i % 3 === 0;
+    const pool = useScare ? SCARE_DECOY_PREFIXES : MUNDANE_DECOY_PREFIXES;
+    const base = pool[i % pool.length]!;
     decoyNames.push(prng.identifier({ style: "privateCamel", hint: base, entropy: 4 }));
   }
 
@@ -181,6 +199,15 @@ export function generateJsTarpitAndBudgetBreaker(
 
 /**
  * Generates a Python Algorithmic Tarpit & Honey-Context block for `.py` protection.
+ *
+ * Defense properties (WorkBuddy / REA peel resistance):
+ * - No greppable `_bla_` / `BLA-SHIELD` markers in emitted names or banner comments.
+ * - Decoy stems mix mundane app vocabulary with a minority of TEE scare names so a
+ *   single `enclave|TPM2|Nitro` grep cannot discard the whole graph.
+ * - Every decoy has a non-trivial always-executed body that mutates shared state and
+ *   records peer edges; opaque-false branches keep deep recursion inert at runtime.
+ * - A module-level warm initializer actually invokes every decoy once so static
+ *   reachability / xref tools cannot dismiss them as unreferenced `pass` stubs.
  */
 export function generatePythonTarpit(
   prng: SeededPrng,
@@ -192,15 +219,33 @@ export function generatePythonTarpit(
 
   const decoyNames: string[] = [];
   for (let i = 0; i < decoyCount; i++) {
-    const base = DECOY_DOMAIN_PREFIXES[i % DECOY_DOMAIN_PREFIXES.length]!;
+    // ~1/3 scare stems (honey), ~2/3 mundane — avoids homogeneous enclave-only naming.
+    const useScare = i % 3 === 0;
+    const pool = useScare ? SCARE_DECOY_PREFIXES : MUNDANE_DECOY_PREFIXES;
+    const base = pool[i % pool.length]!;
     decoyNames.push(prng.identifier({ style: "snake", hint: base, entropy: 4 }));
   }
 
   const lines: string[] = [];
-  const stateVar = prng.identifier({ style: "snake", hint: "enclaveState", entropy: 4 }).toUpperCase();
-  lines.push(`# BLA-SHIELD runtime attestation boundary`);
+  // Keep auditor phrase "runtime attestation boundary" but drop greppable BLA-SHIELD.
+  const stateVar = prng
+    .identifier({ style: "snake", hint: "runtimeState", entropy: 4 })
+    .toUpperCase();
+  const slotVar = prng
+    .identifier({ style: "snake", hint: "sharedSlot", entropy: 4 })
+    .toUpperCase();
+  const manifestsVar = prng
+    .identifier({ style: "snake", hint: "manifestTable", entropy: 4 })
+    .toUpperCase();
+  const warmName = prng.identifier({
+    style: "snake",
+    hint: "warmRuntimeBindings",
+    entropy: 4,
+  });
+
+  lines.push(`# runtime attestation boundary`);
   lines.push(`${stateVar} = 0x${prng.hex(6)} | 1`);
-  const manifestsVar = prng.identifier({ style: "snake", hint: "enclaveManifests", entropy: 4 }).toUpperCase();
+  lines.push(`${slotVar}: dict = {"epoch": 0, "peer": 0, "tag": 0}`);
   lines.push(`${manifestsVar} = (`);
   for (const payload of chaffPayloads) {
     lines.push(`    ${JSON.stringify(payload.rawText)},`);
@@ -212,27 +257,102 @@ export function generatePythonTarpit(
   for (let i = 0; i < decoyNames.length; i++) {
     const fnName = decoyNames[i]!;
     const next1 = decoyNames[(i + 1) % decoyNames.length]!;
-    const next2 = decoyNames[(i + 2) % decoyNames.length]!;
-    crossRefEdges += 2;
+    const next2 = decoyNames[(i + 3) % decoyNames.length]!;
+    const next3 = decoyNames[(i + 5) % decoyNames.length]!;
+    crossRefEdges += 3;
     const k1 = prng.nextInt(1000, 65535);
+    const k2 = prng.nextInt(1000, 65535);
     const chaffIdx = i % Math.max(1, chaffPayloads.length);
+    const bodyVariant = i % 4;
+    let mix = (prng.nextUint32() | 1) >>> 0;
+    if (mix === 0x9e3779b9 || mix === 2654435769) mix ^= 2;
+
+    const docstring =
+      chaffPayloads[chaffIdx]?.rawText ??
+      "Compatibility shim retained for ABI alignment.";
 
     lines.push(`def ${fnName}(seed: int = 0, depth: int = 0) -> int:`);
-    lines.push(`    """${chaffPayloads[chaffIdx]?.rawText ?? "Enclave attestation verifier stub."}"""`);
+    lines.push(`    """${docstring}"""`);
+    lines.push(`    tag = ${manifestsVar}[${chaffIdx} % len(${manifestsVar})]`);
     lines.push(`    acc = (seed ^ ${k1} ^ ${stateVar}) & 0xFFFFFFFF`);
-    lines.push(`    for r in range(4):`);
-    let mix = (prng.nextUint32() | 1) >>> 0;
-    if (mix === 0x9e3779b9) mix ^= 2;
-    lines.push(`        acc = ((acc * ${mix}) ^ (acc >> 11) ^ r) & 0xFFFFFFFF`);
-    lines.push(`    if depth > 0 and ${generatePythonOpaqueFalseExpression(prng, stateVar)}:`);
-    lines.push(`        return ${next1}(acc, depth - 1) ^ ${next2}(acc ^ ${k1}, depth - 1)`);
-    lines.push(`    return acc`);
+
+    if (bodyVariant === 0) {
+      lines.push(`    for r in range(5):`);
+      lines.push(
+        `        acc = ((acc * ${mix}) ^ (acc >> 11) ^ r ^ (ord(tag[r % len(tag)]) if tag else 0)) & 0xFFFFFFFF`,
+      );
+      lines.push(
+        `        ${slotVar}["epoch"] = (${slotVar}.get("epoch", 0) ^ acc) & 0xFFFFFFFF`,
+      );
+    } else if (bodyVariant === 1) {
+      lines.push(`    cursor = bytearray(8)`);
+      lines.push(`    for r in range(4):`);
+      lines.push(
+        `        acc = ((acc * ${mix}) ^ (acc >> 7) ^ (r * ${k2})) & 0xFFFFFFFF`,
+      );
+      lines.push(`        cursor[r] = acc & 0xFF`);
+      lines.push(`        cursor[7 - r] = (acc >> 8) & 0xFF`);
+      lines.push(
+        `    ${slotVar}["tag"] = int.from_bytes(cursor, "little") ^ ${slotVar}.get("tag", 0)`,
+      );
+    } else if (bodyVariant === 2) {
+      lines.push(`    def _fold(local: int, rounds: int) -> int:`);
+      lines.push(`        v = local & 0xFFFFFFFF`);
+      lines.push(`        for r in range(rounds):`);
+      lines.push(
+        `            v = ((v * ${mix}) ^ (v >> 13) ^ r) & 0xFFFFFFFF`,
+      );
+      lines.push(`        return v`);
+      lines.push(`    acc = _fold(acc ^ ${k2}, 4)`);
+      lines.push(`    try:`);
+      lines.push(
+        `        ${slotVar}["peer"] = (${slotVar}.get("peer", 0) + acc) & 0xFFFFFFFF`,
+      );
+      lines.push(`    except Exception:`);
+      lines.push(`        ${slotVar}["peer"] = acc`);
+    } else {
+      lines.push(
+        `    window = [(acc ^ (i << 3)) & 0xFF for i in range(6)]`,
+      );
+      lines.push(`    for r, b in enumerate(window):`);
+      lines.push(
+        `        acc = ((acc * ${mix}) ^ b ^ (r * ${k2})) & 0xFFFFFFFF`,
+      );
+      lines.push(
+        `    ${slotVar}["epoch"] = (${slotVar}.get("epoch", 0) ^ acc ^ len(tag)) & 0xFFFFFFFF`,
+      );
+    }
+
+    // Always-executed peer name touch keeps xrefs dense even when depth==0.
+    lines.push(
+      `    ${slotVar}["peer"] = (${slotVar}.get("peer", 0) ^ hash(${next1}.__name__) ^ hash(${next2}.__name__)) & 0xFFFFFFFF`,
+    );
+    lines.push(
+      `    if depth > 0 and ${generatePythonOpaqueFalseExpression(prng, stateVar)}:`,
+    );
+    lines.push(
+      `        return ${next1}(acc, depth - 1) ^ ${next2}(acc ^ ${k1}, depth - 1) ^ ${next3}(acc ^ ${k2}, max(0, depth - 2))`,
+    );
+    lines.push(`    return acc ^ (${slotVar}.get("epoch", 0) & 0xFFFF)`);
     lines.push(``);
   }
 
+  // Live module-level warm: every decoy is reachable from import-time init.
+  lines.push(`def ${warmName}(_seed: int = 0) -> int:`);
+  lines.push(`    acc = _seed & 0xFFFFFFFF`);
+  for (let i = 0; i < decoyNames.length; i++) {
+    lines.push(`    acc ^= ${decoyNames[i]}(acc ^ ${i + 1}, 0)`);
+    crossRefEdges += 1;
+  }
+  lines.push(`    ${slotVar}["warm"] = acc`);
+  lines.push(`    return acc`);
+  lines.push(``);
+  lines.push(`${warmName}(${stateVar} & 0xFF)`);
+  lines.push(``);
+
   return {
     code: lines.join("\n"),
-    decoyFunctionNames: decoyNames,
+    decoyFunctionNames: [...decoyNames, warmName],
     crossReferenceEdges: crossRefEdges,
     semanticBudgetTriggers: ["python-marshal-code-graph-tarpit"],
   };
