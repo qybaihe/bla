@@ -25,6 +25,11 @@ bla harden .
 
 </div>
 
+
+<div align="center">
+<a href="https://upstar.dev/r/qybaihe/bla"><img src="docs/assets/bla-trending-upstar.png" alt="Upstar: bla #1 in MCP this week · +1.7k stars" width="900" /></a>
+</div>
+
 > [!IMPORTANT]
 > BLA is a **defensive** tool for protecting **your own** software. See [DISCLAIMER.md](DISCLAIMER.md).
 > Get BLA from [qybaihe/bla](https://github.com/qybaihe/bla) or [npm `bla-agents`](https://www.npmjs.com/package/bla-agents).

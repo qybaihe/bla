@@ -22,6 +22,11 @@
 
 </div>
 
+
+<div align="center">
+<a href="https://upstar.dev/r/qybaihe/bla"><img src="../assets/bla-trending-upstar.png" alt="Upstar：bla 本周 MCP #1 · +1.7k stars" width="900" /></a>
+</div>
+
 > [!IMPORTANT]
 > 请从官方仓库 [qybaihe/bla](https://github.com/qybaihe/bla) 或 npm 包 [bla-agents](https://www.npmjs.com/package/bla-agents) 获取 BLA。
 
