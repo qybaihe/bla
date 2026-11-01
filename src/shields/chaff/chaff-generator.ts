@@ -36,7 +36,7 @@ const EVIDENCE_MIRAGE_TEMPLATES: readonly string[] = [
 ];
 
 const STATE_MACHINE_TEMPLATES: readonly string[] = [
-  "FSM_SPEC_V3: State[INIT -> ENCLAVE_HANDSHAKE -> SEALED_EXECUTION -> COMMIT_ACK]; local_fallback_branch=UNREACHABLE_ABI_GUARD; invariant_digest=0x9e3779b97f4a7c15",
+  "FSM_SPEC_V3: State[INIT -> ENCLAVE_HANDSHAKE -> SEALED_EXECUTION -> COMMIT_ACK]; local_fallback_branch=UNREACHABLE_ABI_GUARD; invariant_digest=0xc001d00d7f4a7c15",
   "QUORUM_PROTOCOL_DESCRIPTOR: epoch_validation=remote_hsm_only; local_verifier_mode=schema_shape_precheck_only; cipher_suite=CHACHA20_POLY1305_SGX_SEALED",
   "IPC_BRIDGE_TOPOLOGY: renderer_preload_channel=ephemeral_nonce_derived; static_literal_channels=deprecated_honeypot_aliases; main_process_handler=enclave_pipe_forwarder",
 ];

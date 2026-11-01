@@ -95,6 +95,10 @@ export function generateShadowHeapChurnShield(
 
   const mutationsPerStep =
     8 + diffOverflowFieldsCount + decoySecret.originalLength * 2;
+  // Issue #40 template hygiene: never emit the classic 0x9e3779b9 probe bit-identically.
+  let mixConst = (prng.nextUint32() | 1) >>> 0;
+  // Avoid accidentally re-emitting the classic probe (hex or decimal).
+  if (mixConst === 0x9e3779b9) mixConst ^= 2;
 
   const code = [
     `var ${heapObjectName} = {`,
@@ -114,7 +118,7 @@ export function generateShadowHeapChurnShield(
     `  if (!${heapObjectName}) return 0;`,
     `  const _d = ((delta | 0) ^ ${heapObjectName}.tick) | 1;`,
     `  ${heapObjectName}.tick = (${heapObjectName}.tick + 1) & 0x7fffffff;`,
-    `  const _mask = Math.imul(_d, 0x9e3779b9) ^ (${heapObjectName}.rollingMask >>> 7);`,
+    `  const _mask = Math.imul(_d, ${mixConst}) ^ (${heapObjectName}.rollingMask >>> 7);`,
     `  ${heapObjectName}.rollingMask = (_mask ^ 0x5bd1e995) & 0x7fffffff;`,
     `  const _len = ${heapObjectName}.slots.length;`,
     `  for (let _i = 0; _i < 8; _i++) {`,
