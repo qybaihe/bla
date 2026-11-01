@@ -15,17 +15,19 @@
 | 与业务无关的 sidecar「防护层」文件 | 「独立层」分类 | 难度不升反降 |
 | 可 grep 的 `BLA-SHIELD` 横幅 | 明确「这是防护」证据 | 方便一刀切 |
 
-**目标**：诱饵必须**巧妙织入**客户真实路径，使「丢掉诱饵层」等于破坏业务或验证失败。
+**目标**：诱饵必须**巧妙织入**客户真实路径，使「丢掉诱饵层」等于破坏业务或验证失败。  
+**构建方式必须是结构纠缠，而不是规则引擎**（禁止「匹配业务名 → 注入固定片段」对照表；禁止同质 marker 模板当策略）。
 
-## 2. JS 已织入 vs Python 仍 warm-init
+## 2. JS 已织入 vs Python 结构织入（gated）
 
 | 管线 | 现状 | 含义 |
 | :--- | :--- | :--- |
 | **JavaScript / TypeScript** (`ast-shield.ts`) | **已织入** | opaque-true 包裹快乐路径语句；真实函数体织入步进器与 tarpit 互调；认知装甲与 seed 纠缠 |
-| **Python** (`tarpit-generator.ts` + `python.ts`) | **warm-init-only**（#51） | 稠密异构体、共享状态、词干混用、模块级 warm-init 保 xref；**尚未**把诱饵调用织进客户 `def` |
+| **Python `.py`** (`python-ast-weave.ts` + tarpit) | **woven（需 `weave_decoys: true`）** | #51 稠密异构体 + warm-init 之后，对客户 `FunctionDef` 做结构织入：共享槽 touch + opaque-false 诱饵调用；按 tarpit 名表**身份**跳过已注入 decoy/warm（非业务名规则） |
+| **Python `.pyc`** | warm-init / trailer 为主 | 客户入口织入仍有限 |
 | 若干二进制 / sidecar 格式 | sidecar / 附加块 | 原则仍适用；完整入口纠缠列为后续 |
 
-本 PR 把理论与 MCP 执行面备齐；**完整 Python（及更多格式）AST 织入客户定义**留给 follow-up PR。
+`weave_decoys: false` 时 Python 行为与 #51 一致（仅 warm-init，不改客户 `def` 体）。
 
 ## 3. 织入原则（执行时必须遵守）
 
@@ -33,7 +35,7 @@
 2. **客户入口可达** — 边必须从入口、路由、导出 API 进入诱饵；仅靠顶层 warm-init 不够对抗「独立层」过滤。  
 3. **词干混用** — 约 2/3 平凡业务名 + 约 1/3 安全诱饵名。  
 4. **快乐路径不透明真** — 真实语句用 opaque-true 守卫；禁止只把诱饵放进永不执行的死图。  
-5. **调用图纠缠** — 在真实函数体内织入步进 / 互调 / 影子堆搅动。  
+5. **调用图纠缠** — 在真实函数体内织入步进 / 互调 / 影子堆搅动（结构扫描，非规则表）。  
 6. **可选自密封** — 入口与完整字节 / digest 绑定（产品缺口见 issue #40）。
 
 ## 4. 明确禁止
@@ -42,6 +44,7 @@
 - 可 grep 的 `BLA-SHIELD` / `_bla_` 横幅（审计短语 `runtime attestation boundary` 可保留）  
 - 仅 TEE 词表的同质包  
 - 永不调用的 `pass` 桩冒充「加固」  
+- 规则式「名字匹配 → 注入」与同质 marker 模板当防护策略  
 - 任何进攻性内容
 
 ## 5. 后续 AI 执行清单（不依赖聊天记录）
@@ -50,16 +53,16 @@
 2. `bla_weave_plan` → `{ "path": "<project-or-artifact>" }`，保存返回的 JSON 工单  
 3. `bla_harden` / `bla_defend` / `bla_protect` 传 **`weave_decoys: true`**  
 4. JS：验证现有 AST 织入，**不要**再堆 sidecar 噪声  
-5. Python：保持稠密 + warm-init；**不要**用空 scare 模块填补缺口；标注 follow-up AST weave  
+5. Python `.py`：确认客户 `def` 体内出现共享槽 touch / 诱饵 xref；**不要**用空 scare 模块填补  
 6. 按 §6 验收；失败则回滚噪声改动
 
 ## 6. 验收（apply 后必须通过）
 
 1. **无禁止标记** — 无 `_bla_` / `BLA-SHIELD` 横幅  
 2. **词干混用** — 诱饵名非 100% TEE/enclave  
-3. **共享状态变异** — 诱饵体修改与业务相关的共享槽  
-4. **客户入口边** — 静态 xref 从客户入口到达诱饵（JS 必须；Python warm-init 仅为过渡）  
-5. **opaque-true 缠绕** — 删除守卫或诱饵调用会改变行为或验证结果  
+3. **共享状态变异** — 诱饵体与织入语句修改同一共享槽  
+4. **客户入口边** — 静态 xref 从客户入口到达诱饵（JS；Python 在 `weave_decoys:true` 下经由客户 def 织入）  
+5. **opaque 缠绕** — 删除守卫或诱饵调用会改变行为或验证结果  
 6. **抗独立层过滤** — 不能仅凭空体 / 同质 scare / 未引用启发式整层丢弃
 
 ## 7. MCP 表面
@@ -68,14 +71,13 @@
 | :--- | :--- |
 | Resource `bla://directives/weave-decoy` | 返回本理论的可执行 Markdown |
 | Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON |
-| `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | 标注本次加固并挂接未来 AST 织入钩子 |
+| `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | **真实管线属性**：激活 Python 客户 def 结构织入（JS 始终 AST 织入）；非仅报告布尔标注 |
 
-实现入口：`src/shields/weave/weave-decoy.ts`、`src/mcp/server.ts`。
+实现入口：`src/shields/weave/weave-decoy.ts`、`src/shields/formats/python-ast-weave.ts`、`src/mcp/server.ts`。
 
-## 8. Follow-up PR（本 PR 不做）
+## 8. Follow-up
 
-- 将诱饵调用 **AST 织入 Python 客户函数体**（超越 warm-init）  
-- 扩展更多格式的入口纠缠验收  
+- `.pyc` / 更多格式的客户入口纠缠验收  
 - 可选 self-seal 与 `defenseScore` 对 onefile 诚实性（#40）
 
 ## 相关文档

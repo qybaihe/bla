@@ -157,8 +157,9 @@ export interface ProtectionOptions {
    */
   readonly llmDirectives?: boolean;
   /**
-   * When true, label the run for weave-decoy hooks (JS AST already weaves;
-   * Python remains warm-init-only until follow-up). Default false.
+   * When true, activate weave-decoy entanglement: JS AST weave (always) plus
+   * structural Python customer-def weave (shared-slot + opaque-false decoy xref).
+   * When false, Python stays warm-init-only. Default false.
    */
   readonly weaveDecoys?: boolean;
 }
@@ -182,7 +183,7 @@ export interface ProtectionResult {
   readonly outputPath: string;
   readonly detectedFormat: ArtifactFormat;
   readonly intensity: ProtectionIntensity;
-  /** Present when protect was called with weaveDecoys:true (label / future hooks). */
+  /** Present when protect was called with weaveDecoys:true (Python customer-def weave active). */
   readonly weaveDecoys?: boolean;
   readonly seed: string;
   readonly originalSha256: string;

@@ -27,6 +27,8 @@
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations.
 - `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist; no crack/RE).
 
+`weave_decoys: true` activates structural Python customer-def weave (shared-slot touch + opaque-false decoy calls) after the #51 tarpit; when false, Python stays warm-init-only. JS AST weave remains always-on.
+
 ### MCP Resources
 
 - `bla://directives/weave-decoy` — weave-decoy theory + executor checklist (Markdown).

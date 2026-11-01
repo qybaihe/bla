@@ -11,6 +11,12 @@ export interface TarpitGenerationResult {
   readonly decoyFunctionNames: readonly string[];
   readonly crossReferenceEdges: number;
   readonly semanticBudgetTriggers: readonly string[];
+  /** Python shared dict mutated by decoys / weave (absent for JS tarpit). */
+  readonly sharedSlotName?: string;
+  /** Python opaque-predicate seed / state int name. */
+  readonly stateVarName?: string;
+  /** Python module warm-init function name (skipped by customer-def weave). */
+  readonly warmInitName?: string;
 }
 
 /** Mixed honey + mundane stems so a single TEE/TPM grep cannot dismiss the whole tarpit. */
@@ -355,5 +361,8 @@ export function generatePythonTarpit(
     decoyFunctionNames: [...decoyNames, warmName],
     crossReferenceEdges: crossRefEdges,
     semanticBudgetTriggers: ["python-marshal-code-graph-tarpit"],
+    sharedSlotName: slotVar,
+    stateVarName: stateVar,
+    warmInitName: warmName,
   };
 }

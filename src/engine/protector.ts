@@ -342,7 +342,11 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
     const rawPy = readFileSync(absInput, "utf8");
-    const res = protectPythonSource(rawPy, { intensity, seed });
+    const res = protectPythonSource(rawPy, {
+      intensity,
+      seed,
+      weaveDecoys: options.weaveDecoys === true,
+    });
     writeFileSync(absOutput, res.code, "utf8");
     decoyFunctionsInjected = res.decoyFunctionsInjected;
     fakeCrossReferencesCreated = res.crossReferenceEdges;
