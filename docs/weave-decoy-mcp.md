@@ -24,7 +24,7 @@
 | :--- | :--- | :--- |
 | **JavaScript / TypeScript** (`ast-shield.ts`) | **已织入** | opaque-true 包裹快乐路径语句；真实函数体织入步进器与 tarpit 互调；认知装甲与 seed 纠缠 |
 | **Python `.py`** (`python-ast-weave.ts` + tarpit) | **woven（需 `weave_decoys: true`）** | #51 稠密异构体 + warm-init 之后，对客户 `FunctionDef` 做结构织入：共享槽 touch + opaque-false 诱饵调用；按 tarpit 名表**身份**跳过已注入 decoy/warm（非业务名规则） |
-| **Python `.pyc`** | warm-init / trailer 为主 | 客户入口织入仍有限 |
+| **Python `.pyc`** | `weave_decoys:true` → co_consts decoy TYPE_CODE 织入 | false 时仍为 trailer honey |
 | 若干二进制 / sidecar 格式 | sidecar / 附加块 | 原则仍适用；完整入口纠缠列为后续 |
 
 `weave_decoys: false` 时 Python 行为与 #51 一致（仅 warm-init，不改客户 `def` 体）。
@@ -77,7 +77,7 @@
 
 ## 8. Follow-up
 
-- `.pyc` / 更多格式的客户入口纠缠验收  
+- 更多 sidecar 格式的入口纠缠验收；可选 self-seal / defenseScore honesty (#40)  
 - 可选 self-seal 与 `defenseScore` 对 onefile 诚实性（#40）
 
 ## 相关文档

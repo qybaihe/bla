@@ -251,7 +251,8 @@ function maturityForFormat(format: ArtifactFormat): WeaveMaturity {
       // Structural customer-def weave lands when weave_decoys:true (warm-init remains when false).
       return "woven";
     case "python-pyc":
-      return "warm-init-only";
+      // Nested TYPE_CODE weave into customer/module co_consts when weave_decoys:true.
+      return "woven";
     case "electron-asar":
     case "firmware-uf2":
     case "android-dex":
@@ -285,7 +286,7 @@ function notesForMaturity(maturity: WeaveMaturity): string {
     case "woven":
       return "JS AST / Python 结构织入已将诱饵织入真实函数体（opaque + tarpit/xref）。Python 需 weave_decoys:true；保持此路径，禁止再加可剥离噪声层。";
     case "warm-init-only":
-      return "该格式目前以稠密诱饵 + 模块 warm-init / sidecar 为主（如 .pyc）；完整客户入口织入仍有限。";
+      return "该格式目前以稠密诱饵 + 模块 warm-init / sidecar 为主；完整客户入口织入仍有限。";
     case "sidecar-decoy":
       return "格式以 sidecar / 附加块诱饵为主；织入原则仍适用：避免空同质 scare，保持可达与词干混用。";
     case "gap":
@@ -305,7 +306,7 @@ function actionsForMaturity(maturity: WeaveMaturity): readonly string[] {
     case "warm-init-only":
       return Object.freeze([
         "Keep densified tarpit + warm-init; do not add empty honeypot modules.",
-        "Prefer .py sources with weave_decoys:true when customer-def weave is required.",
+        "Prefer .py sources (or .pyc with weave_decoys:true for co_consts CODE weave) when customer-def weave is required.",
         "Optional: self-seal binding (issue #40).",
       ]);
     case "sidecar-decoy":
@@ -486,9 +487,9 @@ const PIPELINE_HOOK = Object.freeze({
   mcpFlag: "weave_decoys" as const,
   hardenOption: "weaveDecoys" as const,
   todayBehaviorZh:
-    "weave_decoys=true 时：JS 保持现有 AST 织入；Python `.py` 在稠密 tarpit + warm-init 之后，对客户 FunctionDef 做结构织入（共享槽 touch + opaque-false 诱饵调用，按身份跳过已注入 decoy/warm）。false 时 Python 仍为 warm-init-only。报告标注 weaveDecoys。",
+    "weave_decoys=true 时：JS 保持现有 AST 织入；Python `.py` 对客户 FunctionDef 做结构织入；Python `.pyc` 向客户/模块 co_consts 追加未执行 decoy TYPE_CODE（append-only，保 FLAG_REF）。false 时 .py 为 warm-init-only、.pyc 为 trailer honey。报告标注 weaveDecoys。",
   followUpZh:
-    "Follow-up：.pyc 客户入口织入；可选 self-seal；扩展 sidecar 格式的入口纠缠验收。",
+    "Follow-up：可选 self-seal / defenseScore honesty；扩展 sidecar 格式的入口纠缠验收；.pyc 已支持 co_consts CODE 织入。",
 });
 
 /** Markdown theory pack returned by MCP resources/read (Chinese-friendly). */

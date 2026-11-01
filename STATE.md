@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 1.6.3 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 1.6.4 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tag-only releases (`git tag bla-agents-<version>`); see `CHANGELOG.md` and GitHub Releases.
 
@@ -20,7 +20,7 @@ Also: `bla_harden` MCP tool with `{ "directory": "." }`.
 | JavaScript / TypeScript | ✓ | **verified** — real REA `resourceLimits` (alias/getter/primitive) + anti-strip | AST + semantic budgets |
 | Electron ASAR | ✓ | **verified** — `DEFAULT_ASAR_MAX_HEADER_BYTES` | |
 | WebAssembly | ✓ export decoys | **verified** — Wabt `WASM_INTERFACE_REPRESENTATION_BYTES` / partial | needs Wabt for REA path |
-| Python `.py` / `.pyc` | ✓ | designed-for | |
+| Python `.py` / `.pyc` | ✓ | designed-for | `.py` AST weave + `.pyc` remmarshal `co_consts` CODE weave when `weave_decoys` |
 | Native ELF (Go/Flutter/Electron fuses) | ✓ | **verified** — `MAX_BUILD_INFO_BYTES`, pool URIs/tokens, fuse sentinels | |
 | SQLite | ✓ honey + trap columns | **verified** on Node 24 — `SqliteColumnEvaluationFailure`; Node 22 soft `capability_gated` | |
 | Safetensors | ✓ nesting breaker | **verified** — `MODEL_JSON_NESTING` (HF-loadable) | |
@@ -89,14 +89,13 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 
 ## Nightly roadmap remaining
 
-1. **Empirical JADX / Android red-team** — run real REA Android mapping + JNI
-   tools against a BLA-hardened unsigned APK fixture; record before/after.
-2. **Manifest-component decoys** — counter REA #7379 selected manifest component
-   declarations (binary AndroidManifest.xml decoys for unsigned APKs).
-3. **GPU objects** — make PTX (and later CUDA/SPIR-V/AMD) trip a real REA budget without breaking validity  
-4. **Firmware** — decide scope or keep skipped  
-5. **Signed APK** — keep refuse-by-default; optional resign workflow documentation  
-6. Polish doctor subsystem list (SQLite / models / BEAM / EVM / Android R8) for parity with shields  
+1. **Self-seal / defenseScore honesty (#40)** — opt-in self-integrity + honest scores for onefile/peel limits.
+2. **Sidecar entry entanglement** — entangle protectors with entry/sidecar so stripping decoys breaks runtime.
+3. **Deception shields → more formats** — WASM custom sections/export names, DEX string pool, SQLite comments/metadata, Safetensors/GGUF header metadata.
+4. **Empirical JADX / Android red-team** — real REA mapping+JNI vs BLA-hardened unsigned APK.
+5. **ESP flash / esp-image (#8228)** — if REA moved there; UF2 empirical red-team otherwise.
+6. **Dependabot majors #29–#35** — still held pending review.
+7. Polish doctor subsystem list (SQLite / models / BEAM / EVM / Android R8) for parity with shields.
 
 ## Publish checklist (once a GitHub token exists)
 

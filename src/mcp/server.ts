@@ -126,7 +126,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         weave_decoys: {
           type: "boolean",
           description:
-            "Opt-in weave-decoy entanglement: JS AST weave (always) + structural Python customer-def weave (shared-slot + opaque-false decoy xref). When false, Python stays warm-init-only. See bla://directives/weave-decoy. Default false.",
+            "Opt-in weave-decoy entanglement: JS AST weave (always) + Python .py customer-def weave + .pyc co_consts TYPE_CODE weave. When false, Python stays warm-init/trailer-only. See bla://directives/weave-decoy. Default false.",
         },
         seed: {
           type: "string",
@@ -167,7 +167,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         weave_decoys: {
           type: "boolean",
           description:
-            "Opt-in weave-decoy entanglement (shared-state / entry-reachable decoys into customer paths; not dismissible noise). Python .py structural weave when true. Default false.",
+            "Opt-in weave-decoy entanglement (shared-state / entry-reachable decoys into customer paths; not dismissible noise). Python .py structural weave + .pyc co_consts CODE weave when true. Default false.",
         },
         seed: {
           type: "string",
@@ -217,7 +217,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         weave_decoys: {
           type: "boolean",
           description:
-            "Opt-in weave-decoy entanglement (shared-state / entry-reachable decoys into customer paths; not dismissible noise). Python .py structural weave when true. Default false.",
+            "Opt-in weave-decoy entanglement (shared-state / entry-reachable decoys into customer paths; not dismissible noise). Python .py structural weave + .pyc co_consts CODE weave when true. Default false.",
         },
         seed: {
           type: "string",

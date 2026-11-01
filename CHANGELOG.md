@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`weave_decoys` is a real pipeline attribute** for Python source (not label-only):
-  planner maturity for `python-source` is `woven`; MCP/docs/`pipelineHook.todayBehaviorZh`
-  describe structural weave. `.pyc` remains warm-init / trailer oriented.
+  planner maturity for `python-source` and `python-pyc` is `woven`; MCP/docs/`pipelineHook.todayBehaviorZh`
+  describe structural weave. `.pyc` without `weave_decoys` stays trailer-oriented.
 - **Python tarpit densification** (`tarpit-generator.ts`, `python.ts`): decoys
   no longer look like empty `_bla_*` honeypots — mixed mundane/scare stems,
   heterogeneous always-executed bodies that mutate shared state, and a live
@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document PyInstaller onefile honesty limits: CArchive peel is expected;
   densify by shielding `.py`/`.pyc` before bundling (`python.ts` /
   `native.ts` notes + `docs/counter-rea-deception.md`).
+
+## [1.6.4] — 2026-11-02
+
+### Added
+
+- **Python `.pyc` customer-def weave** (`src/shields/formats/python-pyc-weave.ts`):
+  when `weave_decoys: true`, remmarshal the code object (CPython FLAG_REF early-reserve
+  for containers/CODE; copy shared `co_consts` before mutate) and append unused decoy
+  `TYPE_CODE` into module + customer `co_consts` (no `FLAG_REF` on decoys; original
+  `co_code` preserved). Trailer canary/diagnostic honey still applied. Planner maturity
+  for `python-pyc` is now `woven`.
 
 ## [1.6.3] — 2026-11-01
 
