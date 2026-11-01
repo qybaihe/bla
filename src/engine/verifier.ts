@@ -91,6 +91,10 @@ export function verifyTarget(
   });
 
   const passedCount = checks.filter((c) => c.passed).length;
+  // defenseScore measures Counter-REA gate pass-rate + exposure drop only.
+  // It is NOT a claim of cryptographic preimage hardness: numeric-literal
+  // coverage, WASM export rename, opaque-predicate seed strength, and
+  // opt-in self-seal helpers are tracked separately (issue #40).
   const defenseScore = Math.round(
     (passedCount / checks.length) * 70 + Math.max(0, (100 - afterAudit.exposureScore) * 0.3),
   );
