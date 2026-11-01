@@ -1,4 +1,5 @@
 import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { posix } from "node:path";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
@@ -227,14 +228,31 @@ export function validateZipProtectionInput(
   const reservedExact = options.allowUnsignedApk
     ? ["lib/arm64-v8a/libbla_enclave_jni.so"]
     : [];
+  // Normalize every entry name before the reserved-prefix check so a
+  // traversal (`../evil`) or an aliased name (`./assets/bla-shield/x`) cannot
+  // escape the archive root or collide with the reserved output namespace.
+  const normalizedNames = existingEntries.map((e) => {
+    const normalized = posix.normalize(e.name);
+    if (
+      normalized.startsWith("/") ||
+      normalized.startsWith("../") ||
+      normalized === ".." ||
+      e.name.includes("\\")
+    ) {
+      throw new UnsupportedArchiveError(
+        `entry name resolves outside the archive root: ${e.name}`,
+      );
+    }
+    return normalized;
+  });
   if (
-    existingEntries.some(
-      (e) =>
-        reservedPrefixes.includes(e.name) ||
-        reservedExact.includes(e.name) ||
-        e.name.startsWith("assets/bla-shield/") ||
+    normalizedNames.some(
+      (name) =>
+        reservedPrefixes.includes(name) ||
+        reservedExact.includes(name) ||
+        name.startsWith("assets/bla-shield/") ||
         (!options.allowUnsignedApk &&
-          (e.name.startsWith("assets/enclave/") || e.name.startsWith("enclave/"))),
+          (name.startsWith("assets/enclave/") || name.startsWith("enclave/"))),
     )
   ) {
     throw new UnsupportedArchiveError("existing entries overlap the reserved output namespace");
