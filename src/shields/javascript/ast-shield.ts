@@ -909,12 +909,16 @@ export function transformJavaScriptWithBlaShield(
 
 
   // 2b. Rename non-exported local bindings (including function parameters and private helpers)
-  // so original identifiers are not left pristine
+  // so original identifiers are not left pristine.
+  // Only rename bindings owned by the current scope. Babel mirrors ClassDeclaration
+  // names onto the class scope with the SAME binding object; renaming there a second
+  // time with a fresh PRNG name desyncs `class Foo` from `new Foo()` (issue #40).
   const exportedNameSet = new Set(exportedSymbolsBefore);
   const generatedNames = new Set<string>();
   traverse(ast, {
     Scope(path) {
       for (const [name, binding] of Object.entries(path.scope.bindings)) {
+        if (binding.scope !== path.scope) continue;
         if (RENAME_RESERVED.has(name)) continue;
         if (exportedNameSet.has(name)) continue;
         if (binding.kind === "module") continue;
@@ -1069,8 +1073,11 @@ export function transformJavaScriptWithBlaShield(
   // 4. Build Decoy IPC Ambiguity & Route Mirage block + Cognitive-Armor seed entanglement
   const mirageLines: string[] = [];
   mirageLines.push(deceptionSuite.cognitiveArmor.code);
+  // Deterministic opaque-predicate seed (issue #40): never hrtime/Date.now.
+  // Keep the low bit entangled with cognitive-armor digest so tamper flips seed parity.
+  const opaqueSeedBase = (prng.nextInt(1, 0x1ffff) << 2) & 0x7fffc;
   mirageLines.push(
-    `const ${seedVarName} = (((typeof process !== "undefined" && typeof process?.hrtime?.bigint === "function" ? Number(process.hrtime.bigint() & 0x7fffcn) : (typeof Date !== "undefined" ? (Date.now() & 0x7fffc) : 4)) & 0x7fffc) | ((typeof ${deceptionSuite.cognitiveArmor.digestFunctionName} === "function" && ${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+    `const ${seedVarName} = ((${opaqueSeedBase}) | ((typeof ${deceptionSuite.cognitiveArmor.digestFunctionName} === "function" && ${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
   );
   mirageLines.push(memoryDiffShield.code);
   const channelsToMirror =
