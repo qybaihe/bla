@@ -12,19 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theory pack [`docs/weave-decoy-mcp.md`](docs/weave-decoy-mcp.md) (zh-friendly),
   MCP resource `bla://directives/weave-decoy`, tool `bla_weave_plan` (read-only
   `bla-weave-plan/v1` JSON), prompt `bla-weave-decoy`, and opt-in `weave_decoys`
-  on `bla_harden` / `bla_defend` / `bla_protect`. Labels runs and documents that
-  JS AST already weaves while Python remains warm-init-only after #51 — full
-  customer-def AST weave is a follow-up. Defensive only; no dismissible noise layers.
+  on `bla_harden` / `bla_defend` / `bla_protect`. Defensive only; no dismissible noise layers.
+- **Python structural decoy weave** (`src/shields/formats/python-ast-weave.ts`):
+  when `weave_decoys: true`, after tarpit prepend, walk customer `FunctionDef`
+  bodies (indent-stack / structural, skip injected decoy+warm by identity) and
+  insert always-executed shared-slot touch plus opaque-false decoy calls —
+  modeled on JS `ast-shield` §3. When false, Python stays #51 warm-init-only.
+  Not a rule engine (no business-name → snippet table).
 
 ### Changed
 
-
+- **`weave_decoys` is a real pipeline attribute** for Python source (not label-only):
+  planner maturity for `python-source` is `woven`; MCP/docs/`pipelineHook.todayBehaviorZh`
+  describe structural weave. `.pyc` remains warm-init / trailer oriented.
 - **Python tarpit densification** (`tarpit-generator.ts`, `python.ts`): decoys
   no longer look like empty `_bla_*` honeypots — mixed mundane/scare stems,
   heterogeneous always-executed bodies that mutate shared state, and a live
   module-level warm initializer so xref tools see real reachability. Dropped
   greppable `BLA-SHIELD` banner (auditor still matches `runtime attestation
-  boundary`).
+  boundary`). Exposes `sharedSlotName` / `stateVarName` / `warmInitName` for weave.
 - **Chaff vocabulary diversification** (`chaff-generator.ts`): alternate
   billing / cache / scheduler / observability / locale / storage mirages so
   `TPM2_` / `NitroEnclave` / `hardware_enclave_stub` is not the only family.

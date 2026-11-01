@@ -43,21 +43,23 @@ describe("weave-decoy theory pack", () => {
     expect(md.toLowerCase()).not.toMatch(/exploit poc|crackme bypass playbook/);
   });
 
-  it("buildWeavePlan classifies JS as woven and Python as warm-init-only", () => {
+  it("buildWeavePlan classifies JS and Python source as woven", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-weave-plan-"));
     temps.push(dir);
     writeFileSync(join(dir, "app.js"), "function main(){ return 1; }\n");
     writeFileSync(join(dir, "svc.py"), "def main():\n    return 1\n");
     const plan = buildWeavePlan(dir);
     expect(plan.schema).toBe(WEAVE_DECOY_SCHEMA);
-    expect(plan.overallStatus).toBe("partial");
+    expect(plan.overallStatus).toBe("ready");
     const js = plan.targets.find((t) => t.relativePath.endsWith("app.js"));
     const py = plan.targets.find((t) => t.relativePath.endsWith("svc.py"));
     expect(js?.maturity).toBe("woven");
     expect(js?.status).toBe("ready");
-    expect(py?.maturity).toBe("warm-init-only");
-    expect(py?.status).toBe("partial");
+    expect(py?.maturity).toBe("woven");
+    expect(py?.status).toBe("ready");
     expect(plan.pipelineHook.mcpFlag).toBe("weave_decoys");
+    expect(plan.pipelineHook.todayBehaviorZh).toMatch(/结构织入|customer|FunctionDef|weave_decoys/);
+    expect(plan.pipelineHook.todayBehaviorZh).not.toMatch(/尚未改客户 def|future hooks only/);
   });
 });
 

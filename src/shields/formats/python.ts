@@ -3,6 +3,7 @@ import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
 import { generatePythonTarpit } from "../tarpit/tarpit-generator.js";
+import { weavePythonDecoyCalls } from "./python-ast-weave.js";
 
 export class InvalidPythonSourceError extends Error {
   constructor(message: string) {
@@ -660,6 +661,11 @@ export function protectPythonSource(
   options: {
     readonly intensity?: ProtectionIntensity;
     readonly seed?: string | number;
+    /**
+     * When true, structurally weave decoy entanglement into customer `def` bodies
+     * (shared-slot touch + opaque-false calls). When false, preserve warm-init-only.
+     */
+    readonly weaveDecoys?: boolean;
   } = {},
 ): {
   readonly code: string;
@@ -668,8 +674,11 @@ export function protectPythonSource(
   readonly chaffPayloadsEmbedded: number;
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
+  readonly customerDefsWoven: number;
+  readonly weaveDecoys: boolean;
 } {
   const intensity = options.intensity ?? "balanced";
+  const weaveDecoys = options.weaveDecoys === true;
   const prng = new SeededPrng(options.seed ?? "bla-python-shield-v1");
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const tarpit = generatePythonTarpit(prng, intensity, chaffPayloads);
@@ -706,17 +715,57 @@ export function protectPythonSource(
     "    return AMBIGUOUS_TRANSPORT[_i]",
   ].join(eol);
 
-  const combined = [head, tarpitNormalized, deceptionBlock, tail]
+  let customerTail = tail;
+  let crossReferenceEdges = tarpit.crossReferenceEdges;
+  let customerDefsWoven = 0;
+
+  if (
+    weaveDecoys &&
+    tarpit.sharedSlotName &&
+    tarpit.stateVarName &&
+    tarpit.decoyFunctionNames.length > 0 &&
+    customerTail.length > 0
+  ) {
+    // Weave only the customer tail so nested helpers inside injected tarpit defs
+    // (e.g. `_fold`) are never touched. Skip set is tarpit identities for safety
+    // if a customer name collides.
+    const skipDefNames = [
+      ...tarpit.decoyFunctionNames,
+      ...(tarpit.warmInitName ? [tarpit.warmInitName] : []),
+      "probe_canary_honeypot",
+    ];
+    const woven = weavePythonDecoyCalls({
+      source: customerTail.endsWith("\n") || customerTail.endsWith("\r")
+        ? customerTail
+        : customerTail + eol,
+      skipDefNames,
+      decoyFunctionNames: tarpit.decoyFunctionNames,
+      sharedSlotName: tarpit.sharedSlotName,
+      stateVarName: tarpit.stateVarName,
+      warmInitName: tarpit.warmInitName,
+      prng,
+      intensity,
+    });
+    customerTail = woven.code.replace(/(?:\r?\n)+$/, "");
+    customerDefsWoven = woven.customerDefsWoven;
+    crossReferenceEdges += woven.crossReferenceEdgesAdded;
+  }
+
+  const combined = [head, tarpitNormalized, deceptionBlock, customerTail]
     .filter((part) => part.length > 0)
     .join(eol + eol);
 
   return {
-    code: combined + eol,
+    code: combined.endsWith("\n") || combined.endsWith("\r")
+      ? combined
+      : combined + eol,
     decoyFunctionsInjected: tarpit.decoyFunctionNames.length,
-    crossReferenceEdges: tarpit.crossReferenceEdges,
+    crossReferenceEdges,
     chaffPayloadsEmbedded: chaffPayloads.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
+    customerDefsWoven,
+    weaveDecoys,
   };
 }
 

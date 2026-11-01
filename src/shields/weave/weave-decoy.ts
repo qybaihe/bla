@@ -180,7 +180,7 @@ export const WEAVE_ACCEPTANCE_TESTS: readonly WeaveAcceptanceTest[] =
       id: "customer-entry-edges",
       titleZh: "客户入口边",
       checkEn:
-        "Static xref from customer entry / exported handlers reaches at least one decoy call (not warm-init alone for JS; Python warm-init is interim only).",
+        "Static xref from customer entry / exported handlers reaches at least one decoy call (JS always; Python with weave_decoys:true via customer-def weave, not warm-init alone).",
     },
     {
       id: "opaque-true-entanglement",
@@ -216,7 +216,7 @@ export const WEAVE_EXECUTOR_CHECKLIST: readonly WeaveChecklistStep[] =
       phase: "apply",
       titleZh: "走 harden 管线旗标",
       actionEn:
-        "Call `bla_harden` / `bla_defend` / `bla_protect` with `weave_decoys: true` so the run is labeled and future AST weave hooks activate.",
+        "Call `bla_harden` / `bla_defend` / `bla_protect` with `weave_decoys: true` so Python structural customer-def weave runs (JS AST weave is always on).",
     },
     {
       id: "js-entangle",
@@ -226,11 +226,11 @@ export const WEAVE_EXECUTOR_CHECKLIST: readonly WeaveChecklistStep[] =
         "For JS/TS: existing `ast-shield` already weaves opaque-true + tarpit calls into real function bodies — verify, do not add a second noise sidecar.",
     },
     {
-      id: "python-gap",
+      id: "python-weave",
       phase: "apply",
-      titleZh: "Python 缺口标注",
+      titleZh: "确认 Python 结构织入",
       actionEn:
-        "For Python: today is warm-init-only after densify (#51). Full weave into customer defs is a follow-up PR — do not pile empty scare modules as a substitute.",
+        "For Python `.py`: with weave_decoys:true, `python-ast-weave` inserts shared-slot touch + opaque-false decoy calls into customer defs (identity-skip tarpit names). Do not pile empty scare modules.",
     },
     {
       id: "acceptance",
@@ -248,6 +248,8 @@ function maturityForFormat(format: ArtifactFormat): WeaveMaturity {
     case "html-bundle":
       return "woven";
     case "python-source":
+      // Structural customer-def weave lands when weave_decoys:true (warm-init remains when false).
+      return "woven";
     case "python-pyc":
       return "warm-init-only";
     case "electron-asar":
@@ -281,9 +283,9 @@ function statusForMaturity(maturity: WeaveMaturity): WeavePlanStatus {
 function notesForMaturity(maturity: WeaveMaturity): string {
   switch (maturity) {
     case "woven":
-      return "JS AST 已将诱饵织入真实函数体（opaque-true + tarpit/xref）。保持此路径，禁止再加可剥离噪声层。";
+      return "JS AST / Python 结构织入已将诱饵织入真实函数体（opaque + tarpit/xref）。Python 需 weave_decoys:true；保持此路径，禁止再加可剥离噪声层。";
     case "warm-init-only":
-      return "Python 在 #51 后有稠密诱饵 + 模块 warm-init，但尚未织入客户 def 调用图；后续 PR 做 AST weave。";
+      return "该格式目前以稠密诱饵 + 模块 warm-init / sidecar 为主（如 .pyc）；完整客户入口织入仍有限。";
     case "sidecar-decoy":
       return "格式以 sidecar / 附加块诱饵为主；织入原则仍适用：避免空同质 scare，保持可达与词干混用。";
     case "gap":
@@ -297,14 +299,14 @@ function actionsForMaturity(maturity: WeaveMaturity): readonly string[] {
   switch (maturity) {
     case "woven":
       return Object.freeze([
-        "Run bla_harden/bla_protect with weave_decoys:true (label + future hooks).",
-        "Verify opaque-true entanglement and mixed stems on output.",
+        "Run bla_harden/bla_protect with weave_decoys:true (JS always weaves; Python structural customer-def weave).",
+        "Verify opaque entanglement, shared-slot touch, and mixed stems on output.",
       ]);
     case "warm-init-only":
       return Object.freeze([
         "Keep densified tarpit + warm-init; do not add empty honeypot modules.",
-        "Track follow-up: AST weave decoy calls into customer Python defs.",
-        "Optional: self-seal binding (issue #40) after weave lands.",
+        "Prefer .py sources with weave_decoys:true when customer-def weave is required.",
+        "Optional: self-seal binding (issue #40).",
       ]);
     case "sidecar-decoy":
       return Object.freeze([
@@ -456,9 +458,9 @@ export function buildWeavePlan(
   const overallStatus = overallFromTargets(targets);
   const summaryZh =
     overallStatus === "ready"
-      ? "目标以 JS 织入成熟度为主；可直接 bla_harden(weave_decoys:true) 并跑验收。"
+      ? "目标以 JS/Python 源码织入成熟度为主；可直接 bla_harden(weave_decoys:true) 并跑验收。"
       : overallStatus === "partial"
-        ? "部分格式已织入或仅有 warm-init/sidecar；按 checklist 执行，Python 客户 def 织入留给后续 PR。"
+        ? "部分格式已织入或仅有 warm-init/sidecar；按 checklist 执行（.py 需 weave_decoys:true 激活客户 def 织入）。"
         : overallStatus === "gap"
           ? "存在尚无织入钩子的格式；先标准 harden，勿堆噪声层。"
           : "未发现可分析产物；请指向源码或构建目录。";
@@ -484,9 +486,9 @@ const PIPELINE_HOOK = Object.freeze({
   mcpFlag: "weave_decoys" as const,
   hardenOption: "weaveDecoys" as const,
   todayBehaviorZh:
-    "weave_decoys=true 时：JS 保持现有 AST 织入；Python 保持 #51 稠密 + warm-init（尚未改客户 def）；报告标注 weaveDecoys。完整 Python/多格式 AST 织入为后续 PR。",
+    "weave_decoys=true 时：JS 保持现有 AST 织入；Python `.py` 在稠密 tarpit + warm-init 之后，对客户 FunctionDef 做结构织入（共享槽 touch + opaque-false 诱饵调用，按身份跳过已注入 decoy/warm）。false 时 Python 仍为 warm-init-only。报告标注 weaveDecoys。",
   followUpZh:
-    "Follow-up：把诱饵调用织进 Python 客户函数体；可选 self-seal；扩展 sidecar 格式的入口纠缠验收。",
+    "Follow-up：.pyc 客户入口织入；可选 self-seal；扩展 sidecar 格式的入口纠缠验收。",
 });
 
 /** Markdown theory pack returned by MCP resources/read (Chinese-friendly). */
@@ -564,7 +566,13 @@ export function inspectWeaveHints(source: string, format: ArtifactFormat): {
     if (/runtime attestation boundary/.test(source)) {
       hints.push("python-tarpit-banner-phrase");
     }
-    return { maturity: "warm-init-only", hints };
+    if (/hash\(\w+\.__name__\)/.test(source) && /\["epoch"\]/.test(source)) {
+      hints.push("python-customer-def-weave");
+    }
+    return {
+      maturity: format === "python-source" ? "woven" : "warm-init-only",
+      hints,
+    };
   }
   return { maturity: maturityForFormat(format), hints };
 }
