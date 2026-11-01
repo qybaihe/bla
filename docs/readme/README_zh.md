@@ -9,6 +9,7 @@
 **指向你准备发布的构建产物，从源码、字节码到二进制层面保护核心逻辑与运行时行为。**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=flat-square&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
 [![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#你可以保护哪些目标)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#基准测试与案例)
@@ -23,9 +24,11 @@
 </div>
 
 
-<div align="center">
-<a href="https://upstar.dev/r/qybaihe/bla"><img src="../assets/bla-trending-upstar.png" alt="Upstar：bla 本周 MCP #1 · +1.7k stars" width="900" /></a>
-</div>
+<p align="center">
+  <a href="https://trendshift.io/repositories/323569" target="_blank" rel="noopener noreferrer">
+    <img src="../assets/bla-github-trending-badge.png" alt="GitHub Trending — 当日仓库第 15 名" width="280" height="56"/>
+  </a>
+</p>
 
 > [!IMPORTANT]
 > 请从官方仓库 [qybaihe/bla](https://github.com/qybaihe/bla) 或 npm 包 [bla-agents](https://www.npmjs.com/package/bla-agents) 获取 BLA。

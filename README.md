@@ -9,6 +9,7 @@
 **Point BLA at the build you ship. When an AI reverse-engineering agent (REA) opens it, the analyzer hits resource budgets, follows decoys, and burns tokens — while your users still get the same runtime behavior.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=flat-square&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](docs/cli-and-mcp.md)
 [![Node.js](https://img.shields.io/badge/Node.js-%5E22.23.4_%7C%7C_24.x-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#format-coverage)
 [![Counter-REA](https://img.shields.io/badge/Counter--REA-empirically_measured-1d4ed8?style=flat-square)](#empirical-results-vs-real-rea)
@@ -26,9 +27,11 @@ bla harden .
 </div>
 
 
-<div align="center">
-<a href="https://upstar.dev/r/qybaihe/bla"><img src="docs/assets/bla-trending-upstar.png" alt="Upstar: bla #1 in MCP this week · +1.7k stars" width="900" /></a>
-</div>
+<p align="center">
+  <a href="https://trendshift.io/repositories/323569" target="_blank" rel="noopener noreferrer">
+    <img src="docs/assets/bla-github-trending-badge.png" alt="GitHub Trending — #15 Repository Of The Day" width="280" height="56"/>
+  </a>
+</p>
 
 > [!IMPORTANT]
 > BLA is a **defensive** tool for protecting **your own** software. See [DISCLAIMER.md](DISCLAIMER.md).
