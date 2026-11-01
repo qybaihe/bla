@@ -46,11 +46,14 @@ export function generateFridaCaptureSaturation(
   const tag = prng.hex(3);
   const ringName = `fridaRealmRing_${tag}`;
   const saturatorName = `fridaCaptureSaturator_${tag}`;
+  // Issue #40 template hygiene: PRNG mix instead of classic golden constant.
+  let epochMix = (prng.nextUint32() | 1) >>> 0;
+  if (epochMix === 0x9e3779b9) epochMix ^= 2;
 
   const code = [
     `const ${ringName} = { epoch: 0x${prng.hex(6)}, slots: new Array(${realmAgnosticRingSlots}).fill(0) };`,
     `function ${saturatorName}(forceEnvelope) {`,
-    `  ${ringName}.epoch = (${ringName}.epoch + 0x9e3779b9) & 0x7fffffff;`,
+    `  ${ringName}.epoch = (${ringName}.epoch + ${epochMix}) & 0x7fffffff;`,
     `  for (let _s = 0; _s < ${ringName}.slots.length; _s++) {`,
     `    ${ringName}.slots[_s] = (${ringName}.epoch ^ (_s * 0x85ebca6b)) & 0x7fffffff;`,
     `  }`,

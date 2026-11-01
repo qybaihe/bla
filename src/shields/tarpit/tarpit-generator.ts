@@ -221,7 +221,9 @@ export function generatePythonTarpit(
     lines.push(`    """${chaffPayloads[chaffIdx]?.rawText ?? "Enclave attestation verifier stub."}"""`);
     lines.push(`    acc = (seed ^ ${k1} ^ ${stateVar}) & 0xFFFFFFFF`);
     lines.push(`    for r in range(4):`);
-    lines.push(`        acc = ((acc * 0x9E3779B9) ^ (acc >> 11) ^ r) & 0xFFFFFFFF`);
+    let mix = (prng.nextUint32() | 1) >>> 0;
+    if (mix === 0x9e3779b9) mix ^= 2;
+    lines.push(`        acc = ((acc * ${mix}) ^ (acc >> 11) ^ r) & 0xFFFFFFFF`);
     lines.push(`    if depth > 0 and ${generatePythonOpaqueFalseExpression(prng, stateVar)}:`);
     lines.push(`        return ${next1}(acc, depth - 1) ^ ${next2}(acc ^ ${k1}, depth - 1)`);
     lines.push(`    return acc`);

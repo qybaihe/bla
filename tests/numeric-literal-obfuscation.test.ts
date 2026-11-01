@@ -21,9 +21,8 @@ describe("Issue #40: numeric literal de-literalization", () => {
     // Customer schedule/salt constants must not survive as NumericLiterals.
     expect(result.code).not.toMatch(/109551763/);
     expect(result.code).not.toMatch(/\b2654435769\b/);
-    // Direct assignment form of the classic probe must be gone (BLA's own
-    // injected runtime shields may still mention 0x9e3779b9 in templates —
-    // tracked as follow-up template hygiene, not this transform).
+    // Direct assignment form of the classic probe must be gone.
+    // Injected shield templates are scrubbed separately (see injected-golden-constant-scrub).
     expect(result.code).not.toMatch(/GOLDEN\s*=\s*0x9e3779b9/i);
     expect(result.code).not.toMatch(/GOLDEN\s*=\s*2654435769/);
 
