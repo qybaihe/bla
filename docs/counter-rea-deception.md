@@ -27,3 +27,13 @@ refuses EOF trailers that would break the MEI cookie.
 `pyinstaller`, so the peeled archive still contains dense decoys rather than
 clean customer logic. Opt-in self-seal / anti-debug helpers that bind the
 customer entry to intact bytes remain a separate product gap (issue #40).
+
+## Weave decoys (not dismissible noise)
+
+Empty / homogeneous scare decoys are filtered as a separate layer by
+WorkBuddy-class agents. Prefer **weaving** decoys into real customer paths
+(shared state, entry reachability, mixed vocabulary, opaque-true happy path).
+JS AST already weaves; Python after #51 is warm-init densify only.
+Executable theory + MCP: [`weave-decoy-mcp.md`](./weave-decoy-mcp.md),
+resource `bla://directives/weave-decoy`, tool `bla_weave_plan`, flag
+`weave_decoys`.

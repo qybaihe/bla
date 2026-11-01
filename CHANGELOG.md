@@ -6,7 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Weave-decoy MCP surface** (`src/shields/weave/weave-decoy.ts`, `src/mcp/server.ts`):
+  theory pack [`docs/weave-decoy-mcp.md`](docs/weave-decoy-mcp.md) (zh-friendly),
+  MCP resource `bla://directives/weave-decoy`, tool `bla_weave_plan` (read-only
+  `bla-weave-plan/v1` JSON), prompt `bla-weave-decoy`, and opt-in `weave_decoys`
+  on `bla_harden` / `bla_defend` / `bla_protect`. Labels runs and documents that
+  JS AST already weaves while Python remains warm-init-only after #51 — full
+  customer-def AST weave is a follow-up. Defensive only; no dismissible noise layers.
+
 ### Changed
+
 
 - **Python tarpit densification** (`tarpit-generator.ts`, `python.ts`): decoys
   no longer look like empty `_bla_*` honeypots — mixed mundane/scare stems,

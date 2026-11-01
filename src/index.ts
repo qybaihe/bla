@@ -182,7 +182,7 @@ export {
 } from "./setup/clients.js";
 export { runSetup, runUninstall } from "./setup/setup.js";
 export { runDoctor } from "./setup/doctor.js";
-export { handleMcpRequest, startMcpStdioServer, BLA_MCP_TOOLS } from "./mcp/server.js";
+export { handleMcpRequest, startMcpStdioServer, BLA_MCP_TOOLS, BLA_MCP_RESOURCES, BLA_MCP_PROMPTS } from "./mcp/server.js";
 export {
   inspectReleaseExposure,
   type ReleaseExposureReport,
@@ -222,3 +222,20 @@ export {
   buildMappedFlutterIsolatePoolPlant,
   buildMappedGoFlutterElfFixture,
 } from "./shields/formats/go-flutter-exhaustion.js";
+
+export {
+  buildWeavePlan,
+  getWeaveDirectivesMarkdown,
+  inspectWeaveHints,
+  WEAVE_ACCEPTANCE_TESTS,
+  WEAVE_DECOY_DOC_PATH,
+  WEAVE_DECOY_SCHEMA,
+  WEAVE_DIRECTIVES_URI,
+  WEAVE_EXECUTOR_CHECKLIST,
+  WEAVE_FORBIDDEN,
+  WEAVE_PRINCIPLES,
+  type WeaveMaturity,
+  type WeavePlan,
+  type WeavePlanStatus,
+} from "./shields/weave/weave-decoy.js";
+

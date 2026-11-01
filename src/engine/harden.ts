@@ -91,6 +91,7 @@ export interface HardenProjectOptions {
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
   readonly llmDirectives?: boolean;
+  readonly weaveDecoys?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -107,6 +108,7 @@ export interface HardenProjectReport {
   readonly outputDirectory: string;
   readonly artifacts: readonly HardenArtifactSummary[];
   readonly oneSentenceUsage: string;
+  readonly weaveDecoys: boolean;
 }
 
 function isProtectableFormat(format: ArtifactFormat): boolean {
@@ -288,6 +290,9 @@ export function hardenProject(
         ...(options.llmDirectives !== undefined
           ? { llmDirectives: options.llmDirectives }
           : {}),
+        ...(options.weaveDecoys !== undefined
+          ? { weaveDecoys: options.weaveDecoys }
+          : {}),
         emitManifest,
       });
       summaries.push({
@@ -327,6 +332,7 @@ export function hardenProject(
             schema: "bla-harden-summary/v1",
             directory: absDir,
             intensity,
+            weaveDecoys: options.weaveDecoys === true,
             artifacts: summaries,
           },
           null,
@@ -353,6 +359,7 @@ export function hardenProject(
     artifacts: summaries,
     oneSentenceUsage:
       'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
+    weaveDecoys: options.weaveDecoys === true,
   };
 }
 
