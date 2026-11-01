@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStdioLineProcessor, MAX_STDIO_LINE_BYTES } from "../src/mcp/server.js";
+import { createStdioLineProcessor, MAX_STDIO_LINE_CHARS } from "../src/mcp/server.js";
 
 function collect() {
   const lines: string[] = [];
@@ -27,7 +27,7 @@ describe("MCP stdio line processor", () => {
 
   it("rejects an unterminated partial line past the cap and recovers at the next newline", () => {
     const { lines, processor, oversizedCount } = collect();
-    processor.push("x".repeat(MAX_STDIO_LINE_BYTES + 1));
+    processor.push("x".repeat(MAX_STDIO_LINE_CHARS + 1));
     expect(oversizedCount()).toBe(1);
     expect(lines).toEqual([]);
     // The rest of the oversized line drains silently, then a valid message flows through.
@@ -38,7 +38,7 @@ describe("MCP stdio line processor", () => {
 
   it("rejects a complete single line past the cap instead of parsing it", () => {
     const { lines, processor, oversizedCount } = collect();
-    processor.push("z".repeat(MAX_STDIO_LINE_BYTES + 1) + "\n");
+    processor.push("z".repeat(MAX_STDIO_LINE_CHARS + 1) + "\n");
     expect(oversizedCount()).toBe(1);
     expect(lines).toEqual([]);
     // Buffer must be empty again: the next small message is not poisoned.

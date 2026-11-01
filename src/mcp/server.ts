@@ -956,10 +956,11 @@ export async function handleMcpRequest(
 }
 
 /**
- * Starts the BLA MCP server over stdio (supporting newline-delimited JSON-RPC 2.0).
+ * Largest single stdio line accepted before the client is treated as
+ * misbehaving. Measured in UTF-16 code units (`String.length`, matching what
+ * JavaScript reports as a string's "characters"), not bytes.
  */
-/** Largest single stdio line accepted before the client is treated as misbehaving. */
-export const MAX_STDIO_LINE_BYTES = 1_048_576;
+export const MAX_STDIO_LINE_CHARS = 1_048_576;
 
 export interface StdioLineProcessorHooks {
   readonly onLine: (line: string) => void;
@@ -995,13 +996,13 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
         const line = buffer.slice(0, newlineIdx).trim();
         buffer = buffer.slice(newlineIdx + 1);
         if (!line || line.startsWith("Content-Length:")) continue;
-        if (line.length > MAX_STDIO_LINE_BYTES) {
+        if (line.length > MAX_STDIO_LINE_CHARS) {
           hooks.onOversizedLine?.();
           continue;
         }
         hooks.onLine(line);
       }
-      if (buffer.length > MAX_STDIO_LINE_BYTES) {
+      if (buffer.length > MAX_STDIO_LINE_CHARS) {
         buffer = "";
         discarding = true;
         hooks.onOversizedLine?.();
@@ -1010,6 +1011,9 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
   };
 }
 
+/**
+ * Starts the BLA MCP server over stdio (supporting newline-delimited JSON-RPC 2.0).
+ */
 export function startMcpStdioServer(): void {
   let processingQueue = Promise.resolve();
   const processor = createStdioLineProcessor({
@@ -1040,7 +1044,7 @@ export function startMcpStdioServer(): void {
         id: null,
         error: {
           code: -32700,
-          message: `Parse error: line exceeds ${MAX_STDIO_LINE_BYTES} byte limit`,
+          message: `Parse error: line exceeds ${MAX_STDIO_LINE_CHARS} character limit`,
         },
       };
       process.stdout.write(JSON.stringify(parseErr) + "\n");
