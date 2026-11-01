@@ -4,6 +4,7 @@ import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
 import { generatePythonTarpit } from "../tarpit/tarpit-generator.js";
 import { weavePythonDecoyCalls } from "./python-ast-weave.js";
+import { weavePythonPycBuffer } from "./python-pyc-weave.js";
 
 export class InvalidPythonSourceError extends Error {
   constructor(message: string) {
@@ -814,25 +815,49 @@ export function protectPythonPycBuffer(
   options: {
     readonly intensity?: ProtectionIntensity;
     readonly seed?: string | number;
+    /**
+     * When true, structurally weave unused decoy TYPE_CODE objects into customer
+     * and module `co_consts` (append-only; preserves FLAG_REF intern indices and
+     * executed bytecode). Falls back to trailer-only honey when marshal walk fails.
+     */
+    readonly weaveDecoys?: boolean;
   } = {},
 ): {
   readonly buffer: Buffer;
   readonly chaffPayloadsEmbedded: number;
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
+  readonly weaveDecoys: boolean;
+  readonly decoyCodeObjectsInjected: number;
+  readonly customerDefsWoven: number;
 } {
   if (bytes.length < 16 || bytes[2] !== 0x0d || bytes[3] !== 0x0a) {
     throw new Error("Invalid CPython .pyc header (missing 0x0d 0x0a magic marker)");
   }
 
   const intensity = options.intensity ?? "balanced";
-  const prng = new SeededPrng(options.seed ?? "bla-pyc-shield-v1");
+  const weaveDecoys = options.weaveDecoys === true;
+  const seed = options.seed ?? "bla-pyc-shield-v1";
+  const prng = new SeededPrng(seed);
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
+
+  let working = bytes;
+  let decoyCodeObjectsInjected = 0;
+  let customerDefsWoven = 0;
+  if (weaveDecoys) {
+    const woven = weavePythonPycBuffer(bytes, { intensity, seed });
+    if (woven) {
+      working = woven.buffer;
+      decoyCodeObjectsInjected = woven.decoyCodeObjectsInjected;
+      customerDefsWoven = woven.customerDefsWoven;
+    }
+  }
 
   // Construct marshal-framed ASCII constant records (TYPE_ASCII = 0x61 + uint32LE length + utf8 bytes).
   // Keep distinctive prefixes within REA's PYTHON_PYC_CONST_PREVIEW_LIMIT (80) so canary tokens
   // and diagnostic errorClass/systemCode survive truncated previews.
+  // Trailers sit AFTER the root marshal object so importlib stops at the woven root.
   const marshalRecords: Buffer[] = [];
   const pushAscii = (raw: string) => {
     const strBytes = Buffer.from(raw, "utf8");
@@ -859,9 +884,12 @@ export function protectPythonPycBuffer(
   }
 
   return {
-    buffer: Buffer.concat([bytes, ...marshalRecords]),
+    buffer: Buffer.concat([working, ...marshalRecords]),
     chaffPayloadsEmbedded: chaffPayloads.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
+    weaveDecoys,
+    decoyCodeObjectsInjected,
+    customerDefsWoven,
   };
 }

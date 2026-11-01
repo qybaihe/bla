@@ -355,12 +355,20 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("call-graph-tracing");
   } else if (format === "python-pyc") {
     const rawPyc = readFileSync(absInput);
-    const res = protectPythonPycBuffer(rawPyc, { intensity, seed });
+    const res = protectPythonPycBuffer(rawPyc, {
+      intensity,
+      seed,
+      weaveDecoys: options.weaveDecoys === true,
+    });
     writeFileSync(absOutput, res.buffer);
-    decoyFunctionsInjected = 14;
+    decoyFunctionsInjected =
+      res.decoyCodeObjectsInjected > 0 ? res.decoyCodeObjectsInjected : 14;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = 1;
     counteredVectors.add("python-pyc-marshal");
+    if (res.weaveDecoys && res.customerDefsWoven > 0) {
+      counteredVectors.add("call-graph-tracing");
+    }
   } else if (
     format === "native-elf" ||
     format === "native-macho" ||
