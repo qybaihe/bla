@@ -649,6 +649,11 @@ function pythonDiagnosticTuple(
  * Algorithmic Tarpit (`generatePythonTarpit`), opaque predicates, and
  * honey-docstrings while preserving shebangs, PEP 263 encoding headers,
  * module docstrings (`__doc__`), and complete `from __future__` imports.
+ *
+ * Honesty limits: this shields the `.py` / `.pyc` bytes BLA sees. A later
+ * PyInstaller onefile (or similar) pack is still peelable to the embedded
+ * archive — harden sources *before* bundling; BLA will not rewrite a
+ * PyInstaller CArchive in place (see `detectNativeEofAppendHazard`).
  */
 export function protectPythonSource(
   source: string,
@@ -741,8 +746,9 @@ export function inspectPythonPyc(bytes: Buffer): PythonPycInspectionSummary {
     pep552Flags,
     extractedStrings: matches.slice(0, 64),
     blaProtected:
-      textView.includes("BLA-SHIELD") ||
+      textView.includes("runtime attestation boundary") ||
       textView.includes("Architecture Notice: Core business logic") ||
+      textView.includes("Billing Pipeline Notice") ||
       textView.includes("PROTECTED_CANARY_CREDENTIAL=") ||
       textView.includes("DarwinProcessOwnershipInspectionError"),
   };

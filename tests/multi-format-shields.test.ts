@@ -80,15 +80,19 @@ describe("Multi-Format Shields (WASM, Python, Native ELF/Mach-O/PE, C/Rust/Go He
 
     expect(protectedPy.decoyFunctionsInjected).toBeGreaterThanOrEqual(10);
     expect(protectedPy.crossReferenceEdges).toBeGreaterThanOrEqual(20);
-    expect(protectedPy.code).toContain("BLA-SHIELD");
+    expect(protectedPy.code).toContain("runtime attestation boundary");
+    expect(protectedPy.code).not.toMatch(/_bla_/i);
+    expect(protectedPy.code).not.toContain("BLA-SHIELD");
     expect(protectedPy.code).toContain("def calculate_dynamic_quote");
     expect(protectedPy.canaryTokensEmbedded).toBeGreaterThanOrEqual(2);
     expect(protectedPy.diagnosticsEmbedded).toBeGreaterThanOrEqual(2);
     expect(protectedPy.code).toContain("CANARY_TOKENS");
-    expect(protectedPy.code).toContain("BLA-SHIELD");
     expect(protectedPy.code).toContain("AKIAIOSFODNN7EXAMPLE");
     expect(protectedPy.code).toContain("DarwinProcessOwnershipInspectionError");
     expect(protectedPy.code).toContain("https:/canary_");
+    // Live warm + shared slot: decoys are not empty unreferenced stubs
+    expect(protectedPy.code).toMatch(/\["warm"\]\s*=/);
+    expect(protectedPy.code).toMatch(/dict\s*=\s*\{"epoch":/);
 
     // Test .pyc shield on a synthetic CPython 3.11 .pyc buffer
     const fakePycHeader = Buffer.alloc(16);
