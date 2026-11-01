@@ -138,6 +138,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `${ANSI.bold}Verification Target:${ANSI.reset} ${report.targetPath}`,
     `${ANSI.bold}Defense Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (${report.overallPassed ? "ALL COUNTER-REA GATES PASSED" : "PARTIAL PASS"})`,
     `${ANSI.bold}Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
+    `${ANSI.dim}Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40).${ANSI.reset}`,
     "",
     `${ANSI.bold}Counter-REA Invariant Checks:${ANSI.reset}`,
   ];
@@ -235,6 +236,7 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
     `  ${ANSI.bold}Input Target:${ANSI.reset}      ${rep.inputPath}`,
     `  ${ANSI.bold}Hardened Output:${ANSI.reset}   ${ANSI.cyan}${rep.outputPath}${ANSI.reset}`,
     `  ${ANSI.bold}Intensity Preset:${ANSI.reset}  ${ANSI.magenta}${rep.intensity.toUpperCase()}${ANSI.reset} (Defense Score: ${ANSI.green}${ANSI.bold}${rep.verification.defenseScore}/100${ANSI.reset})`,
+    `  ${ANSI.dim}Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40).${ANSI.reset}`,
     "",
     `${ANSI.bold}${ANSI.blue}── 5-Stage Automated Counter-REA Pipeline ──────────────────────────────────────${ANSI.reset}`,
   ];

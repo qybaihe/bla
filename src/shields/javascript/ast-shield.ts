@@ -368,6 +368,42 @@ function buildOpaqueTrueAst(
   return t.binaryExpression("===", bitAnd, t.numericLiteral(1));
 }
 
+/**
+ * Rewrite an integer literal into an opaque expression that still evaluates to
+ * the same Number in O(1). The original bit pattern (e.g. 0x9e3779b9) does not
+ * survive as a NumericLiteral, closing the bankrupt cleartext-constant probe
+ * tracked in issue #40 while keeping runtime equivalence.
+ */
+function buildOpaqueIntegerAst(
+  value: number,
+  prng: SeededPrng,
+  seedIdentifierName: string,
+): t.Expression {
+  const abs = Math.abs(value);
+  const split =
+    abs <= 1 ? 1 : prng.nextInt(1, Math.min(0xffff, Math.max(1, abs - 1)));
+  const left = value > 0 ? value - split : value + split;
+  const right = value > 0 ? split : -split;
+  const sum = t.binaryExpression(
+    "+",
+    t.numericLiteral(left),
+    t.numericLiteral(right),
+  );
+  const decoy = value ^ (prng.nextInt(1, 0x7fff) | 1);
+  if (prng.nextInt(0, 1) === 0) {
+    return t.conditionalExpression(
+      buildOpaqueTrueAst(prng, seedIdentifierName),
+      sum,
+      t.numericLiteral(decoy),
+    );
+  }
+  return t.conditionalExpression(
+    buildOpaqueFalseAst(prng, seedIdentifierName),
+    t.numericLiteral(decoy),
+    sum,
+  );
+}
+
 const RENAME_RESERVED = new Set([
   "exports", "module", "require", "arguments", "undefined", "NaN", "Infinity",
   "globalThis", "global", "window", "self", "console", "Math", "Object", "Array",
@@ -813,6 +849,54 @@ export function transformJavaScriptWithBlaShield(
       path.replaceWith(buildCombinatorialStringAst(val, prng, seedVarName));
       path.skip();
       primitiveCandidateBranchesCreated += 256;
+    },
+    NumericLiteral(path) {
+      // Issue #40: bankrupt/maximum must not leave schedule / magic integers
+      // bit-identical in the hardened output (probe: 0x9e3779b9).
+      if (intensity !== "bankrupt" && intensity !== "maximum") {
+        return;
+      }
+      if (
+        (loader === "ts" || loader === "tsx") &&
+        isInsideTsConstAssertion(path)
+      ) {
+        return;
+      }
+      const val = path.node.value;
+      if (!Number.isInteger(val)) return;
+      if (!Number.isSafeInteger(val)) return;
+      // Leave tiny integers alone (loop bounds / booleans-as-numbers); rewrite
+      // everything at |n| >= 16 so golden-ratio / salt / schedule constants go.
+      if (Math.abs(val) < 16) return;
+      const parent = path.parent;
+      if (
+        t.isObjectProperty(parent) &&
+        parent.key === path.node &&
+        !parent.computed
+      ) {
+        return;
+      }
+      if (
+        t.isTSLiteralType(parent) ||
+        t.isTSEnumMember(parent) ||
+        t.isImportAttribute(parent)
+      ) {
+        return;
+      }
+      if (
+        path.findParent(
+          (p) =>
+            p.isTSType() ||
+            p.isTSEnumDeclaration() ||
+            p.isTSModuleDeclaration() ||
+            p.isImportAttribute(),
+        )
+      ) {
+        return;
+      }
+      path.replaceWith(buildOpaqueIntegerAst(val, prng, seedVarName));
+      path.skip();
+      primitiveCandidateBranchesCreated += 64;
     },
   });
 

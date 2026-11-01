@@ -114,9 +114,10 @@ describe("CrackMe v6 (harden-native)", () => {
       const ra = await lib.hardenChallenge({ key: lib.FIXTURE_KEY, flag: lib.FIXTURE_FLAG, outDir: a });
       const rb = await lib.hardenChallenge({ key: lib.FIXTURE_KEY, flag: lib.FIXTURE_FLAG, outDir: b });
       expect(ra.artifacts).toEqual(rb.artifacts);
-      // Same public template + panel + wasm as the release → identical panel/wasm digests.
-      expect(ra.artifacts["panel.html"].sha256).toBe(seal.artifacts["panel.html"].sha256);
-      expect(ra.artifacts["core.wasm"].sha256).toBe(seal.artifacts["core.wasm"].sha256);
+      // Release digests stay pinned by SEAL + the committed-artifacts test above.
+      // Intentional shield-pipeline changes (e.g. issue #40 numeric de-literalization)
+      // legitimately drift re-harden output from the frozen v6 release bundle, so we
+      // no longer require panel/wasm sha256 == seal here.
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
