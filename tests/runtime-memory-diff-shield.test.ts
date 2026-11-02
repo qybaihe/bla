@@ -11,6 +11,7 @@ import { generateFridaCaptureSaturation } from "../src/shields/exhaustion/frida-
 import { REA_BUDGET_BREAKER_MATRIX } from "../src/shields/exhaustion/rea-budget-matrix.js";
 import { transformJavaScriptWithBlaShield } from "../src/shields/javascript/ast-shield.js";
 import { emitCompileTimeNativeHeader } from "../src/shields/formats/headers.js";
+import { lintLaneIndependence } from "../src/engine/lane-independence-lint.js";
 
 describe("Counter-REA Runtime Memory Diff & Heap Churn Shield", () => {
   it("Floods M0 -> M1 differential memory snapshots with > 35 synchronized decoy mutations on every function call", () => {
@@ -126,6 +127,24 @@ describe("Counter-REA Runtime Memory Diff & Heap Churn Shield", () => {
       expect(shareA).not.toEqual(prevA);
       expect(shareB).not.toEqual(prevB);
     }
+  });
+
+
+  it("R9: shadow-heap decoy tables avoid lane-lint BYTE_COMPARE_ARRAY even beside key identifiers", () => {
+    const prng = new SeededPrng("r9-lane-quiet-decoy");
+    const shield = generateShadowHeapChurnShield(prng, "bankrupt");
+    // Must not emit [n, n, n, n+] numeric literals (R8 red residual → R9 blue).
+    expect(shield.code).not.toMatch(
+      /\[\s*(?:0x[0-9a-fA-F]+|\d+)\s*(?:,\s*(?:0x[0-9a-fA-F]+|\d+)\s*){3,}\]/,
+    );
+    expect(shield.code).toContain('splitShareA: "');
+    expect(shield.code).toContain(".split(\",\").map");
+    expect(shield.code).toContain(".concat([");
+    const report = lintLaneIndependence(
+      "// key guess input lane entitlement gate\n" + shield.code,
+    );
+    expect(report.looksLaneIndependent).toBe(false);
+    expect(report.findings).toEqual([]);
   });
 
   it("Triggers Frida capture saturation and realm-agnostic ring churn even when globalThis.Frida is isolated in Frida Gum", () => {

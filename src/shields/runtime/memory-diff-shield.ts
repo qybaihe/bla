@@ -72,8 +72,9 @@ export function generateShadowHeapChurnShield(
           : i % 4 === 2
             ? "tpm2_pcr_quote_digest"
             : "enclave_session_ratchet";
+    // words as 2+2 concat — avoids lane-lint BYTE_COMPARE_ARRAY ([n,n,n,n+] literals)
     initialSlots.push(
-      `    { slotId: ${i}, kind: "${kind}", epoch: ${w0}, words: [${w0}, ${w1}, ${w2}, ${w3}], hmacTag: 0x${prng.hex(6)} }`,
+      `    { slotId: ${i}, kind: "${kind}", epoch: ${w0}, words: [${w0}, ${w1}].concat([${w2}, ${w3}]), hmacTag: 0x${prng.hex(6)} }`,
     );
   }
 
@@ -105,8 +106,9 @@ export function generateShadowHeapChurnShield(
     `  cursor: 0,`,
     `  tick: 1,`,
     `  rollingMask: 0x${prng.hex(6)},`,
-    `  splitShareA: [${decoySecret.shareA.join(", ")}],`,
-    `  splitShareB: [${decoySecret.shareB.join(", ")}],`,
+    // CSV→map avoids lane-lint BYTE_COMPARE_ARRAY on bankrupt output (R8 red residual / R9 blue)
+    `  splitShareA: "${decoySecret.shareA.join(",")}".split(",").map(function (n) { return n | 0; }),`,
+    `  splitShareB: "${decoySecret.shareB.join(",")}".split(",").map(function (n) { return n | 0; }),`,
     `  slots: [`,
     initialSlots.join(",\n"),
     `  ],`,
