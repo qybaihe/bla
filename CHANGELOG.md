@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **MCP/Skill 2.0 stabilization:** `bla_harden` dry-run no longer sets `overallSuccess: true`; CLI formatter labels dry-run as `DRY-RUN (nothing written)` instead of `SUCCESS`. Successful `bla_harden` writes now return `writeReceipt` (matching defend/protect and the stage A contract). `bla_redteam_report` on-disk reads use `status: available` (not `pass`) so agents cannot mistake a static fixture for a live REA verdict; harness stdout/stderr are clipped for MCP stdio safety. Skill guide **v1.5.1** documents available vs unverified.
+
 ### Added
 - **MCP/Skill 2.0 stage C (evidence + REA observability):** harden/defend/protect results carry a stable unsigned `runId`; `hardenProject` writes `bla-harden-summary/v2` with `runId` + `signature: "unsigned"`; read-only `bla_run_lookup` and optional `bla_verify` `summary_path`/`run_id` correlation (bad/missing id → explicit error). Thin MCP wrappers `bla_rea_drift` / `bla_redteam_report` over existing scripts — absent REA or missing report → `status: unverified` with `isError` (never silent pass). Skill guide **v1.5** documents run lookup + unverified principles.
 - **MCP/Skill 2.0 stage B (CLI↔MCP parity):** `bla_lint_lanes` (same engine as `bla lint-lanes`); `in_place` on `bla_protect`/`bla_defend` (still gated by `confirm_overwrite`); `honey_source_maps` on `bla_protect`; `output_directory` on `bla_harden`; `bla_verify` honesty metadata (`self_seal_enabled`, `wasm_export_rename_applied`, `numeric_template_leak_known`) so soft-caps match protect-side facts.

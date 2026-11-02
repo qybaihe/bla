@@ -33,6 +33,8 @@ describe("blind-llm-agents skill guide contents", () => {
     expect(text).toContain("bla_rea_drift");
     expect(text).toContain("bla_redteam_report");
     expect(text).toMatch(/unverified/i);
+    expect(text).toContain("available");
+    expect(text).toContain("overallSuccess");
     // No brittle repo-relative ../../../docs links that break after setup install.
     expect(text).not.toMatch(/\.\.\/\.\.\/\.\.\/docs\//);
   });

@@ -29,7 +29,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 - `bla_lint_lanes`: Read-only lane-independence footgun lint (`path`) — same engine as CLI `bla lint-lanes`.
 - `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
-- `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. Missing report / unready REA → `status: unverified`.
+- `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.
 - `bla_benchmark`: Runs the 8-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).
@@ -37,10 +37,10 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 
 ### Write safety (dry-run, confirmation, receipts)
 
-- `bla_harden` with `dry_run: true` (CLI `bla harden . --dry-run`) discovers targets and plans outputs with **zero bytes written** (no `.bla-hardened/`, no summary, no `.blarc` seed).
+- `bla_harden` with `dry_run: true` (CLI `bla harden . --dry-run`) discovers targets and plans outputs with **zero bytes written** (no `.bla-hardened/`, no summary, no `.blarc` seed). Dry-run sets `overallSuccess: false` — it never claims a successful harden.
 - Discovery is capped (`max_artifacts`, default 64); when more targets exist the result sets `truncated: true` instead of silently dropping them.
 - `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite an existing output file unless `confirm_overwrite: true`. A refusal is `isError: true` with `{ status: "confirmation_required", wouldOverwrite: [...], wrote: [] }`; nothing is written.
-- Successful `bla_defend` / `bla_protect` calls add `writeReceipt: { status: "written", wrote, overwrote, confirmed }`.
+- Successful `bla_harden` / `bla_defend` / `bla_protect` writes add `writeReceipt: { status: "written", wrote, overwrote, confirmed }` (`bla_harden` dry-run omits it).
 - `in_place: true` (MCP) / `--in-place` (CLI) plans the output as the input path; because that path already exists, `confirm_overwrite: true` is required on MCP or the call is refused with `confirmation_required`.
 
 `weave_decoys: true` activates structural Python customer-def weave (shared-slot touch + opaque-false decoy calls) after the #51 tarpit; when false, Python stays warm-init-only. JS AST weave remains always-on.
