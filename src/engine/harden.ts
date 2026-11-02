@@ -370,10 +370,20 @@ export function hardenProject(
         ? join(absDir, ".bla-hardened")
         : join(dirname(absDir), ".bla-hardened")),
   );
-  const plannedOutputs = discovered.map((artifact) => {
+  let plannedOutputs = discovered.map((artifact) => {
     const outputPath = planArtifactOutputPath(artifact, outputRoot);
     return { artifact, outputPath, outputExisted: existsSync(outputPath) };
   });
+  // When self-seal is on, protect non-JS bindable siblings first so JS entry
+  // modules can embed expected SHA-256 hard-fail hashes (red/blue round-4).
+  if (options.selfSeal === true) {
+    const jsLike = new Set(["javascript", "typescript"]);
+    plannedOutputs = [
+      ...plannedOutputs.filter((p) => !jsLike.has(p.artifact.format)),
+      ...plannedOutputs.filter((p) => jsLike.has(p.artifact.format)),
+    ];
+  }
+
   const wouldOverwrite = plannedOutputs.filter((p) => p.outputExisted).map((p) => p.outputPath);
 
   const bindableFormats = new Set(["javascript", "typescript", "wasm", "html-bundle"]);

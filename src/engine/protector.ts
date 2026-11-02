@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
 import { assertSafeOutputPath } from "../core/output-path.js";
 import { withLlmDirectives } from "../core/llm-directives.js";
@@ -78,12 +78,40 @@ import {
 
 function selfSealTransformOption(
   options: ProtectionOptions,
-): boolean | { readonly siblingPaths: readonly string[] } | undefined {
+  absOutput: string,
+): boolean | {
+  readonly siblingPaths: readonly string[];
+  readonly expectedSiblingSha256?: Readonly<Record<string, string>>;
+  readonly hardFailOnSiblingMismatch?: boolean;
+} | undefined {
   if (options.selfSeal !== true) return undefined;
-  if (options.selfSealSiblingPaths && options.selfSealSiblingPaths.length > 0) {
-    return { siblingPaths: options.selfSealSiblingPaths };
+  if (!options.selfSealSiblingPaths || options.selfSealSiblingPaths.length === 0) {
+    return true;
   }
-  return true;
+  const siblingPaths = options.selfSealSiblingPaths;
+  const base = dirname(absOutput);
+  const expectedSiblingSha256: Record<string, string> = {};
+  for (const rel of siblingPaths) {
+    if (typeof rel !== "string" || rel.length === 0) continue;
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      expectedSiblingSha256[rel] = createHash("sha256")
+        .update(readFileSync(abs))
+        .digest("hex");
+    } catch {
+      /* sibling not readable yet — skip expected hash (opaque-seed only) */
+    }
+  }
+  return {
+    siblingPaths,
+    ...(Object.keys(expectedSiblingSha256).length > 0
+      ? {
+          expectedSiblingSha256,
+          hardFailOnSiblingMismatch: true,
+        }
+      : {}),
+  };
 }
 
 function applyPanelDeriveRewrite(
@@ -284,7 +312,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       }
     }
     const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
-    const selfSealOpt = selfSealTransformOption(options);
+    const selfSealOpt = selfSealTransformOption(options, absOutput);
     const transformed = transformJavaScriptWithBlaShield(panelSafe, {
       intensity,
       seed,
@@ -340,7 +368,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
             options,
             `${absInput}#script-${currentIndex}`,
           );
-          const selfSealOpt = selfSealTransformOption(options);
+          const selfSealOpt = selfSealTransformOption(options, absOutput);
           const res = transformJavaScriptWithBlaShield(panelSafe, {
             intensity,
             seed: scriptSeed,
@@ -370,7 +398,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         intensity,
         seed: `${seed}:html-bootstrap`,
         sourceType: "script",
-        ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
+        ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       });
       decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
       fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
@@ -416,7 +444,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           intensity,
           seed: `${seed}:${vf.relativePath}`,
           filename: vf.relativePath,
-          ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
+          ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
         });
         const honey = generateHoneySourceMap(
           basename(vf.relativePath),
@@ -461,14 +489,14 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       {
         intensity,
         seed: `${seed}:enclave-decoy`,
-        ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
+        ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       },
     );
     protectedFiles.push({
       relativePath: "enclave/hardware-tee-bridge.js",
       content: Buffer.from(decoyBridgeJs.code, "utf8"),
     
-      ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
+      ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
     });
 
     // Flood ASAR Pickle JSON header past REA DEFAULT_ASAR_MAX_HEADER_BYTES at
@@ -714,7 +742,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               intensity,
               seed: `${seed}:${entry.name}`,
               filename: entry.name,
-              ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
+              ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
             });
             const honey = generateHoneySourceMap(
               entry.name,

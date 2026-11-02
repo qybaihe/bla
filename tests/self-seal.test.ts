@@ -12,6 +12,7 @@ import {
 import { transformJavaScriptWithBlaShield } from "../src/shields/javascript/ast-shield.js";
 import { parseCliArgs } from "../src/cli.js";
 import { DEFAULT_BLA_CONFIG, initBlaConfig, loadBlaConfig } from "../src/core/config.js";
+import { protectTarget } from "../src/engine/protector.js";
 
 describe("self-seal helper (#40.5)", () => {
   it("DEFAULT_BLA_CONFIG exposes selfSeal:false (opt-in)", () => {
@@ -175,3 +176,60 @@ describe("self-seal helper (#40.5)", () => {
     }
   });
 });
+
+  it("embeds expected sibling SHA-256 and hard-fails on mismatch (round-4)", () => {
+    const prng = new SeededPrng("self-seal-hardfail-1");
+    const snip = generateSelfSealSnippet(prng, {
+      siblingPaths: ["./core.wasm"],
+      bindingName: "integrityDigestHf",
+      expectedSiblingSha256: {
+        "./core.wasm": "a".repeat(64),
+      },
+      hardFailOnSiblingMismatch: true,
+    });
+    expect(snip.expectedSiblingHashCount).toBe(1);
+    expect(snip.hardFailOnSiblingMismatch).toBe(true);
+    expect(snip.code).toContain("integrity check failed");
+    expect(snip.code).toContain("a".repeat(64));
+  });
+
+  it("protect+self-seal hard-fails when an on-disk sibling is tampered", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-selfseal-hf-"));
+    try {
+      const sib = join(dir, "core.wasm");
+      // Minimal wasm magic so file exists for hashing (content arbitrary).
+      writeFileSync(sib, Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0xaa]));
+      const src = [
+        '"use strict";',
+        "function main() { return 42; }",
+        "module.exports = { main };",
+        'if (require.main === module) console.log(main());',
+        "",
+      ].join("\n");
+      const entry = join(dir, "gate.cjs");
+      writeFileSync(entry, src, "utf8");
+
+      const out = join(dir, "gate.out.cjs");
+      protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "self-seal-hardfail-protect",
+        selfSeal: true,
+        selfSealSiblingPaths: ["core.wasm"],
+      });
+
+      const intact = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(intact.status, intact.stderr).toBe(0);
+      expect(intact.stdout.trim()).toBe("42");
+
+      writeFileSync(sib, Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0xbb]));
+      const tampered = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(tampered.status, tampered.stdout + tampered.stderr).not.toBe(0);
+      expect((tampered.stderr || "") + (tampered.stdout || "")).toMatch(
+        /integrity check failed/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });

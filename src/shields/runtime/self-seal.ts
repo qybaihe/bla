@@ -10,6 +10,11 @@
  * the opaque-predicate seed. Tampering with sibling modules or attaching an
  * inspector changes the digest → seed parity flips → opaque happy-path guards fail.
  *
+ * When build-time `expectedSiblingSha256` hashes are embedded (harden/protect fills
+ * these from siblings already on disk), runtime **hard-fails** on mismatch. Opaque
+ * seed entanglement alone does not gate entitlement control flow that never reads
+ * the seed (red/blue round-4 finding).
+ *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice. Browser builds soft-skip (digest=0).
  */
 
@@ -25,6 +30,18 @@ export interface SelfSealOptions {
   readonly envFingerprint?: boolean;
   /** Override the emitted binding name (tests). */
   readonly bindingName?: string;
+  /**
+   * Optional build-time SHA-256 hex of sibling file bytes (keyed by the same
+   * path strings listed in siblingPaths). When present, runtime hard-fails if
+   * a sibling's bytes diverge — opaque-seed entanglement alone does not gate
+   * entitlement control flow (red/blue round-4).
+   */
+  readonly expectedSiblingSha256?: Readonly<Record<string, string>>;
+  /**
+   * When true (default if expectedSiblingSha256 is non-empty), throw on sibling
+   * hash mismatch instead of only poisoning the digest.
+   */
+  readonly hardFailOnSiblingMismatch?: boolean;
 }
 
 export interface SelfSealSnippet {
@@ -35,6 +52,9 @@ export interface SelfSealSnippet {
   readonly expectedDigestHelperName: string;
   readonly siblingCount: number;
   readonly envFingerprint: boolean;
+  /** How many sibling expected hashes were embedded for hard-fail. */
+  readonly expectedSiblingHashCount: number;
+  readonly hardFailOnSiblingMismatch: boolean;
 }
 
 /**
@@ -57,9 +77,24 @@ export function generateSelfSealSnippet(
   const siblings = (options.siblingPaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
+  const expectedSiblingSha256 = options.expectedSiblingSha256 ?? {};
+  const expectedEntries = Object.entries(expectedSiblingSha256).filter(
+    ([k, v]) =>
+      typeof k === "string" &&
+      k.length > 0 &&
+      typeof v === "string" &&
+      /^[0-9a-f]{64}$/i.test(v),
+  );
+  const hardFailOnSiblingMismatch =
+    options.hardFailOnSiblingMismatch !== undefined
+      ? options.hardFailOnSiblingMismatch
+      : expectedEntries.length > 0;
 
   // Embed sibling list as a JSON array literal — paths are customer-controlled.
   const siblingsLiteral = JSON.stringify(siblings);
+  const expectedLiteral = JSON.stringify(
+    Object.fromEntries(expectedEntries.map(([k, v]) => [k, v.toLowerCase()])),
+  );
 
   const lines: string[] = [];
   lines.push(`function ${helperName}() {`);
@@ -73,13 +108,27 @@ export function generateSelfSealSnippet(
   lines.push(`    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`);
   lines.push(`    if (selfPath) { try { h.update(_fs.readFileSync(selfPath)); } catch (_e) {} }`);
   lines.push(`    var siblings = ${siblingsLiteral};`);
+  lines.push(`    var expected = ${expectedLiteral};`);
   lines.push(`    for (var i = 0; i < siblings.length; i++) {`);
   lines.push(`      try {`);
-  lines.push(`        var sp = siblings[i];`);
+  lines.push(`        var spKey = siblings[i];`);
+  lines.push(`        var sp = spKey;`);
   lines.push(`        if (!_path.isAbsolute(sp) && typeof __dirname === "string") sp = _path.join(__dirname, sp);`);
+  lines.push(`        var sibBuf = _fs.readFileSync(sp);`);
+  lines.push(`        var sibHex = _c.createHash("sha256").update(sibBuf).digest("hex");`);
+  lines.push(`        if (expected[spKey] && expected[spKey] !== sibHex) {`);
+  if (hardFailOnSiblingMismatch) {
+    lines.push(`          throw new Error("integrity check failed");`);
+  } else {
+    lines.push(`          digest = 0xffffffff;`);
+  }
+  lines.push(`        }`);
   lines.push(`        h.update(sp);`);
-  lines.push(`        h.update(_fs.readFileSync(sp));`);
-  lines.push(`      } catch (_e2) { h.update("missing:" + String(siblings[i])); }`);
+  lines.push(`        h.update(sibBuf);`);
+  lines.push(`      } catch (_e2) {`);
+  lines.push(`        if (_e2 && _e2.message === "integrity check failed") throw _e2;`);
+  lines.push(`        h.update("missing:" + String(siblings[i]));`);
+  lines.push(`      }`);
   lines.push(`    }`);
   if (envFingerprint) {
     lines.push(`    var envNote = "";`);
@@ -92,7 +141,10 @@ export function generateSelfSealSnippet(
   }
   lines.push(`    var hex = h.digest("hex");`);
   lines.push(`    digest = parseInt(hex.slice(0, 8), 16) >>> 0;`);
-  lines.push(`  } catch (_e4) { digest = 0; }`);
+  lines.push(`  } catch (_e4) {`);
+  lines.push(`    if (_e4 && _e4.message === "integrity check failed") throw _e4;`);
+  lines.push(`    digest = 0;`);
+  lines.push(`  }`);
   lines.push(`  return digest >>> 0;`);
   lines.push(`}`);
   lines.push(`var ${bindingName} = ${helperName}();`);
@@ -104,6 +156,8 @@ export function generateSelfSealSnippet(
     expectedDigestHelperName: helperName,
     siblingCount: siblings.length,
     envFingerprint,
+    expectedSiblingHashCount: expectedEntries.length,
+    hardFailOnSiblingMismatch,
   };
 }
 
