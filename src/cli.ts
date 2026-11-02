@@ -71,6 +71,7 @@ Options:
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
+  --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -94,6 +95,7 @@ interface ParsedCliArgs {
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  readonly wasmPreserveExports: readonly string[];
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -119,6 +121,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
+  let wasmPreserveExports: string[] = [];
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -159,6 +162,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg.startsWith("--wasm-preserve-exports=")) {
+      wasmPreserveExports = arg
+        .slice("--wasm-preserve-exports=".length)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    } else if (arg === "--wasm-preserve-exports" && i + 1 < argv.length) {
+      wasmPreserveExports = argv[++i]!
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
     } else if (arg === "--mcp") {
       command = "mcp";
     } else if (arg === "--update") {
@@ -202,6 +216,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     llmDirectives,
     weaveDecoys,
     selfSeal,
+    wasmPreserveExports,
     lang,
     clients,
     allDetected,
@@ -323,6 +338,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -356,6 +377,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
         });
         if (parsed.sarif) {
           console.log(
@@ -436,6 +463,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));
