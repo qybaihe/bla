@@ -68,6 +68,7 @@ Options:
   --manifest                  Emit unsigned .bla-manifest.json next to protected artifacts (opt-in)
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
+  --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -90,6 +91,7 @@ interface ParsedCliArgs {
   readonly manifest: boolean;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
+  readonly selfSeal: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -114,6 +116,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let manifest = false;
   let llmDirectives = false;
   let weaveDecoys = false;
+  let selfSeal = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -152,6 +155,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
       weaveDecoys = true;
+    } else if (arg === "--self-seal") {
+      selfSeal = true;
     } else if (arg === "--mcp") {
       command = "mcp";
     } else if (arg === "--update") {
@@ -194,6 +199,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     manifest,
     llmDirectives,
     weaveDecoys,
+    selfSeal,
     lang,
     clients,
     allDetected,
@@ -314,6 +320,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -346,6 +353,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -402,6 +410,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           honeySourceMaps: parsed.honeyMaps,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

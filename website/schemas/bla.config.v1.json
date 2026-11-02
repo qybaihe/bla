@@ -46,6 +46,11 @@
       "type": "boolean",
       "default": false,
       "description": "Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on). Parity with CLI --weave-decoys / MCP weave_decoys."
+    },
+    "selfSeal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Parity with CLI --self-seal / MCP self_seal."
     }
   },
   "additionalProperties": true

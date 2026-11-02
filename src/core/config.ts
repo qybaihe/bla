@@ -18,6 +18,8 @@ export interface BlaProjectConfig {
   readonly minDefenseScore?: number;
   /** Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on). Parity with CLI `--weave-decoys` / MCP `weave_decoys`. */
   readonly weaveDecoys?: boolean;
+  /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). Parity with CLI `--self-seal` / MCP `self_seal`. */
+  readonly selfSeal?: boolean;
 }
 
 /**
@@ -34,6 +36,7 @@ export const DEFAULT_BLA_CONFIG: BlaProjectConfig = Object.freeze({
   honeySourceMaps: true,
   minDefenseScore: 90,
   weaveDecoys: false,
+  selfSeal: false,
 });
 
 /** Legacy fixed seeds that fingerprint every project the same way — never reuse as a default. */
