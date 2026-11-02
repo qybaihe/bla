@@ -532,6 +532,7 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
     // Non-clobbering backup: ONLY create `${configPath}.bla-backup` if it does not already exist!
     let recordedBackupPath: string | null = null;
     let recordedBackupSha256: string | null = null;
+    let configWritten = false;
     try {
       if (configExistedBefore && existingRawContent !== null) {
         recordedBackupPath = backupPathCandidate;
@@ -544,8 +545,23 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
       }
 
       writeFileAtomicSync(client.configPath, nextConfigContent);
+      configWritten = true;
       writeFileAtomicSync(skillPath, skillContent);
     } catch (err) {
+      // Roll the config back when the skill write failed after a successful
+      // config write — never leave a half-installed registration (config
+      // pointing at BLA with no skill file).
+      if (configWritten) {
+        try {
+          if (configExistedBefore && existingRawContent !== null) {
+            writeFileAtomicSync(client.configPath, existingRawContent);
+          } else {
+            unlinkSync(client.configPath);
+          }
+        } catch {
+          // Best effort: the original failure is still reported below.
+        }
+      }
       anyError = true;
       completedActions.push({
         clientId: client.id,
