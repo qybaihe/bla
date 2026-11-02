@@ -164,6 +164,11 @@ export interface ProtectionOptions {
    * When false, Python stays warm-init-only. Default false.
    */
   readonly weaveDecoys?: boolean;
+  /**
+   * Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5).
+   * When true, harden/protect inject a self-integrity preamble and entangle the opaque seed.
+   */
+  readonly selfSeal?: boolean;
 }
 
 export interface ProtectionMetrics {
@@ -189,6 +194,8 @@ export interface ProtectionResult {
   readonly intensity: ProtectionIntensity;
   /** Present when protect was called with weaveDecoys:true (Python customer-def weave active). */
   readonly weaveDecoys?: boolean;
+  /** Present when protect was called with selfSeal:true (JS self-integrity binding active). */
+  readonly selfSeal?: boolean;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;
