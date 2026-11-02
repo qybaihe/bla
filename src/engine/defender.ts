@@ -119,7 +119,10 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
   });
 
   // Stage 4: Verify Counter-REA Invariants
-  const verification = verifyTarget(protection.outputPath, absInput);
+  const verification = verifyTarget(protection.outputPath, absInput, {
+    selfSealEnabled: options.selfSeal === true || protection.selfSeal === true,
+    wasmExportRenameApplied: protection.wasmExportRenameApplied === true,
+  });
 
   const afterEst = protection.afterAudit.agentEstimates[0]!;
   const exhaustionSummary = {

@@ -189,6 +189,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let chaffPayloadsEmbedded = 0;
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
+  let wasmExportsRenamed = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
@@ -391,12 +392,18 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("asar-header-admission");
   } else if (format === "wasm") {
     const rawWasm = readFileSync(absInput);
-    const res = protectWasmBinary(rawWasm, { intensity, seed });
+    const res = protectWasmBinary(rawWasm, {
+      intensity,
+      seed,
+      // Issue #40.3: rename internal-looking exports at maximum/bankrupt by default;
+      // customers can pass preserveExports via future config — public ABI names stay.
+    });
     writeFileAtomicSync(absOutput, res.buffer);
     decoyFunctionsInjected = 16;
     fakeCrossReferencesCreated = 24;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customSectionsAdded;
+    wasmExportsRenamed = res.exportsRenamed.length;
     counteredVectors.add("wasm-wat-interface");
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
@@ -685,6 +692,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     intensity,
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+    ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,

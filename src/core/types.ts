@@ -196,6 +196,8 @@ export interface ProtectionResult {
   readonly weaveDecoys?: boolean;
   /** Present when protect was called with selfSeal:true (JS self-integrity binding active). */
   readonly selfSeal?: boolean;
+  /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
+  readonly wasmExportRenameApplied?: boolean;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;
