@@ -39,9 +39,19 @@ function tsharkVersion(env) {
 
 async function main() {
   if (!reaDistReady()) {
+    // Honest agent-facing status: exit 0 keeps CI green when REA is optional,
+    // but never imply a red-team pass. MCP bla_redteam_report uses the same word.
     console.log(
       "SKIP: sibling REA dist not ready (expected at ../rea or $REA_ROOT). " +
         "Red-team empirical gates require a local REA checkout; CI skips when absent.",
+    );
+    console.log(
+      JSON.stringify({
+        schema: "bla-redteam-rea/v1",
+        status: "unverified",
+        reason:
+          "Sibling REA dist not ready — empirical redteam:rea did not run (not a pass).",
+      }),
     );
     process.exit(0);
   }

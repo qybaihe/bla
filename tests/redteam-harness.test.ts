@@ -152,3 +152,27 @@ describe("WASM interface exhaustion vs representation budget", () => {
     );
   });
 });
+
+describe("redteam:rea skip honesty", () => {
+  it("emits status unverified JSON when sibling REA dist is absent", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const emptyRea = mkdtempSync(join(tmpdir(), "bla-no-rea-"));
+    const r = spawnSync(process.execPath, ["scripts/redteam/run.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, REA_ROOT: emptyRea },
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/SKIP: sibling REA dist not ready/);
+    const line = r.stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s.startsWith("{") && s.includes("bla-redteam-rea"));
+    expect(line).toBeTruthy();
+    const payload = JSON.parse(line!);
+    expect(payload.schema).toBe("bla-redteam-rea/v1");
+    expect(payload.status).toBe("unverified");
+  });
+});
