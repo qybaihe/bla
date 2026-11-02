@@ -175,6 +175,13 @@ export {
 } from "./engine/harden.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";
+export {
+  generateSelfSealSnippet,
+  measureSelfSealDigestOffline,
+  SELF_SEAL_SCHEMA,
+  type SelfSealOptions,
+  type SelfSealSnippet,
+} from "./shields/runtime/self-seal.js";
 export * from "./shields/formats/apple-plist.js";
 export * from "./shields/formats/dotnet-managed.js";
 export * from "./shields/formats/jvm-bytecode.js";
