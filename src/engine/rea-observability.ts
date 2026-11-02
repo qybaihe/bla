@@ -25,7 +25,21 @@ export function reaDistReady(reaRoot = resolveReaRoot()): boolean {
   return existsSync(join(reaRoot, "dist", "go", "GoBinaryImage.js"));
 }
 
-export type ReaObservabilityStatus = "pass" | "fail" | "unverified";
+/** Cap harness chatter so MCP stdio JSON cannot blow the line limit. */
+const MAX_OBSERVABILITY_STREAM_CHARS = 32_768;
+
+function clipObservabilityStream(text: string): string {
+  if (text.length <= MAX_OBSERVABILITY_STREAM_CHARS) return text;
+  return `${text.slice(0, MAX_OBSERVABILITY_STREAM_CHARS)}\n…[truncated]`;
+}
+
+/**
+ * - `pass` / `fail`: a live harness ran (drift check, or redteam with execute:true).
+ * - `available`: an on-disk empirical report was read without re-running REA
+ *   (not live proof — agents must not treat this as a fresh red-team pass).
+ * - `unverified`: required inputs missing; never a silent success.
+ */
+export type ReaObservabilityStatus = "pass" | "fail" | "unverified" | "available";
 
 export interface ReaDriftReport {
   readonly schema: "bla-rea-drift/v1";
@@ -88,8 +102,8 @@ export function runReaDriftCheck(options: {
     timeout: options.timeoutMs ?? 120_000,
   });
 
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
+  const stdout = clipObservabilityStream(result.stdout ?? "");
+  const stderr = clipObservabilityStream(result.stderr ?? "");
   if (result.error) {
     return {
       ...base,
@@ -137,8 +151,8 @@ export interface RedteamReportResult {
 
 /**
  * Read (and optionally re-run) the empirical REA red-team report.
- * - Default: return the on-disk JSON when present.
- * - `execute: true`: spawn `scripts/redteam/run.mjs` when REA dist is ready.
+ * - Default: return the on-disk JSON when present (`status: available` — not a live pass).
+ * - `execute: true`: spawn `scripts/redteam/run.mjs` when REA dist is ready (`pass`/`fail`).
  * - Missing report AND missing/unready REA → explicit `unverified`.
  */
 export function getRedteamReport(options: {
@@ -187,8 +201,8 @@ export function getRedteamReport(options: {
       env: { ...process.env, REA_ROOT: reaRoot },
       timeout: options.timeoutMs ?? 600_000,
     });
-    const stdout = result.stdout ?? "";
-    const stderr = result.stderr ?? "";
+    const stdout = clipObservabilityStream(result.stdout ?? "");
+    const stderr = clipObservabilityStream(result.stderr ?? "");
     if (result.error) {
       return {
         ...base,
@@ -232,11 +246,13 @@ export function getRedteamReport(options: {
 
   try {
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    const executed = options.execute === true;
     return {
       ...base,
-      status: "pass",
-      executed: options.execute === true,
-      exitCode: options.execute === true ? 0 : null,
+      // Live execute → pass; plain on-disk read → available (not a fresh REA verdict).
+      status: executed ? "pass" : "available",
+      executed,
+      exitCode: executed ? 0 : null,
       report,
       stdout: "",
       stderr: "",

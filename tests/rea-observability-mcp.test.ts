@@ -73,7 +73,7 @@ describe("REA observability engine (C2)", () => {
       reaRoot: fakeRea,
       reportPath,
     });
-    expect(result.status).toBe("pass");
+    expect(result.status).toBe("available");
     expect(result.report).toMatchObject(fixture);
     expect(result.executed).toBe(false);
   });
@@ -128,7 +128,7 @@ describe("REA observability MCP tools (C2)", () => {
       structuredContent: { status: string; report: { generatedAt: string } };
     };
     expect(okResult.isError).not.toBe(true);
-    expect(okResult.structuredContent.status).toBe("pass");
+    expect(okResult.structuredContent.status).toBe("available");
     expect(okResult.structuredContent.report.generatedAt).toBe("fixture");
 
     const missing = await call("bla_redteam_report", {
