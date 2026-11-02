@@ -94,6 +94,8 @@ export interface HardenProjectOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
+  readonly wasmPreserveExports?: readonly string[];
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -298,6 +300,10 @@ export function hardenProject(
           : {}),
         ...(options.selfSeal !== undefined
           ? { selfSeal: options.selfSeal }
+          : {}),
+        ...(options.wasmPreserveExports !== undefined &&
+        options.wasmPreserveExports.length > 0
+          ? { wasmPreserveExports: options.wasmPreserveExports }
           : {}),
         emitManifest,
       });

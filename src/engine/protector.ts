@@ -396,7 +396,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       intensity,
       seed,
       // Issue #40.3: rename internal-looking exports at maximum/bankrupt by default;
-      // customers can pass preserveExports via future config — public ABI names stay.
+      // wasmPreserveExports keeps the customer public ABI.
+      ...(options.wasmPreserveExports && options.wasmPreserveExports.length > 0
+        ? { preserveExports: options.wasmPreserveExports }
+        : {}),
     });
     writeFileAtomicSync(absOutput, res.buffer);
     decoyFunctionsInjected = 16;

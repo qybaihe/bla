@@ -27,6 +27,8 @@ export interface OneClickDefenseOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
+  readonly wasmPreserveExports?: readonly string[];
 }
 
 export interface OneClickDefenseStageSummary {
@@ -114,6 +116,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.selfSeal !== undefined
       ? { selfSeal: options.selfSeal }
+      : {}),
+    ...(options.wasmPreserveExports !== undefined && options.wasmPreserveExports.length > 0
+      ? { wasmPreserveExports: options.wasmPreserveExports }
       : {}),
     honeySourceMaps: true,
   });
