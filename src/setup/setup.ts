@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BLA_IDENTITY } from "../identity.js";
 import {
@@ -90,6 +90,12 @@ export interface InstalledClientRecord {
   readonly skillExistedBefore: boolean;
   readonly skillDirectoryExistedBefore: boolean;
   readonly writtenSkillSha256: string;
+  /**
+   * Supporting skill bundle files (e.g. `references/counter-rea-matrix.md`)
+   * written next to SKILL.md, keyed by POSIX relative path → sha256.
+   * Absent on manifests written before full-bundle installs.
+   */
+  readonly writtenSkillFiles?: Readonly<Record<string, string>>;
   readonly installedAt: string;
 }
 
@@ -233,16 +239,28 @@ function writeInstallManifest(home: string, manifest: BlaInstallManifest): strin
   return manifestPath;
 }
 
-export function resolveBundledSkillContent(): string {
+/** One file of the installable skill bundle (SKILL.md + references/appendices). */
+export interface BundledSkillFile {
+  /** POSIX path relative to the skill directory, e.g. `references/counter-rea-matrix.md`. */
+  readonly relativePath: string;
+  readonly content: string;
+  readonly sha256: string;
+}
+
+const SKILL_ENTRY_FILE = "SKILL.md";
+
+function resolveBundledSkillDirectory(): string | null {
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
-    const candidate = resolve(thisDir, "../../.agents/skills/blind-llm-agents/SKILL.md");
-    if (existsSync(candidate)) {
-      return readFileSync(candidate, "utf8");
-    }
+    const candidate = resolve(thisDir, "../../.agents/skills/blind-llm-agents");
+    if (existsSync(join(candidate, SKILL_ENTRY_FILE))) return candidate;
   } catch {
-    // Fallback inline skill
+    // fall through to inline fallback
   }
+  return null;
+}
+
+function inlineFallbackSkill(): string {
   return [
     "---",
     "name: blind-llm-agents",
@@ -258,7 +276,70 @@ export function resolveBundledSkillContent(): string {
   ].join("\n");
 }
 
+export function resolveBundledSkillContent(): string {
+  const dir = resolveBundledSkillDirectory();
+  if (dir) return readFileSync(join(dir, SKILL_ENTRY_FILE), "utf8");
+  return inlineFallbackSkill();
+}
+
+function collectSkillFiles(root: string, dir: string, out: string[]): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) collectSkillFiles(root, full, out);
+    else if (entry.isFile()) out.push(relative(root, full).split(sep).join("/"));
+  }
+}
+
+/**
+ * Full installable skill bundle: SKILL.md first, then every supporting file
+ * (references/, format appendices) so relative links in SKILL.md resolve after
+ * `bla setup`. Falls back to the inline SKILL.md when the package tree is absent.
+ */
+export function resolveBundledSkillBundle(): readonly BundledSkillFile[] {
+  const dir = resolveBundledSkillDirectory();
+  if (!dir) {
+    const content = inlineFallbackSkill();
+    return [{ relativePath: SKILL_ENTRY_FILE, content, sha256: sha256Hex(content) }];
+  }
+  const rels: string[] = [];
+  collectSkillFiles(dir, dir, rels);
+  rels.sort((a, b) => (a === SKILL_ENTRY_FILE ? -1 : b === SKILL_ENTRY_FILE ? 1 : a.localeCompare(b)));
+  return rels.map((rel) => {
+    const content = readFileSync(join(dir, ...rel.split("/")), "utf8");
+    return { relativePath: rel, content, sha256: sha256Hex(content) };
+  });
+}
+
 export const generateBlaSkillMarkdown = resolveBundledSkillContent;
+
+function removeOwnedSkillSupportFiles(
+  skillDirectory: string,
+  recorded: Readonly<Record<string, string>> | undefined,
+  bundled: ReadonlyMap<string, string>,
+  force: boolean,
+): void {
+  const rels = new Set<string>([...Object.keys(recorded ?? {}), ...bundled.keys()]);
+  const touchedDirs = new Set<string>();
+  for (const rel of rels) {
+    const full = join(skillDirectory, ...rel.split("/"));
+    if (!existsSync(full)) continue;
+    const current = sha256Hex(readFileSync(full));
+    if (force || current === recorded?.[rel] || current === bundled.get(rel)) {
+      unlinkSync(full);
+      touchedDirs.add(dirname(full));
+    }
+  }
+  // Deepest first so nested appendix dirs collapse before their parents.
+  for (const dir of [...touchedDirs].sort((a, b) => b.length - a.length)) {
+    let cur = dir;
+    while (cur.startsWith(skillDirectory) && cur !== skillDirectory) {
+      if (!existsSync(cur) || readdirSync(cur).length > 0) break;
+      rmdirSync(cur);
+      cur = dirname(cur);
+    }
+  }
+}
 
 export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
   const home = options.homeDir ?? homedir();
@@ -331,6 +412,12 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
 
   const skillContent = resolveBundledSkillContent();
   const expectedSkillSha256 = sha256Hex(skillContent);
+  const supportSkillFiles = resolveBundledSkillBundle().filter(
+    (f) => f.relativePath !== SKILL_ENTRY_FILE,
+  );
+  const writtenSkillFiles: Record<string, string> = Object.fromEntries(
+    supportSkillFiles.map((f) => [f.relativePath, f.sha256]),
+  );
   const manifest = readInstallManifest(home);
   const updatedManifestClients: Record<string, InstalledClientRecord> = { ...manifest.clients };
   const completedActions: PlannedSetupAction[] = [];
@@ -547,6 +634,9 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
       writeFileAtomicSync(client.configPath, nextConfigContent);
       configWritten = true;
       writeFileAtomicSync(skillPath, skillContent);
+      for (const file of supportSkillFiles) {
+        writeFileAtomicSync(join(client.skillDirectory, ...file.relativePath.split("/")), file.content);
+      }
     } catch (err) {
       // Roll the config back when the skill write failed after a successful
       // config write — never leave a half-installed registration (config
@@ -599,6 +689,7 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
         ? prevRecord.skillDirectoryExistedBefore
         : skillDirectoryExistedBefore,
       writtenSkillSha256: expectedSkillSha256,
+      writtenSkillFiles,
       installedAt: new Date().toISOString(),
     };
 
@@ -673,6 +764,11 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
   const manifest = readInstallManifest(home);
   const remainingManifestClients: Record<string, InstalledClientRecord> = { ...manifest.clients };
   const bundledSkillHash = sha256Hex(resolveBundledSkillContent());
+  const bundledSupportHashes = new Map(
+    resolveBundledSkillBundle()
+      .filter((f) => f.relativePath !== SKILL_ENTRY_FILE)
+      .map((f) => [f.relativePath, f.sha256] as const),
+  );
 
   const removedClients: string[] = [];
   const results: ClientUninstallResult[] = [];
@@ -765,6 +861,14 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
         if (ownedByThisManifest || ownedByAnyManifest || ownedByFallbackUnmodified || options.force) {
           unlinkSync(skillPath);
           skillRemoved = true;
+          // Remove supporting bundle files BLA wrote (unmodified only), then
+          // prune their now-empty subdirectories.
+          removeOwnedSkillSupportFiles(
+            client.skillDirectory,
+            manifestRecord?.writtenSkillFiles,
+            bundledSupportHashes,
+            options.force === true,
+          );
           // Only remove `client.skillDirectory` if it is now completely empty!
           if (existsSync(client.skillDirectory)) {
             const remainingFiles = readdirSync(client.skillDirectory);
