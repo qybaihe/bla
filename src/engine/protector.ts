@@ -63,10 +63,17 @@ import {
   wasmParamCarrierRefuseMessage,
 } from "./wasm-param-carrier-lint.js";
 import {
+  intensityEnforcesPanelOracleRefusal,
   intensityRewritesPanelDerive,
   lintPanelDeriveAbiSource,
+  panelDeriveRefuseMessage,
   rewriteStablePanelDeriveSymbols,
 } from "./panel-derive-abi-lint.js";
+import {
+  intensityEnforcesJsAesUnwrapRefusal,
+  jsAesUnwrapRefuseMessage,
+  lintJsAesUnwrapSource,
+} from "./js-aes-unwrap-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -311,6 +318,25 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         throw new Error(laneIndependenceRefuseMessage(laneReport, absInput));
       }
     }
+    if (
+      intensityEnforcesJsAesUnwrapRefusal(intensity) &&
+      options.allowJsAesUnwrap !== true
+    ) {
+      const aesReport = lintJsAesUnwrapSource(raw, { path: absInput });
+      if (aesReport.shouldRefuseBankrupt) {
+        throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
+      }
+    }
+    {
+      const panelLint = lintPanelDeriveAbiSource(raw, { path: absInput });
+      if (
+        intensityEnforcesPanelOracleRefusal(intensity) &&
+        options.allowPanelOfflineOracle !== true &&
+        panelLint.shouldRefuseBankrupt
+      ) {
+        throw new Error(panelDeriveRefuseMessage(panelLint, absInput));
+      }
+    }
     const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
     const selfSealOpt = selfSealTransformOption(options, absOutput);
     const transformed = transformJavaScriptWithBlaShield(panelSafe, {
@@ -350,6 +376,25 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "html-bundle") {
     const rawHtml = readFileSync(absInput, "utf8");
+    if (
+      intensityEnforcesJsAesUnwrapRefusal(intensity) &&
+      options.allowJsAesUnwrap !== true
+    ) {
+      const aesReport = lintJsAesUnwrapSource(rawHtml, { path: absInput });
+      if (aesReport.shouldRefuseBankrupt) {
+        throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
+      }
+    }
+    {
+      const panelLint = lintPanelDeriveAbiSource(rawHtml, { path: absInput });
+      if (
+        intensityEnforcesPanelOracleRefusal(intensity) &&
+        options.allowPanelOfflineOracle !== true &&
+        panelLint.shouldRefuseBankrupt
+      ) {
+        throw new Error(panelDeriveRefuseMessage(panelLint, absInput));
+      }
+    }
     let inlineScriptsTransformed = 0;
     let scriptIndex = 0;
     let transformedHtml = rawHtml.replace(

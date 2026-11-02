@@ -30,6 +30,10 @@ export interface BlaProjectConfig {
   readonly allowWasmClearParamCarriers?: boolean;
   /** When true, keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false. */
   readonly allowStablePanelDeriveAbi?: boolean;
+  /** When true, allow bankrupt despite JS AES wrap-key unwrap footguns (red-blue round-4). Default false. */
+  readonly allowJsAesUnwrap?: boolean;
+  /** When true, allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
+  readonly allowPanelOfflineOracle?: boolean;
 }
 
 /**

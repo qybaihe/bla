@@ -26,6 +26,10 @@ import {
   type PanelDeriveAbiReport,
 } from "../engine/panel-derive-abi-lint.js";
 import {
+  lintJsAesUnwrapFile,
+  type JsAesUnwrapReport,
+} from "../engine/js-aes-unwrap-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -186,7 +190,17 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         allow_stable_panel_derive: {
           type: "boolean",
           description:
-            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
         },
         seed: {
           type: "string",
@@ -296,7 +310,17 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         allow_stable_panel_derive: {
           type: "boolean",
           description:
-            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
         },
         seed: {
           type: "string",
@@ -387,7 +411,17 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         allow_stable_panel_derive: {
           type: "boolean",
           description:
-            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
         },
         seed: {
           type: "string",
@@ -623,7 +657,23 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_lint_panel_derive",
     description:
-      "Read-only panel-derive ABI lint (same engine as CLI `bla lint-panel-derive`). Flags stable __vaultPanelDerive_* globals and classic FNV primes. Maximum/bankrupt protect rewrites the ABI unless allow_stable_panel_derive. Writes nothing.",
+      "Read-only panel-derive ABI lint (same engine as CLI `bla lint-panel-derive`). Flags stable __vaultPanelDerive_* / deriveLocal, classic FNV primes, and deriveLocal+panelTokenSha256 offline-oracle packaging. Maximum/bankrupt rewrites ABI unless allow_stable_panel_derive; bankrupt refuses oracle combo unless allow_panel_offline_oracle. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_js_aes_unwrap",
+    description:
+      "Read-only JS AES wrap-key unwrap lint (same engine as CLI `bla lint-js-aes-unwrap`). Flags hex/base64 wrap-key material + createDecipheriv/createCipheriv + fixed sealed hdr (e.g. d17ea004). Bankrupt harden refuses unless allow_js_aes_unwrap. Gate only — not white-box AES. Writes nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -895,6 +945,10 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_stable_panel_derive === true
       ? { allowStablePanelDeriveAbi: true }
       : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -925,6 +979,10 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       : {}),
     ...(args.allow_stable_panel_derive === true
       ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
       : {}),
   });
 }
@@ -974,6 +1032,14 @@ function runLintPanelDerive(args: Record<string, unknown>): PanelDeriveAbiReport
     throw new Error(`lint-panel-derive target not found: ${abs}`);
   }
   return lintPanelDeriveAbiFile(abs);
+}
+
+function runLintJsAesUnwrap(args: Record<string, unknown>): JsAesUnwrapReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-js-aes-unwrap target not found: ${abs}`);
+  }
+  return lintJsAesUnwrapFile(abs);
 }
 
 export function validateMcpToolCall(
@@ -1429,12 +1495,16 @@ export async function handleMcpRequest(
                 ? { allowLaneIndependentGates: true }
                 : {}),
               ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
-    ...(args.allow_wasm_clear_params === true
-      ? { allowWasmClearParamCarriers: true }
-      : {}),
-    ...(args.allow_stable_panel_derive === true
-      ? { allowStablePanelDeriveAbi: true }
-      : {}),
+              ...(args.allow_wasm_clear_params === true
+                ? { allowWasmClearParamCarriers: true }
+                : {}),
+              ...(args.allow_stable_panel_derive === true
+                ? { allowStablePanelDeriveAbi: true }
+                : {}),
+              ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+              ...(args.allow_panel_offline_oracle === true
+                ? { allowPanelOfflineOracle: true }
+                : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1556,7 +1626,12 @@ export async function handleMcpRequest(
           refused = (payload as WasmParamCarrierReport).shouldRefuseBankrupt;
         } else if (name === "bla_lint_panel_derive") {
           payload = runLintPanelDerive(args);
-          refused = (payload as PanelDeriveAbiReport).shouldRewriteOrRefuse;
+          refused =
+            (payload as PanelDeriveAbiReport).shouldRefuseBankrupt ||
+            (payload as PanelDeriveAbiReport).shouldRewriteOrRefuse;
+        } else if (name === "bla_lint_js_aes_unwrap") {
+          payload = runLintJsAesUnwrap(args);
+          refused = (payload as JsAesUnwrapReport).shouldRefuseBankrupt;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

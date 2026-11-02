@@ -24,6 +24,11 @@ import {
   wasmParamCarrierRefuseMessage,
 } from "./wasm-param-carrier-lint.js";
 import {
+  discoverAndLintJsAesUnwrap,
+  intensityEnforcesJsAesUnwrapRefusal,
+  jsAesUnwrapRefuseMessage,
+} from "./js-aes-unwrap-lint.js";
+import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
@@ -121,6 +126,10 @@ export interface HardenProjectOptions {
   readonly allowWasmClearParamCarriers?: boolean;
   /** Keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false — rewrite. */
   readonly allowStablePanelDeriveAbi?: boolean;
+  /** Allow bankrupt despite JS AES wrap-key unwrap footguns (red-blue round-4). Default false. */
+  readonly allowJsAesUnwrap?: boolean;
+  /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
+  readonly allowPanelOfflineOracle?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -364,6 +373,12 @@ export function hardenProject(
     options.allowWasmClearParamCarriers !== true
       ? wasmParmReports.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const jsAesReports = discoverAndLintJsAesUnwrap(absDir);
+  const blockingJsAes =
+    intensityEnforcesJsAesUnwrapRefusal(intensity) &&
+    options.allowJsAesUnwrap !== true
+      ? jsAesReports.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -430,7 +445,7 @@ export function hardenProject(
     runId,
   } as const;
 
-  if (blockingSeals.length > 0 || blockingWasmParms.length > 0) {
+  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -455,13 +470,24 @@ export function hardenProject(
       outputExisted: false,
       error: wasmParamCarrierRefuseMessage(r, r.path),
     }));
-    const blockReason =
-      blockingSeals.length > 0 && blockingWasmParms.length > 0
-        ? "skipped: plaintext/reversible seal sidecar or clear WASM param carrier blocked bankrupt harden"
-        : blockingWasmParms.length > 0
-          ? "skipped: clear WASM param/cipher carrier blocked bankrupt harden"
-          : "skipped: plaintext/reversible seal sidecar blocked bankrupt harden";
-    const blockedExtras = [...sealArtifacts, ...wasmArtifacts];
+    const jsAesArtifacts = blockingJsAes.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "javascript" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: jsAesUnwrapRefuseMessage(r, r.path),
+    }));
+    const blockParts: string[] = [];
+    if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
+    if (blockingWasmParms.length > 0) blockParts.push("clear WASM param carrier");
+    if (blockingJsAes.length > 0) blockParts.push("JS AES wrap-key unwrap");
+    const blockReason = `skipped: ${blockParts.join(" / ")} blocked bankrupt harden`;
+    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts];
     return {
       ...reportBase,
       overallSuccess: false,
@@ -541,6 +567,10 @@ export function hardenProject(
           : {}),
         ...(options.allowStablePanelDeriveAbi === true
           ? { allowStablePanelDeriveAbi: true }
+          : {}),
+        ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
+        ...(options.allowPanelOfflineOracle === true
+          ? { allowPanelOfflineOracle: true }
           : {}),
         ...((() => {
           if (options.selfSeal !== true) return {};

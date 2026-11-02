@@ -196,6 +196,17 @@ export interface ProtectionOptions {
    */
   readonly allowStablePanelDeriveAbi?: boolean;
   /**
+   * When true, allow bankrupt harden/protect despite JS AES wrap-key +
+   * create*iv + fixed sealed-hdr unwrap footguns (red-blue round-4). Default false — refuse.
+   * This is a gate only — not white-box AES.
+   */
+  readonly allowJsAesUnwrap?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite panel deriveLocal +
+   * plaintext panelTokenSha256 offline-oracle packaging (red-blue round-4). Default false — refuse.
+   */
+  readonly allowPanelOfflineOracle?: boolean;
+  /**
    * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
    * Relative paths are resolved from the protected module's directory at runtime.
    */

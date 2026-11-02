@@ -17,6 +17,7 @@ import { unpackAsarBuffer } from "../shields/formats/asar.js";
 import { inspectWasmBinary } from "../shields/formats/wasm.js";
 import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
+import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
 import { inspectPythonPyc } from "../shields/formats/python.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { detectBunStandaloneGraph } from "../shields/formats/bun-standalone.js";
@@ -501,6 +502,20 @@ export function auditTarget(targetPath: string): AuditReport {
           reaToolUsed: "bla lint-panel-derive / static source scan",
           estimatedTokensToReconstruct: 1_200,
           estimatedCostUsd: 0.05,
+          reason: f.summary,
+        });
+      }
+      const aesLint = lintJsAesUnwrapSource(text, { path: absPath });
+      for (const f of aesLint.findings) {
+        exposedItems.push({
+          id: `js_aes_${f.id}`,
+          name: f.id,
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: f.severity === "error" ? "high" : "medium",
+          reaToolUsed: "bla lint-js-aes-unwrap / static source scan",
+          estimatedTokensToReconstruct: 1_500,
+          estimatedCostUsd: 0.06,
           reason: f.summary,
         });
       }

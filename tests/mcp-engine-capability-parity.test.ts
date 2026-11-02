@@ -26,6 +26,8 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_plaintext_seal",
       "allow_wasm_clear_params",
       "allow_stable_panel_derive",
+      "allow_js_aes_unwrap",
+      "allow_panel_offline_oracle",
       "seed",
       "dry_run",
       "max_artifacts",
@@ -52,6 +54,8 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_plaintext_seal",
       "allow_wasm_clear_params",
       "allow_stable_panel_derive",
+      "allow_js_aes_unwrap",
+      "allow_panel_offline_oracle",
       "seed",
       "in_place",
       "confirm_overwrite",
@@ -70,6 +74,8 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_plaintext_seal",
       "allow_wasm_clear_params",
       "allow_stable_panel_derive",
+      "allow_js_aes_unwrap",
+      "allow_panel_offline_oracle",
       "seed",
       "llm_directives",
       "in_place",
@@ -103,6 +109,10 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_lint_panel_derive",
+    params: ["path"],
+  },
+  {
+    tool: "bla_lint_js_aes_unwrap",
     params: ["path"],
   },
   {

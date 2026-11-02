@@ -37,6 +37,10 @@ export interface OneClickDefenseOptions {
   readonly allowWasmClearParamCarriers?: boolean;
   /** Keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false — rewrite. */
   readonly allowStablePanelDeriveAbi?: boolean;
+  /** Allow bankrupt despite JS AES wrap-key unwrap footguns (red-blue round-4). Default false. */
+  readonly allowJsAesUnwrap?: boolean;
+  /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
+  readonly allowPanelOfflineOracle?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
 }
@@ -139,6 +143,10 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.allowStablePanelDeriveAbi === true
       ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(options.allowPanelOfflineOracle === true
+      ? { allowPanelOfflineOracle: true }
       : {}),
     ...(options.selfSealSiblingPaths !== undefined &&
     options.selfSealSiblingPaths.length > 0
