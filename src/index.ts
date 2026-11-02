@@ -144,6 +144,19 @@ export {
 export { auditTarget } from "./engine/auditor.js";
 export { protectTarget } from "./engine/protector.js";
 export { verifyTarget } from "./engine/verifier.js";
+export type { VerifyTargetOptions } from "./engine/verifier.js";
+export {
+  applyDefenseScoreHonesty,
+  collectDefenseScoreGaps,
+  DEFENSE_SCORE_DISCLAIMER,
+  formatDefenseScoreGapAnnotation,
+} from "./engine/defense-score-honesty.js";
+export type {
+  DefenseScoreGap,
+  DefenseScoreGapId,
+  DefenseScoreHonesty,
+  DefenseScoreHonestyInput,
+} from "./engine/defense-score-honesty.js";
 export {
   defendTarget,
   type OneClickDefenseOptions,

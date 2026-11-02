@@ -207,12 +207,26 @@ export interface VerificationCheck {
   readonly details: string;
 }
 
+/** Soft-cap annotation when known product gaps still apply (issue #40.6). */
+export interface DefenseScoreGapAnnotation {
+  readonly id: string;
+  readonly summary: string;
+  readonly scoreCap: number;
+}
+
 export interface VerificationReport {
   readonly targetPath: string;
   readonly originalPath?: string;
   readonly detectedFormat: ArtifactFormat;
   readonly overallPassed: boolean;
-  readonly defenseScore: number; // 0 to 100
+  /** Soft-capped Counter-REA gate score (0–100). Not a preimage-hardness claim. */
+  readonly defenseScore: number;
+  /** Raw gate score before honesty soft-caps (issue #40.6). */
+  readonly defenseScoreRaw?: number;
+  /** Known gaps that annotated / capped the score. */
+  readonly defenseScoreGaps?: readonly DefenseScoreGapAnnotation[];
+  /** Fixed disclaimer: score ≠ preimage hardness. */
+  readonly defenseScoreDisclaimer?: string;
   readonly checks: readonly VerificationCheck[];
   readonly tokenAmplificationFactor: number;
   readonly costAmplificationFactor: number;
