@@ -388,6 +388,8 @@ export function buildTestWasmWithXorMaskSidecar(
     readonly words?: readonly [number, number, number, number];
     readonly cipher?: Buffer;
     readonly mask?: Buffer;
+    /** Round-7 style: store masked blob only (key-dependent unmask) — must NOT refuse. */
+    readonly omitMaskSidecar?: boolean;
   } = {},
 ): Buffer {
   const salt = options.salt ?? 0x12345678;
@@ -408,7 +410,7 @@ export function buildTestWasmWithXorMaskSidecar(
   cipher.copy(plain, 26);
   const masked = Buffer.alloc(N);
   for (let i = 0; i < N; i++) masked[i] = plain[i]! ^ mask[i % 32]!;
-  const dataPayload = Buffer.concat([masked, mask]);
+  const dataPayload = options.omitMaskSidecar ? masked : Buffer.concat([masked, mask]);
 
   const typeSec = section(1, [1, 0x60, 0, 0]);
   const funcSec = section(3, [1, 0]);

@@ -33,3 +33,11 @@ describe("wasm-xor-mask-sidecar-lint", () => {
     expect(looksLikeXorMaskedEntitlementPack(Buffer.alloc(100)).ok).toBe(false);
   });
 });
+
+  it("does not refuse masked entitlement pack without adjacent plaintext mask (r7 key-dep style)", () => {
+    const wasm = buildTestWasmWithXorMaskSidecar({ omitMaskSidecar: true });
+    const report = lintWasmXorMaskSidecarBuffer(wasm, { path: "keydep.wasm" });
+    expect(report.shouldRefuseBankrupt).toBe(false);
+    expect(report.findings).toHaveLength(0);
+  });
+
