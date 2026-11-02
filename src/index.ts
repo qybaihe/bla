@@ -281,3 +281,8 @@ export {
   type SidecarEntanglePlan,
   type SidecarEntanglePlanOptions,
 } from "./shields/runtime/sidecar-entangle.js";
+
+export {
+  recommendOpaqueSeedBinding,
+} from "./shields/tarpit/opaque-predicates.js";
+
