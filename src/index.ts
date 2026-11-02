@@ -292,6 +292,19 @@ export {
   type LaneIndependenceSeverity,
 } from "./engine/lane-independence-lint.js";
 export {
+  lintSealCommitmentSource,
+  lintSealCommitmentFile,
+  discoverAndLintSealSidecars,
+  findSiblingSealSidecars,
+  sealCommitmentRefuseMessage,
+  intensityEnforcesSealRefusal,
+  SEAL_COMMITMENT_SCHEMA,
+  type SealCommitmentFinding,
+  type SealCommitmentReport,
+  type SealCommitmentFindingId,
+  type SealCommitmentSeverity,
+} from "./engine/seal-commitment-lint.js";
+export {
   parseWasmExportSectionPayload,
   renameWasmExports,
   looksLikeInternalWasmExport,
