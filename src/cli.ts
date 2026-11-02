@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
 import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "./core/config.js";
@@ -11,6 +11,7 @@ import { protectTarget } from "./engine/protector.js";
 import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
+import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -50,6 +51,7 @@ Commands:
   defend <target>             One-click full Counter-REA pipeline (inspect -> audit -> bankrupt protect -> verify)
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
+  lint-lanes <file>           Heuristic warn if gate code looks lane-independent (issue #40.1)
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
@@ -371,6 +373,29 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         return report.overallSuccess ? 0 : 2;
       }
 
+      case "lint-lanes": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-lanes <file>`.");
+          return 1;
+        }
+        const source = readFileSync(resolve(target), "utf8");
+        const report = lintLaneIndependence(source);
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA lane-independence lint — ${resolve(target)}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.looksLaneIndependent ? 2 : 0;
+      }
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const target = parsed.positionals[0] ?? loaded.config.input;
