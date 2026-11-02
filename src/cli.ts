@@ -86,7 +86,9 @@ Options:
   --intensity <preset>        stealth | balanced | maximum | bankrupt
                             (harden/defend default: bankrupt; protect default: balanced)
   --seed <seed>               Deterministic PRNG seed (default: per-project random in .blarc)
-  --manifest                  Emit unsigned .bla-manifest.json next to protected artifacts (opt-in)
+  --manifest                  Emit .bla-manifest.json next to protected artifacts (opt-in; unsigned by default)
+  --sign-manifest             Ed25519-sign the emitted manifest (implies --manifest; requires --manifest-key)
+  --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
@@ -117,6 +119,8 @@ interface ParsedCliArgs {
   readonly intensity: ProtectionIntensity;
   readonly seed?: string;
   readonly manifest: boolean;
+  readonly signManifest: boolean;
+  readonly manifestKey?: string;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
@@ -152,6 +156,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let intensity: ProtectionIntensity = "balanced";
   let seed: string | undefined;
   let manifest = false;
+  let signManifest = false;
+  let manifestKey: string | undefined;
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
@@ -199,6 +205,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       honeyMaps = false;
     } else if (arg === "--manifest") {
       manifest = true;
+    } else if (arg === "--sign-manifest") {
+      signManifest = true;
+    } else if (arg === "--manifest-key" && i + 1 < argv.length) {
+      manifestKey = argv[++i]!;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -274,6 +284,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     intensity,
     ...(seed !== undefined ? { seed } : {}),
     manifest,
+    signManifest,
+    ...(manifestKey !== undefined ? { manifestKey } : {}),
     llmDirectives,
     weaveDecoys,
     selfSeal,
@@ -408,7 +420,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           intensity: explicitIntensity,
           ...(seed !== undefined ? { seed } : {}),
           dryRun: parsed.dryRun,
-          emitManifest: parsed.manifest || loaded.config.emitManifest === true,
+          emitManifest: parsed.manifest || parsed.signManifest === true || loaded.config.emitManifest === true,
+          ...(parsed.signManifest === true
+            ? { signManifest: true, manifestSigningKeyPath: parsed.manifestKey ?? "" }
+            : {}),
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
@@ -475,7 +490,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           inPlace: parsed.inPlace,
           intensity: explicitIntensity,
           seed: resolved.seed,
-          emitManifest: parsed.manifest || loaded.config.emitManifest === true,
+          emitManifest: parsed.manifest || parsed.signManifest === true || loaded.config.emitManifest === true,
+          ...(parsed.signManifest === true
+            ? { signManifest: true, manifestSigningKeyPath: parsed.manifestKey ?? "" }
+            : {}),
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
