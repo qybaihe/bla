@@ -175,6 +175,16 @@ export {
   type DiscoveredArtifact,
   type HardenDiscoveryResult,
 } from "./engine/harden.js";
+export {
+  computeHardenRunId,
+  computeArtifactRunId,
+  readHardenRunSummary,
+  HARDEN_SUMMARY_FILE_NAME,
+  HARDEN_SUMMARY_SCHEMA,
+  type HardenRunIdentity,
+  type HardenRunSummary,
+  type ReadHardenRunSummaryResult,
+} from "./engine/run-evidence.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";
 export {

@@ -13,6 +13,11 @@ import {
   defendTarget,
   type OneClickDefenseReport,
 } from "./defender.js";
+import {
+  computeHardenRunId,
+  HARDEN_SUMMARY_FILE_NAME,
+  HARDEN_SUMMARY_SCHEMA,
+} from "./run-evidence.js";
 
 /** Preferred build-output directory names, searched first under a project root. */
 export const BLA_BUILD_OUTPUT_DIR_NAMES = Object.freeze([
@@ -128,6 +133,13 @@ export interface HardenProjectReport {
   readonly maxArtifacts: number;
   /** Planned/actual outputs that already existed before this run. */
   readonly wouldOverwrite: readonly string[];
+  /**
+   * Content-addressed id for this harden run (unsigned). Stable across identical
+   * inputs/planned outputs; present even on dry-run so agents can correlate later.
+   */
+  readonly runId: string;
+  /** Absolute path of the unsigned summary when written; omitted on dry-run. */
+  readonly summaryPath?: string;
 }
 
 export interface HardenDiscoveryResult {
@@ -326,6 +338,19 @@ export function hardenProject(
   });
   const wouldOverwrite = plannedOutputs.filter((p) => p.outputExisted).map((p) => p.outputPath);
 
+  const runId = computeHardenRunId({
+    blaVersion: BLA_IDENTITY.version,
+    directory: absDir,
+    intensity,
+    weaveDecoys: options.weaveDecoys === true,
+    selfSeal: options.selfSeal === true,
+    artifacts: plannedOutputs.map(({ artifact, outputPath }) => ({
+      relativePath: artifact.relativePath,
+      format: artifact.format,
+      outputPath,
+    })),
+  });
+
   const reportBase = {
     blaVersion: BLA_IDENTITY.version,
     directory: absDir,
@@ -340,6 +365,7 @@ export function hardenProject(
     truncated: discovery.truncated,
     maxArtifacts: discovery.maxArtifacts,
     wouldOverwrite,
+    runId,
   } as const;
 
   if (dryRun) {
@@ -419,14 +445,18 @@ export function hardenProject(
     }
   }
 
-  // Persist a project-level summary for agents to read back.
+  // Persist a project-level summary for agents to read back (unsigned).
+  let summaryPath: string | undefined;
   if (discovered.length > 0) {
+    summaryPath = join(outputRoot, HARDEN_SUMMARY_FILE_NAME);
     try {
       writeFileSync(
-        join(outputRoot, "bla-harden-summary.json"),
+        summaryPath,
         JSON.stringify(
           {
-            schema: "bla-harden-summary/v1",
+            schema: HARDEN_SUMMARY_SCHEMA,
+            runId,
+            signature: "unsigned",
             directory: absDir,
             intensity,
             weaveDecoys: options.weaveDecoys === true,
@@ -439,7 +469,7 @@ export function hardenProject(
         "utf8",
       );
     } catch {
-      /* best-effort */
+      summaryPath = undefined;
     }
   }
 
@@ -451,12 +481,14 @@ export function hardenProject(
     hardenedCount,
     failedCount,
     artifacts: summaries,
+    ...(summaryPath !== undefined ? { summaryPath } : {}),
   };
 }
 
 export function formatHardenProjectReport(report: HardenProjectReport): string {
   const lines: string[] = [
     `BLA harden ${report.blaVersion} — ${report.directory}${report.dryRun ? " (dry-run: nothing written)" : ""}`,
+    `Run: ${report.runId} (unsigned)`,
     `Intensity: ${report.intensity} | discovered=${report.discoveredCount} hardened=${report.hardenedCount} failed=${report.failedCount}`,
     `Overall: ${report.overallSuccess ? "SUCCESS" : report.discoveredCount === 0 ? "NO ARTIFACTS" : "PARTIAL/FAILED"}`,
   ];
