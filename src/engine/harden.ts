@@ -19,6 +19,11 @@ import {
   sealCommitmentRefuseMessage,
 } from "./seal-commitment-lint.js";
 import {
+  discoverAndLintWasmParamCarriers,
+  intensityEnforcesWasmParamRefusal,
+  wasmParamCarrierRefuseMessage,
+} from "./wasm-param-carrier-lint.js";
+import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
@@ -112,6 +117,10 @@ export interface HardenProjectOptions {
   readonly allowLaneIndependentGates?: boolean;
   /** Allow bankrupt despite plaintext/reversible seal sidecars (red-blue round-2). Default false — refuse. */
   readonly allowPlaintextSeal?: boolean;
+  /** Allow bankrupt despite clear WASM param/cipher carriers (red-blue round-3). Default false — refuse. */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /** Keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false — rewrite. */
+  readonly allowStablePanelDeriveAbi?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -135,6 +144,14 @@ export interface HardenProjectReport {
   readonly oneSentenceUsage: string;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  /**
+   * True when bankrupt discovered a multi-artifact JS/WASM/HTML tree and
+   * `selfSeal` was not enabled — agents should pass `self_seal: true`.
+   * Never auto-enables for single-file trees.
+   */
+  readonly selfSealRecommended: boolean;
+  /** Short advice when selfSealRecommended is true. */
+  readonly selfSealRecommendation?: string;
   /** True when this report is a zero-write preview. */
   readonly dryRun: boolean;
   /** True when discovery stopped at `maxArtifacts`; more targets exist. */
@@ -341,6 +358,12 @@ export function hardenProject(
     intensityEnforcesSealRefusal(intensity) && options.allowPlaintextSeal !== true
       ? sealReports.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const wasmParmReports = discoverAndLintWasmParamCarriers(absDir);
+  const blockingWasmParms =
+    intensityEnforcesWasmParamRefusal(intensity) &&
+    options.allowWasmClearParamCarriers !== true
+      ? wasmParmReports.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -352,6 +375,16 @@ export function hardenProject(
     return { artifact, outputPath, outputExisted: existsSync(outputPath) };
   });
   const wouldOverwrite = plannedOutputs.filter((p) => p.outputExisted).map((p) => p.outputPath);
+
+  const bindableFormats = new Set(["javascript", "typescript", "wasm", "html-bundle"]);
+  const bindable = discovered.filter((a) => bindableFormats.has(a.format));
+  const selfSealRecommended =
+    intensity === "bankrupt" &&
+    bindable.length >= 2 &&
+    options.selfSeal !== true;
+  const selfSealRecommendation = selfSealRecommended
+    ? "Multi-artifact entitlement tree detected — pass self_seal / --self-seal so Node entry modules bind sibling JS/WASM/HTML bytes. Single-file trees stay opt-in only (never auto-enabled)."
+    : undefined;
 
   const runId = computeHardenRunId({
     blaVersion: BLA_IDENTITY.version,
@@ -376,6 +409,10 @@ export function hardenProject(
       'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
     weaveDecoys: options.weaveDecoys === true,
     selfSeal: options.selfSeal === true,
+    selfSealRecommended,
+    ...(selfSealRecommendation !== undefined
+      ? { selfSealRecommendation }
+      : {}),
     dryRun,
     truncated: discovery.truncated,
     maxArtifacts: discovery.maxArtifacts,
@@ -383,7 +420,7 @@ export function hardenProject(
     runId,
   } as const;
 
-  if (blockingSeals.length > 0) {
+  if (blockingSeals.length > 0 || blockingWasmParms.length > 0) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -396,11 +433,30 @@ export function hardenProject(
       outputExisted: false,
       error: sealCommitmentRefuseMessage(r, r.path),
     }));
+    const wasmArtifacts = blockingWasmParms.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "wasm" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: wasmParamCarrierRefuseMessage(r, r.path),
+    }));
+    const blockReason =
+      blockingSeals.length > 0 && blockingWasmParms.length > 0
+        ? "skipped: plaintext/reversible seal sidecar or clear WASM param carrier blocked bankrupt harden"
+        : blockingWasmParms.length > 0
+          ? "skipped: clear WASM param/cipher carrier blocked bankrupt harden"
+          : "skipped: plaintext/reversible seal sidecar blocked bankrupt harden";
+    const blockedExtras = [...sealArtifacts, ...wasmArtifacts];
     return {
       ...reportBase,
       overallSuccess: false,
       hardenedCount: 0,
-      failedCount: sealArtifacts.length,
+      failedCount: blockedExtras.length,
       artifacts: [
         ...plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
           inputPath: artifact.path,
@@ -412,11 +468,9 @@ export function hardenProject(
           tokenAmplificationFactor: 0,
           costAmplificationFactor: 0,
           outputExisted,
-          error: dryRun
-            ? "skipped: plaintext/reversible seal sidecar blocked bankrupt harden"
-            : "skipped: plaintext/reversible seal sidecar blocked bankrupt harden",
+          error: blockReason,
         })),
-        ...sealArtifacts,
+        ...blockedExtras,
       ],
     };
   }
@@ -472,6 +526,35 @@ export function hardenProject(
           ? { allowLaneIndependentGates: true }
           : {}),
         ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
+        ...(options.allowWasmClearParamCarriers === true
+          ? { allowWasmClearParamCarriers: true }
+          : {}),
+        ...(options.allowStablePanelDeriveAbi === true
+          ? { allowStablePanelDeriveAbi: true }
+          : {}),
+        ...((() => {
+          if (options.selfSeal !== true) return {};
+          const siblings = plannedOutputs
+            .filter(
+              (p) =>
+                p.outputPath !== outputPath &&
+                bindableFormats.has(p.artifact.format),
+            )
+            .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
+            .filter((rel) => rel.length > 0 && !rel.startsWith(".."));
+          // Prefer same-directory / nested siblings; still pass upward-relative
+          // paths when the mirror tree places artifacts beside each other.
+          const loose = plannedOutputs
+            .filter(
+              (p) =>
+                p.outputPath !== outputPath &&
+                bindableFormats.has(p.artifact.format),
+            )
+            .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
+            .filter((rel) => rel.length > 0);
+          const list = siblings.length > 0 ? siblings : loose;
+          return list.length > 0 ? { selfSealSiblingPaths: list } : {};
+        })()),
         emitManifest,
       });
       summaries.push({
@@ -560,6 +643,11 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
             : "PARTIAL/FAILED"
     }`,
   ];
+  if (report.selfSealRecommended) {
+    lines.push(
+      `  ⚠ self_seal recommended: ${report.selfSealRecommendation ?? "multi-artifact tree — pass --self-seal / self_seal:true"}`,
+    );
+  }
   for (const a of report.artifacts) {
     if (report.dryRun) {
       lines.push(

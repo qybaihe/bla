@@ -18,6 +18,14 @@ import {
   type SealCommitmentReport,
 } from "../engine/seal-commitment-lint.js";
 import {
+  lintWasmParamCarrierFile,
+  type WasmParamCarrierReport,
+} from "../engine/wasm-param-carrier-lint.js";
+import {
+  lintPanelDeriveAbiFile,
+  type PanelDeriveAbiReport,
+} from "../engine/panel-derive-abi-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -152,7 +160,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -169,6 +177,16 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
         },
         seed: {
           type: "string",
@@ -252,7 +270,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -269,6 +287,16 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
         },
         seed: {
           type: "string",
@@ -333,7 +361,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -350,6 +378,16 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* (red-blue round-3).",
         },
         seed: {
           type: "string",
@@ -560,6 +598,38 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         path: {
           type: "string",
           description: "Path to a seal.json / *.seal.json (or seal-shaped JSON) file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_wasm_params",
+    description:
+      "Read-only WASM param/cipher carrier lint (same engine as CLI `bla lint-wasm-params`). Flags clear ASCII magics such as R3PARM/R3CIPH/R2SEAL with adjacent binary blobs. Bankrupt harden refuses unless allow_wasm_clear_params. Does not encrypt WASM data sections. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm (or WASM-shaped) file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_panel_derive",
+    description:
+      "Read-only panel-derive ABI lint (same engine as CLI `bla lint-panel-derive`). Flags stable __vaultPanelDerive_* globals and classic FNV primes. Maximum/bankrupt protect rewrites the ABI unless allow_stable_panel_derive. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
         },
       },
       required: ["path"],
@@ -819,6 +889,12 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
       ? { allowLaneIndependentGates: true }
       : {}),
     ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -844,6 +920,12 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       ? { allowLaneIndependentGates: true }
       : {}),
     ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
   });
 }
 
@@ -876,6 +958,22 @@ function runLintSeal(args: Record<string, unknown>): SealCommitmentReport {
     throw new Error(`lint-seal target not found: ${abs}`);
   }
   return lintSealCommitmentFile(abs);
+}
+
+function runLintWasmParams(args: Record<string, unknown>): WasmParamCarrierReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-params target not found: ${abs}`);
+  }
+  return lintWasmParamCarrierFile(abs);
+}
+
+function runLintPanelDerive(args: Record<string, unknown>): PanelDeriveAbiReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-panel-derive target not found: ${abs}`);
+  }
+  return lintPanelDeriveAbiFile(abs);
 }
 
 export function validateMcpToolCall(
@@ -1331,6 +1429,12 @@ export async function handleMcpRequest(
                 ? { allowLaneIndependentGates: true }
                 : {}),
               ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1447,6 +1551,12 @@ export async function handleMcpRequest(
         } else if (name === "bla_lint_seal") {
           payload = runLintSeal(args);
           refused = (payload as SealCommitmentReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_params") {
+          payload = runLintWasmParams(args);
+          refused = (payload as WasmParamCarrierReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_panel_derive") {
+          payload = runLintPanelDerive(args);
+          refused = (payload as PanelDeriveAbiReport).shouldRewriteOrRefuse;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

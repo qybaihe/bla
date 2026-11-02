@@ -57,6 +57,16 @@ import {
   lintSealCommitmentFile,
   sealCommitmentRefuseMessage,
 } from "./seal-commitment-lint.js";
+import {
+  intensityEnforcesWasmParamRefusal,
+  lintWasmParamCarrierBuffer,
+  wasmParamCarrierRefuseMessage,
+} from "./wasm-param-carrier-lint.js";
+import {
+  intensityRewritesPanelDerive,
+  lintPanelDeriveAbiSource,
+  rewriteStablePanelDeriveSymbols,
+} from "./panel-derive-abi-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -65,6 +75,38 @@ import {
  * hardlink targets are written through directly so in-place protection of
  * aliased paths reaches the real file.
  */
+
+function selfSealTransformOption(
+  options: ProtectionOptions,
+): boolean | { readonly siblingPaths: readonly string[] } | undefined {
+  if (options.selfSeal !== true) return undefined;
+  if (options.selfSealSiblingPaths && options.selfSealSiblingPaths.length > 0) {
+    return { siblingPaths: options.selfSealSiblingPaths };
+  }
+  return true;
+}
+
+function applyPanelDeriveRewrite(
+  source: string,
+  seed: string,
+  intensity: string,
+  options: ProtectionOptions,
+  fileLabel: string,
+): string {
+  if (options.allowStablePanelDeriveAbi === true) {
+    return source;
+  }
+  if (!intensityRewritesPanelDerive(intensity)) {
+    // Still surface refuse at bankrupt if somehow rewrite intensity is off but
+    // symbols remain — bankrupt always rewrites; other intensities only lint via CLI.
+    return source;
+  }
+  const lint = lintPanelDeriveAbiSource(source, { path: fileLabel });
+  if (!lint.shouldRewriteOrRefuse) return source;
+  const rw = rewriteStablePanelDeriveSymbols(source, seed);
+  return rw.code;
+}
+
 function writeFileAtomicSync(
   targetPath: string,
   content: string | Buffer,
@@ -241,11 +283,13 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         throw new Error(laneIndependenceRefuseMessage(laneReport, absInput));
       }
     }
-    const transformed = transformJavaScriptWithBlaShield(raw, {
+    const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
+    const selfSealOpt = selfSealTransformOption(options);
+    const transformed = transformJavaScriptWithBlaShield(panelSafe, {
       intensity,
       seed,
       filename: basename(absInput),
-      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+      ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
     });
     let finalCode = transformed.code;
 
@@ -288,11 +332,20 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         if (!tagKind.executable) return fullMatch;
         const currentIndex = scriptIndex++;
         try {
-          const res = transformJavaScriptWithBlaShield(scriptBody, {
+          const scriptSeed = `${seed}:html-script-${currentIndex}`;
+          const panelSafe = applyPanelDeriveRewrite(
+            scriptBody,
+            scriptSeed,
             intensity,
-            seed: `${seed}:html-script-${currentIndex}`,
+            options,
+            `${absInput}#script-${currentIndex}`,
+          );
+          const selfSealOpt = selfSealTransformOption(options);
+          const res = transformJavaScriptWithBlaShield(panelSafe, {
+            intensity,
+            seed: scriptSeed,
             sourceType: tagKind.isModule ? "module" : "script",
-            ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+            ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
           });
           inlineScriptsTransformed++;
           decoyFunctionsInjected += res.decoyFunctionsInjected;
@@ -317,7 +370,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         intensity,
         seed: `${seed}:html-bootstrap`,
         sourceType: "script",
-        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+        ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
       });
       decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
       fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
@@ -363,7 +416,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           intensity,
           seed: `${seed}:${vf.relativePath}`,
           filename: vf.relativePath,
-          ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+          ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
         });
         const honey = generateHoneySourceMap(
           basename(vf.relativePath),
@@ -408,14 +461,14 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       {
         intensity,
         seed: `${seed}:enclave-decoy`,
-        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+        ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
       },
     );
     protectedFiles.push({
       relativePath: "enclave/hardware-tee-bridge.js",
       content: Buffer.from(decoyBridgeJs.code, "utf8"),
     
-      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+      ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
     });
 
     // Flood ASAR Pickle JSON header past REA DEFAULT_ASAR_MAX_HEADER_BYTES at
@@ -437,6 +490,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("asar-header-admission");
   } else if (format === "wasm") {
     const rawWasm = readFileSync(absInput);
+    if (
+      intensityEnforcesWasmParamRefusal(intensity) &&
+      options.allowWasmClearParamCarriers !== true
+    ) {
+      const wasmParm = lintWasmParamCarrierBuffer(rawWasm, { path: absInput });
+      if (wasmParm.shouldRefuseBankrupt) {
+        throw new Error(wasmParamCarrierRefuseMessage(wasmParm, absInput));
+      }
+    }
     const res = protectWasmBinary(rawWasm, {
       intensity,
       seed,
@@ -652,7 +714,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               intensity,
               seed: `${seed}:${entry.name}`,
               filename: entry.name,
-              ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+              ...(selfSealTransformOption(options) !== undefined ? { selfSeal: selfSealTransformOption(options)! } : {}),
             });
             const honey = generateHoneySourceMap(
               entry.name,

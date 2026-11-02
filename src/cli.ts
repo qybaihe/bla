@@ -13,6 +13,8 @@ import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
+import { lintWasmParamCarrierFile } from "./engine/wasm-param-carrier-lint.js";
+import { lintPanelDeriveAbiFile } from "./engine/panel-derive-abi-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -53,6 +55,8 @@ Commands:
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
   lint-lanes <file>           Heuristic ERROR if gate code looks lane-independent (issue #40.1); exit 2
+  lint-wasm-params <file>    Heuristic ERROR if WASM embeds clear R3PARM/R3CIPH/R2SEAL-class carriers; exit 2
+  lint-panel-derive <file>   Heuristic ERROR if stable __vaultPanelDerive_* ABI remains; exit 2
   lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
@@ -102,6 +106,8 @@ interface ParsedCliArgs {
   readonly wasmPreserveExports: readonly string[];
   readonly allowLaneIndependentGates: boolean;
   readonly allowPlaintextSeal: boolean;
+  readonly allowWasmClearParamCarriers: boolean;
+  readonly allowStablePanelDeriveAbi: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -130,6 +136,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let wasmPreserveExports: string[] = [];
   let allowLaneIndependentGates = false;
   let allowPlaintextSeal = false;
+  let allowWasmClearParamCarriers = false;
+  let allowStablePanelDeriveAbi = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -174,6 +182,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowLaneIndependentGates = true;
     } else if (arg === "--allow-plaintext-seal") {
       allowPlaintextSeal = true;
+    } else if (arg === "--allow-wasm-clear-params") {
+      allowWasmClearParamCarriers = true;
+    } else if (arg === "--allow-stable-panel-derive") {
+      allowStablePanelDeriveAbi = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -231,6 +243,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     wasmPreserveExports,
     allowLaneIndependentGates,
     allowPlaintextSeal,
+    allowWasmClearParamCarriers,
+    allowStablePanelDeriveAbi,
     lang,
     clients,
     allDetected,
@@ -368,6 +382,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowPlaintextSeal:
             parsed.allowPlaintextSeal ||
             loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -414,6 +434,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowPlaintextSeal:
             parsed.allowPlaintextSeal ||
             loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -478,6 +504,54 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           ? 2
           : 0;
       }
+      case "lint-wasm-params": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-wasm-params <file>`.");
+          return 1;
+        }
+        const report = lintWasmParamCarrierFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-param-carrier lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary} @${f.offset}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+      case "lint-panel-derive": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-panel-derive <file>`.");
+          return 1;
+        }
+        const report = lintPanelDeriveAbiFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA panel-derive ABI lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRewriteOrRefuse || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const target = parsed.positionals[0] ?? loaded.config.input;
@@ -530,6 +604,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowPlaintextSeal:
             parsed.allowPlaintextSeal ||
             loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

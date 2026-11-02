@@ -305,6 +305,33 @@ export {
   type SealCommitmentSeverity,
 } from "./engine/seal-commitment-lint.js";
 export {
+  lintWasmParamCarrierBuffer,
+  lintWasmParamCarrierFile,
+  discoverAndLintWasmParamCarriers,
+  wasmParamCarrierRefuseMessage,
+  intensityEnforcesWasmParamRefusal,
+  buildTestWasmWithParamCarrier,
+  WASM_PARAM_CARRIER_SCHEMA,
+  type WasmParamCarrierFinding,
+  type WasmParamCarrierReport,
+  type WasmParamCarrierFindingId,
+  type WasmParamCarrierSeverity,
+} from "./engine/wasm-param-carrier-lint.js";
+export {
+  lintPanelDeriveAbiSource,
+  lintPanelDeriveAbiFile,
+  rewriteStablePanelDeriveSymbols,
+  panelDeriveSeedRoot,
+  panelDeriveReplacementName,
+  intensityRewritesPanelDerive,
+  PANEL_DERIVE_ABI_SCHEMA,
+  type PanelDeriveFinding,
+  type PanelDeriveAbiReport,
+  type PanelDeriveFindingId,
+  type PanelDeriveSeverity,
+  type PanelDeriveRewriteResult,
+} from "./engine/panel-derive-abi-lint.js";
+export {
   parseWasmExportSectionPayload,
   renameWasmExports,
   looksLikeInternalWasmExport,

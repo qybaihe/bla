@@ -33,6 +33,12 @@ export interface OneClickDefenseOptions {
   readonly allowLaneIndependentGates?: boolean;
   /** Allow bankrupt despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
   readonly allowPlaintextSeal?: boolean;
+  /** Allow bankrupt despite clear WASM param/cipher carriers (red-blue round-3). Default false. */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /** Keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false — rewrite. */
+  readonly allowStablePanelDeriveAbi?: boolean;
+  /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
+  readonly selfSealSiblingPaths?: readonly string[];
 }
 
 export interface OneClickDefenseStageSummary {
@@ -128,6 +134,16 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       ? { allowLaneIndependentGates: true }
       : {}),
     ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
+    ...(options.allowWasmClearParamCarriers === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(options.allowStablePanelDeriveAbi === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(options.selfSealSiblingPaths !== undefined &&
+    options.selfSealSiblingPaths.length > 0
+      ? { selfSealSiblingPaths: options.selfSealSiblingPaths }
+      : {}),
     honeySourceMaps: true,
   });
 

@@ -185,6 +185,21 @@ export interface ProtectionOptions {
    * sidecars (red-blue round-2). Default false — refuse.
    */
   readonly allowPlaintextSeal?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite clear WASM param/cipher
+   * ASCII carriers (R3PARM/R3CIPH/R2SEAL-class; red-blue round-3). Default false — refuse.
+   */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /**
+   * When true, keep stable `__vaultPanelDerive_*` ABI (skip rewrite/refuse).
+   * Default false — maximum/bankrupt rewrite to seed-stable `_blaPd_*` (red-blue round-3).
+   */
+  readonly allowStablePanelDeriveAbi?: boolean;
+  /**
+   * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
+   * Relative paths are resolved from the protected module's directory at runtime.
+   */
+  readonly selfSealSiblingPaths?: readonly string[];
 }
 
 export interface ProtectionMetrics {

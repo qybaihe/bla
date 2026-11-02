@@ -26,6 +26,10 @@ export interface BlaProjectConfig {
   readonly allowLaneIndependentGates?: boolean;
   /** When true, allow bankrupt harden despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
   readonly allowPlaintextSeal?: boolean;
+  /** When true, allow bankrupt despite clear WASM param/cipher carriers (red-blue round-3). Default false. */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /** When true, keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false. */
+  readonly allowStablePanelDeriveAbi?: boolean;
 }
 
 /**
