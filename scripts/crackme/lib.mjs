@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -140,8 +140,11 @@ export function ensureDistBuilt() {
  */
 export async function hardenChallenge({ key, flag, outDir, seed = SEED }) {
   ensureDistBuilt();
-  const { hardenProject } = await import(pathToFileURL(join(ROOT, "dist", "engine", "harden.js")).href);
-  const { BLA_IDENTITY } = await import(pathToFileURL(join(ROOT, "dist", "identity.js")).href);
+  // Relative specifier (not file:// URL): Vite/vitest cannot resolve
+  // percent-encoded URLs when the workspace path contains spaces; Node ESM
+  // resolves `import.meta.url`-relative specifiers correctly either way.
+  const { hardenProject } = await import("../../dist/engine/harden.js");
+  const { BLA_IDENTITY } = await import("../../dist/identity.js");
   const work = mkdtempSync(join(tmpdir(), "bla-crackme-v6-"));
   try {
     const stage = join(work, "app");

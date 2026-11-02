@@ -9,7 +9,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { assertNoForbiddenMarkers } from "../src/core/identifiers.js";
 import { inspectWasmBinary } from "../src/shields/formats/wasm.js";
@@ -17,8 +16,11 @@ import { inspectWasmBinary } from "../src/shields/formats/wasm.js";
 const ROOT = resolve(process.cwd());
 const V6 = join(ROOT, "challenge", "v6");
 const HARDENED = join(V6, "hardened");
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const libP: Promise<any> = import(pathToFileURL(join(ROOT, "scripts", "crackme", "lib.mjs")).href);
+	// Relative specifier, not a file:// URL: Vite/vitest cannot resolve
+	// percent-encoded file URLs when the workspace path contains spaces.
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	// @ts-expect-error lib.mjs ships no type declarations; typed by its runtime shape.
+	const libP: Promise<any> = import("../scripts/crackme/lib.mjs");
 const seal = JSON.parse(readFileSync(join(V6, "SEAL.json"), "utf8"));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -157,7 +157,7 @@ export function isCommandResolvable(
 function probeLocalMcpHandshake(
   command: string,
   args: readonly string[],
-  timeoutMs: number = 3000,
+  timeoutMs: number = 8000,
 ): boolean {
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
@@ -385,7 +385,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     let handshakeStatus: DoctorHandshakeStatus = "not_checked";
     let handshakeVerified = false;
     if (options.verifyHandshake && configured && commandResolvable && command !== null) {
-      handshakeVerified = probeLocalMcpHandshake(command, args, options.handshakeTimeoutMs ?? 3000);
+      handshakeVerified = probeLocalMcpHandshake(command, args, options.handshakeTimeoutMs ?? 8000);
       handshakeStatus = handshakeVerified ? "verified" : "failed";
       if (!handshakeVerified) {
         clientIssues.push(`MCP stdio initialize handshake failed for ${c.displayName}`);

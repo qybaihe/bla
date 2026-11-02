@@ -189,6 +189,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let chaffPayloadsEmbedded = 0;
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
+  /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
+  let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (format === "javascript" || format === "typescript") {
@@ -254,6 +256,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           chaffPayloadsEmbedded += res.chaffPayloadsEmbedded;
           return `<script${attrs}>\n${escapeHtmlInlineScriptBody(res.code)}\n</script>`;
         } catch {
+          // Ship the original script rather than dropping it, but count the
+          // failure so partial HTML protection is never silent (honesty red
+          // line — see STATE.md).
+          inlineScriptsFailed++;
           return fullMatch;
         }
       },
@@ -657,6 +663,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     decoyRoutesInjected,
     chaffPayloadsEmbedded,
     honeySourceMapsGenerated,
+    inlineScriptsFailed,
     binarySectionsPatched,
   };
 

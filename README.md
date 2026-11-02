@@ -71,13 +71,13 @@ npx bla-agents harden .       # one-command Counter-REA pass on the current proj
 npx bla-agents benchmark      # 14-target showcase (local estimates + runtime checks)
 ```
 
-Ask your agent after setup:
+Ask your agent after setup (skill guides one-click harden):
 
 ```text
 Harden my software against REA
 ```
 
-Or run stages explicitly: `audit` · `protect` · `verify` · `defend` — see [CLI and MCP](docs/cli-and-mcp.md).
+Or run stages explicitly: `audit` · `protect` · `verify` · `defend` — see [one-click agent defense](docs/one-click-agent-defense.md) and [CLI and MCP](docs/cli-and-mcp.md).
 
 ---
 
@@ -201,7 +201,7 @@ Protections are format-native (no commercial packer / external LLVM required). R
 <details>
 <summary><strong>Which agents can use BLA?</strong></summary>
 
-Any coding agent with local MCP or `SKILL.md` workflows. `npx bla-agents setup` configures Claude Code, Cursor, Codex, Gemini CLI, Windsurf, Google Antigravity, OpenCode, VS Code, and GitHub Copilot CLI.
+Any coding agent with local MCP or `SKILL.md` workflows. `npx bla-agents setup` configures Claude Code, Cursor, Codex, Gemini CLI, Windsurf, Google Antigravity, OpenCode, VS Code, and GitHub Copilot CLI. After setup, the bundled [`blind-llm-agents` skill](.agents/skills/blind-llm-agents/SKILL.md) is the one-click harden guide (`bla_harden` / `bla harden .`); MCP stays the execution layer.
 </details>
 
 <details>
@@ -227,7 +227,10 @@ No. See [DISCLAIMER.md](DISCLAIMER.md). Protective payloads activate under rever
 - [DISCLAIMER.md](DISCLAIMER.md) — defensive use, own-software only
 - [Installation and agent setup](docs/installation.md)
 - [CLI and MCP contracts](docs/cli-and-mcp.md)
+- [One-click agent defense (skill-first)](docs/one-click-agent-defense.md)
+- [Weave-decoy MCP](docs/weave-decoy-mcp.md)
 - [Empirical REA validation](docs/redteam/empirical-rea-validation.md)
+- [`blind-llm-agents` skill](.agents/skills/blind-llm-agents/SKILL.md)
 - [Counter-REA matrix](.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [v1.4.0 release notes (staged)](docs/releases/v1.4.0.md)
 - [CHANGELOG](CHANGELOG.md)
