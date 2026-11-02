@@ -135,6 +135,8 @@ export interface AuditReport {
   readonly agentEstimates: readonly AgentCostEstimate[];
   readonly headlineWarning: string;
   readonly recommendedCommand: string;
+  /** Entries skipped while walking a directory tree (depth/entry/file-size bounds). */
+  readonly walkSkipped?: { directories: number; files: number; bytes: number };
 }
 
 export interface ProtectionOptions {
