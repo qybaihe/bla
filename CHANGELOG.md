@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`blind-llm-agents` skill → v1.3.0**: skill is the primary one-click harden GUIDE
+  (MCP/CLI remain the execution layer). Documents default `bla_harden` / `harden .`,
+  optional weave path (`bla://directives/weave-decoy` → `bla_weave_plan` →
+  `weave_decoys:true`), FORBIDDEN noise/crack patterns, single-file `bla_defend` vs
+  directory `bla_harden`, and links to weave + Counter-REA docs. Synced
+  [`docs/one-click-agent-defense.md`](docs/one-click-agent-defense.md),
+  [`docs/cli-and-mcp.md`](docs/cli-and-mcp.md), and README skill pointers.
+- **CLI `--weave-decoys`**: opt-in flag on `harden` / `defend` / `protect`, matching
+  MCP `weave_decoys` (structural Python customer-def / `.pyc` weave; JS AST weave
+  already on).
+
 ### Added
 
 - **Weave-decoy MCP surface** (`src/shields/weave/weave-decoy.ts`, `src/mcp/server.ts`):
