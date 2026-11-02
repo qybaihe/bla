@@ -13,6 +13,15 @@ import {
   lintLaneIndependence,
   type LaneIndependenceReport,
 } from "../engine/lane-independence-lint.js";
+import {
+  computeArtifactRunId,
+  readHardenRunSummary,
+  sha256File,
+} from "../engine/run-evidence.js";
+import {
+  getRedteamReport,
+  runReaDriftCheck,
+} from "../engine/rea-observability.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -339,7 +348,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_verify",
     description:
-      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult.",
+      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult. Optional run_id / summary_path correlate this verify with a prior harden summary (unsigned).",
     inputSchema: {
       type: "object",
       properties: {
@@ -365,6 +374,16 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Honesty metadata: true when known BLA-injected numeric template golden constants still leak (issue #40.6).",
+        },
+        summary_path: {
+          type: "string",
+          description:
+            "Optional path to bla-harden-summary.json (or its output directory) to correlate this verify with a prior harden run (unsigned).",
+        },
+        run_id: {
+          type: "string",
+          description:
+            "Optional harden run_id; when paired with summary_path, must match the summary or the tool errors.",
         },
       },
       required: ["target_path"],
@@ -497,6 +516,66 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
       additionalProperties: false,
     },
   },
+  {
+    name: "bla_run_lookup",
+    description:
+      "Read-only correlation of a prior harden run: load bla-harden-summary.json by path or output directory, optionally asserting a run_id. Unsigned summaries only — never treats absence as success.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary_path: {
+          type: "string",
+          description:
+            "Path to bla-harden-summary.json, or the harden output directory that contains it",
+        },
+        run_id: {
+          type: "string",
+          description: "Optional expected run_id; mismatch or missing id is an error",
+        },
+      },
+      required: ["summary_path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_rea_drift",
+    description:
+      "Run the REA constant-drift harness (scripts/verify-rea-constants.mjs). This is NOT red-team evidence. Absent sibling REA → status unverified (never a silent pass).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rea_root: {
+          type: "string",
+          description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_redteam_report",
+    description:
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        execute: {
+          type: "boolean",
+          description:
+            "When true, spawn npm redteam:rea (requires sibling REA dist). Default false: read the on-disk report only.",
+        },
+        rea_root: {
+          type: "string",
+          description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
+        },
+        report_path: {
+          type: "string",
+          description: "Optional override path for the empirical JSON report",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ]);
 
 
@@ -618,6 +697,44 @@ function writeReceipt(
 ): Record<string, unknown> {
   return { status: "written", wrote: outputs, overwrote: overwritten, confirmed };
 }
+
+function attachArtifactRunEvidence(
+  tool: string,
+  inputPath: string,
+  report: Record<string, unknown>,
+): Record<string, unknown> {
+  const outputPath =
+    typeof report.outputPath === "string" ? report.outputPath : undefined;
+  if (outputPath === undefined || !existsSync(outputPath)) {
+    return {
+      ...report,
+      runEvidence: {
+        signature: "unsigned",
+        status: "unverified",
+        reason: "Protected output path missing; cannot content-address this run",
+      },
+    };
+  }
+  const outputSha256 = sha256File(outputPath);
+  const runId = computeArtifactRunId({
+    tool,
+    inputPath,
+    outputPath,
+    outputSha256,
+  });
+  return {
+    ...report,
+    runId,
+    runEvidence: {
+      schema: "bla-artifact-run/v1",
+      signature: "unsigned",
+      runId,
+      outputPath,
+      outputSha256,
+    },
+  };
+}
+
 
 function optionalCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -1166,8 +1283,13 @@ export async function handleMcpRequest(
             const report = (name === "bla_defend"
               ? runDefend(handlers, args)
               : runProtect(handlers, args)) as Record<string, unknown>;
+            const withRun = attachArtifactRunEvidence(
+              name,
+              args.input_path as string,
+              report,
+            );
             payload = {
-              ...report,
+              ...withRun,
               writeReceipt: writeReceipt(
                 existingPaths(planned),
                 clobbered,
@@ -1178,11 +1300,35 @@ export async function handleMcpRequest(
         } else if (name === "bla_audit") {
           payload = handlers.auditTarget(args.path as string);
         } else if (name === "bla_verify") {
-          payload = handlers.verifyTarget(
+          const verification = handlers.verifyTarget(
             args.target_path as string,
             typeof args.original_path === "string" ? args.original_path : undefined,
             verifyHonestyOptions(args),
           );
+          if (typeof args.summary_path === "string" && args.summary_path.trim().length > 0) {
+            const lookup = readHardenRunSummary(
+              args.summary_path as string,
+              typeof args.run_id === "string" && args.run_id.trim().length > 0
+                ? (args.run_id as string)
+                : undefined,
+            );
+            payload = {
+              ...verification,
+              runCorrelation: {
+                schema: "bla-run-correlation/v1",
+                signature: "unsigned",
+                runId: lookup.runId,
+                summaryPath: lookup.summaryPath,
+                runIdMatches: lookup.runIdMatches,
+              },
+            };
+          } else if (typeof args.run_id === "string" && args.run_id.trim().length > 0) {
+            throw new Error(
+              "bla_verify: run_id requires summary_path so the id can be correlated against an on-disk harden summary",
+            );
+          } else {
+            payload = verification;
+          }
         } else if (name === "bla_benchmark") {
           payload = await handlers.runShowcaseBenchmark();
         } else if (name === "bla_emit_headers") {
@@ -1213,6 +1359,37 @@ export async function handleMcpRequest(
           });
         } else if (name === "bla_lint_lanes") {
           payload = runLintLanes(args);
+        } else if (name === "bla_run_lookup") {
+          payload = readHardenRunSummary(
+            args.summary_path as string,
+            typeof args.run_id === "string" && args.run_id.trim().length > 0
+              ? (args.run_id as string)
+              : undefined,
+          );
+        } else if (name === "bla_rea_drift") {
+          payload = runReaDriftCheck({
+            ...(typeof args.rea_root === "string" && args.rea_root.trim().length > 0
+              ? { reaRoot: args.rea_root as string }
+              : {}),
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "unverified" || status === "fail";
+          }
+        } else if (name === "bla_redteam_report") {
+          payload = getRedteamReport({
+            execute: args.execute === true,
+            ...(typeof args.rea_root === "string" && args.rea_root.trim().length > 0
+              ? { reaRoot: args.rea_root as string }
+              : {}),
+            ...(typeof args.report_path === "string" && args.report_path.trim().length > 0
+              ? { reportPath: args.report_path as string }
+              : {}),
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "unverified" || status === "fail";
+          }
         }
 
         return {

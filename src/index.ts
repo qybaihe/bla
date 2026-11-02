@@ -185,6 +185,15 @@ export {
   type HardenRunSummary,
   type ReadHardenRunSummaryResult,
 } from "./engine/run-evidence.js";
+export {
+  runReaDriftCheck,
+  getRedteamReport,
+  resolveReaRoot,
+  reaCheckoutPresent,
+  reaDistReady,
+  type ReaDriftReport,
+  type RedteamReportResult,
+} from "./engine/rea-observability.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";
 export {

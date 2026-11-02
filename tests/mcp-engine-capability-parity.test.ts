@@ -73,11 +73,25 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "self_seal_enabled",
       "wasm_export_rename_applied",
       "numeric_template_leak_known",
+      "summary_path",
+      "run_id",
     ],
   },
   {
     tool: "bla_lint_lanes",
     params: ["path"],
+  },
+  {
+    tool: "bla_run_lookup",
+    params: ["summary_path", "run_id"],
+  },
+  {
+    tool: "bla_rea_drift",
+    params: ["rea_root"],
+  },
+  {
+    tool: "bla_redteam_report",
+    params: ["execute", "rea_root", "report_path"],
   },
 ]);
 
