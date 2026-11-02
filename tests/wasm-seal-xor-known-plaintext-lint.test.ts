@@ -32,4 +32,15 @@ describe("wasm-seal-xor-known-plaintext-lint", () => {
   it("looksLike helper rejects empty buffer", () => {
     expect(looksLikeSealRevisionKnownPlaintextPack(Buffer.alloc(10), Buffer.alloc(32)).ok).toBe(false);
   });
+
+  it("round-8 entropy pad under XOR (commit elsewhere) does not refuse", () => {
+    // Product pattern: masked prefix holds entropy ≠ seal.revision; commitment is not under XOR.
+    const { wasm, seal } = buildTestWasmWithSealXorKnownPlaintext({ mismatchCommit: true });
+    const report = lintWasmSealXorKnownPlaintextBuffer(wasm, {
+      path: "r8-style.wasm",
+      sealRaw: JSON.stringify(seal),
+    });
+    expect(report.shouldRefuseBankrupt).toBe(false);
+    expect(report.findings).toHaveLength(0);
+  });
 });
