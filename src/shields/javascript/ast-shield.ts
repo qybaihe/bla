@@ -1099,10 +1099,13 @@ export function transformJavaScriptWithBlaShield(
     selfSealEnabled = true;
     selfSealBindingName = seal.bindingName;
   }
-  // Deterministic opaque-predicate seed (issue #40): never hrtime/Date.now.
-  // Keep the low bit entangled with cognitive-armor digest so tamper flips seed parity.
+  // Deterministic opaque-predicate seed (issue #40.4): never hrtime/Date.now/bit0-only.
+  // Draw ~28 bits of PRNG material (two draws xor'd) so weak hrtime/bit0 patterns
+  // cannot be guessed; keep low bit free for cognitive-armor entanglement.
   // When self-seal is on, also fold the integrity digest into the seed material.
-  const opaqueSeedBase = (prng.nextInt(1, 0x1ffff) << 2) & 0x7fffc;
+  const opaqueSeedHi = prng.nextUint32() >>> 0;
+  const opaqueSeedLo = prng.nextUint32() >>> 0;
+  const opaqueSeedBase = ((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffe) >>> 0;
   const selfSealFold =
     selfSealEnabled && selfSealBindingName
       ? ` ^ ((${selfSealBindingName} >>> 0) & 0xfffffffe)`

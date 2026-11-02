@@ -41,3 +41,20 @@ export function generatePythonOpaqueFalseExpression(prng: SeededPrng, seedVar = 
   const k = prng.nextInt(3, 97);
   return `(((7 * ((${seedVar} | ${k}) ** 2) - 1) & 0xFFFFFFFF) == (((${seedVar} ^ ${k + 3}) ** 2) & 0xFFFFFFFF) and ((${seedVar} * (${seedVar} + 1)) & 1) == 1)`;
 }
+
+/**
+ * Recommended opaque-seed binding strength (issue #40.4).
+ * Callers should draw >= 28 bits of PRNG material and reserve bit0 for
+ * integrity entanglement — never Date.now / hrtime / constant bit0.
+ */
+export function recommendOpaqueSeedBinding(): {
+  readonly minEntropyBits: number;
+  readonly forbid: readonly string[];
+  readonly reserveLowBitForIntegrity: boolean;
+} {
+  return {
+    minEntropyBits: 28,
+    forbid: ["Date.now", "performance.now", "process.hrtime", "Math.random"],
+    reserveLowBitForIntegrity: true,
+  };
+}
