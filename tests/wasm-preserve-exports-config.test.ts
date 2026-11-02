@@ -110,7 +110,7 @@ describe("wasmPreserveExports .blarc / CLI / protect parity (#40.3)", () => {
     const fromNames = res.exportsRenamed.map((r) => r.from);
     expect(fromNames).toContain("__bla_internal_x");
     expect(fromNames).not.toContain("add");
-    const mod = new WebAssembly.Module(res.buffer);
+    const mod = new WebAssembly.Module(new Uint8Array(res.buffer));
     const inst = new WebAssembly.Instance(mod);
     expect(Object.keys(inst.exports)).toContain("add");
     expect(Object.keys(inst.exports)).not.toContain("__bla_internal_x");
