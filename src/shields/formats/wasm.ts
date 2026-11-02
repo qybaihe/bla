@@ -209,12 +209,53 @@ function appendDecoyExports(
   ]);
 }
 
+/**
+ * Collect unique function-export indices from a WASM binary (kind 0 only).
+ * Used so bankrupt decoy aliases can be spread across real stubs + unlock
+ * instead of all aliasing funcIndex 0 (red/blue round-10 arity-2 hygiene).
+ */
+function collectExportedFuncIndices(bytes: Buffer): number[] {
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x00 ||
+    bytes[1] !== 0x61 ||
+    bytes[2] !== 0x73 ||
+    bytes[3] !== 0x6d
+  ) {
+    return [];
+  }
+  let offset = 8;
+  while (offset < bytes.length) {
+    const sectionId = bytes[offset++]!;
+    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) break;
+    if (sectionId === 7) {
+      const payload = bytes.subarray(nextOffset, sectionEnd);
+      const entries = parseWasmExportSectionPayload(payload);
+      const seen = new Set<number>();
+      const out: number[] = [];
+      for (const e of entries) {
+        if (e.kind !== 0) continue;
+        if (seen.has(e.index)) continue;
+        seen.add(e.index);
+        out.push(e.index);
+      }
+      return out;
+    }
+    offset = sectionEnd;
+  }
+  return [];
+}
+
 function planWasmExportNameDecoys(
   prng: SeededPrng,
   intensity: ProtectionIntensity,
-  funcIndex: number,
+  funcIndices: readonly number[],
 ): readonly { readonly name: string; readonly funcIndex: number }[] {
   // bankrupt: ~250 × ~12 KiB names → Wabt interface charge ≫ 32 MiB.
+  // Round-10: spread aliases across exported function indices (stubs + unlock)
+  // so ~all-250 do not concentrate on funcIndex 0 / the real unlock body.
   const count =
     intensity === "stealth"
       ? 0
@@ -225,12 +266,14 @@ function planWasmExportNameDecoys(
           : 250;
   const namePad = intensity === "bankrupt" ? 12_000 : intensity === "maximum" ? 48 : 16;
   const tag = prng.hex(4);
+  const indices =
+    funcIndices.length > 0 ? prng.shuffle([...new Set(funcIndices)]) : [0];
   const out: { name: string; funcIndex: number }[] = [];
   for (let i = 0; i < count; i++) {
     const pad = "e".repeat(namePad);
     out.push({
       name: `enclave_export_${tag}_${i}_${pad}`,
-      funcIndex,
+      funcIndex: indices[i % indices.length]!,
     });
   }
   return out;
@@ -417,7 +460,12 @@ export function protectWasmBinary(
   // At bankrupt intensity, densify the export section with long-name aliases of
   // existing funcs so REA's real Wabt→WasmInterfaceBudget path trips (custom
   // sections alone do not expand the typed interface inventory).
-  const decoyExports = planWasmExportNameDecoys(prng, intensity, 0);
+  // Round-10: spread aliases across all exported function indices (not only 0).
+  const decoyExports = planWasmExportNameDecoys(
+    prng,
+    intensity,
+    collectExportedFuncIndices(bytes),
+  );
   const keptChunks: Buffer[] = [bytes.subarray(0, 8)];
   let offset = 8;
   let exportDecoysInjected = 0;

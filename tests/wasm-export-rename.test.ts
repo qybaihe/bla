@@ -110,3 +110,65 @@ describe("WASM export rename / semantic preservation (#40.3)", () => {
     expect(inspectWasmBinary(res.buffer).exportNames).toContain("compute_score");
   });
 });
+
+describe("WASM export decoy arity-2 hygiene (red/blue round-10)", () => {
+  /** Two func exports (idx 0 junk, idx 1 real) + memory — decoys must not all alias 0. */
+  function fixtureTwoFuncs(): Buffer {
+    // types: (i32)->i32, (i32,i32)->i32; funcs type0+type1; mem; exports junk/unlock/memory
+    // junk returns 0; unlock returns a+b
+    return Buffer.from([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+      0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x03, 0x01, 0x00, 0x01,
+      0x07, 0x1a, 0x03, 0x04, 0x6a, 0x75, 0x6e, 0x6b, 0x00, 0x00, 0x06, 0x75, 0x6e, 0x6c, 0x6f, 0x63,
+      0x6b, 0x00, 0x01, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x0e, 0x02, 0x04,
+      0x00, 0x41, 0x00, 0x0b, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
+    ]);
+  }
+
+  it("bankrupt decoy aliases spread across exported function indices", () => {
+    const raw = fixtureTwoFuncs();
+    expect(WebAssembly.validate(new Uint8Array(raw))).toBe(true);
+    const res = protectWasmBinary(raw, {
+      intensity: "bankrupt",
+      seed: "r10-arity2-hygiene-spread",
+      // keep names so we can map decoy→index via parse of protected export section
+      preserveExports: ["junk", "unlock", "memory"],
+    });
+    expect(res.exportDecoysInjected).toBe(250);
+    expect(WebAssembly.validate(new Uint8Array(res.buffer))).toBe(true);
+
+    // Locate export section payload and count decoy aliases per func index.
+    const bytes = res.buffer;
+    let offset = 8;
+    let decoyIdx0 = 0;
+    let decoyIdx1 = 0;
+    while (offset < bytes.length) {
+      const sectionId = bytes[offset++]!;
+      let size = 0;
+      let shift = 0;
+      while (true) {
+        const b = bytes[offset++]!;
+        size |= (b & 0x7f) << shift;
+        if ((b & 0x80) === 0) break;
+        shift += 7;
+      }
+      const sectionEnd = offset + size;
+      if (sectionId === 7) {
+        const payload = bytes.subarray(offset, sectionEnd);
+        const entries = parseWasmExportSectionPayload(payload);
+        for (const e of entries) {
+          if (e.kind !== 0) continue;
+          if (!e.name.startsWith("enclave_export_")) continue;
+          if (e.index === 0) decoyIdx0++;
+          else if (e.index === 1) decoyIdx1++;
+        }
+        break;
+      }
+      offset = sectionEnd;
+    }
+    expect(decoyIdx0 + decoyIdx1).toBe(250);
+    // Hygiene: both indices get a non-trivial share (not 250/0 pile-on).
+    expect(decoyIdx0).toBeGreaterThan(40);
+    expect(decoyIdx1).toBeGreaterThan(40);
+  });
+});
