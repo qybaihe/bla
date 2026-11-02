@@ -18,6 +18,7 @@ import { inspectWasmBinary } from "../shields/formats/wasm.js";
 import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
 import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
+import { lintJsWasmHydrateDumpSource } from "./js-wasm-hydrate-dump-lint.js";
 import { inspectPythonPyc } from "../shields/formats/python.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { detectBunStandaloneGraph } from "../shields/formats/bun-standalone.js";
@@ -515,6 +516,20 @@ export function auditTarget(targetPath: string): AuditReport {
           riskLevel: f.severity === "error" ? "high" : "medium",
           reaToolUsed: "bla lint-js-aes-unwrap / static source scan",
           estimatedTokensToReconstruct: 1_500,
+          estimatedCostUsd: 0.06,
+          reason: f.summary,
+        });
+      }
+      const hydrateDumpLint = lintJsWasmHydrateDumpSource(text, { path: absPath });
+      for (const f of hydrateDumpLint.findings) {
+        exposedItems.push({
+          id: `js_wasm_hydrate_${f.id}`,
+          name: f.id,
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: f.severity === "error" ? "high" : "medium",
+          reaToolUsed: "bla lint-js-wasm-hydrate-dump / static source scan",
+          estimatedTokensToReconstruct: 1_600,
           estimatedCostUsd: 0.06,
           reason: f.summary,
         });

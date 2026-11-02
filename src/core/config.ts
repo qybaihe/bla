@@ -34,6 +34,8 @@ export interface BlaProjectConfig {
   readonly allowJsAesUnwrap?: boolean;
   /** When true, allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
+  /** When true, allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
+  readonly allowJsWasmHydrateDump?: boolean;
 }
 
 /**

@@ -7,14 +7,14 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.5.6"
+  version: "1.5.8"
 ---
 
 # BLA: Blind LLM Agents
 
 **This skill is the primary one-click harden GUIDE.** MCP (`bla` server) and the
 `bla-agents` CLI are the **execution layer**. Prefer teaching/calling existing tools
-(`bla_harden`, `bla_defend`, `bla_weave_plan`, `bla_lint_lanes`, `bla_lint_seal`, `bla_lint_wasm_params`, `bla_lint_panel_derive`, …) over inventing new
+(`bla_harden`, `bla_defend`, `bla_weave_plan`, `bla_lint_lanes`, `bla_lint_seal`, `bla_lint_wasm_params`, `bla_lint_panel_derive`, `bla_lint_js_aes_unwrap`, `bla_lint_js_wasm_hydrate_dump`, …) over inventing new
 MCP surfaces.
 
 Use BLA whenever the user asks to harden a project against AI reverse-engineering
@@ -24,7 +24,7 @@ model misjudgment on proprietary logic, or **one-click / 一键加固** a build.
 Defensive only: protect **their own** artifacts. Refuse crack, RE, bypass PoCs, or
 attack playbooks against software they do not own.
 
-**Principles (red-blue round-1+2+3+4):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break — **closed in round-3** when seal is digests-only). Enforce with `bla_lint_seal` / `bla lint-seal`; bankrupt harden **refuses** unless `allow_plaintext_seal` / `--allow-plaintext-seal`. Round-3 residual **gates**: `bla_lint_wasm_params` / `bla lint-wasm-params` — bankrupt refuses clear `R2SEAL`/`R3PARM`/`R3CIPH`-class carriers unless `allow_wasm_clear_params`; `bla_lint_panel_derive` — maximum/bankrupt **rewrites** `__vaultPanelDerive_*` to `_blaPd_*` unless `allow_stable_panel_derive`; bankrupt harden sets `selfSealRecommended` for multi-artifact trees (never auto for single-file) — prefer **`self_seal`**. Round-4 gates: `bla_lint_js_aes_unwrap` / `bla lint-js-aes-unwrap` — bankrupt **refuses** JS wrap-key + `create*iv` + fixed sealed hdr (e.g. `d17ea004`) unless `allow_js_aes_unwrap` (gate only — **not** white-box AES; prefer in-WASM unwrap). `bla_lint_panel_derive` flags `deriveLocal` (rewritten to `_blaPdLocal_*`) and **refuses** `deriveLocal` + plaintext `panelTokenSha256` offline-oracle packaging unless `allow_panel_offline_oracle` (rename is not a crypto fix — scrub digests / avoid derive UI). `self_seal` embeds **expected sibling SHA-256 hard-fail** when siblings exist at protect time (harden processes JS last); opaque-seed entanglement alone does **not** gate entitlement control flow.
+**Principles (red-blue round-1+2+3+4):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break — **closed in round-3** when seal is digests-only). Enforce with `bla_lint_seal` / `bla lint-seal`; bankrupt harden **refuses** unless `allow_plaintext_seal` / `--allow-plaintext-seal`. Round-3 residual **gates**: `bla_lint_wasm_params` / `bla lint-wasm-params` — bankrupt refuses clear `R2SEAL`/`R3PARM`/`R3CIPH`-class carriers unless `allow_wasm_clear_params`; `bla_lint_panel_derive` — maximum/bankrupt **rewrites** `__vaultPanelDerive_*` to `_blaPd_*` unless `allow_stable_panel_derive`; bankrupt harden sets `selfSealRecommended` for multi-artifact trees (never auto for single-file) — prefer **`self_seal`**. Round-4 gates: `bla_lint_js_aes_unwrap` / `bla lint-js-aes-unwrap` — bankrupt **refuses** JS wrap-key + `create*iv` + fixed sealed hdr (e.g. `d17ea004`) unless `allow_js_aes_unwrap` (gate only — **not** white-box AES; prefer in-WASM unwrap). `bla_lint_panel_derive` flags `deriveLocal` (rewritten to `_blaPdLocal_*`) and **refuses** `deriveLocal` + plaintext `panelTokenSha256` offline-oracle packaging unless `allow_panel_offline_oracle` (rename is not a crypto fix — scrub digests / avoid derive UI). `self_seal` embeds **expected sibling SHA-256 hard-fail** when siblings exist at protect time (harden processes JS last); opaque-seed entanglement alone does **not** gate entitlement control flow. Round-5 gates: `bla_lint_js_wasm_hydrate_dump` / `bla lint-js-wasm-hydrate-dump` — bankrupt **refuses** JS that copies salt/rounds/cipher from `WebAssembly.Memory` after hydrate/instantiate unless `allow_js_wasm_hydrate_dump` (host memory dump needs **no** Node `create*iv`; export rename alone does not close this — prefer keep ARX+certify **inside** WASM so params never re-enter JS).
 
 ## Prerequisites (once)
 
@@ -108,6 +108,7 @@ npx -y bla-agents@latest doctor
 npx -y bla-agents@latest harden .
 npx -y bla-agents@latest harden . --weave-decoys --self-seal
 npx -y bla-agents@latest lint-lanes path/to/gate.js
+npx -y bla-agents@latest lint-js-wasm-hydrate-dump path/to/license.cjs
 npx -y bla-agents@latest defend /absolute/path/to/target --manifest --json
 npx -y bla-agents@latest verify /absolute/path/to/protected /absolute/path/to/target --json
 ```

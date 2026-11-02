@@ -29,6 +29,11 @@ import {
   jsAesUnwrapRefuseMessage,
 } from "./js-aes-unwrap-lint.js";
 import {
+  discoverAndLintJsWasmHydrateDump,
+  intensityEnforcesJsWasmHydrateDumpRefusal,
+  jsWasmHydrateDumpRefuseMessage,
+} from "./js-wasm-hydrate-dump-lint.js";
+import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
@@ -128,6 +133,8 @@ export interface HardenProjectOptions {
   readonly allowStablePanelDeriveAbi?: boolean;
   /** Allow bankrupt despite JS AES wrap-key unwrap footguns (red-blue round-4). Default false. */
   readonly allowJsAesUnwrap?: boolean;
+  /** Lab-only: allow JS←WASM hydrate memory dump of salt/rounds/cipher (red/blue r5). */
+  readonly allowJsWasmHydrateDump?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
@@ -379,6 +386,12 @@ export function hardenProject(
     options.allowJsAesUnwrap !== true
       ? jsAesReports.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const jsHydrateDumpReports = discoverAndLintJsWasmHydrateDump(absDir);
+  const blockingJsHydrateDump =
+    intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
+    options.allowJsWasmHydrateDump !== true
+      ? jsHydrateDumpReports.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -445,7 +458,7 @@ export function hardenProject(
     runId,
   } as const;
 
-  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0) {
+  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -482,12 +495,25 @@ export function hardenProject(
       outputExisted: false,
       error: jsAesUnwrapRefuseMessage(r, r.path),
     }));
+    const jsHydrateDumpArtifacts = blockingJsHydrateDump.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "javascript" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: jsWasmHydrateDumpRefuseMessage(r, r.path),
+    }));
     const blockParts: string[] = [];
     if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
     if (blockingWasmParms.length > 0) blockParts.push("clear WASM param carrier");
     if (blockingJsAes.length > 0) blockParts.push("JS AES wrap-key unwrap");
+    if (blockingJsHydrateDump.length > 0) blockParts.push("JS WASM hydrate param-dump");
     const blockReason = `skipped: ${blockParts.join(" / ")} blocked bankrupt harden`;
-    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts];
+    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts];
     return {
       ...reportBase,
       overallSuccess: false,
@@ -569,6 +595,7 @@ export function hardenProject(
           ? { allowStablePanelDeriveAbi: true }
           : {}),
         ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
+        ...(options.allowJsWasmHydrateDump === true ? { allowJsWasmHydrateDump: true } : {}),
         ...(options.allowPanelOfflineOracle === true
           ? { allowPanelOfflineOracle: true }
           : {}),

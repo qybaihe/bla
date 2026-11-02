@@ -41,6 +41,8 @@ export interface OneClickDefenseOptions {
   readonly allowJsAesUnwrap?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
+  /** Allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
+  readonly allowJsWasmHydrateDump?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
 }
@@ -147,6 +149,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
     ...(options.allowPanelOfflineOracle === true
       ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(options.allowJsWasmHydrateDump === true
+      ? { allowJsWasmHydrateDump: true }
       : {}),
     ...(options.selfSealSiblingPaths !== undefined &&
     options.selfSealSiblingPaths.length > 0

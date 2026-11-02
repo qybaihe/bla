@@ -30,6 +30,10 @@ import {
   type JsAesUnwrapReport,
 } from "../engine/js-aes-unwrap-lint.js";
 import {
+  lintJsWasmHydrateDumpFile,
+  type JsWasmHydrateDumpReport,
+} from "../engine/js-wasm-hydrate-dump-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -202,6 +206,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
         },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -322,6 +331,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
         },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -422,6 +436,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
         },
         seed: {
           type: "string",
@@ -674,6 +693,22 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
     name: "bla_lint_js_aes_unwrap",
     description:
       "Read-only JS AES wrap-key unwrap lint (same engine as CLI `bla lint-js-aes-unwrap`). Flags hex/base64 wrap-key material + createDecipheriv/createCipheriv + fixed sealed hdr (e.g. d17ea004). Bankrupt harden refuses unless allow_js_aes_unwrap. Gate only — not white-box AES. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_js_wasm_hydrate_dump",
+    description:
+      "Read-only JS←WASM hydrate param-dump lint (same engine as CLI `bla lint-js-wasm-hydrate-dump`). Flags memory.buffer reads + salt/rounds/cipher layout decode after hydrate/instantiate. Bankrupt harden refuses unless allow_js_wasm_hydrate_dump. Prefer keep ARX+certify inside WASM. Writes nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -949,6 +984,9 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_panel_offline_oracle === true
       ? { allowPanelOfflineOracle: true }
       : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -983,6 +1021,9 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
     ...(args.allow_panel_offline_oracle === true
       ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
       : {}),
   });
 }
@@ -1040,6 +1081,14 @@ function runLintJsAesUnwrap(args: Record<string, unknown>): JsAesUnwrapReport {
     throw new Error(`lint-js-aes-unwrap target not found: ${abs}`);
   }
   return lintJsAesUnwrapFile(abs);
+}
+
+function runLintJsWasmHydrateDump(args: Record<string, unknown>): JsWasmHydrateDumpReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-js-wasm-hydrate-dump target not found: ${abs}`);
+  }
+  return lintJsWasmHydrateDumpFile(abs);
 }
 
 export function validateMcpToolCall(
@@ -1505,6 +1554,9 @@ export async function handleMcpRequest(
               ...(args.allow_panel_offline_oracle === true
                 ? { allowPanelOfflineOracle: true }
                 : {}),
+              ...(args.allow_js_wasm_hydrate_dump === true
+                ? { allowJsWasmHydrateDump: true }
+                : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1632,6 +1684,9 @@ export async function handleMcpRequest(
         } else if (name === "bla_lint_js_aes_unwrap") {
           payload = runLintJsAesUnwrap(args);
           refused = (payload as JsAesUnwrapReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_js_wasm_hydrate_dump") {
+          payload = runLintJsWasmHydrateDump(args);
+          refused = (payload as JsWasmHydrateDumpReport).shouldRefuseBankrupt;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

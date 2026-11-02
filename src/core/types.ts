@@ -207,6 +207,11 @@ export interface ProtectionOptions {
    */
   readonly allowPanelOfflineOracle?: boolean;
   /**
+   * When true, allow bankrupt harden/protect despite JS←WASM hydrate memory
+   * dumps of salt/rounds/cipher (red-blue round-5). Default false — refuse.
+   */
+  readonly allowJsWasmHydrateDump?: boolean;
+  /**
    * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
    * Relative paths are resolved from the protected module's directory at runtime.
    */

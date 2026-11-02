@@ -74,6 +74,11 @@ import {
   jsAesUnwrapRefuseMessage,
   lintJsAesUnwrapSource,
 } from "./js-aes-unwrap-lint.js";
+import {
+  intensityEnforcesJsWasmHydrateDumpRefusal,
+  jsWasmHydrateDumpRefuseMessage,
+  lintJsWasmHydrateDumpSource,
+} from "./js-wasm-hydrate-dump-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -327,6 +332,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
       }
     }
+    if (
+      intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
+      options.allowJsWasmHydrateDump !== true
+    ) {
+      const hydrateDumpReport = lintJsWasmHydrateDumpSource(raw, { path: absInput });
+      if (hydrateDumpReport.shouldRefuseBankrupt) {
+        throw new Error(jsWasmHydrateDumpRefuseMessage(hydrateDumpReport, absInput));
+      }
+    }
     {
       const panelLint = lintPanelDeriveAbiSource(raw, { path: absInput });
       if (
@@ -383,6 +397,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       const aesReport = lintJsAesUnwrapSource(rawHtml, { path: absInput });
       if (aesReport.shouldRefuseBankrupt) {
         throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
+      }
+    }
+    if (
+      intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
+      options.allowJsWasmHydrateDump !== true
+    ) {
+      const hydrateDumpReport = lintJsWasmHydrateDumpSource(rawHtml, { path: absInput });
+      if (hydrateDumpReport.shouldRefuseBankrupt) {
+        throw new Error(jsWasmHydrateDumpRefuseMessage(hydrateDumpReport, absInput));
       }
     }
     {

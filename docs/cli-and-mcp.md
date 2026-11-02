@@ -31,6 +31,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 - `bla_lint_wasm_params`: Read-only WASM clear param/cipher carrier lint (`path`) — `R3PARM`/`R3CIPH`/`R2SEAL`-class; same engine as CLI `bla lint-wasm-params`.
 - `bla_lint_panel_derive`: Read-only panel-derive ABI lint (`path`) — stable `__vaultPanelDerive_*` / `deriveLocal` / `panelTokenSha256` oracle; same engine as CLI `bla lint-panel-derive`.
 - `bla_lint_js_aes_unwrap`: Read-only JS AES wrap-key unwrap lint (`path`) — wrap-key + create*iv + fixed hdr; same engine as CLI `bla lint-js-aes-unwrap`. Gate only — not white-box AES.
+- `bla_lint_js_wasm_hydrate_dump`: Read-only JS←WASM hydrate param-dump lint (`path`) — memory.buffer + salt/rounds/cipher after hydrate; same engine as CLI `bla lint-js-wasm-hydrate-dump`. Prefer in-WASM ARX+certify.
 - `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.

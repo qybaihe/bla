@@ -28,6 +28,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_stable_panel_derive",
       "allow_js_aes_unwrap",
       "allow_panel_offline_oracle",
+      "allow_js_wasm_hydrate_dump",
       "seed",
       "dry_run",
       "max_artifacts",
@@ -56,6 +57,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_stable_panel_derive",
       "allow_js_aes_unwrap",
       "allow_panel_offline_oracle",
+      "allow_js_wasm_hydrate_dump",
       "seed",
       "in_place",
       "confirm_overwrite",
@@ -76,6 +78,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_stable_panel_derive",
       "allow_js_aes_unwrap",
       "allow_panel_offline_oracle",
+      "allow_js_wasm_hydrate_dump",
       "seed",
       "llm_directives",
       "in_place",
@@ -113,6 +116,10 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_lint_js_aes_unwrap",
+    params: ["path"],
+  },
+  {
+    tool: "bla_lint_js_wasm_hydrate_dump",
     params: ["path"],
   },
   {
