@@ -24,6 +24,8 @@ export interface BlaProjectConfig {
   readonly wasmPreserveExports?: readonly string[];
   /** When true, allow harden/defend of lane-independent JS gates (issue #40.1). Default false. */
   readonly allowLaneIndependentGates?: boolean;
+  /** When true, allow bankrupt harden despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
+  readonly allowPlaintextSeal?: boolean;
 }
 
 /**

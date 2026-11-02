@@ -51,6 +51,12 @@ import {
   laneIndependenceRefuseMessage,
   lintLaneIndependence,
 } from "./lane-independence-lint.js";
+import {
+  findSiblingSealSidecars,
+  intensityEnforcesSealRefusal,
+  lintSealCommitmentFile,
+  sealCommitmentRefuseMessage,
+} from "./seal-commitment-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -211,6 +217,18 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
+
+  if (
+    intensityEnforcesSealRefusal(intensity) &&
+    options.allowPlaintextSeal !== true
+  ) {
+    for (const sealPath of findSiblingSealSidecars(dirname(absInput))) {
+      const sealReport = lintSealCommitmentFile(sealPath);
+      if (sealReport.shouldRefuseBankrupt) {
+        throw new Error(sealCommitmentRefuseMessage(sealReport, sealPath));
+      }
+    }
+  }
 
   if (format === "javascript" || format === "typescript") {
     const raw = readFileSync(absInput, "utf8");

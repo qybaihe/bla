@@ -180,6 +180,11 @@ export interface ProtectionOptions {
    * Default false: protect/defend/harden refuse such gates (red-blue round-1).
    */
   readonly allowLaneIndependentGates?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite plaintext/reversible seal
+   * sidecars (red-blue round-2). Default false — refuse.
+   */
+  readonly allowPlaintextSeal?: boolean;
 }
 
 export interface ProtectionMetrics {

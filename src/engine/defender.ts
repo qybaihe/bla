@@ -31,6 +31,8 @@ export interface OneClickDefenseOptions {
   readonly wasmPreserveExports?: readonly string[];
   /** Allow lane-independent JS gates (issue #40.1). Default false. */
   readonly allowLaneIndependentGates?: boolean;
+  /** Allow bankrupt despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
+  readonly allowPlaintextSeal?: boolean;
 }
 
 export interface OneClickDefenseStageSummary {
@@ -125,6 +127,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.allowLaneIndependentGates === true
       ? { allowLaneIndependentGates: true }
       : {}),
+    ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
     honeySourceMaps: true,
   });
 

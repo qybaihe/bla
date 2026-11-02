@@ -14,6 +14,11 @@ import {
   type OneClickDefenseReport,
 } from "./defender.js";
 import {
+  discoverAndLintSealSidecars,
+  intensityEnforcesSealRefusal,
+  sealCommitmentRefuseMessage,
+} from "./seal-commitment-lint.js";
+import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
@@ -105,6 +110,8 @@ export interface HardenProjectOptions {
   readonly wasmPreserveExports?: readonly string[];
   /** Allow lane-independent JS gates (issue #40.1). Default false — refuse. */
   readonly allowLaneIndependentGates?: boolean;
+  /** Allow bankrupt despite plaintext/reversible seal sidecars (red-blue round-2). Default false — refuse. */
+  readonly allowPlaintextSeal?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -328,6 +335,12 @@ export function hardenProject(
   const dryRun = options.dryRun === true;
   const discovery = discoverHardenTargets(absDir, { maxArtifacts });
   const discovered = discovery.artifacts;
+
+  const sealReports = discoverAndLintSealSidecars(absDir);
+  const blockingSeals =
+    intensityEnforcesSealRefusal(intensity) && options.allowPlaintextSeal !== true
+      ? sealReports.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -369,6 +382,44 @@ export function hardenProject(
     wouldOverwrite,
     runId,
   } as const;
+
+  if (blockingSeals.length > 0) {
+    const sealArtifacts = blockingSeals.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "unknown" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: sealCommitmentRefuseMessage(r, r.path),
+    }));
+    return {
+      ...reportBase,
+      overallSuccess: false,
+      hardenedCount: 0,
+      failedCount: sealArtifacts.length,
+      artifacts: [
+        ...plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
+          inputPath: artifact.path,
+          relativePath: artifact.relativePath,
+          format: artifact.format,
+          outputPath,
+          success: false,
+          defenseScore: 0,
+          tokenAmplificationFactor: 0,
+          costAmplificationFactor: 0,
+          outputExisted,
+          error: dryRun
+            ? "skipped: plaintext/reversible seal sidecar blocked bankrupt harden"
+            : "skipped: plaintext/reversible seal sidecar blocked bankrupt harden",
+        })),
+        ...sealArtifacts,
+      ],
+    };
+  }
 
   if (dryRun) {
     // Preview only: never claim overallSuccess — nothing was hardened.
@@ -420,6 +471,7 @@ export function hardenProject(
         ...(options.allowLaneIndependentGates === true
           ? { allowLaneIndependentGates: true }
           : {}),
+        ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
         emitManifest,
       });
       summaries.push({
