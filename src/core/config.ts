@@ -22,6 +22,8 @@ export interface BlaProjectConfig {
   readonly selfSeal?: boolean;
   /** WASM export names that must remain the public ABI when export rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
+  /** When true, allow harden/defend of lane-independent JS gates (issue #40.1). Default false. */
+  readonly allowLaneIndependentGates?: boolean;
 }
 
 /**

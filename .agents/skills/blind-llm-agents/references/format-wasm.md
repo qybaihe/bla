@@ -4,7 +4,7 @@ Load this when hardening `.wasm` modules.
 
 ## Intensity & rename
 
-At `maximum` / `bankrupt`, BLA may rename **internal-looking** exports (`__*`, `debug_*`, …). Public ABI names the customer must keep go in the preserve list:
+At `maximum` / `bankrupt`, BLA renames **all** exports not listed in the preserve list (red-blue round-1: silent `mix`/`seal` ABI enabled preload hooks). Do **not** ship a stable public WASM ABI unless glue truly requires it — and then list names **explicitly**:
 
 | Surface | How |
 | :--- | :--- |

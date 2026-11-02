@@ -76,5 +76,5 @@ Pass `--self-seal` / MCP `self_seal: true` / `.blarc` `"selfSeal": true` so JS/N
 
 ## WASM export rename / preserve (#40.3)
 
-At `maximum`/`bankrupt`, BLA may rename internal-looking WASM exports. Pass `--wasm-preserve-exports main,add` / MCP `wasm_preserve_exports` / `.blarc` `"wasmPreserveExports": ["main","add"]` so the public ABI stays stable while glue can consume the rename map for anything else.
+At `maximum`/`bankrupt`, BLA renames **all** non-preserved WASM exports. Pass `--wasm-preserve-exports main,add` / MCP `wasm_preserve_exports` / `.blarc` `"wasmPreserveExports": ["main","add"]` only when the public ABI must stay; otherwise consume the rename map. Do not leave independent JS lane tables — `bla lint-lanes` / harden refuse unless `--allow-lane-independent`.
 

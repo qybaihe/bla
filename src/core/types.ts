@@ -171,9 +171,15 @@ export interface ProtectionOptions {
   readonly selfSeal?: boolean;
   /**
    * WASM public ABI export names to keep when rename runs (issue #40.3).
-   * Other / internal-looking exports may be renamed at maximum/bankrupt.
+   * At maximum/bankrupt every non-listed export is renamed by default —
+   * preserving a stable ABI requires an explicit list.
    */
   readonly wasmPreserveExports?: readonly string[];
+  /**
+   * When true, allow protecting JS/TS that looks lane-independent (issue #40.1).
+   * Default false: protect/defend/harden refuse such gates (red-blue round-1).
+   */
+  readonly allowLaneIndependentGates?: boolean;
 }
 
 export interface ProtectionMetrics {

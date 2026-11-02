@@ -48,9 +48,9 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 Project config parity: set `"weaveDecoys": true` in `.blarc` / `bla.config.json` (schema `bla.config.v1.json`) to enable the same flag without repeating `--weave-decoys` / MCP `weave_decoys` on every invoke. CLI/MCP flags still OR with the config value.
 
 Opt-in **self-seal** (issue #40.5): CLI `--self-seal`, MCP `self_seal`, `.blarc` `"selfSeal": true`. Injects a Node self-integrity preamble (module + optional sibling paths + env fingerprint) and folds the digest into the opaque-predicate seed for JS/Node targets.
-WASM public ABI preserve list (issue #40.3): CLI `--wasm-preserve-exports a,b`, MCP `wasm_preserve_exports`, `.blarc` `"wasmPreserveExports": ["a","b"]`. Kept names stay; internal-looking exports may still rename at maximum/bankrupt.
+WASM public ABI preserve list (issue #40.3 / red-blue round-1): CLI `--wasm-preserve-exports a,b`, MCP `wasm_preserve_exports`, `.blarc` `"wasmPreserveExports": ["a","b"]`. At `maximum`/`bankrupt`, **every** non-listed export is renamed by default — keeping `mix`/`seal`-style names requires an explicit list.
 
-Heuristic **lane-independence lint** (issue #40.1): CLI `bla lint-lanes <file>` and MCP `bla_lint_lanes` warn when gate code looks like independent per-lane checks. Defensive guidance only — prefer whole-key chained mixing.
+Heuristic **lane-independence lint** (issue #40.1 / red-blue round-1): CLI `bla lint-lanes <file>` and MCP `bla_lint_lanes` emit severity **error** when gate code looks like independent per-lane checks. Harden/defend/protect **refuse** unless CLI `--allow-lane-independent` / MCP `allow_lane_independent` / `.blarc` `"allowLaneIndependentGates": true`. Prefer whole-key chained mixing.
 
 ### MCP Resources
 

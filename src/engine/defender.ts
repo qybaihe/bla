@@ -29,6 +29,8 @@ export interface OneClickDefenseOptions {
   readonly selfSeal?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
+  /** Allow lane-independent JS gates (issue #40.1). Default false. */
+  readonly allowLaneIndependentGates?: boolean;
 }
 
 export interface OneClickDefenseStageSummary {
@@ -119,6 +121,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.wasmPreserveExports !== undefined && options.wasmPreserveExports.length > 0
       ? { wasmPreserveExports: options.wasmPreserveExports }
+      : {}),
+    ...(options.allowLaneIndependentGates === true
+      ? { allowLaneIndependentGates: true }
       : {}),
     honeySourceMaps: true,
   });

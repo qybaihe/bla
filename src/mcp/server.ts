@@ -154,7 +154,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
         },
         seed: {
           type: "string",
@@ -244,7 +249,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
         },
         seed: {
           type: "string",
@@ -315,7 +325,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
         },
         seed: {
           type: "string",
@@ -503,7 +518,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_lint_lanes",
     description:
-      "Read-only heuristic lane-independence footgun lint (same engine as CLI `bla lint-lanes`). Warns when gate/activation source looks like independent per-lane checks. Defensive guidance only — prefer whole-key chained mixing. Writes nothing.",
+      "Read-only heuristic lane-independence footgun lint (same engine as CLI `bla lint-lanes`). Returns severity-error findings when gate/activation source looks like independent per-lane checks. Harden refuses such gates unless allow_lane_independent. Prefer whole-key chained mixing. Writes nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -765,6 +780,9 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
     ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -786,6 +804,9 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       ? { honeySourceMaps: args.honey_source_maps }
       : {}),
     ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
   });
 }
 
@@ -1261,6 +1282,9 @@ export async function handleMcpRequest(
               weaveDecoys: Boolean(args.weave_decoys),
               selfSeal: Boolean(args.self_seal),
               ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+              ...(args.allow_lane_independent === true
+                ? { allowLaneIndependentGates: true }
+                : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.

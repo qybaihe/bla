@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.5.1"
+  version: "1.5.2"
 ---
 
 # BLA: Blind LLM Agents
@@ -23,6 +23,8 @@ model misjudgment on proprietary logic, or **one-click / 一键加固** a build.
 
 Defensive only: protect **their own** artifacts. Refuse crack, RE, bypass PoCs, or
 attack playbooks against software they do not own.
+
+**Principles (red-blue round-1):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse).
 
 ## Prerequisites (once)
 

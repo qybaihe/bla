@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Red/Blue round-1 · Writeback P0 — WASM export rename default:** at `maximum`/`bankrupt`, `protectWasmBinary` renames **all** non-preserved exports (not only `__*` / `debug_*`). Keeping a stable public ABI requires explicit `wasmPreserveExports` / `--wasm-preserve-exports` / `wasm_preserve_exports`. Optional `renameInternalOnly: true` for the weaker pass.
+- **Red/Blue round-1 · Writeback P0 — lane-independence is error + harden refuse:** `bla lint-lanes` / `bla_lint_lanes` findings are severity **error**; protect/defend/harden refuse JS/TS that looks lane-independent (including per-byte WASM mix/seal oracles) unless `allowLaneIndependentGates` / `--allow-lane-independent` / `allow_lane_independent`. Skill v1.5.2 principles: no silent stable WASM ABI; no JS independent lane tables; prefer whole-key mixing.
+
 ### Fixed
 - **MCP/Skill 2.0 stabilization:** `bla_harden` dry-run no longer sets `overallSuccess: true`; CLI formatter labels dry-run as `DRY-RUN (nothing written)` instead of `SUCCESS`. Successful `bla_harden` writes now return `writeReceipt` (matching defend/protect and the stage A contract). `bla_redteam_report` on-disk reads use `status: available` (not `pass`) so agents cannot mistake a static fixture for a live REA verdict; harness stdout/stderr are clipped for MCP stdio safety. Skill guide **v1.5.1** documents available vs unverified.
 

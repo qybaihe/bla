@@ -51,7 +51,7 @@ Commands:
   defend <target>             One-click full Counter-REA pipeline (inspect -> audit -> bankrupt protect -> verify)
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
-  lint-lanes <file>           Heuristic warn if gate code looks lane-independent (issue #40.1)
+  lint-lanes <file>           Heuristic ERROR if gate code looks lane-independent (issue #40.1); exit 2
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
@@ -72,6 +72,7 @@ Options:
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
+  --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -96,6 +97,7 @@ interface ParsedCliArgs {
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
   readonly wasmPreserveExports: readonly string[];
+  readonly allowLaneIndependentGates: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -122,6 +124,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let weaveDecoys = false;
   let selfSeal = false;
   let wasmPreserveExports: string[] = [];
+  let allowLaneIndependentGates = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -162,6 +165,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg === "--allow-lane-independent") {
+      allowLaneIndependentGates = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -217,6 +222,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     weaveDecoys,
     selfSeal,
     wasmPreserveExports,
+    allowLaneIndependentGates,
     lang,
     clients,
     allDetected,
@@ -348,6 +354,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -388,6 +397,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -474,6 +486,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

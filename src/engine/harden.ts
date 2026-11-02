@@ -103,6 +103,8 @@ export interface HardenProjectOptions {
   readonly selfSeal?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
+  /** Allow lane-independent JS gates (issue #40.1). Default false — refuse. */
+  readonly allowLaneIndependentGates?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -414,6 +416,9 @@ export function hardenProject(
         ...(options.wasmPreserveExports !== undefined &&
         options.wasmPreserveExports.length > 0
           ? { wasmPreserveExports: options.wasmPreserveExports }
+          : {}),
+        ...(options.allowLaneIndependentGates === true
+          ? { allowLaneIndependentGates: true }
           : {}),
         emitManifest,
       });

@@ -154,6 +154,9 @@ export async function hardenChallenge({ key, flag, outDir, seed = SEED }) {
     copyFileSync(join(SRC_DIR, "panel.html"), join(stage, "panel.html"));
     copyFileSync(join(SRC_DIR, "core.wasm"), join(stage, "core.wasm"));
 
+    // Red/blue round-1: bankrupt renames all non-preserved WASM exports by default.
+    // This teaching fixture keeps mix/seal on purpose (explicit ABI) and opts into
+    // the lane-independent gate that bla_lint_lanes / harden now refuse by default.
     const report = hardenProject({
       directory: stage,
       intensity: INTENSITY,
@@ -161,6 +164,8 @@ export async function hardenChallenge({ key, flag, outDir, seed = SEED }) {
       llmDirectives: false,
       emitManifest: false,
       outputDirectory: hardened,
+      wasmPreserveExports: ["mix", "seal"],
+      allowLaneIndependentGates: true,
     });
     if (!report.overallSuccess) {
       throw new Error(`hardenProject failed: ${JSON.stringify(report.artifacts?.map((a) => [a.relativePath, a.success, a.error]))}`);
