@@ -82,13 +82,18 @@ export function lintLaneIndependence(source: string): LaneIndependenceReport {
 
   if (BYTE_COMPARE_ARRAY.test(text) && /(?:key|guess|input|lane)/i.test(text)) {
     const m = text.match(BYTE_COMPARE_ARRAY);
-    findings.push(
-      finding(
-        "per-lane-byte-compare-array",
-        "Literal multi-byte compare table near key/guess identifiers — may allow independent per-lane probes.",
-        m?.[0] ?? "",
-      ),
-    );
+    // Round-2 blue: all-zero init arrays (e.g. pack buffers) are not compare tables.
+    const lit = m?.[0] ?? "";
+    const allZero = /^\[\s*0\s*(?:,\s*0\s*){3,}\]$/.test(lit);
+    if (!allZero) {
+      findings.push(
+        finding(
+          "per-lane-byte-compare-array",
+          "Literal multi-byte compare table near key/guess identifiers — may allow independent per-lane probes.",
+          lit,
+        ),
+      );
+    }
   }
 
   if (LANE_AND_REDUCE.test(text) || EVERY_INDEXED_LANE.test(text)) {

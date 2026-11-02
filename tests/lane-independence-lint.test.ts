@@ -59,6 +59,30 @@ describe("lane-independence footgun lint (#40.1 / red-blue round-1)", () => {
     expect(report.findings[0]!.severity).toBe("error");
   });
 
+  it("ignores all-zero init arrays used for whole-key packing (round-2 blue)", () => {
+    const src = `
+      function packWord(key, start) {
+        let w = 0;
+        for (let i = 0; i < 4; i++) w = (w << 8) | key.charCodeAt(start + i);
+        return w | 0;
+      }
+      function activate(key) {
+        let a = packWord(key, 0), b = packWord(key, 4), c = packWord(key, 8), d = packWord(key, 12);
+        // legacy-looking zero buffer that is NOT a compare table:
+        const scratch = [0, 0, 0, 0];
+        void scratch;
+        for (let r = 0; r < 24; r++) {
+          a = (a + b) | 0; b = (b ^ a) | 0; c = (c + d) | 0; d = (d ^ c) | 0;
+          a ^= c; b ^= d;
+        }
+        return (a ^ b ^ c ^ d) === 0x12345678;
+      }
+    `;
+    const report = lintLaneIndependence(src);
+    expect(report.findings.some((f) => f.id === "per-lane-byte-compare-array")).toBe(false);
+    expect(report.looksLaneIndependent).toBe(false);
+  });
+
   it("errors on CrackMe v6-style per-byte WASM lane oracles", () => {
     const tpl = readFileSync(
       resolve(process.cwd(), "challenge/v6/src/vault.template.cjs"),
