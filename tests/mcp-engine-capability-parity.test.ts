@@ -130,6 +130,10 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
     params: ["path"],
   },
   {
+    tool: "bla_lint_wasm_seal_xor_known_plaintext",
+    params: ["path", "seal_path"],
+  },
+  {
     tool: "bla_run_lookup",
     params: ["summary_path", "run_id"],
   },

@@ -68,6 +68,11 @@ import {
   wasmXorMaskSidecarRefuseMessage,
 } from "./wasm-xor-mask-sidecar-lint.js";
 import {
+  lintWasmSealXorKnownPlaintextFile,
+  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
+  wasmSealXorKnownPlaintextRefuseMessage,
+} from "./wasm-seal-xor-known-plaintext-lint.js";
+import {
   intensityEnforcesPanelOracleRefusal,
   intensityRewritesPanelDerive,
   lintPanelDeriveAbiSource,
@@ -607,6 +612,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       const xorMask = lintWasmXorMaskSidecarBuffer(rawWasm, { path: absInput });
       if (xorMask.shouldRefuseBankrupt) {
         throw new Error(wasmXorMaskSidecarRefuseMessage(xorMask, absInput));
+      }
+    }
+    if (
+      intensityEnforcesWasmSealXorKnownPlaintextRefusal(intensity) &&
+      options.allowWasmSealXorKnownPlaintext !== true
+    ) {
+      const sealXor = lintWasmSealXorKnownPlaintextFile(absInput);
+      if (sealXor.shouldRefuseBankrupt) {
+        throw new Error(wasmSealXorKnownPlaintextRefuseMessage(sealXor, absInput));
       }
     }
     const res = protectWasmBinary(rawWasm, {

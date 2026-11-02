@@ -331,6 +331,19 @@ export {
   type WasmXorMaskSidecarSeverity,
 } from "./engine/wasm-xor-mask-sidecar-lint.js";
 export {
+  lintWasmSealXorKnownPlaintextBuffer,
+  lintWasmSealXorKnownPlaintextFile,
+  discoverAndLintWasmSealXorKnownPlaintext,
+  buildTestWasmWithSealXorKnownPlaintext,
+  wasmSealXorKnownPlaintextRefuseMessage,
+  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
+  WASM_SEAL_XOR_KNOWN_PLAINTEXT_SCHEMA,
+  type WasmSealXorKnownPlaintextFinding,
+  type WasmSealXorKnownPlaintextReport,
+  type WasmSealXorKnownPlaintextFindingId,
+  type WasmSealXorKnownPlaintextSeverity,
+} from "./engine/wasm-seal-xor-known-plaintext-lint.js";
+export {
   lintPanelDeriveAbiSource,
   lintPanelDeriveAbiFile,
   rewriteStablePanelDeriveSymbols,

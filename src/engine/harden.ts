@@ -39,6 +39,11 @@ import {
   wasmXorMaskSidecarRefuseMessage,
 } from "./wasm-xor-mask-sidecar-lint.js";
 import {
+  discoverAndLintWasmSealXorKnownPlaintext,
+  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
+  wasmSealXorKnownPlaintextRefuseMessage,
+} from "./wasm-seal-xor-known-plaintext-lint.js";
+import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
@@ -141,6 +146,7 @@ export interface HardenProjectOptions {
   /** Lab-only: allow JS←WASM hydrate memory dump of salt/rounds/cipher (red/blue r5). */
   readonly allowJsWasmHydrateDump?: boolean;
   readonly allowWasmXorMaskSidecar?: boolean;
+  readonly allowWasmSealXorKnownPlaintext?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
@@ -404,6 +410,12 @@ export function hardenProject(
     options.allowWasmXorMaskSidecar !== true
       ? wasmXorMaskReports.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const wasmSealXorReports = discoverAndLintWasmSealXorKnownPlaintext(absDir);
+  const blockingWasmSealXor =
+    intensityEnforcesWasmSealXorKnownPlaintextRefusal(intensity) &&
+    options.allowWasmSealXorKnownPlaintext !== true
+      ? wasmSealXorReports.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -470,7 +482,7 @@ export function hardenProject(
     runId,
   } as const;
 
-  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0 || blockingWasmXorMask.length > 0) {
+  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0 || blockingWasmXorMask.length > 0 || blockingWasmSealXor.length > 0) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -531,14 +543,27 @@ export function hardenProject(
       outputExisted: false,
       error: wasmXorMaskSidecarRefuseMessage(r, r.path),
     }));
+    const wasmSealXorArtifacts = blockingWasmSealXor.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "wasm" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: wasmSealXorKnownPlaintextRefuseMessage(r, r.path),
+    }));
     const blockParts: string[] = [];
     if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
     if (blockingWasmParms.length > 0) blockParts.push("clear WASM param carrier");
     if (blockingJsAes.length > 0) blockParts.push("JS AES wrap-key unwrap");
     if (blockingJsHydrateDump.length > 0) blockParts.push("JS WASM hydrate param-dump");
     if (blockingWasmXorMask.length > 0) blockParts.push("WASM XOR-mask sidecar");
+    if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
     const blockReason = `skipped: ${blockParts.join(" / ")} blocked bankrupt harden`;
-    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts, ...wasmXorMaskArtifacts];
+    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts, ...wasmXorMaskArtifacts, ...wasmSealXorArtifacts];
     return {
       ...reportBase,
       overallSuccess: false,
@@ -622,6 +647,7 @@ export function hardenProject(
         ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
         ...(options.allowJsWasmHydrateDump === true ? { allowJsWasmHydrateDump: true } : {}),
         ...(options.allowWasmXorMaskSidecar === true ? { allowWasmXorMaskSidecar: true } : {}),
+        ...(options.allowWasmSealXorKnownPlaintext === true ? { allowWasmSealXorKnownPlaintext: true } : {}),
         ...(options.allowPanelOfflineOracle === true
           ? { allowPanelOfflineOracle: true }
           : {}),

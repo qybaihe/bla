@@ -27,12 +27,10 @@ describe("wasm-xor-mask-sidecar-lint", () => {
 
   it("looksLikeXorMaskedEntitlementPack requires tight pack + entropy", () => {
     const wasm = buildTestWasmWithXorMaskSidecar({});
-    // data payload starts after sections — use lint instead of raw guess
     const report = lintWasmXorMaskSidecarBuffer(wasm);
     expect(report.findings[0]?.blobLen).toBeGreaterThanOrEqual(40);
     expect(looksLikeXorMaskedEntitlementPack(Buffer.alloc(100)).ok).toBe(false);
   });
-});
 
   it("does not refuse masked entitlement pack without adjacent plaintext mask (r7 key-dep style)", () => {
     const wasm = buildTestWasmWithXorMaskSidecar({ omitMaskSidecar: true });
@@ -40,4 +38,4 @@ describe("wasm-xor-mask-sidecar-lint", () => {
     expect(report.shouldRefuseBankrupt).toBe(false);
     expect(report.findings).toHaveLength(0);
   });
-
+});

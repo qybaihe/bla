@@ -38,6 +38,10 @@ import {
   type WasmXorMaskSidecarReport,
 } from "../engine/wasm-xor-mask-sidecar-lint.js";
 import {
+  lintWasmSealXorKnownPlaintextFile,
+  type WasmSealXorKnownPlaintextReport,
+} from "../engine/wasm-seal-xor-known-plaintext-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -220,6 +224,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
         },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -350,6 +359,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
         },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -460,6 +474,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
         },
         seed: {
           type: "string",
@@ -757,6 +776,26 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
     },
   },
   {
+    name: "bla_lint_wasm_seal_xor_known_plaintext",
+    description:
+      "Read-only WASM+seal.revision XOR known-plaintext lint (same engine as CLI `bla lint-wasm-seal-xor-known-plaintext`). Flags entitlement packs where public seal.revision sits under a repeating XOR mask in WASM data — recovers the mask with no key (red-blue round-7). Looks for sibling seal.json. Bankrupt harden refuses unless allow_wasm_seal_xor_known_plaintext. Prefer one-way mask KDFs and keep public digests out of masked plaintext. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm file (sibling seal.json used when seal_path omitted)",
+        },
+        seal_path: {
+          type: "string",
+          description: "Optional explicit seal.json path",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "bla_run_lookup",
     description:
       "Read-only correlation of a prior harden run: load bla-harden-summary.json by path or output directory, optionally asserting a run_id. Unsigned summaries only — never treats absence as success.",
@@ -1025,6 +1064,9 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_wasm_xor_mask_sidecar === true
       ? { allowWasmXorMaskSidecar: true }
       : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -1065,6 +1107,9 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       : {}),
     ...(args.allow_wasm_xor_mask_sidecar === true
       ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
       : {}),
   });
 }
@@ -1138,6 +1183,18 @@ function runLintWasmXorMaskSidecar(args: Record<string, unknown>): WasmXorMaskSi
     throw new Error(`lint-wasm-xor-mask-sidecar target not found: ${abs}`);
   }
   return lintWasmXorMaskSidecarFile(abs);
+}
+
+function runLintWasmSealXorKnownPlaintext(args: Record<string, unknown>): WasmSealXorKnownPlaintextReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-seal-xor-known-plaintext target not found: ${abs}`);
+  }
+  const seal =
+    typeof args.seal_path === "string" && args.seal_path.trim().length > 0
+      ? resolvePath(args.seal_path as string)
+      : undefined;
+  return lintWasmSealXorKnownPlaintextFile(abs, seal);
 }
 
 export function validateMcpToolCall(
@@ -1609,6 +1666,9 @@ export async function handleMcpRequest(
     ...(args.allow_wasm_xor_mask_sidecar === true
       ? { allowWasmXorMaskSidecar: true }
       : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1742,6 +1802,9 @@ export async function handleMcpRequest(
         } else if (name === "bla_lint_wasm_xor_mask_sidecar") {
           payload = runLintWasmXorMaskSidecar(args);
           refused = (payload as WasmXorMaskSidecarReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_seal_xor_known_plaintext") {
+          payload = runLintWasmSealXorKnownPlaintext(args);
+          refused = (payload as WasmSealXorKnownPlaintextReport).shouldRefuseBankrupt;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

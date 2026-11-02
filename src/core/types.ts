@@ -213,6 +213,7 @@ export interface ProtectionOptions {
   readonly allowJsWasmHydrateDump?: boolean;
   /** Red/blue round-6: allow WASM XOR-mask-beside-blob entitlement packs under bankrupt/maximum. */
   readonly allowWasmXorMaskSidecar?: boolean;
+  readonly allowWasmSealXorKnownPlaintext?: boolean;
   /**
    * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
    * Relative paths are resolved from the protected module's directory at runtime.

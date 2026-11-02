@@ -44,6 +44,8 @@ export interface OneClickDefenseOptions {
   /** Allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
   readonly allowJsWasmHydrateDump?: boolean;
   readonly allowWasmXorMaskSidecar?: boolean;
+  /** Allow bankrupt despite seal.revision XOR known-plaintext packs (red-blue round-7). Default false. */
+  readonly allowWasmSealXorKnownPlaintext?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
 }
@@ -156,6 +158,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.allowWasmXorMaskSidecar === true
       ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(options.allowWasmSealXorKnownPlaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
       : {}),
     ...(options.selfSealSiblingPaths !== undefined &&
     options.selfSealSiblingPaths.length > 0

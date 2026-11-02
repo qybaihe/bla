@@ -18,6 +18,7 @@ import { lintPanelDeriveAbiFile } from "./engine/panel-derive-abi-lint.js";
 import { lintJsAesUnwrapFile } from "./engine/js-aes-unwrap-lint.js";
 import { lintJsWasmHydrateDumpFile } from "./engine/js-wasm-hydrate-dump-lint.js";
 import { lintWasmXorMaskSidecarFile } from "./engine/wasm-xor-mask-sidecar-lint.js";
+import { lintWasmSealXorKnownPlaintextFile } from "./engine/wasm-seal-xor-known-plaintext-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -63,6 +64,7 @@ Commands:
   lint-js-aes-unwrap <file>  Heuristic ERROR if JS AES wrap-key + create*iv + fixed hdr unwrap; exit 2
   lint-js-wasm-hydrate-dump <file>  Heuristic ERROR if JS dumps WASM hydrate salt/rounds/cipher; exit 2
   lint-wasm-xor-mask-sidecar <file> Heuristic ERROR if WASM data has XOR-mask beside masked entitlement pack; exit 2
+  lint-wasm-seal-xor-known-plaintext <wasm>  Heuristic ERROR if seal.revision is XOR known-plaintext in WASM pack; exit 2
   lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
@@ -88,6 +90,7 @@ Options:
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
   --allow-js-wasm-hydrate-dump  Allow bankrupt despite JS←WASM hydrate param-dump (round-5); OFF by default
   --allow-wasm-xor-mask-sidecar  Allow bankrupt despite WASM XOR-mask-beside-blob packs (round-6); OFF by default
+  --allow-wasm-seal-xor-known-plaintext  Allow bankrupt despite seal.revision XOR known-plaintext packs (round-7); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -120,6 +123,7 @@ interface ParsedCliArgs {
   readonly allowPanelOfflineOracle: boolean;
   readonly allowJsWasmHydrateDump: boolean;
   readonly allowWasmXorMaskSidecar: boolean;
+  readonly allowWasmSealXorKnownPlaintext: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -153,6 +157,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowJsAesUnwrap = false;
   let allowJsWasmHydrateDump = false;
   let allowWasmXorMaskSidecar = false;
+  let allowWasmSealXorKnownPlaintext = false;
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
@@ -210,6 +215,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowJsWasmHydrateDump = true;
     } else if (arg === "--allow-wasm-xor-mask-sidecar") {
       allowWasmXorMaskSidecar = true;
+    } else if (arg === "--allow-wasm-seal-xor-known-plaintext") {
+      allowWasmSealXorKnownPlaintext = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -273,6 +280,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allowPanelOfflineOracle,
     allowJsWasmHydrateDump,
     allowWasmXorMaskSidecar,
+    allowWasmSealXorKnownPlaintext,
     lang,
     clients,
     allDetected,
@@ -428,6 +436,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmXorMaskSidecar:
             parsed.allowWasmXorMaskSidecar ||
             loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -492,6 +503,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmXorMaskSidecar:
             parsed.allowWasmXorMaskSidecar ||
             loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -680,6 +694,33 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           : 0;
       }
 
+
+      case "lint-wasm-seal-xor-known-plaintext": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <wasm> path for `bla lint-wasm-seal-xor-known-plaintext <wasm>`.");
+          return 1;
+        }
+        const sealArg = parsed.positionals[1];
+        const report = lintWasmSealXorKnownPlaintextFile(resolve(target), sealArg ? resolve(sealArg) : undefined);
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-seal-xor-known-plaintext lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const target = parsed.positionals[0] ?? loaded.config.input;
@@ -750,6 +791,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmXorMaskSidecar:
             parsed.allowWasmXorMaskSidecar ||
             loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));
