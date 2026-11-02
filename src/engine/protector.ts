@@ -122,6 +122,19 @@ function escapeHtmlInlineScriptBody(jsCode: string): string {
   return jsCode.replace(/<\/(script)/gi, "<\\/$1");
 }
 
+/**
+ * Where `protectTarget` will write for a given input/output/inPlace triple.
+ * Pure path math (no filesystem access) so callers can plan or confirm writes.
+ */
+export function resolveProtectOutputPath(
+  inputPath: string,
+  outputPath?: string,
+  inPlace = false,
+): string {
+  const absInput = resolve(inputPath);
+  return resolve(outputPath ?? deriveDefaultOutputPath(absInput, inPlace));
+}
+
 function deriveDefaultOutputPath(inputPath: string, inPlace = false): string {
   if (inPlace) return inputPath;
   const ext = extname(inputPath);

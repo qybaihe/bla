@@ -3,10 +3,11 @@ import { initBlaConfig } from "../core/config.js";
 import { inspectReleaseExposure } from "../core/release-exposure.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import { auditTarget } from "../engine/auditor.js";
-import { protectTarget } from "../engine/protector.js";
+import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js";
 import { verifyTarget } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
-import { hardenProject } from "../engine/harden.js";
+import { existsSync } from "node:fs";
+import { discoverHardenTargets, hardenProject } from "../engine/harden.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -145,6 +146,39 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
         },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Preview only: return discovered targets, planned output paths, wouldOverwrite and truncation without writing a single byte. Default false.",
+        },
+        max_artifacts: {
+          type: "number",
+          description: "Optional cap on discovered artifacts (default 64); the report sets truncated=true when more exist.",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_discover",
+    description:
+      "Read-only inventory of protectable artifacts under a project/build directory using the exact discovery bla_harden uses (format per file, truncated flag when the cap is hit). Writes nothing. Use it to scope work before bla_harden / bla_defend.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        directory: {
+          type: "string",
+          description: "Project or build directory to inventory (default: current working directory)",
+        },
+        max_artifacts: {
+          type: "number",
+          description: "Optional cap on listed artifacts (default 64); truncated=true when more exist.",
+        },
       },
       additionalProperties: false,
     },
@@ -196,6 +230,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
         },
       },
       required: ["input_path"],
@@ -261,6 +300,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         llm_directives: {
           type: "boolean",
           description: "Opt-in risky LLM directive layers. Default false.",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
         },
       },
       required: ["input_path"],
@@ -488,6 +532,85 @@ export const BLA_MCP_PROMPTS: readonly McpPromptDefinition[] = Object.freeze([
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Write-confirmation boundary for destructive MCP calls. Returns the existing
+ * paths a call would overwrite; the caller refuses unless confirm_overwrite.
+ */
+function existingPaths(paths: readonly string[]): string[] {
+  return paths.filter((p) => existsSync(p));
+}
+
+function confirmationRequiredPayload(
+  tool: string,
+  wouldOverwrite: readonly string[],
+): Record<string, unknown> {
+  return {
+    status: "confirmation_required",
+    tool,
+    wrote: [],
+    wouldOverwrite,
+    message: `${tool} would overwrite ${wouldOverwrite.length} existing file(s); nothing was written. Confirm with the user, then retry with confirm_overwrite: true (or choose a new output path).`,
+  };
+}
+
+function writeReceipt(
+  outputs: readonly string[],
+  overwritten: readonly string[],
+  confirmed: boolean,
+): Record<string, unknown> {
+  return { status: "written", wrote: outputs, overwrote: overwritten, confirmed };
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  return handlers.defendTarget({
+    inputPath: args.input_path as string,
+    ...(typeof args.output_path === "string"
+      ? { outputPath: args.output_path }
+      : {}),
+    intensity:
+      typeof args.intensity === "string"
+        ? (args.intensity as ProtectionIntensity)
+        : "bankrupt",
+    emitManifest: Boolean(args.emit_manifest),
+    llmDirectives: Boolean(args.llm_directives),
+    weaveDecoys: Boolean(args.weave_decoys),
+    selfSeal: Boolean(args.self_seal),
+    ...(Array.isArray(args.wasm_preserve_exports)
+      ? {
+          wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+            .filter((x): x is string => typeof x === "string" && x.length > 0),
+        }
+      : {}),
+    ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+  });
+}
+
+function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  return handlers.protectTarget({
+    inputPath: args.input_path as string,
+    ...(typeof args.output_path === "string" ? { outputPath: args.output_path } : {}),
+    ...(typeof args.intensity === "string"
+      ? { intensity: args.intensity as ProtectionIntensity }
+      : {}),
+    ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+    llmDirectives: Boolean(args.llm_directives),
+    weaveDecoys: Boolean(args.weave_decoys),
+    selfSeal: Boolean(args.self_seal),
+    ...(Array.isArray(args.wasm_preserve_exports)
+      ? {
+          wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+            .filter((x): x is string => typeof x === "string" && x.length > 0),
+        }
+      : {}),
+  });
 }
 
 export function validateMcpToolCall(
@@ -869,70 +992,88 @@ export async function handleMcpRequest(
         const name = tool.name;
         let payload: unknown;
 
-        if (name === "bla_harden") {
-          payload = handlers.hardenProject({
-            directory:
-              typeof args.directory === "string" && args.directory.trim().length > 0
-                ? (args.directory as string)
-                : process.cwd(),
-            intensity:
-              typeof args.intensity === "string"
-                ? (args.intensity as ProtectionIntensity)
-                : "bankrupt",
-            emitManifest: Boolean(args.emit_manifest),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-          });
-        } else if (name === "bla_defend") {
-          payload = handlers.defendTarget({
-            inputPath: args.input_path as string,
-            ...(typeof args.output_path === "string"
-              ? { outputPath: args.output_path }
-              : {}),
-            intensity:
-              typeof args.intensity === "string"
-                ? (args.intensity as ProtectionIntensity)
-                : "bankrupt",
-            emitManifest: Boolean(args.emit_manifest),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-          });
+        let refused = false;
+        const confirmed = args.confirm_overwrite === true;
+        if (name === "bla_discover") {
+          payload = discoverHardenTargets(
+            typeof args.directory === "string" && args.directory.trim().length > 0
+              ? args.directory
+              : process.cwd(),
+            {
+              ...(optionalCount(args.max_artifacts) !== undefined
+                ? { maxArtifacts: optionalCount(args.max_artifacts)! }
+                : {}),
+            },
+          );
+        } else if (name === "bla_harden") {
+          const hardenDir =
+            typeof args.directory === "string" && args.directory.trim().length > 0
+              ? (args.directory as string)
+              : process.cwd();
+          const maxArtifacts = optionalCount(args.max_artifacts);
+          const dryRun = args.dry_run === true;
+          let preOverwrite: readonly string[] = [];
+          if (!dryRun && existsSync(hardenDir)) {
+            // Zero-write preview with the real engine to find clobbered outputs.
+            preOverwrite = hardenProject({
+              directory: hardenDir,
+              dryRun: true,
+              ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+            }).wouldOverwrite;
+          }
+          if (!dryRun && preOverwrite.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, preOverwrite);
+          } else {
+            payload = handlers.hardenProject({
+              directory: hardenDir,
+              dryRun,
+              ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+              intensity:
+                typeof args.intensity === "string"
+                  ? (args.intensity as ProtectionIntensity)
+                  : "bankrupt",
+              emitManifest: Boolean(args.emit_manifest),
+              llmDirectives: Boolean(args.llm_directives),
+              weaveDecoys: Boolean(args.weave_decoys),
+              selfSeal: Boolean(args.self_seal),
+              ...(Array.isArray(args.wasm_preserve_exports)
+                ? {
+                    wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+                      .filter((x): x is string => typeof x === "string" && x.length > 0),
+                  }
+                : {}),
+              ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+            });
+          }
+        } else if (name === "bla_defend" || name === "bla_protect") {
+          const out = resolveProtectOutputPath(
+            args.input_path as string,
+            typeof args.output_path === "string" ? args.output_path : undefined,
+          );
+          const planned =
+            name === "bla_defend" && args.emit_manifest === true
+              ? [out, `${out}.bla-manifest.json`]
+              : [out];
+          const clobbered = existingPaths(planned);
+          if (clobbered.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, clobbered);
+          } else {
+            const report = (name === "bla_defend"
+              ? runDefend(handlers, args)
+              : runProtect(handlers, args)) as Record<string, unknown>;
+            payload = {
+              ...report,
+              writeReceipt: writeReceipt(
+                existingPaths(planned),
+                clobbered,
+                confirmed,
+              ),
+            };
+          }
         } else if (name === "bla_audit") {
           payload = handlers.auditTarget(args.path as string);
-        } else if (name === "bla_protect") {
-          payload = handlers.protectTarget({
-            inputPath: args.input_path as string,
-            ...(typeof args.output_path === "string" ? { outputPath: args.output_path } : {}),
-            ...(typeof args.intensity === "string"
-              ? { intensity: args.intensity as ProtectionIntensity }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-          });
         } else if (name === "bla_verify") {
           payload = handlers.verifyTarget(
             args.target_path as string,
@@ -979,7 +1120,8 @@ export async function handleMcpRequest(
               },
             ],
             structuredContent: payload,
-            isError: false,
+            // A refused write is a tool-level error the agent must act on.
+            isError: refused,
           },
         };
       }
