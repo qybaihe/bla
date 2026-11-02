@@ -55,3 +55,14 @@ Round-3 confirmed: SHA-256 (or HMAC) public `revision` **stops** seal-only ARX i
 
 - `bla_lint_panel_derive` / `bla lint-panel-derive` flags stable `__vaultPanelDerive_*`; maximum/bankrupt protect rewrites to `_blaPd_*` unless `allow_stable_panel_derive`.
 - Multi-artifact trees: bankrupt harden reports `selfSealRecommended` — pass `self_seal: true` (auto sibling bind on harden). Single-file stays opt-in only.
+
+## Round-4 residual gates (AES wrap + panel oracle)
+
+AES-CTR sealed WASM param blobs without clear `PARM` magic still leak when **JS** holds a recoverable wrap key and calls `createDecipheriv` / `createCipheriv` against a fixed hdr beacon (e.g. `d17ea004`). This is **not** white-box AES.
+
+| Gate | Surface | Default |
+| :--- | :--- | :--- |
+| `bla_lint_js_aes_unwrap` / `bla lint-js-aes-unwrap` | wrap-key + create*iv + fixed hdr | bankrupt **refuse** unless `allow_js_aes_unwrap` / `--allow-js-aes-unwrap` |
+| `bla_lint_panel_derive` | `deriveLocal` rewrite + `panelTokenSha256` oracle | rewrite `_blaPdLocal_*`; bankrupt **refuse** oracle combo unless `allow_panel_offline_oracle` |
+
+Prefer unwrap inside WASM; scrub plaintext panel token digests; do not ship a callable derive UI beside seal digests. Self-seal sibling SHA-256 hard-fail is separate and already on when siblings exist at protect time.

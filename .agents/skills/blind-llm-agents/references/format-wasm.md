@@ -29,3 +29,7 @@ Export rename closes the public `mix`/`seal` hook surface. It does **not** hide 
 
 - Run `bla_lint_wasm_params` / `bla lint-wasm-params` before shipping. Bankrupt harden refuses clear param/cipher magics unless `allow_wasm_clear_params`.
 - This is a **detection gate**, not data-section encryption.
+
+## Sealed blobs still need JS honesty (red-blue round-4)
+
+Encrypting WASM data (no clear `R3PARM`) closes the ASCII-carrier lint. If the **JS loader** still does `Buffer.from(WRAP_KEY_HEX, "hex")` + `createDecipheriv` against a fixed hdr, Node instrumentation recovers params. Run `bla_lint_js_aes_unwrap` on the loader; bankrupt refuses that footgun. BLA does **not** claim white-box AES.
