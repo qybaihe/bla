@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
 import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "./core/config.js";
@@ -11,6 +11,7 @@ import { protectTarget } from "./engine/protector.js";
 import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
+import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -50,6 +51,7 @@ Commands:
   defend <target>             One-click full Counter-REA pipeline (inspect -> audit -> bankrupt protect -> verify)
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
+  lint-lanes <file>           Heuristic warn if gate code looks lane-independent (issue #40.1)
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
@@ -68,6 +70,8 @@ Options:
   --manifest                  Emit unsigned .bla-manifest.json next to protected artifacts (opt-in)
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
+  --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
+  --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -90,6 +94,8 @@ interface ParsedCliArgs {
   readonly manifest: boolean;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
+  readonly selfSeal: boolean;
+  readonly wasmPreserveExports: readonly string[];
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -114,6 +120,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let manifest = false;
   let llmDirectives = false;
   let weaveDecoys = false;
+  let selfSeal = false;
+  let wasmPreserveExports: string[] = [];
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -152,6 +160,19 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
       weaveDecoys = true;
+    } else if (arg === "--self-seal") {
+      selfSeal = true;
+    } else if (arg.startsWith("--wasm-preserve-exports=")) {
+      wasmPreserveExports = arg
+        .slice("--wasm-preserve-exports=".length)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    } else if (arg === "--wasm-preserve-exports" && i + 1 < argv.length) {
+      wasmPreserveExports = argv[++i]!
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
     } else if (arg === "--mcp") {
       command = "mcp";
     } else if (arg === "--update") {
@@ -194,6 +215,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     manifest,
     llmDirectives,
     weaveDecoys,
+    selfSeal,
+    wasmPreserveExports,
     lang,
     clients,
     allDetected,
@@ -313,7 +336,14 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -345,7 +375,14 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
         });
         if (parsed.sarif) {
           console.log(
@@ -363,6 +400,29 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         return report.overallSuccess ? 0 : 2;
       }
 
+      case "lint-lanes": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-lanes <file>`.");
+          return 1;
+        }
+        const source = readFileSync(resolve(target), "utf8");
+        const report = lintLaneIndependence(source);
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA lane-independence lint — ${resolve(target)}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.looksLaneIndependent ? 2 : 0;
+      }
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const target = parsed.positionals[0] ?? loaded.config.input;
@@ -401,7 +461,14 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           honeySourceMaps: parsed.honeyMaps,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
+          selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...((() => {
+            const fromCli = parsed.wasmPreserveExports;
+            const fromCfg = loaded.config.wasmPreserveExports ?? [];
+            const merged = [...new Set([...fromCfg, ...fromCli])];
+            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+          })()),
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

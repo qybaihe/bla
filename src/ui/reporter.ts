@@ -146,10 +146,25 @@ export function formatVerificationReport(report: VerificationReport): string {
     `${ANSI.bold}Verification Target:${ANSI.reset} ${report.targetPath}`,
     `${ANSI.bold}Defense Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (${report.overallPassed ? "ALL COUNTER-REA GATES PASSED" : "PARTIAL PASS"})`,
     `${ANSI.bold}Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
-    `${ANSI.dim}Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40).${ANSI.reset}`,
-    "",
-    `${ANSI.bold}Counter-REA Invariant Checks:${ANSI.reset}`,
+    `${ANSI.dim}${report.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
   ];
+
+  if (
+    report.defenseScoreRaw !== undefined &&
+    report.defenseScoreRaw !== report.defenseScore
+  ) {
+    lines.push(
+      `${ANSI.yellow}Honesty cap:${ANSI.reset}         raw ${report.defenseScoreRaw}/100 → reported ${report.defenseScore}/100 (known gaps; score ≠ preimage hardness)`,
+    );
+  }
+  if (report.defenseScoreGaps && report.defenseScoreGaps.length > 0) {
+    lines.push(`${ANSI.bold}Known gaps (score honesty):${ANSI.reset}`);
+    for (const gap of report.defenseScoreGaps) {
+      lines.push(`  • ${ANSI.yellow}${gap.id}${ANSI.reset} (cap ≤${gap.scoreCap}): ${gap.summary}`);
+    }
+  }
+
+  lines.push("", `${ANSI.bold}Counter-REA Invariant Checks:${ANSI.reset}`);
 
   for (const check of report.checks) {
     const icon = check.passed ? `${ANSI.green}✓ PASS${ANSI.reset}` : `${ANSI.red}✗ FAIL${ANSI.reset}`;
@@ -244,7 +259,13 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
     `  ${ANSI.bold}Input Target:${ANSI.reset}      ${rep.inputPath}`,
     `  ${ANSI.bold}Hardened Output:${ANSI.reset}   ${ANSI.cyan}${rep.outputPath}${ANSI.reset}`,
     `  ${ANSI.bold}Intensity Preset:${ANSI.reset}  ${ANSI.magenta}${rep.intensity.toUpperCase()}${ANSI.reset} (Defense Score: ${ANSI.green}${ANSI.bold}${rep.verification.defenseScore}/100${ANSI.reset})`,
-    `  ${ANSI.dim}Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40).${ANSI.reset}`,
+    `  ${ANSI.dim}${rep.verification.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
+    ...(rep.verification.defenseScoreRaw !== undefined &&
+    rep.verification.defenseScoreRaw !== rep.verification.defenseScore
+      ? [
+          `  ${ANSI.yellow}Honesty cap:${ANSI.reset}        raw ${rep.verification.defenseScoreRaw}/100 → reported ${rep.verification.defenseScore}/100`,
+        ]
+      : []),
     "",
     `${ANSI.bold}${ANSI.blue}── 5-Stage Automated Counter-REA Pipeline ──────────────────────────────────────${ANSI.reset}`,
   ];

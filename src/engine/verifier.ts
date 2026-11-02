@@ -1,13 +1,25 @@
 import { resolve } from "node:path";
 import type { VerificationCheck, VerificationReport } from "../core/types.js";
 import { auditTarget } from "./auditor.js";
+import {
+  applyDefenseScoreHonesty,
+  DEFENSE_SCORE_DISCLAIMER,
+} from "./defense-score-honesty.js";
+
+export interface VerifyTargetOptions {
+  readonly selfSealEnabled?: boolean;
+  readonly wasmExportRenameApplied?: boolean;
+  readonly numericTemplateLeakKnown?: boolean;
+}
 
 /**
  * Verifies a protected artifact against REA's analysis invariants (`bla verify`).
+ * `defenseScore` is soft-capped when known product gaps still apply (issue #40.6).
  */
 export function verifyTarget(
   targetPath: string,
   originalPath?: string,
+  options: VerifyTargetOptions = {},
 ): VerificationReport {
   const absTarget = resolve(targetPath);
   const afterAudit = auditTarget(absTarget);
@@ -91,20 +103,34 @@ export function verifyTarget(
   });
 
   const passedCount = checks.filter((c) => c.passed).length;
-  // defenseScore measures Counter-REA gate pass-rate + exposure drop only.
-  // It is NOT a claim of cryptographic preimage hardness: numeric-literal
-  // coverage, WASM export rename, opaque-predicate seed strength, and
-  // opt-in self-seal helpers are tracked separately (issue #40).
-  const defenseScore = Math.round(
-    (passedCount / checks.length) * 70 + Math.max(0, (100 - afterAudit.exposureScore) * 0.3),
+  // Raw score = Counter-REA gate pass-rate + exposure drop only.
+  // Soft-capped below when known gaps still apply (issue #40.6).
+  const rawDefenseScore = Math.min(
+    100,
+    Math.round(
+      (passedCount / checks.length) * 70 + Math.max(0, (100 - afterAudit.exposureScore) * 0.3),
+    ),
   );
+  const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
+    detectedFormat: afterAudit.detectedFormat,
+    selfSealEnabled: options.selfSealEnabled === true,
+    wasmExportRenameApplied: options.wasmExportRenameApplied === true,
+    numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,
+  });
 
   return {
     targetPath: absTarget,
     ...(originalPath ? { originalPath: resolve(originalPath) } : {}),
     detectedFormat: afterAudit.detectedFormat,
     overallPassed: passedCount === checks.length,
-    defenseScore: Math.min(100, defenseScore),
+    defenseScore: honesty.cappedScore,
+    defenseScoreRaw: honesty.rawScore,
+    defenseScoreGaps: honesty.gaps.map((g) => ({
+      id: g.id,
+      summary: g.summary,
+      scoreCap: g.scoreCap,
+    })),
+    defenseScoreDisclaimer: DEFENSE_SCORE_DISCLAIMER,
     checks,
     tokenAmplificationFactor: tokenAmp,
     costAmplificationFactor: costAmp,

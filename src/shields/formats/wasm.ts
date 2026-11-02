@@ -54,6 +54,125 @@ function encodeWasmName(str: string): Buffer {
 }
 
 
+export interface WasmExportEntry {
+  readonly name: string;
+  /** 0 = func, 1 = table, 2 = mem, 3 = global */
+  readonly kind: number;
+  readonly index: number;
+}
+
+export interface WasmExportRename {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: number;
+  readonly index: number;
+}
+
+/**
+ * Parse a WASM export-section payload (without the section id/size wrapper)
+ * into individual entries. Defensive: returns [] on truncated / malformed input.
+ */
+export function parseWasmExportSectionPayload(
+  exportSectionPayload: Buffer,
+): WasmExportEntry[] {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(
+      exportSectionPayload,
+      0,
+    );
+    let p = nextOffset;
+    const out: WasmExportEntry[] = [];
+    for (let i = 0; i < count; i++) {
+      const { value: nameLen, nextOffset: afterLen } = decodeUnsignedLeb128(
+        exportSectionPayload,
+        p,
+      );
+      p = afterLen;
+      if (p + nameLen >= exportSectionPayload.length) return out;
+      const name = exportSectionPayload
+        .subarray(p, p + nameLen)
+        .toString("utf8");
+      p += nameLen;
+      if (p >= exportSectionPayload.length) return out;
+      const kind = exportSectionPayload[p++]!;
+      const { value: index, nextOffset: afterIdx } = decodeUnsignedLeb128(
+        exportSectionPayload,
+        p,
+      );
+      p = afterIdx;
+      out.push({ name, kind, index });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function encodeWasmExportEntry(entry: WasmExportEntry): Buffer {
+  return Buffer.concat([
+    encodeWasmName(entry.name),
+    Buffer.from([entry.kind & 0xff]),
+    encodeUnsignedLeb128(entry.index),
+  ]);
+}
+
+function encodeWasmExportSectionPayload(
+  entries: readonly WasmExportEntry[],
+): Buffer {
+  return Buffer.concat([
+    encodeUnsignedLeb128(entries.length),
+    ...entries.map(encodeWasmExportEntry),
+  ]);
+}
+
+/** Heuristic: names that look like internal/debug ABI rather than a public export. */
+export function looksLikeInternalWasmExport(name: string): boolean {
+  return /^(?:__|_|debug_|dbg_|_internal|internal_|test_|tmp_)/i.test(name);
+}
+
+/**
+ * Rename export names that are NOT in `preserveExports`.
+ * When `onlyInternal` is true, only names matching {@link looksLikeInternalWasmExport}
+ * are renamed (safer default). Function indices / kinds are preserved so
+ * Instantiation semantics stay intact for glue that uses the returned rename map.
+ *
+ * DEFENSIVE ONLY — customers must update import sites using the rename map
+ * (or keep public ABI names in `preserveExports`).
+ */
+export function renameWasmExports(
+  exportSectionPayload: Buffer,
+  prng: SeededPrng,
+  options: {
+    readonly preserveExports?: readonly string[];
+    /** When true (default), only rename internal-looking names. */
+    readonly onlyInternal?: boolean;
+  } = {},
+): {
+  readonly payload: Buffer;
+  readonly renames: readonly WasmExportRename[];
+} {
+  const preserve = new Set(options.preserveExports ?? []);
+  const onlyInternal = options.onlyInternal !== false;
+  const entries = parseWasmExportSectionPayload(exportSectionPayload);
+  if (entries.length === 0) {
+    return { payload: exportSectionPayload, renames: [] };
+  }
+  const renames: WasmExportRename[] = [];
+  const rewritten: WasmExportEntry[] = entries.map((e) => {
+    if (preserve.has(e.name)) return e;
+    if (onlyInternal && !looksLikeInternalWasmExport(e.name)) return e;
+    const tag = prng.hex(4);
+    const to = `ops_${tag}_${prng.identifier({ style: "snake", hint: "dispatch", entropy: 3 })}`;
+    renames.push({ from: e.name, to, kind: e.kind, index: e.index });
+    return { name: to, kind: e.kind, index: e.index };
+  });
+  return {
+    payload: encodeWasmExportSectionPayload(rewritten),
+    renames,
+  };
+}
+
+
 /**
  * Append decoy export entries that alias an existing function index.
  * Original exports are preserved; WebAssembly.validate and original
@@ -241,6 +360,24 @@ export function protectWasmBinary(
   options: {
     readonly intensity?: ProtectionIntensity;
     readonly seed?: string | number;
+    /**
+     * Public ABI export names that must keep their original names (issue #40.3).
+     * All other exports may be renamed when `renameNonPublicExports` is active.
+     */
+    readonly preserveExports?: readonly string[];
+    /**
+     * When true, rename exports not listed in `preserveExports`.
+     * Default: true at maximum/bankrupt for internal-looking names only;
+     * pass `renameNonPublicExports: true` with an explicit preserve list to
+     * rename every non-preserved export.
+     */
+    readonly renameNonPublicExports?: boolean;
+    /**
+     * When renaming, only touch internal-looking names (`__*`, `debug_*`, …).
+     * Default true unless `renameNonPublicExports` is explicitly true AND
+     * `preserveExports` is provided (then all non-preserved names rename).
+     */
+    readonly renameInternalOnly?: boolean;
   } = {},
 ): {
   readonly buffer: Buffer;
@@ -252,6 +389,8 @@ export function protectWasmBinary(
   readonly projectedInterfaceChargeBytes: number;
   readonly exceedsRepresentationBudget: boolean;
   readonly exportDecoysInjected: number;
+  /** Export renames applied this pass (issue #40.3). Empty when rename is off. */
+  readonly exportsRenamed: readonly WasmExportRename[];
 } {
   if (
     bytes.length < 8 ||
@@ -276,6 +415,7 @@ export function protectWasmBinary(
   const keptChunks: Buffer[] = [bytes.subarray(0, 8)];
   let offset = 8;
   let exportDecoysInjected = 0;
+  let exportsRenamed: readonly WasmExportRename[] = [];
   while (offset < bytes.length) {
     const sectionStart = offset;
     const sectionId = bytes[offset++]!;
@@ -285,9 +425,33 @@ export function protectWasmBinary(
 
     if (sectionId === 0) {
       // strip original custom/debug
-    } else if (sectionId === 7 && decoyExports.length > 0) {
-      const payload = bytes.subarray(nextOffset, sectionEnd);
-      const expanded = appendDecoyExports(payload, decoyExports);
+    } else if (sectionId === 7) {
+      let payload = bytes.subarray(nextOffset, sectionEnd);
+      // Issue #40.3: optional rename of non-public / internal exports first.
+      const intensityWantsRename =
+        intensity === "maximum" || intensity === "bankrupt";
+      const renameRequested =
+        options.renameNonPublicExports === true ||
+        (options.renameNonPublicExports !== false && intensityWantsRename);
+      if (renameRequested) {
+        const onlyInternal =
+          options.renameInternalOnly !== undefined
+            ? options.renameInternalOnly
+            : !(
+                options.renameNonPublicExports === true &&
+                (options.preserveExports?.length ?? 0) > 0
+              );
+        const renamed = renameWasmExports(payload, prng, {
+          preserveExports: options.preserveExports,
+          onlyInternal,
+        });
+        payload = Buffer.from(renamed.payload);
+        exportsRenamed = renamed.renames;
+      }
+      const expanded =
+        decoyExports.length > 0
+          ? appendDecoyExports(payload, decoyExports)
+          : payload;
       keptChunks.push(
         Buffer.concat([
           Buffer.from([0x07]),
@@ -401,5 +565,6 @@ export function protectWasmBinary(
     projectedInterfaceChargeBytes: ifacePlan.totalReaChargedBytes,
     exceedsRepresentationBudget: ifacePlan.exceedsRepresentationBudget,
     exportDecoysInjected,
+    exportsRenamed,
   };
 }

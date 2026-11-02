@@ -25,6 +25,10 @@ export interface OneClickDefenseOptions {
   readonly emitManifest?: boolean;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
+  /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
+  readonly selfSeal?: boolean;
+  /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
+  readonly wasmPreserveExports?: readonly string[];
 }
 
 export interface OneClickDefenseStageSummary {
@@ -45,6 +49,8 @@ export interface OneClickDefenseReport {
   readonly intensity: ProtectionIntensity;
   /** True when caller opted into weave-decoy labeling/hooks. */
   readonly weaveDecoys: boolean;
+  /** True when caller opted into self-seal integrity binding. */
+  readonly selfSeal: boolean;
   readonly overallSuccess: boolean;
   readonly stages: readonly OneClickDefenseStageSummary[];
   readonly releaseExposure: ReleaseExposureReport | null;
@@ -108,11 +114,20 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.weaveDecoys !== undefined
       ? { weaveDecoys: options.weaveDecoys }
       : {}),
+    ...(options.selfSeal !== undefined
+      ? { selfSeal: options.selfSeal }
+      : {}),
+    ...(options.wasmPreserveExports !== undefined && options.wasmPreserveExports.length > 0
+      ? { wasmPreserveExports: options.wasmPreserveExports }
+      : {}),
     honeySourceMaps: true,
   });
 
   // Stage 4: Verify Counter-REA Invariants
-  const verification = verifyTarget(protection.outputPath, absInput);
+  const verification = verifyTarget(protection.outputPath, absInput, {
+    selfSealEnabled: options.selfSeal === true || protection.selfSeal === true,
+    wasmExportRenameApplied: protection.wasmExportRenameApplied === true,
+  });
 
   const afterEst = protection.afterAudit.agentEstimates[0]!;
   const exhaustionSummary = {
@@ -194,6 +209,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     outputPath: protection.outputPath,
     intensity,
     weaveDecoys: options.weaveDecoys === true,
+    selfSeal: options.selfSeal === true,
     overallSuccess: verification.overallPassed,
     stages,
     releaseExposure,

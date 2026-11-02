@@ -144,6 +144,19 @@ export {
 export { auditTarget } from "./engine/auditor.js";
 export { protectTarget } from "./engine/protector.js";
 export { verifyTarget } from "./engine/verifier.js";
+export type { VerifyTargetOptions } from "./engine/verifier.js";
+export {
+  applyDefenseScoreHonesty,
+  collectDefenseScoreGaps,
+  DEFENSE_SCORE_DISCLAIMER,
+  formatDefenseScoreGapAnnotation,
+} from "./engine/defense-score-honesty.js";
+export type {
+  DefenseScoreGap,
+  DefenseScoreGapId,
+  DefenseScoreHonesty,
+  DefenseScoreHonestyInput,
+} from "./engine/defense-score-honesty.js";
 export {
   defendTarget,
   type OneClickDefenseOptions,
@@ -162,6 +175,13 @@ export {
 } from "./engine/harden.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";
+export {
+  generateSelfSealSnippet,
+  measureSelfSealDigestOffline,
+  SELF_SEAL_SCHEMA,
+  type SelfSealOptions,
+  type SelfSealSnippet,
+} from "./shields/runtime/self-seal.js";
 export * from "./shields/formats/apple-plist.js";
 export * from "./shields/formats/dotnet-managed.js";
 export * from "./shields/formats/jvm-bytecode.js";
@@ -238,4 +258,31 @@ export {
   type WeavePlan,
   type WeavePlanStatus,
 } from "./shields/weave/weave-decoy.js";
+
+
+export {
+  lintLaneIndependence,
+  LANE_INDEPENDENCE_SCHEMA,
+  type LaneIndependenceFinding,
+  type LaneIndependenceReport,
+  type LaneIndependenceFindingId,
+} from "./engine/lane-independence-lint.js";
+export {
+  parseWasmExportSectionPayload,
+  renameWasmExports,
+  looksLikeInternalWasmExport,
+  type WasmExportEntry,
+  type WasmExportRename,
+} from "./shields/formats/wasm.js";
+
+export {
+  planSidecarEntanglement,
+  SIDECAR_ENTANGLE_SCHEMA,
+  type SidecarEntanglePlan,
+  type SidecarEntanglePlanOptions,
+} from "./shields/runtime/sidecar-entangle.js";
+
+export {
+  recommendOpaqueSeedBinding,
+} from "./shields/tarpit/opaque-predicates.js";
 

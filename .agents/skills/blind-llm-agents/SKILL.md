@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.3.0"
+  version: "1.3.2"
 ---
 
 # BLA: Blind LLM Agents
@@ -78,6 +78,38 @@ entanglement:
 happy paths, call-graph entanglement). JS AST weave is already on; Python `.py`/`.pyc`
 customer-def structural weave activates when `weave_decoys: true`. See
 [docs/weave-decoy-mcp.md](../../../docs/weave-decoy-mcp.md).
+
+
+## Optional stronger path: self-seal (#40.5)
+
+When the user wants sibling-module integrity / anti-tamper binding on **JS/Node**
+targets (or says self-seal / 自密封):
+
+1. CLI: add `--self-seal` to `harden` / `defend` / `protect`
+2. MCP: `self_seal: true` on `bla_harden` / `bla_defend` / `bla_protect`
+3. Config: `"selfSeal": true` in `.blarc` (ORs with the flag)
+
+Off by default. Browser builds soft-skip (digest=0). Pair with weave decoys when
+Python structural weave is also desired.
+
+## WASM public ABI preserve (#40.3)
+
+When hardening `.wasm` at maximum/bankrupt and the customer must keep specific export names:
+
+1. CLI: `--wasm-preserve-exports main,add`
+2. MCP: `wasm_preserve_exports: ["main","add"]`
+3. Config: `"wasmPreserveExports": ["main","add"]` in `.blarc`
+Internal-looking names (`__*`, `debug_*`, …) may still be renamed; update glue via the rename map when needed.
+
+## Lane-independence footgun lint (#40.1)
+
+Before shipping a custom license/activation gate, run:
+
+`npx bla-agents lint-lanes path/to/gate.js`
+
+Heuristic warn only (exit 2 when findings). Prefer whole-key chained mixing
+(no per-lane oracle) — see Meridian DESIGN / issue #40. Not RE advice.
+
 
 ## FORBIDDEN for executing agents
 

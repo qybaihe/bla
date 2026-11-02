@@ -72,13 +72,15 @@
 | Resource `bla://directives/weave-decoy` | 返回本理论的可执行 Markdown |
 | Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON |
 | `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | **真实管线属性**：激活 Python 客户 def 结构织入（JS 始终 AST 织入）；非仅报告布尔标注 |
+| `.blarc` / `bla.config.json` 字段 `weaveDecoys` | 与 CLI `--weave-decoys` / MCP `weave_decoys` 同义；CLI 读取后与旗标做 OR |
 
 实现入口：`src/shields/weave/weave-decoy.ts`、`src/shields/formats/python-ast-weave.ts`、`src/mcp/server.ts`。
 
 ## 8. Follow-up
 
-- 更多 sidecar 格式的入口纠缠验收；可选 self-seal / defenseScore honesty (#40)  
-- 可选 self-seal 与 `defenseScore` 对 onefile 诚实性（#40）
+- 更多 sidecar 格式的入口纠缠验收（DESIGN + planner stub 已落地；完整 strip⇒fail rewrite 仍开）  
+- self-seal / defenseScore honesty soft-caps 已落地；onefile/peel 更深的分数模型仍开（#40）  
+- `bla lint-lanes` / WASM `wasmPreserveExports` 已落地；格式 densify 与更广的模板数值卫生仍开
 
 ## 相关文档
 

@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Self-seal (#40.5):** opt-in CLI `--self-seal` / MCP `self_seal` / `.blarc selfSeal` injects Node sibling-module + env-fingerprint integrity binding into JS AST shield and entangles the opaque-predicate seed.
+- **WASM preserve ABI (#40.3):** `.blarc`/`CLI`/`MCP` `wasmPreserveExports` / `--wasm-preserve-exports` / `wasm_preserve_exports` keeps listed export names when rename runs.
+- **WASM export rename (#40.3):** `protectWasmBinary` renames internal-looking exports at maximum/bankrupt (preserve public ABI via `preserveExports`); returns `exportsRenamed`.
+- **Lane-independence lint (#40.1):** `bla lint-lanes <file>` heuristic warn for per-lane oracle footguns; `lintLaneIndependence()` API.
+- **Sidecar entanglement DESIGN + planner stub:** `docs/design/sidecar-entry-entanglement.md` + `planSidecarEntanglement()`.
+- **`.blarc weaveDecoys` / `selfSeal` schema parity** with CLI/MCP flags.
+
+### Changed
+- **defenseScore honesty (#40.6):** soft-caps + gap annotations when WASM rename / self-seal / numeric template gaps still apply; SEAL/verify text clarifies score ≠ preimage hardness.
+- **Opaque-predicate seed (#40.4):** ~28-bit PRNG material (no hrtime/Date.now); `recommendOpaqueSeedBinding()` helper.
+- **Native header templates:** scrub classic `0x9e3779b9` probe from emit-headers output.
+
+
 ### Changed
 
 - **`blind-llm-agents` skill → v1.3.0**: skill is the primary one-click harden GUIDE

@@ -68,3 +68,13 @@ See [`weave-decoy-mcp.md`](./weave-decoy-mcp.md). Do **not** add dismissible
 
 - [CLI and MCP](./cli-and-mcp.md)
 - [Counter-REA matrix](../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
+
+
+## Opt-in self-seal (#40.5)
+
+Pass `--self-seal` / MCP `self_seal: true` / `.blarc` `"selfSeal": true` so JS/Node harden paths inject sibling-module integrity binding and entangle the opaque seed. Off by default.
+
+## WASM export rename / preserve (#40.3)
+
+At `maximum`/`bankrupt`, BLA may rename internal-looking WASM exports. Pass `--wasm-preserve-exports main,add` / MCP `wasm_preserve_exports` / `.blarc` `"wasmPreserveExports": ["main","add"]` so the public ABI stays stable while glue can consume the rename map for anything else.
+

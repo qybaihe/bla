@@ -189,6 +189,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let chaffPayloadsEmbedded = 0;
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
+  let wasmExportsRenamed = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
@@ -199,6 +200,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       intensity,
       seed,
       filename: basename(absInput),
+      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     });
     let finalCode = transformed.code;
 
@@ -245,6 +247,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
             intensity,
             seed: `${seed}:html-script-${currentIndex}`,
             sourceType: tagKind.isModule ? "module" : "script",
+            ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
           });
           inlineScriptsTransformed++;
           decoyFunctionsInjected += res.decoyFunctionsInjected;
@@ -269,6 +272,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         intensity,
         seed: `${seed}:html-bootstrap`,
         sourceType: "script",
+        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
       });
       decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
       fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
@@ -314,6 +318,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           intensity,
           seed: `${seed}:${vf.relativePath}`,
           filename: vf.relativePath,
+          ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
         });
         const honey = generateHoneySourceMap(
           basename(vf.relativePath),
@@ -355,11 +360,17 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     // Inject a decoy hardware-enclave bridge module inside the ASAR archive
     const decoyBridgeJs = transformJavaScriptWithBlaShield(
       `export function verifyHardwareEnclaveLease(token) { return Boolean(token); }\n`,
-      { intensity, seed: `${seed}:enclave-decoy` },
+      {
+        intensity,
+        seed: `${seed}:enclave-decoy`,
+        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+      },
     );
     protectedFiles.push({
       relativePath: "enclave/hardware-tee-bridge.js",
       content: Buffer.from(decoyBridgeJs.code, "utf8"),
+    
+      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     });
 
     // Flood ASAR Pickle JSON header past REA DEFAULT_ASAR_MAX_HEADER_BYTES at
@@ -381,12 +392,21 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("asar-header-admission");
   } else if (format === "wasm") {
     const rawWasm = readFileSync(absInput);
-    const res = protectWasmBinary(rawWasm, { intensity, seed });
+    const res = protectWasmBinary(rawWasm, {
+      intensity,
+      seed,
+      // Issue #40.3: rename internal-looking exports at maximum/bankrupt by default;
+      // wasmPreserveExports keeps the customer public ABI.
+      ...(options.wasmPreserveExports && options.wasmPreserveExports.length > 0
+        ? { preserveExports: options.wasmPreserveExports }
+        : {}),
+    });
     writeFileAtomicSync(absOutput, res.buffer);
     decoyFunctionsInjected = 16;
     fakeCrossReferencesCreated = 24;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customSectionsAdded;
+    wasmExportsRenamed = res.exportsRenamed.length;
     counteredVectors.add("wasm-wat-interface");
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
@@ -587,6 +607,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               intensity,
               seed: `${seed}:${entry.name}`,
               filename: entry.name,
+              ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
             });
             const honey = generateHoneySourceMap(
               entry.name,
@@ -673,6 +694,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     detectedFormat: format,
     intensity,
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
+    ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+    ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,

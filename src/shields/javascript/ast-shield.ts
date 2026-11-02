@@ -13,6 +13,10 @@ import {
   generateShadowHeapChurnShield,
   type ShadowHeapChurnShieldResult,
 } from "../runtime/memory-diff-shield.js";
+import {
+  generateSelfSealSnippet,
+  type SelfSealOptions,
+} from "../runtime/self-seal.js";
 import { generateCounterReaExhaustionSuite } from "../exhaustion/index.js";
 import { generateCounterReaDeceptionSuite } from "../deception/index.js";
 
@@ -46,6 +50,12 @@ export interface JsTransformOptions {
   readonly sourceType?: JsCarrierType;
   readonly loader?: JsLoaderType;
   readonly llmDirectives?: boolean;
+  /**
+   * Opt-in self-seal / sibling-module integrity binding (issue #40.5).
+   * When true or an options object, injects a Node self-integrity preamble and
+   * entangles the opaque-predicate seed with the measured digest.
+   */
+  readonly selfSeal?: boolean | SelfSealOptions;
 }
 
 export interface JsShieldTransformResult {
@@ -63,6 +73,9 @@ export interface JsShieldTransformResult {
   readonly shadowHeapSlotsChurned: number;
   readonly electronProtocolsProtected?: number;
   readonly memoryDiffShield: ShadowHeapChurnShieldResult;
+  /** True when self-seal preamble was injected (issue #40.5). */
+  readonly selfSealEnabled?: boolean;
+  readonly selfSealBindingName?: string;
 }
 
 const DECOY_ROUTES: readonly string[] = [
@@ -457,6 +470,9 @@ export function transformJavaScriptWithBlaShield(
   const exhaustionSuite = generateCounterReaExhaustionSuite(prng, intensity);
   const deceptionSuite = generateCounterReaDeceptionSuite(prng, intensity);
   const memoryDiffShield = generateShadowHeapChurnShield(prng, intensity);
+  // Declared early so every return path can report self-seal status (issue #40.5).
+  let selfSealEnabled = false;
+  let selfSealBindingName: string | undefined;
 
   const hasExplicitLoaderOrFilename =
     options.loader !== undefined || options.filename !== undefined;
@@ -1073,11 +1089,29 @@ export function transformJavaScriptWithBlaShield(
   // 4. Build Decoy IPC Ambiguity & Route Mirage block + Cognitive-Armor seed entanglement
   const mirageLines: string[] = [];
   mirageLines.push(deceptionSuite.cognitiveArmor.code);
-  // Deterministic opaque-predicate seed (issue #40): never hrtime/Date.now.
-  // Keep the low bit entangled with cognitive-armor digest so tamper flips seed parity.
-  const opaqueSeedBase = (prng.nextInt(1, 0x1ffff) << 2) & 0x7fffc;
+  // Opt-in self-seal (issue #40.5): sibling-module + env fingerprint digest.
+  const selfSealOpt = options.selfSeal;
+  if (selfSealOpt) {
+    const sealOpts: SelfSealOptions =
+      selfSealOpt === true ? {} : selfSealOpt;
+    const seal = generateSelfSealSnippet(prng, sealOpts);
+    mirageLines.push(seal.code);
+    selfSealEnabled = true;
+    selfSealBindingName = seal.bindingName;
+  }
+  // Deterministic opaque-predicate seed (issue #40.4): never hrtime/Date.now/bit0-only.
+  // Draw ~28 bits of PRNG material (two draws xor'd) so weak hrtime/bit0 patterns
+  // cannot be guessed; keep low bit free for cognitive-armor entanglement.
+  // When self-seal is on, also fold the integrity digest into the seed material.
+  const opaqueSeedHi = prng.nextUint32() >>> 0;
+  const opaqueSeedLo = prng.nextUint32() >>> 0;
+  const opaqueSeedBase = ((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffe) >>> 0;
+  const selfSealFold =
+    selfSealEnabled && selfSealBindingName
+      ? ` ^ ((${selfSealBindingName} >>> 0) & 0xfffffffe)`
+      : "";
   mirageLines.push(
-    `const ${seedVarName} = ((${opaqueSeedBase}) | ((typeof ${deceptionSuite.cognitiveArmor.digestFunctionName} === "function" && ${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+    `const ${seedVarName} = ((${opaqueSeedBase}${selfSealFold}) | ((typeof ${deceptionSuite.cognitiveArmor.digestFunctionName} === "function" && ${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
   );
   mirageLines.push(memoryDiffShield.code);
   const channelsToMirror =
@@ -1305,5 +1339,6 @@ export function transformJavaScriptWithBlaShield(
     shadowHeapSlotsChurned: memoryDiffShield.mutableSlotsCount,
     electronProtocolsProtected,
     memoryDiffShield,
+    ...(selfSealEnabled ? { selfSealEnabled: true as const, selfSealBindingName: selfSealBindingName! } : {}),
   };
 }

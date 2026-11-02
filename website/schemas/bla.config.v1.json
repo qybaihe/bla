@@ -41,6 +41,21 @@
     },
     "minDefenseScore": {
       "type": "number"
+    },
+    "weaveDecoys": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on). Parity with CLI --weave-decoys / MCP weave_decoys."
+    },
+    "selfSeal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Parity with CLI --self-seal / MCP self_seal."
+    },
+    "wasmPreserveExports": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3)."
     }
   },
   "additionalProperties": true

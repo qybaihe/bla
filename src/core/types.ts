@@ -164,6 +164,16 @@ export interface ProtectionOptions {
    * When false, Python stays warm-init-only. Default false.
    */
   readonly weaveDecoys?: boolean;
+  /**
+   * Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5).
+   * When true, harden/protect inject a self-integrity preamble and entangle the opaque seed.
+   */
+  readonly selfSeal?: boolean;
+  /**
+   * WASM public ABI export names to keep when rename runs (issue #40.3).
+   * Other / internal-looking exports may be renamed at maximum/bankrupt.
+   */
+  readonly wasmPreserveExports?: readonly string[];
 }
 
 export interface ProtectionMetrics {
@@ -189,6 +199,10 @@ export interface ProtectionResult {
   readonly intensity: ProtectionIntensity;
   /** Present when protect was called with weaveDecoys:true (Python customer-def weave active). */
   readonly weaveDecoys?: boolean;
+  /** Present when protect was called with selfSeal:true (JS self-integrity binding active). */
+  readonly selfSeal?: boolean;
+  /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
+  readonly wasmExportRenameApplied?: boolean;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;
@@ -207,12 +221,26 @@ export interface VerificationCheck {
   readonly details: string;
 }
 
+/** Soft-cap annotation when known product gaps still apply (issue #40.6). */
+export interface DefenseScoreGapAnnotation {
+  readonly id: string;
+  readonly summary: string;
+  readonly scoreCap: number;
+}
+
 export interface VerificationReport {
   readonly targetPath: string;
   readonly originalPath?: string;
   readonly detectedFormat: ArtifactFormat;
   readonly overallPassed: boolean;
-  readonly defenseScore: number; // 0 to 100
+  /** Soft-capped Counter-REA gate score (0–100). Not a preimage-hardness claim. */
+  readonly defenseScore: number;
+  /** Raw gate score before honesty soft-caps (issue #40.6). */
+  readonly defenseScoreRaw?: number;
+  /** Known gaps that annotated / capped the score. */
+  readonly defenseScoreGaps?: readonly DefenseScoreGapAnnotation[];
+  /** Fixed disclaimer: score ≠ preimage hardness. */
+  readonly defenseScoreDisclaimer?: string;
   readonly checks: readonly VerificationCheck[];
   readonly tokenAmplificationFactor: number;
   readonly costAmplificationFactor: number;

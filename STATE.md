@@ -89,13 +89,14 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 
 ## Nightly roadmap remaining
 
-1. **Self-seal / defenseScore honesty (#40)** — opt-in self-integrity + honest scores for onefile/peel limits.
-2. **Sidecar entry entanglement** — entangle protectors with entry/sidecar so stripping decoys breaks runtime.
-3. **Deception shields → more formats** — WASM custom sections/export names, DEX string pool, SQLite comments/metadata, Safetensors/GGUF header metadata.
+1. ~~**Self-seal / defenseScore honesty (#40)**~~ — landed soft-caps + opt-in `--self-seal` / MCP `self_seal` / `.blarc selfSeal` (batch 2026-11-02). Remaining: deeper onefile/peel score model.
+2. **Sidecar entry entanglement** — DESIGN + `planSidecarEntanglement()` stub landed; full strip⇒fail rewrite still open.
+3. **Deception shields → more formats** — WASM export rename + `wasmPreserveExports` landed; DEX/SQLite/model densify and broader numeric template hygiene still open.
 4. **Empirical JADX / Android red-team** — real REA mapping+JNI vs BLA-hardened unsigned APK.
 5. **ESP flash / esp-image (#8228)** — if REA moved there; UF2 empirical red-team otherwise.
 6. **Dependabot majors #29–#35** — still held pending review.
 7. Polish doctor subsystem list (SQLite / models / BEAM / EVM / Android R8) for parity with shields.
+8. **Lane-independence lint (#40.1)** — `bla lint-lanes` heuristic shipped; optional CI gate / doctor hook TBD.
 
 ## Publish checklist (once a GitHub token exists)
 

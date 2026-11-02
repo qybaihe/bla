@@ -92,6 +92,10 @@ export interface HardenProjectOptions {
   readonly emitManifest?: boolean;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
+  /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
+  readonly selfSeal?: boolean;
+  /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
+  readonly wasmPreserveExports?: readonly string[];
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -109,6 +113,7 @@ export interface HardenProjectReport {
   readonly artifacts: readonly HardenArtifactSummary[];
   readonly oneSentenceUsage: string;
   readonly weaveDecoys: boolean;
+  readonly selfSeal: boolean;
 }
 
 function isProtectableFormat(format: ArtifactFormat): boolean {
@@ -293,6 +298,13 @@ export function hardenProject(
         ...(options.weaveDecoys !== undefined
           ? { weaveDecoys: options.weaveDecoys }
           : {}),
+        ...(options.selfSeal !== undefined
+          ? { selfSeal: options.selfSeal }
+          : {}),
+        ...(options.wasmPreserveExports !== undefined &&
+        options.wasmPreserveExports.length > 0
+          ? { wasmPreserveExports: options.wasmPreserveExports }
+          : {}),
         emitManifest,
       });
       summaries.push({
@@ -333,6 +345,7 @@ export function hardenProject(
             directory: absDir,
             intensity,
             weaveDecoys: options.weaveDecoys === true,
+            selfSeal: options.selfSeal === true,
             artifacts: summaries,
           },
           null,
@@ -360,6 +373,7 @@ export function hardenProject(
     oneSentenceUsage:
       'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
     weaveDecoys: options.weaveDecoys === true,
+    selfSeal: options.selfSeal === true,
   };
 }
 

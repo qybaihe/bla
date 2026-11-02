@@ -4,6 +4,18 @@ import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 
 export type NativeHeaderLanguage = "c" | "rust" | "go";
 
+/**
+ * Issue #40 template hygiene: derive a per-decoy odd 32-bit mixing constant from
+ * the project PRNG so the emitted native tarpit never ships the classic
+ * `0x9e3779b9` golden-ratio probe bit-identically. Odd constants keep the
+ * 32-bit multiply a bijection (full avalanche) just like the original value.
+ */
+function deriveMixConstant(prng: SeededPrng): number {
+  let mix = (prng.nextUint32() | 1) >>> 0;
+  if (mix === 0x9e3779b9 || mix === 2654435769) mix = (mix ^ 2) >>> 0;
+  return mix >>> 0;
+}
+
 export interface EmittedNativeHeader {
   readonly language: NativeHeaderLanguage;
   readonly filename: string;
@@ -116,12 +128,13 @@ export function emitCompileTimeNativeHeader(
       const next1 = (i + 1) % decoyCount;
       const next2 = (i + 3) % decoyCount;
       const k = prng.nextInt(0x1000, 0xffff);
+      const mix = deriveMixConstant(prng);
       const chaffSym = chaffPayloads[i % chaffPayloads.length]!.symbolName;
       lines.push(`BLA_NOINLINE static uint32_t ${tarpitStem}_${i}(uint32_t seed, int depth) {`);
       lines.push(`    const char* _anchor_str = (const char*)enclave_keep_data_table[(seed + ${i}u) % ${dataTableCount}u];`);
       lines.push(`    uint32_t acc = seed ^ 0x${k.toString(16)}u ^ (uint32_t)(unsigned char)${chaffSym}[0] ^ (uint32_t)(unsigned char)_anchor_str[0];`);
       lines.push(`    for (int r = 0; r < 4; ++r) {`);
-      lines.push(`        acc = (acc * 0x9E3779B9u) ^ (acc >> 13) ^ (uint32_t)r;`);
+      lines.push(`        acc = (acc * 0x${mix.toString(16)}u) ^ (acc >> 13) ^ (uint32_t)r;`);
       lines.push(`        ${shadowHeapName}[(${i} * 4 + r) & 31] ^= acc;`);
       lines.push(`    }`);
       lines.push(`    if (depth > 0 && ((7u * (seed | 3u) * (seed | 3u) - 1u) == (seed ^ 5u) * (seed ^ 5u))) {`);
@@ -177,11 +190,12 @@ export function emitCompileTimeNativeHeader(
       const next1 = (i + 1) % decoyCount;
       const next2 = (i + 2) % decoyCount;
       const k = prng.nextInt(0x1000, 0xffff);
+      const mix = deriveMixConstant(prng);
       lines.push(`#[inline(never)]`);
       lines.push(`pub fn enclave_tarpit_${i}(seed: u32, depth: u32) -> u32 {`);
       lines.push(`    let mut acc = seed ^ 0x${k.toString(16)};`);
       lines.push(`    for r in 0..4u32 {`);
-      lines.push(`        acc = acc.wrapping_mul(0x9E37_79B9) ^ (acc >> 13) ^ r;`);
+      lines.push(`        acc = acc.wrapping_mul(0x${mix.toString(16)}) ^ (acc >> 13) ^ r;`);
       lines.push(`    }`);
       lines.push(`    if depth > 0 && ((seed | 1).wrapping_mul(seed | 2) & 1) == 1 {`);
       lines.push(`        return enclave_tarpit_${next1}(acc, depth - 1) ^ enclave_tarpit_${next2}(acc ^ 0x5A, depth - 1);`);
@@ -219,11 +233,12 @@ export function emitCompileTimeNativeHeader(
     const next1 = (i + 1) % decoyCount;
     const next2 = (i + 2) % decoyCount;
     const k = prng.nextInt(0x1000, 0xffff);
+    const mix = deriveMixConstant(prng);
     lines.push(`//go:noinline`);
     lines.push(`func EnclaveTarpit${i}(seed uint32, depth int) uint32 {`);
     lines.push(`\tacc := seed ^ 0x${k.toString(16)} ^ uint32(len(EnclaveManifests[0]))`);
     lines.push(`\tfor r := uint32(0); r < 4; r++ {`);
-    lines.push(`\t\tacc = (acc * 0x9E3779B9) ^ (acc >> 13) ^ r`);
+    lines.push(`\t\tacc = (acc * 0x${mix.toString(16)}) ^ (acc >> 13) ^ r`);
     lines.push(`\t\tShadowHeapSlots[(${i}*4+int(r))&15] ^= acc`);
     lines.push(`\t}`);
     lines.push(`\tif depth > 0 && (((seed|1)*((seed|1)+1))&1) == 1 {`);
