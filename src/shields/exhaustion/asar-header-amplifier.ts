@@ -1,14 +1,16 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
+import { REA_INTERNAL_LIMITS } from "../../identity.js";
 import type { VirtualAsarFile } from "../formats/asar.js";
 
 /**
- * Exact constants from REA ASAR header admission
- * (`DEFAULT_ASAR_MAX_HEADER_BYTES` / `MAXIMUM_ASAR_MAX_HEADER_BYTES`).
+ * REA ASAR header admission limits — values centralized in
+ * `REA_INTERNAL_LIMITS` (`src/identity.ts`) so `verify:rea` drift checks cover
+ * them alongside every other REA constant.
  */
 export const REA_ASAR_HEADER_LIMITS = {
-  DEFAULT_ASAR_MAX_HEADER_BYTES: 16 * 1024 * 1024,
-  MAXIMUM_ASAR_MAX_HEADER_BYTES: 256 * 1024 * 1024,
+  DEFAULT_ASAR_MAX_HEADER_BYTES: REA_INTERNAL_LIMITS.ASAR_DEFAULT_MAX_HEADER_BYTES,
+  MAXIMUM_ASAR_MAX_HEADER_BYTES: REA_INTERNAL_LIMITS.ASAR_MAXIMUM_MAX_HEADER_BYTES,
 } as const;
 
 export interface AsarHeaderAmplificationPlan {

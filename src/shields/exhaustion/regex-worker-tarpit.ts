@@ -1,13 +1,16 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
+import { REA_INTERNAL_LIMITS } from "../../identity.js";
 
 /**
- * Exact constants from `morluto/rea/src/domain/analysisResourceLimits.ts:38,50`.
+ * REA regex worker budgets (`morluto/rea/src/domain/analysisResourceLimits.ts:38,50`)
+ * — values centralized in `REA_INTERNAL_LIMITS` (`src/identity.ts`) so
+ * `verify:rea` drift checks cover them alongside every other REA constant.
  */
 export const REA_REGEX_WORKER_LIMITS = {
-  DEFAULT_REGEX_MATCHING_DEADLINE_MS: 5_000,
-  DEFAULT_REGEX_WORKER_HEAP_REQUEST_MIB: 128,
-  MINIMUM_REGEX_WORKER_HEAP_REQUEST_MIB: 7,
+  DEFAULT_REGEX_MATCHING_DEADLINE_MS: REA_INTERNAL_LIMITS.REGEX_DEFAULT_MATCHING_DEADLINE_MS,
+  DEFAULT_REGEX_WORKER_HEAP_REQUEST_MIB: REA_INTERNAL_LIMITS.REGEX_DEFAULT_WORKER_HEAP_REQUEST_MIB,
+  MINIMUM_REGEX_WORKER_HEAP_REQUEST_MIB: REA_INTERNAL_LIMITS.REGEX_MINIMUM_WORKER_HEAP_REQUEST_MIB,
 } as const;
 
 export interface RegexWorkerTarpitResult {
