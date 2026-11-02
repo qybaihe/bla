@@ -10,6 +10,7 @@ import {
   weavePythonDecoyCalls,
 } from "../src/shields/formats/python-ast-weave.js";
 import { SeededPrng } from "../src/core/prng.js";
+import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -115,7 +116,7 @@ describe("python structural decoy weave", () => {
     expect(body!).not.toMatch(/\w+\(\d+,\s*0\)/);
   });
 
-  it("woven output still py_compile-clean when python3 is available", () => {
+  it.skipIf(!PY3)("woven output still py_compile-clean when python3 is available", () => {
     const customer = [
       "#!/usr/bin/env python3",
       "# -*- coding: utf-8 -*-",
@@ -137,7 +138,7 @@ describe("python structural decoy weave", () => {
     temps.push(dir);
     const file = join(dir, "woven.py");
     writeFileSync(file, out.code, "utf8");
-    execFileSync("python3", ["-m", "py_compile", file], { stdio: "pipe" });
+    execFileSync(python3(), ["-m", "py_compile", file], { stdio: "pipe" });
   });
 
   it("PRNG selects decoys without business-name rule tables", () => {
