@@ -54,6 +54,11 @@ export function formatAuditReport(report: AuditReport): string {
       `${ANSI.bold}Triggered Limits:${ANSI.reset}   ${ANSI.green}${report.reaSimulation.triggeredResourceLimits.join(", ")}${ANSI.reset}`,
     );
   }
+  if (report.walkSkipped && (report.walkSkipped.files > 0 || report.walkSkipped.directories > 0)) {
+    lines.push(
+      `${ANSI.bold}Walk Skipped:${ANSI.reset}      ${ANSI.yellow}${report.walkSkipped.files} file(s) over size cap + ${report.walkSkipped.directories} directory subtree(s) over depth/entry cap (results are partial)${ANSI.reset}`,
+    );
+  }
 
   lines.push(
     `${ANSI.bold}Obligation Graph:${ANSI.reset}   ${report.reaSimulation.obligationLedgerNodes} nodes (${report.reaSimulation.decoyFunctionsDetectedAsReal} decoy tarpit nodes, ${report.reaSimulation.architecturalChaffPayloads} chaff manifests)`,
@@ -120,6 +125,9 @@ export function formatProtectionResult(res: ProtectionResult): string {
     `  • Alias Selection States:             ${ANSI.bold}${res.metrics.aliasSelectionStatesCreated.toLocaleString()}${ANSI.reset} (> REA's 512 state limit)`,
     `  • IPC Ambiguity Sites / Decoy Routes: ${ANSI.bold}${res.metrics.ipcAmbiguitySitesInjected}${ANSI.reset} IPC sites / ${ANSI.bold}${res.metrics.decoyRoutesInjected}${ANSI.reset} decoy routes`,
     `  • Enclave Chaff Manifests Embedded:   ${ANSI.bold}${res.metrics.chaffPayloadsEmbedded}${ANSI.reset}`,
+    ...(res.metrics.inlineScriptsFailed > 0
+      ? [`  ${ANSI.red}⚠ ${res.metrics.inlineScriptsFailed} inline <script> body(ies) shipped UNPROTECTED (AST shield failed on them)${ANSI.reset}`]
+      : []),
     "",
     `${ANSI.bold}${ANSI.cyan}── Before vs. After BLA Impact (Claude Opus 4 / REA Loop) ──────────────────────${ANSI.reset}`,
     `  • REA Exposure Score:       ${ANSI.red}${res.beforeAudit.exposureScore}/100 (${res.beforeAudit.protectionStatus})${ANSI.reset}  -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.exposureScore}/100 (${res.afterAudit.protectionStatus})${ANSI.reset}`,

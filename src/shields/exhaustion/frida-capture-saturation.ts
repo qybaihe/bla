@@ -1,16 +1,19 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
+import { REA_INTERNAL_LIMITS } from "../../identity.js";
 
 /**
- * Exact constants from `morluto/rea/src/frida/fridaCaptureLimits.ts:2-11`.
+ * REA Frida capture limits (`morluto/rea/src/frida/fridaCaptureLimits.ts:2-11`)
+ * — values centralized in `REA_INTERNAL_LIMITS` (`src/identity.ts`) so
+ * `verify:rea` drift checks cover them alongside every other REA constant.
  */
 export const REA_FRIDA_CAPTURE_LIMITS = {
-  MAX_SESSION_CAPTURE_BYTES: 16 * 1024 * 1024,
-  MAX_MESSAGE_METADATA_BYTES: 128 * 1024,
-  MAX_MESSAGE_TYPE_BYTES: 4 * 1024,
-  MAX_MESSAGE_TEXT_BYTES: 32 * 1024,
-  MAX_CAPTURE_JSON_NODES: 250_000,
-  MAX_JSON_DEPTH: 64,
+  MAX_SESSION_CAPTURE_BYTES: REA_INTERNAL_LIMITS.FRIDA_MAX_SESSION_CAPTURE_BYTES,
+  MAX_MESSAGE_METADATA_BYTES: REA_INTERNAL_LIMITS.FRIDA_MAX_MESSAGE_METADATA_BYTES,
+  MAX_MESSAGE_TYPE_BYTES: REA_INTERNAL_LIMITS.FRIDA_MAX_MESSAGE_TYPE_BYTES,
+  MAX_MESSAGE_TEXT_BYTES: REA_INTERNAL_LIMITS.FRIDA_MAX_MESSAGE_TEXT_BYTES,
+  MAX_CAPTURE_JSON_NODES: REA_INTERNAL_LIMITS.FRIDA_MAX_CAPTURE_JSON_NODES,
+  MAX_JSON_DEPTH: REA_INTERNAL_LIMITS.FRIDA_MAX_JSON_DEPTH,
 } as const;
 
 export interface FridaCaptureSaturationResult {

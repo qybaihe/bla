@@ -35,6 +35,10 @@ const seal = JSON.parse(readFileSync(SEAL, "utf8"));
 must(seal.schema === "bla-crackme-v7-seal/v1", "bad schema");
 must(seal.intensity === "bankrupt" && seal.llmDirectives === false && seal.emitManifest === false, "knobs");
 must(seal.product === "Meridian", "product");
+// The seal must record the BLA version that produced the artifacts — a stale
+// blaVersion means the hardened bundle drifted behind a version bump.
+const pkgVersion = String(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version);
+must(seal.blaVersion === pkgVersion, `SEAL blaVersion ${seal.blaVersion} != package.json ${pkgVersion}`);
 
 for (const rel of [...MODULES, "data/catalog.json"]) {
   const buf = readFileSync(join(DIST, rel));

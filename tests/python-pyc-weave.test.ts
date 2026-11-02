@@ -12,6 +12,7 @@ import {
   weavePythonPycBuffer,
 } from "../src/shields/formats/python-pyc-weave.js";
 import { buildWeavePlan } from "../src/shields/weave/weave-decoy.js";
+import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 function compileSamplePyc(): Buffer {
   const dir = mkdtempSync(join(tmpdir(), "bla-pyc-weave-"));
@@ -34,7 +35,7 @@ function compileSamplePyc(): Buffer {
       "utf8",
     );
     execFileSync(
-      "python3",
+      python3(),
       ["-c", `import py_compile; py_compile.compile(${JSON.stringify(srcPath)}, cfile=${JSON.stringify(pycPath)}, doraise=True)`],
       { stdio: "pipe" },
     );
@@ -58,7 +59,7 @@ print(mod.calculate(2, 3))
 print(mod.convert(7))
 print(mod.stats([1, 2, 3, 4]))
 `;
-    const out = execFileSync("python3", ["-c", script], {
+    const out = execFileSync(python3(), ["-c", script], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -93,7 +94,7 @@ while stack:
 print(n)
 `;
     return Number(
-      execFileSync("python3", ["-c", script], { encoding: "utf8" }).trim(),
+      execFileSync(python3(), ["-c", script], { encoding: "utf8" }).trim(),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -107,13 +108,13 @@ describe("python-pyc-weave", () => {
     }
   });
 
-  it("maps current CPython magic to a known layout", () => {
+  it.skipIf(!PY3)("maps current CPython magic to a known layout", () => {
     const pyc = compileSamplePyc();
     const magic = pyc.readUInt16LE(0);
     expect(layoutForPycMagic(magic)).toBe("py311"); // 3.11+ marshal CODE layout (3.11–3.15 magics)
   });
 
-  it("weave_decoys:true injects decoy TYPE_CODE into customer co_consts without breaking import", () => {
+  it.skipIf(!PY3)("weave_decoys:true injects decoy TYPE_CODE into customer co_consts without breaking import", () => {
     const raw = compileSamplePyc();
     const before = importAndCall(raw);
     expect(before.calculate).toBe(5);
@@ -141,7 +142,7 @@ describe("python-pyc-weave", () => {
     expect(woven!.buffer.subarray(0, 16).equals(raw.subarray(0, 16))).toBe(true);
   });
 
-  it("protectPythonPycBuffer weaveDecoys:false stays trailer-only (no co_consts CODE growth)", () => {
+  it.skipIf(!PY3)("protectPythonPycBuffer weaveDecoys:false stays trailer-only (no co_consts CODE growth)", () => {
     const raw = compileSamplePyc();
     const before = countCodeObjects(raw);
     const res = protectPythonPycBuffer(raw, {
@@ -158,7 +159,7 @@ describe("python-pyc-weave", () => {
     expect(importAndCall(res.buffer).calculate).toBe(5);
   });
 
-  it("protectPythonPycBuffer weaveDecoys:true weaves CODE + trailers", () => {
+  it.skipIf(!PY3)("protectPythonPycBuffer weaveDecoys:true weaves CODE + trailers", () => {
     const raw = compileSamplePyc();
     const before = countCodeObjects(raw);
     const res = protectPythonPycBuffer(raw, {
@@ -179,7 +180,7 @@ describe("python-pyc-weave", () => {
     });
   });
 
-  it("weave planner marks python-pyc as woven", () => {
+  it.skipIf(!PY3)("weave planner marks python-pyc as woven", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-pyc-plan-"));
     try {
       const pycPath = join(dir, "app.pyc");
