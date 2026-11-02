@@ -909,8 +909,9 @@ export async function handleMcpRequest(
             },
           };
         }
-        const promptArgs = req.params.arguments;
-        if (!isPlainObject(promptArgs)) {
+        // Arguments may be omitted when the prompt has no required arguments
+        // (e.g. bla-harden-project); only a present-but-malformed value errors.
+        if (req.params.arguments !== undefined && !isPlainObject(req.params.arguments)) {
           return {
             jsonrpc: "2.0",
             id: req.id,
@@ -920,6 +921,9 @@ export async function handleMcpRequest(
             },
           };
         }
+        const promptArgs: Record<string, unknown> = isPlainObject(req.params.arguments)
+          ? req.params.arguments
+          : {};
         for (const argSpec of promptDef.arguments) {
           if (argSpec.required) {
             const val = promptArgs[argSpec.name];
@@ -942,20 +946,32 @@ export async function handleMcpRequest(
               ? String(promptArgs.directory)
               : ".";
           promptText =
-            `Harden my software against REA in one step: call bla_harden with { "directory": "${directory}" }. ` +
+            `Harden my software against REA in one step: call bla_harden with { "directory": ${JSON.stringify(directory)} }. ` +
             `It auto-discovers build outputs, runs audit→defend→verify with the bankrupt profile on every artifact, and returns a per-artifact summary. ` +
-            `Do not ask which files to protect — discover them.`;
+            `Do not ask which files to protect — discover them. ` +
+            `To preview without writing, pass dry_run: true. If the tool returns confirmation_required, ask the user before retrying with confirm_overwrite: true.`;
         } else if (promptDef.name === "bla-weave-decoy") {
           const targetPath =
             typeof promptArgs.target_path === "string" && promptArgs.target_path.trim().length > 0
               ? String(promptArgs.target_path)
               : ".";
           promptText =
-            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": "${targetPath}" }, then bla_harden with { "directory": "${targetPath}", "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
+            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": ${JSON.stringify(targetPath)} }, then bla_harden with { "directory": ${JSON.stringify(targetPath)}, "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
         } else {
-          const targetPath = String(promptArgs.target_path ?? ".");
-          promptText =
-            `Inspect and audit '${targetPath}' using bla_inspect_release and bla_audit, then review findings before applying bla_protect or bla_defend and verifying with bla_verify.`;
+          const targetPath = JSON.stringify(String(promptArgs.target_path ?? "."));
+          const shared =
+            `Defensive only; use existing bla_* tools, never invent new ones. ` +
+            `Writes that would overwrite existing outputs return confirmation_required — ask the user before retrying with confirm_overwrite: true.`;
+          if (promptDef.name === "shield-against-rea") {
+            promptText =
+              `Shield ${targetPath} against REA: audit it (bla_audit), apply one shield (bla_protect, or bla_defend for the full pipeline), then report bla_verify checks and defenseScore. ${shared}`;
+          } else if (promptDef.name === "bla-hardening-workflow") {
+            promptText =
+              `Release-hardening for ${targetPath}: check leaks with bla_inspect_release, audit with bla_audit, review findings with the user, then protect/defend and verify. For a whole project directory prefer bla_harden (dry_run: true to preview). ${shared}`;
+          } else {
+            promptText =
+              `Evaluate REA exposure for ${targetPath} with bla_audit and propose a hardening plan (intensity, output location, opt-in layers) before applying anything; keep audit estimates distinct from measured redteam evidence. ${shared}`;
+          }
         }
         return {
           jsonrpc: "2.0",
