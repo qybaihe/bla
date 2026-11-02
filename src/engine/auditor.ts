@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, type Stats } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
@@ -349,16 +349,50 @@ export function auditTarget(targetPath: string): AuditReport {
   };
   const exposedItems: ExposedSymbolOrModule[] = [];
   const vulnerableVectors = new Set<ReaAttackVectorId>();
+  let skippedDirectories = 0;
+  let skippedFiles = 0;
+  let skippedBytes = 0;
 
   if (format === "directory") {
     const filesToScan: string[] = [];
     const nonJsFilesToScan: string[] = [];
-    const walkDir = (dir: string): void => {
+    // Mirror the bounded-read design of release-exposure.ts so a hostile or
+    // gigantic tree cannot hang or OOM the default defend/audit pipeline.
+    const MAX_DIR_DEPTH = 16;
+    const MAX_DIR_ENTRIES = 10_000;
+    const MAX_FILE_BYTES = 2 * 1024 * 1024;
+    const walkDir = (dir: string, depth = 0): void => {
+      if (depth > MAX_DIR_DEPTH) {
+        skippedDirectories++;
+        return;
+      }
+      let entriesSeen = 0;
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        entriesSeen++;
+        if (entriesSeen > MAX_DIR_ENTRIES) {
+          skippedDirectories++;
+          break;
+        }
         if (entry.name === "node_modules" || entry.name === ".git") continue;
         const full = join(dir, entry.name);
-        if (entry.isDirectory()) walkDir(full);
-        else if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(extname(entry.name).toLowerCase())) {
+        if (entry.isDirectory()) {
+          walkDir(full, depth + 1);
+          continue;
+        }
+        let stat: Stats;
+        try {
+          stat = statSync(full);
+        } catch {
+          skippedFiles++;
+          continue;
+        }
+        if (stat.size > MAX_FILE_BYTES) {
+          skippedFiles++;
+          skippedBytes += stat.size;
+          continue;
+        }
+        const ext = extname(entry.name).toLowerCase();
+        if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(ext)) {
           filesToScan.push(full);
         } else {
           const cf = detectArtifactFormat(full);
@@ -1167,19 +1201,24 @@ export function auditTarget(targetPath: string): AuditReport {
       ? `SHIELD ACTIVE: ${basename(absPath)} triggers ${sim.triggeredResourceLimits.length} REA resource limits and forces ~${primaryEstimate.estimatedInputTokens.toLocaleString()} tokens ($${primaryEstimate.estimatedCostUsd.toFixed(2)}) of agent tarpit exhaustion.`
       : `DANGER: Module "${primaryModule}" in ${basename(absPath)} is exposed to REA (${exposureScore}/100 exposure). Estimated Claude Code time: ${primaryEstimate.estimatedWallClockSeconds}s, cost: $${primaryEstimate.estimatedCostUsd.toFixed(2)} to reconstruct. Run "${recommendedCommand}" to inject AI Tarpit & Semantic Shield.`;
 
-  return {
-    targetPath: absPath,
-    detectedFormat: format,
-    sha256,
-    byteSize,
-    timestamp: new Date().toISOString(),
-    exposureScore,
-    protectionStatus,
-    reaSimulation: sim,
-    exposedItems,
-    vulnerableReaVectors: [...vulnerableVectors],
-    agentEstimates,
-    headlineWarning,
-    recommendedCommand,
-  };
+    return {
+      targetPath: absPath,
+      detectedFormat: format,
+      sha256,
+      byteSize,
+      timestamp: new Date().toISOString(),
+      exposureScore,
+      protectionStatus,
+      reaSimulation: sim,
+      exposedItems,
+      vulnerableReaVectors: [...vulnerableVectors],
+      agentEstimates,
+      headlineWarning,
+      recommendedCommand,
+      ...(skippedDirectories > 0 || skippedFiles > 0
+        ? {
+            walkSkipped: { directories: skippedDirectories, files: skippedFiles, bytes: skippedBytes },
+          }
+        : {}),
+    };
 }

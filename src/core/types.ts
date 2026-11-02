@@ -135,6 +135,8 @@ export interface AuditReport {
   readonly agentEstimates: readonly AgentCostEstimate[];
   readonly headlineWarning: string;
   readonly recommendedCommand: string;
+  /** Entries skipped while walking a directory tree (depth/entry/file-size bounds). */
+  readonly walkSkipped?: { directories: number; files: number; bytes: number };
 }
 
 export interface ProtectionOptions {
@@ -175,6 +177,8 @@ export interface ProtectionMetrics {
   readonly decoyRoutesInjected: number;
   readonly chaffPayloadsEmbedded: number;
   readonly honeySourceMapsGenerated: number;
+  /** Inline `<script>` bodies the AST shield threw on and shipped unchanged — surfaced so partial HTML protection is never silent. */
+  readonly inlineScriptsFailed: number;
   readonly binarySectionsPatched: number;
 }
 

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import {
   existsSync,
   mkdirSync,
@@ -9,8 +10,33 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
+const require = createRequire(import.meta.url);
+
+/**
+ * Locates `npm-cli.js` so `npm pack` can run through `node` without a shell.
+ * Checked in order: project-local resolve, the standard layout next to
+ * `node.exe` (Windows/nvm-windows), and the POSIX `../lib/node_modules` layout.
+ * When none is found on Windows we refuse to fall back to `shell: true`
+ * (Node concatenates shell arguments unescaped → command injection through
+ * paths containing `&`, `|`, or quotes).
+ */
+function resolveNpmCliPath(): string | null {
+  const candidates: (string | null)[] = [];
+  try {
+    candidates.push(require.resolve("npm-cli.js"));
+  } catch {
+    candidates.push(null);
+  }
+  const nodeDir = dirname(process.execPath);
+  candidates.push(join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"));
+  candidates.push(join(dirname(nodeDir), "lib", "node_modules", "npm", "bin", "npm-cli.js"));
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export type ReleaseConsistencyErrorCode =
@@ -313,6 +339,30 @@ function resolveTarCommand(): string {
 }
 
 /**
+ * Runs `npm pack` without a shell. On Windows a bare `execFileSync("npm.cmd")`
+ * throws EINVAL (`.cmd` is not executable directly), which previously forced
+ * `shell: true` — but Node concatenates shell arguments unescaped, so a path
+ * containing `&`, `|`, or quotes would execute arbitrary commands. Invoking
+ * `npm-cli.js` through `process.execPath` sidesteps `.cmd` shims entirely and
+ * keeps every argument an opaque argv entry on all platforms.
+ */
+function runNpmPack(args: readonly string[], cwd: string): void {
+  const npmCli = resolveNpmCliPath();
+  if (npmCli) {
+    execFileSync(process.execPath, [npmCli, ...args], { cwd, stdio: "pipe" });
+    return;
+  }
+  if (process.platform !== "win32") {
+    // POSIX: `npm` is a shebang script and runs without a shell.
+    execFileSync(npmCmd, [...args], { cwd, stdio: "pipe" });
+    return;
+  }
+  throw new Error(
+    "npm-cli.js not found next to the Node installation; refusing to run npm via shell:true (command injection risk). Reinstall Node.js so node_modules/npm is present.",
+  );
+}
+
+/**
  * Packs both `bla-agents` (primary) and `bla-shield` (alias) tarballs into `outDir`
  * without mutating the repository working tree, and writes `SHA256SUMS.txt`.
  */
@@ -332,12 +382,7 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
   const version = pkgJson.version;
 
   // 1. Pack primary (`bla-agents-<version>.tgz`) directly into `absOut`
-  execFileSync(npmCmd, ["pack", "--pack-destination", absOut], {
-    cwd: absRepo,
-    stdio: "pipe",
-    // .cmd shims on Windows require a shell; bare execFile EINVAL otherwise.
-    shell: process.platform === "win32",
-  });
+  runNpmPack(["pack", "--pack-destination", absOut], absRepo);
 
   const primaryFilename = `bla-agents-${version}.tgz`;
   const primaryPath = join(absOut, primaryFilename);
@@ -362,11 +407,7 @@ export function packDualReleaseTarballs(repoDir: string, outDir: string): DualPa
     unpackedPkg.name = "bla-shield";
     writeFileSync(unpackedPkgJsonPath, JSON.stringify(unpackedPkg, null, 2) + "\n", "utf8");
 
-    execFileSync(npmCmd, ["pack", "--pack-destination", absOut, "--ignore-scripts"], {
-      cwd: unpackedPkgDir,
-      stdio: "pipe",
-      shell: process.platform === "win32",
-    });
+    runNpmPack(["pack", "--pack-destination", absOut, "--ignore-scripts"], unpackedPkgDir);
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
   }
