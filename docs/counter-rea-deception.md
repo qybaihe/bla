@@ -37,3 +37,8 @@ JS AST already weaves; Python `.py` with `weave_decoys:true` structurally weaves
 Executable theory + MCP: [`weave-decoy-mcp.md`](./weave-decoy-mcp.md),
 resource `bla://directives/weave-decoy`, tool `bla_weave_plan`, flag
 `weave_decoys`.
+
+
+## WASM export rename (#40.3)
+
+`protectWasmBinary` can rename non-public / internal-looking exports while preserving names listed in `preserveExports`. At `maximum`/`bankrupt`, internal-looking names (`__*`, `debug_*`, …) are renamed by default. Forced full rename: `renameNonPublicExports: true` with an explicit preserve list for the public ABI. Returns `exportsRenamed` for glue updates.

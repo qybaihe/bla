@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.3.0"
+  version: "1.3.1"
 ---
 
 # BLA: Blind LLM Agents
@@ -78,6 +78,29 @@ entanglement:
 happy paths, call-graph entanglement). JS AST weave is already on; Python `.py`/`.pyc`
 customer-def structural weave activates when `weave_decoys: true`. See
 [docs/weave-decoy-mcp.md](../../../docs/weave-decoy-mcp.md).
+
+
+## Optional stronger path: self-seal (#40.5)
+
+When the user wants sibling-module integrity / anti-tamper binding on **JS/Node**
+targets (or says self-seal / 自密封):
+
+1. CLI: add `--self-seal` to `harden` / `defend` / `protect`
+2. MCP: `self_seal: true` on `bla_harden` / `bla_defend` / `bla_protect`
+3. Config: `"selfSeal": true` in `.blarc` (ORs with the flag)
+
+Off by default. Browser builds soft-skip (digest=0). Pair with weave decoys when
+Python structural weave is also desired.
+
+## Lane-independence footgun lint (#40.1)
+
+Before shipping a custom license/activation gate, run:
+
+`npx bla-agents lint-lanes path/to/gate.js`
+
+Heuristic warn only (exit 2 when findings). Prefer whole-key chained mixing
+(no per-lane oracle) — see Meridian DESIGN / issue #40. Not RE advice.
+
 
 ## FORBIDDEN for executing agents
 
