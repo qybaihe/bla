@@ -60,7 +60,7 @@ describe("WASM export rename / semantic preservation (#40.3)", () => {
     expect(after.map((e) => e.name)).toContain(renames[0]!.to);
   });
 
-  it("protectWasmBinary preserves public ABI by default; explicit rename rewrites non-preserved", () => {
+  it("balanced keeps public ABI; bankrupt renames non-preserved by default", () => {
     const raw = fixtureComputeScore();
     const balanced = protectWasmBinary(raw, {
       intensity: "balanced",
@@ -70,37 +70,43 @@ describe("WASM export rename / semantic preservation (#40.3)", () => {
     expect(inspectWasmBinary(balanced.buffer).exportNames).toContain("compute_score");
     expect(WebAssembly.validate(new Uint8Array(balanced.buffer))).toBe(true);
 
-    const renamed = protectWasmBinary(raw, {
-      intensity: "balanced",
-      seed: "wasm-rename-force",
-      renameNonPublicExports: true,
-      renameInternalOnly: false,
-      preserveExports: [],
+    const bankrupt = protectWasmBinary(raw, {
+      intensity: "bankrupt",
+      seed: "wasm-rename-bankrupt-default",
     });
-    expect(renamed.exportsRenamed.length).toBeGreaterThanOrEqual(1);
-    expect(renamed.exportsRenamed[0]!.from).toBe("compute_score");
-    const names = inspectWasmBinary(renamed.buffer).exportNames;
+    expect(bankrupt.exportsRenamed.length).toBeGreaterThanOrEqual(1);
+    expect(bankrupt.exportsRenamed[0]!.from).toBe("compute_score");
+    const names = inspectWasmBinary(bankrupt.buffer).exportNames;
     expect(names).not.toContain("compute_score");
-    expect(names).toContain(renamed.exportsRenamed[0]!.to);
-    expect(WebAssembly.validate(new Uint8Array(renamed.buffer))).toBe(true);
+    expect(names).toContain(bankrupt.exportsRenamed[0]!.to);
+    expect(WebAssembly.validate(new Uint8Array(bankrupt.buffer))).toBe(true);
 
-    const mod = new WebAssembly.Module(new Uint8Array(renamed.buffer));
+    const mod = new WebAssembly.Module(new Uint8Array(bankrupt.buffer));
     const inst = new WebAssembly.Instance(mod);
-    const fn = inst.exports[renamed.exportsRenamed[0]!.to] as (x: number) => number;
+    const fn = inst.exports[bankrupt.exportsRenamed[0]!.to] as (x: number) => number;
     expect(fn(10)).toBe(427);
   });
 
-  it("preserveExports keeps the named public ABI under forced rename", () => {
+  it("preserveExports keeps the named public ABI under bankrupt rename", () => {
     const raw = fixtureComputeScore();
     const res = protectWasmBinary(raw, {
       intensity: "bankrupt",
       seed: "wasm-rename-preserve",
-      renameNonPublicExports: true,
-      renameInternalOnly: false,
       preserveExports: ["compute_score"],
     });
     expect(res.exportsRenamed).toHaveLength(0);
     expect(inspectWasmBinary(res.buffer).exportNames).toContain("compute_score");
     expect(WebAssembly.validate(new Uint8Array(res.buffer))).toBe(true);
+  });
+
+  it("renameInternalOnly:true keeps public names even at bankrupt", () => {
+    const raw = fixtureComputeScore();
+    const res = protectWasmBinary(raw, {
+      intensity: "bankrupt",
+      seed: "wasm-rename-internal-only",
+      renameInternalOnly: true,
+    });
+    expect(res.exportsRenamed).toHaveLength(0);
+    expect(inspectWasmBinary(res.buffer).exportNames).toContain("compute_score");
   });
 });

@@ -144,7 +144,11 @@ export function renameWasmExports(
   prng: SeededPrng,
   options: {
     readonly preserveExports?: readonly string[];
-    /** When true (default), only rename internal-looking names. */
+    /**
+     * When true, only rename internal-looking names.
+     * Callers that want full non-preserved rename must pass `onlyInternal: false`
+     * (protectWasmBinary does this by default at maximum/bankrupt).
+     */
     readonly onlyInternal?: boolean;
   } = {},
 ): {
@@ -152,6 +156,8 @@ export function renameWasmExports(
   readonly renames: readonly WasmExportRename[];
 } {
   const preserve = new Set(options.preserveExports ?? []);
+  // Library default remains conservative (internal-only) when called directly;
+  // protectWasmBinary passes onlyInternal:false at maximum/bankrupt.
   const onlyInternal = options.onlyInternal !== false;
   const entries = parseWasmExportSectionPayload(exportSectionPayload);
   if (entries.length === 0) {
@@ -367,15 +373,15 @@ export function protectWasmBinary(
     readonly preserveExports?: readonly string[];
     /**
      * When true, rename exports not listed in `preserveExports`.
-     * Default: true at maximum/bankrupt for internal-looking names only;
-     * pass `renameNonPublicExports: true` with an explicit preserve list to
-     * rename every non-preserved export.
+     * Default: true at maximum/bankrupt (all non-preserved names).
+     * Keeping a stable public ABI requires an explicit `preserveExports` list
+     * (CLI `--wasm-preserve-exports` / MCP `wasm_preserve_exports` / `.blarc`).
      */
     readonly renameNonPublicExports?: boolean;
     /**
      * When renaming, only touch internal-looking names (`__*`, `debug_*`, …).
-     * Default true unless `renameNonPublicExports` is explicitly true AND
-     * `preserveExports` is provided (then all non-preserved names rename).
+     * Default **false** at maximum/bankrupt (rename every non-preserved export).
+     * Set true only when you intentionally want the weaker internal-only pass.
      */
     readonly renameInternalOnly?: boolean;
   } = {},
@@ -434,13 +440,13 @@ export function protectWasmBinary(
         options.renameNonPublicExports === true ||
         (options.renameNonPublicExports !== false && intensityWantsRename);
       if (renameRequested) {
+        // Red/Blue round-1: public ABI (`mix`/`seal`) surviving bankrupt enabled
+        // preload hooks. Default at maximum/bankrupt is full non-preserved rename;
+        // callers that need stable names must pass preserveExports explicitly.
         const onlyInternal =
           options.renameInternalOnly !== undefined
             ? options.renameInternalOnly
-            : !(
-                options.renameNonPublicExports === true &&
-                (options.preserveExports?.length ?? 0) > 0
-              );
+            : false;
         const renamed = renameWasmExports(payload, prng, {
           preserveExports: options.preserveExports,
           onlyInternal,

@@ -46,6 +46,11 @@ import { protectPcapCaptureBuffer } from "../shields/formats/pcap-capture.js";
 import { protectGpuPtxText } from "../shields/formats/gpu-ptx.js";
 import { protectUf2FirmwareBuffer } from "../shields/formats/firmware-uf2.js";
 import { auditTarget } from "./auditor.js";
+import {
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
+  lintLaneIndependence,
+} from "./lane-independence-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -209,6 +214,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
 
   if (format === "javascript" || format === "typescript") {
     const raw = readFileSync(absInput, "utf8");
+    if (
+      formatSupportsLaneIndependenceLint(format) &&
+      options.allowLaneIndependentGates !== true
+    ) {
+      const laneReport = lintLaneIndependence(raw);
+      if (laneReport.looksLaneIndependent) {
+        throw new Error(laneIndependenceRefuseMessage(laneReport, absInput));
+      }
+    }
     const transformed = transformJavaScriptWithBlaShield(raw, {
       intensity,
       seed,
@@ -408,8 +422,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     const res = protectWasmBinary(rawWasm, {
       intensity,
       seed,
-      // Issue #40.3: rename internal-looking exports at maximum/bankrupt by default;
-      // wasmPreserveExports keeps the customer public ABI.
+      // Issue #40.3 / red-blue round-1: rename ALL non-preserved exports at
+      // maximum/bankrupt by default; wasmPreserveExports is the explicit ABI keep-list.
       ...(options.wasmPreserveExports && options.wasmPreserveExports.length > 0
         ? { preserveExports: options.wasmPreserveExports }
         : {}),

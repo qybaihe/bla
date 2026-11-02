@@ -118,4 +118,19 @@ describe("wasmPreserveExports .blarc / CLI / protect parity (#40.3)", () => {
       (inst.exports as { add: (a: number, b: number) => number }).add(2, 3),
     ).toBe(5);
   });
+
+  it("bankrupt without preserveExports renames public ABI names", () => {
+    const raw = minimalTwoExportWasm();
+    const res = protectWasmBinary(raw, {
+      intensity: "bankrupt",
+      seed: "wasm-no-preserve-renames-public",
+    });
+    const fromNames = res.exportsRenamed.map((r) => r.from);
+    expect(fromNames).toContain("add");
+    expect(fromNames).toContain("__bla_internal_x");
+    const mod = new WebAssembly.Module(new Uint8Array(res.buffer));
+    const inst = new WebAssembly.Instance(mod);
+    expect(Object.keys(inst.exports)).not.toContain("add");
+    expect(Object.keys(inst.exports)).not.toContain("__bla_internal_x");
+  });
 });

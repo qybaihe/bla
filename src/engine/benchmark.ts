@@ -236,8 +236,18 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const origInst = new WebAssembly.Instance(origMod);
       const protInst = new WebAssembly.Instance(protMod);
       const origFn = origInst.exports.computeDigest as (a: number, b: number) => number;
-      const protFn = protInst.exports.computeDigest as (a: number, b: number) => number;
-      const functionalOk = validWasm && origFn(17, 29) === protFn(17, 29);
+      // Bankrupt renames non-preserved ABI by default (red-blue round-1); resolve
+      // the live export (decoy aliases share the same func index).
+      const protExportTable = protInst.exports as Record<string, unknown>;
+      const protFn = (
+        typeof protExportTable.computeDigest === "function"
+          ? protExportTable.computeDigest
+          : Object.values(protExportTable).find((v) => typeof v === "function")
+      ) as ((a: number, b: number) => number) | undefined;
+      const functionalOk =
+        validWasm &&
+        typeof protFn === "function" &&
+        origFn(17, 29) === protFn(17, 29);
 
       cases.push(buildCaseResult("wasm-core", "WebAssembly Crypto Kernel (.wasm)", "REA inspect_wasm_artifact", res, functionalOk));
     }
