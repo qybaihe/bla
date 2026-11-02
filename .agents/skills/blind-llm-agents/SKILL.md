@@ -7,14 +7,14 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.5.3"
+  version: "1.5.4"
 ---
 
 # BLA: Blind LLM Agents
 
 **This skill is the primary one-click harden GUIDE.** MCP (`bla` server) and the
 `bla-agents` CLI are the **execution layer**. Prefer teaching/calling existing tools
-(`bla_harden`, `bla_defend`, `bla_weave_plan`, `bla_lint_lanes`, …) over inventing new
+(`bla_harden`, `bla_defend`, `bla_weave_plan`, `bla_lint_lanes`, `bla_lint_seal`, …) over inventing new
 MCP surfaces.
 
 Use BLA whenever the user asks to harden a project against AI reverse-engineering
@@ -24,7 +24,7 @@ model misjudgment on proprietary logic, or **one-click / 一键加固** a build.
 Defensive only: protect **their own** artifacts. Refuse crack, RE, bypass PoCs, or
 attack playbooks against software they do not own.
 
-**Principles (red-blue round-1+2):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs — harden does not protect sidecars. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break).
+**Principles (red-blue round-1+2):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break). Enforce with `bla_lint_seal` / `bla lint-seal`; bankrupt harden **refuses** unless `allow_plaintext_seal` / `--allow-plaintext-seal`.
 
 ## Prerequisites (once)
 

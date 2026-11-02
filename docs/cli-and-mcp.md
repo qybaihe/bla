@@ -20,13 +20,14 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 
 ## MCP Tools (`bla` Server)
 
-- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false, `output_directory` optional). The report carries `dryRun`, `truncated`, `maxArtifacts`, `wouldOverwrite`, and `outputDirectory`.
+- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false, `output_directory` optional). The report carries `dryRun`, `truncated`, `maxArtifacts`, `wouldOverwrite`, and `outputDirectory`.
 - `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts }`. Writes nothing.
-- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `seed`, `in_place` default false, `confirm_overwrite` default false).
+- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `seed`, `in_place` default false, `confirm_overwrite` default false).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
-- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
+- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
 - `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`, optional honesty metadata `self_seal_enabled` / `wasm_export_rename_applied` / `numeric_template_leak_known` so `defenseScore` soft-caps match what protect actually ran; optional `summary_path` / `run_id` to correlate with a prior harden summary).
 - `bla_lint_lanes`: Read-only lane-independence footgun lint (`path`) — same engine as CLI `bla lint-lanes`.
+- `bla_lint_seal`: Read-only seal-commitment lint (`path`) — plaintext / reversible seal sidecars; same engine as CLI `bla lint-seal`.
 - `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.
@@ -51,6 +52,8 @@ Opt-in **self-seal** (issue #40.5): CLI `--self-seal`, MCP `self_seal`, `.blarc`
 WASM public ABI preserve list (issue #40.3 / red-blue round-1): CLI `--wasm-preserve-exports a,b`, MCP `wasm_preserve_exports`, `.blarc` `"wasmPreserveExports": ["a","b"]`. At `maximum`/`bankrupt`, **every** non-listed export is renamed by default — keeping `mix`/`seal`-style names requires an explicit list.
 
 Heuristic **lane-independence lint** (issue #40.1 / red-blue round-1): CLI `bla lint-lanes <file>` and MCP `bla_lint_lanes` emit severity **error** when gate code looks like independent per-lane checks. Harden/defend/protect **refuse** unless CLI `--allow-lane-independent` / MCP `allow_lane_independent` / `.blarc` `"allowLaneIndependentGates": true`. Prefer whole-key chained mixing.
+
+Heuristic **seal-commitment lint** (red-blue round-2): CLI `bla lint-seal <file>` and MCP `bla_lint_seal` flag plaintext seal/entitlement JSON and reversible public commitments (`scheduleSalt`+`rounds`+`revision` without a one-way algorithm). Severity **error** findings make **bankrupt** harden/protect **refuse** unless CLI `--allow-plaintext-seal` / MCP `allow_plaintext_seal` / `.blarc` `"allowPlaintextSeal": true`. One-way SHA-256/HMAC digests pass. Full seal-encrypt/bind remains a follow-up; refusal closes the round-2 footgun by default.
 
 ### MCP Resources
 

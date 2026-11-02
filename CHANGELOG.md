@@ -6,8 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Red/Blue round-2 · Writeback P1 — seal-commitment lint + bankrupt refuse:** CLI `bla lint-seal` / MCP `bla_lint_seal` detect plaintext seal sidecars and reversible public commitments (round-2 `seal.json` + ARX `revision` break). Bankrupt harden/protect refuse unless `allowPlaintextSeal` / `--allow-plaintext-seal` / `allow_plaintext_seal`. One-way SHA-256 seals pass. Skill v1.5.4 points at the new tool/switch.
+
 ### Changed
-- **Red/Blue round-2 · Writeback (skill):** Skill guide **v1.5.3** + `format-javascript.md` — plaintext seal/catalog sidecars are unprotected by harden; public compare digests must be one-way (reversible ARX/`revision` was the round-2 key-recovery break). Round-1 P0 (WASM export rename + lane refuse) held against the old vectors.
+- **Red/Blue round-2 · Writeback (skill, superseded in part by P1 engine lint):** Skill guide **v1.5.3** + `format-javascript.md` — plaintext seal/catalog sidecars are unprotected by harden; public compare digests must be one-way (reversible ARX/`revision` was the round-2 key-recovery break). Round-1 P0 (WASM export rename + lane refuse) held against the old vectors.
 - **Red/Blue round-1 · Writeback P0 — WASM export rename default:** at `maximum`/`bankrupt`, `protectWasmBinary` renames **all** non-preserved exports (not only `__*` / `debug_*`). Keeping a stable public ABI requires explicit `wasmPreserveExports` / `--wasm-preserve-exports` / `wasm_preserve_exports`. Optional `renameInternalOnly: true` for the weaker pass.
 - **Red/Blue round-1 · Writeback P0 — lane-independence is error + harden refuse:** `bla lint-lanes` / `bla_lint_lanes` findings are severity **error**; protect/defend/harden refuse JS/TS that looks lane-independent (including per-byte WASM mix/seal oracles) unless `allowLaneIndependentGates` / `--allow-lane-independent` / `allow_lane_independent`. Skill v1.5.2 principles: no silent stable WASM ABI; no JS independent lane tables; prefer whole-key mixing.
 
