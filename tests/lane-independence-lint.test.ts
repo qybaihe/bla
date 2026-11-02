@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { lintLaneIndependence } from "../src/engine/lane-independence-lint.js";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  lintLaneIndependence,
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
+} from "../src/engine/lane-independence-lint.js";
 
-describe("lane-independence footgun lint (#40.1)", () => {
+describe("lane-independence footgun lint (#40.1 / red-blue round-1)", () => {
   it("stays quiet on chained whole-key mixing (Meridian-like)", () => {
     const src = `
       function activate(key) {
@@ -20,7 +26,7 @@ describe("lane-independence footgun lint (#40.1)", () => {
     expect(report.findings).toHaveLength(0);
   });
 
-  it("warns on per-lane byte compare table + key identifiers", () => {
+  it("errors on per-lane byte compare table + key identifiers", () => {
     const src = `
       const lanes = [0x41, 0x42, 0x43, 0x44, 0x45];
       function check(key) {
@@ -29,9 +35,11 @@ describe("lane-independence footgun lint (#40.1)", () => {
     `;
     const report = lintLaneIndependence(src);
     expect(report.looksLaneIndependent).toBe(true);
+    expect(report.findings.every((f) => f.severity === "error")).toBe(true);
     expect(report.findings.some((f) => f.id === "per-lane-byte-compare-array")).toBe(true);
     expect(report.findings.some((f) => f.id === "independent-lane-and-reduce")).toBe(true);
     expect(report.oneLineAdvice).toMatch(/whole-key chained mixing/i);
+    expect(report.oneLineAdvice).toMatch(/ERROR/i);
 
     const explicit = lintLaneIndependence(`
       const lanes = [1,2,3,4];
@@ -40,7 +48,7 @@ describe("lane-independence footgun lint (#40.1)", () => {
     expect(explicit.findings.some((f) => f.id === "independent-lane-and-reduce")).toBe(true);
   });
 
-  it("warns on indexed lane oracle loops", () => {
+  it("errors on indexed lane oracle loops", () => {
     const src = `
       for (let i = 0; i < 16; i++) {
         if (key[i] === target[i]) ok++;
@@ -48,5 +56,27 @@ describe("lane-independence footgun lint (#40.1)", () => {
     `;
     const report = lintLaneIndependence(src);
     expect(report.findings.some((f) => f.id === "indexed-lane-oracle-loop")).toBe(true);
+    expect(report.findings[0]!.severity).toBe("error");
+  });
+
+  it("errors on CrackMe v6-style per-byte WASM lane oracles", () => {
+    const tpl = readFileSync(
+      resolve(process.cwd(), "challenge/v6/src/vault.template.cjs"),
+      "utf8",
+    );
+    const report = lintLaneIndependence(tpl);
+    expect(report.looksLaneIndependent).toBe(true);
+    expect(report.findings.some((f) => f.id === "per-byte-wasm-lane-oracle")).toBe(true);
+    expect(report.findings.every((f) => f.severity === "error")).toBe(true);
+    expect(laneIndependenceRefuseMessage(report, "/tmp/vault.cjs")).toMatch(
+      /allowLaneIndependentGates|allow-lane-independent/i,
+    );
+  });
+
+  it("formatSupportsLaneIndependenceLint covers JS/TS only", () => {
+    expect(formatSupportsLaneIndependenceLint("javascript")).toBe(true);
+    expect(formatSupportsLaneIndependenceLint("typescript")).toBe(true);
+    expect(formatSupportsLaneIndependenceLint("wasm")).toBe(false);
+    expect(formatSupportsLaneIndependenceLint("html-bundle")).toBe(false);
   });
 });

@@ -284,9 +284,12 @@ export {
 export {
   lintLaneIndependence,
   LANE_INDEPENDENCE_SCHEMA,
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
   type LaneIndependenceFinding,
   type LaneIndependenceReport,
   type LaneIndependenceFindingId,
+  type LaneIndependenceSeverity,
 } from "./engine/lane-independence-lint.js";
 export {
   parseWasmExportSectionPayload,

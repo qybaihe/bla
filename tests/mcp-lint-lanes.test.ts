@@ -65,7 +65,7 @@ describe("MCP bla_lint_lanes", () => {
     expect(result.structuredContent.findings).toHaveLength(0);
   });
 
-  it("returns warn findings for independent per-lane gate shapes", async () => {
+  it("returns error findings for independent per-lane gate shapes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-lint-warn-"));
     tempDirs.push(dir);
     const file = join(dir, "oracle.js");
@@ -92,7 +92,7 @@ describe("MCP bla_lint_lanes", () => {
     expect(result.structuredContent.findings.some((f) => f.id === "per-lane-byte-compare-array")).toBe(
       true,
     );
-    expect(result.structuredContent.findings.every((f) => f.severity === "warn")).toBe(true);
+    expect(result.structuredContent.findings.every((f) => f.severity === "error")).toBe(true);
     expect(result.structuredContent.oneLineAdvice).toMatch(/whole-key chained mixing/i);
   });
 
