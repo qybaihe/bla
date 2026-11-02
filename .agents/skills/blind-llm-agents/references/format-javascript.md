@@ -41,3 +41,13 @@ Rules of thumb:
 3. Dual-publish (JSON + WASM `R2SEAL` data) without encryption doubles the same exposure.
 
 **Engine gate:** `bla_lint_seal` / CLI `bla lint-seal` flags reversible plaintext seals. At **bankrupt**, harden/protect **refuse** unless `allow_plaintext_seal` / `--allow-plaintext-seal` / `.blarc` `"allowPlaintextSeal": true` (lab fixtures only). One-way SHA-256 seals without invertible ARX params pass.
+
+## One-way seals still need packaging (red-blue round-3)
+
+Round-3 confirmed: SHA-256 (or HMAC) public `revision` **stops** seal-only ARX inversion. That is necessary, not sufficient:
+
+1. Digests-only `seal.json` still triggers `plaintext-seal-sidecar` **warning** (`shouldRefuseBankrupt: false`). Prefer omit/encrypt/`self_seal`.
+2. Do **not** dual-carry runtime salt/rounds/ciphertext as clear WASM data next to the seal (`R3PARM`/`R3CIPH`-class ASCII magics). Encrypt, relocate, or bind under self-seal.
+3. Strip or rename stable panel helpers such as `__vaultPanelDerive_*`, and avoid leaving classic FNV primes as readable literals in HTML bundles when they back entitlement tokens.
+4. For multi-artifact gates (JS + WASM + HTML + seal), turn on **`self_seal`** so siblings cannot be freely swapped/instrumented.
+

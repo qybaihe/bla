@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Red/Blue round-3 · Red writeback (skill):** one-way SHA-256 seals **close** the round-2 ARX-invert break; skill **v1.5.5** + format appendices document residual packaging — WASM `R3PARM`/`R3CIPH`-class clear param/cipher carriers, stable `__vaultPanelDerive_*` / FNV literals, and prefer `self_seal` for multi-artifact entitlement trees. No emergency P0.
 - **Red/Blue round-2 · Writeback P1 — seal-commitment lint + bankrupt refuse:** CLI `bla lint-seal` / MCP `bla_lint_seal` detect plaintext seal sidecars and reversible public commitments (round-2 `seal.json` + ARX `revision` break). Bankrupt harden/protect refuse unless `allowPlaintextSeal` / `--allow-plaintext-seal` / `allow_plaintext_seal`. One-way SHA-256 seals pass. Skill v1.5.4 points at the new tool/switch.
 
 ### Changed

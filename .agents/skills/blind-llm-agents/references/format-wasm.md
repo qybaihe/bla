@@ -17,3 +17,11 @@ Glue that imports renamed symbols should consume the rename map from the protect
 ## Verify honesty
 
 Standalone `bla_verify` soft-caps WASM with `wasm-export-rename-pending` unless you pass `wasm_export_rename_applied: true` (set when `ProtectionResult.wasmExportRenameApplied` was true). Defend/harden already forward that flag into their embedded verify step.
+
+## Data-section seal carriers (red-blue round-3)
+
+Export rename closes the public `mix`/`seal` hook surface. It does **not** hide plaintext entitlement material in active data:
+
+- Avoid shipping ASCII magics such as `R2SEAL` / `R3PARM` / `R3CIPH` followed by clear salt, round counts, invertible revisions, or certificate ciphertext.
+- If the gate must load schedule params from WASM, encrypt them or bind the blob under **`self_seal`** with the entry module — especially when a sibling `seal.json` already publishes one-way digests.
+

@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.5.4"
+  version: "1.5.5"
 ---
 
 # BLA: Blind LLM Agents
@@ -24,7 +24,7 @@ model misjudgment on proprietary logic, or **one-click / 一键加固** a build.
 Defensive only: protect **their own** artifacts. Refuse crack, RE, bypass PoCs, or
 attack playbooks against software they do not own.
 
-**Principles (red-blue round-1+2):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break). Enforce with `bla_lint_seal` / `bla lint-seal`; bankrupt harden **refuses** unless `allow_plaintext_seal` / `--allow-plaintext-seal`.
+**Principles (red-blue round-1+2+3):** do not ship a stable public WASM ABI without an explicit `wasm_preserve_exports` list; do not leave JS-side independent lane tables — prefer whole-key chained mixing (`bla_lint_lanes` / harden refuse). **Do not** place plaintext seal/catalog JSON (`revision`, salts, certificate ciphertext) beside hardened outputs. Public compare targets must be **one-way** (SHA-256/HMAC/etc.); reversible ARX/Feistel digests as public `revision` are a key-recovery footgun (round-2 break — **closed in round-3** when seal is digests-only). Enforce with `bla_lint_seal` / `bla lint-seal`; bankrupt harden **refuses** unless `allow_plaintext_seal` / `--allow-plaintext-seal`. Round-3 residual: even with one-way seals, **do not** leave ASCII WASM param/cipher magics (`R2SEAL`/`R3PARM`/`R3CIPH`) + clear salt/rounds/ciphertext in the data section; strip stable panel derive globals (`__vaultPanelDerive_*`); prefer **`self_seal`** for multi-artifact entitlement trees.
 
 ## Prerequisites (once)
 
