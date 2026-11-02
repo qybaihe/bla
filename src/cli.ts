@@ -12,6 +12,7 @@ import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
+import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -52,6 +53,7 @@ Commands:
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
   lint-lanes <file>           Heuristic ERROR if gate code looks lane-independent (issue #40.1); exit 2
+  lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
@@ -73,6 +75,7 @@ Options:
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
+  --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -98,6 +101,7 @@ interface ParsedCliArgs {
   readonly selfSeal: boolean;
   readonly wasmPreserveExports: readonly string[];
   readonly allowLaneIndependentGates: boolean;
+  readonly allowPlaintextSeal: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -125,6 +129,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let selfSeal = false;
   let wasmPreserveExports: string[] = [];
   let allowLaneIndependentGates = false;
+  let allowPlaintextSeal = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -167,6 +172,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       selfSeal = true;
     } else if (arg === "--allow-lane-independent") {
       allowLaneIndependentGates = true;
+    } else if (arg === "--allow-plaintext-seal") {
+      allowPlaintextSeal = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -223,6 +230,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     selfSeal,
     wasmPreserveExports,
     allowLaneIndependentGates,
+    allowPlaintextSeal,
     lang,
     clients,
     allDetected,
@@ -357,6 +365,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -400,6 +411,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -439,6 +453,30 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           }
         }
         return report.looksLaneIndependent ? 2 : 0;
+      }
+      case "lint-seal": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-seal <file>`.");
+          return 1;
+        }
+        const report = lintSealCommitmentFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA seal-commitment lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
       }
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
@@ -489,6 +527,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

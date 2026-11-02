@@ -23,6 +23,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "self_seal",
       "wasm_preserve_exports",
       "allow_lane_independent",
+      "allow_plaintext_seal",
       "seed",
       "dry_run",
       "max_artifacts",
@@ -46,6 +47,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "self_seal",
       "wasm_preserve_exports",
       "allow_lane_independent",
+      "allow_plaintext_seal",
       "seed",
       "in_place",
       "confirm_overwrite",
@@ -61,6 +63,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "self_seal",
       "wasm_preserve_exports",
       "allow_lane_independent",
+      "allow_plaintext_seal",
       "seed",
       "llm_directives",
       "in_place",
@@ -82,6 +85,10 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_lint_lanes",
+    params: ["path"],
+  },
+  {
+    tool: "bla_lint_seal",
     params: ["path"],
   },
   {

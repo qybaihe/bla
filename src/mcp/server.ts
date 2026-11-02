@@ -14,6 +14,10 @@ import {
   type LaneIndependenceReport,
 } from "../engine/lane-independence-lint.js";
 import {
+  lintSealCommitmentFile,
+  type SealCommitmentReport,
+} from "../engine/seal-commitment-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -161,6 +165,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
         },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -256,6 +265,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
         },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -331,6 +345,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
         },
         seed: {
           type: "string",
@@ -525,6 +544,22 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         path: {
           type: "string",
           description: "Path to a UTF-8 source file to lint (JS/TS/Python-like)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_seal",
+    description:
+      "Read-only seal-commitment lint (same engine as CLI `bla lint-seal`). Flags plaintext seal/entitlement JSON sidecars and reversible public commitments (scheduleSalt+rounds+revision without a one-way algorithm). Bankrupt harden refuses error findings unless allow_plaintext_seal. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a seal.json / *.seal.json (or seal-shaped JSON) file to lint",
         },
       },
       required: ["path"],
@@ -783,6 +818,7 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_lane_independent === true
       ? { allowLaneIndependentGates: true }
       : {}),
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -807,6 +843,7 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     ...(args.allow_lane_independent === true
       ? { allowLaneIndependentGates: true }
       : {}),
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
   });
 }
 
@@ -831,6 +868,14 @@ function runLintLanes(args: Record<string, unknown>): LaneIndependenceReport {
   }
   const source = readFileSync(abs, "utf8");
   return lintLaneIndependence(source);
+}
+
+function runLintSeal(args: Record<string, unknown>): SealCommitmentReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-seal target not found: ${abs}`);
+  }
+  return lintSealCommitmentFile(abs);
 }
 
 export function validateMcpToolCall(
@@ -1285,6 +1330,7 @@ export async function handleMcpRequest(
               ...(args.allow_lane_independent === true
                 ? { allowLaneIndependentGates: true }
                 : {}),
+              ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1398,6 +1444,9 @@ export async function handleMcpRequest(
           });
         } else if (name === "bla_lint_lanes") {
           payload = runLintLanes(args);
+        } else if (name === "bla_lint_seal") {
+          payload = runLintSeal(args);
+          refused = (payload as SealCommitmentReport).shouldRefuseBankrupt;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,
