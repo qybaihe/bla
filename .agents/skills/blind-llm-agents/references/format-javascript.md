@@ -51,3 +51,7 @@ Round-3 confirmed: SHA-256 (or HMAC) public `revision` **stops** seal-only ARX i
 3. Strip or rename stable panel helpers such as `__vaultPanelDerive_*`, and avoid leaving classic FNV primes as readable literals in HTML bundles when they back entitlement tokens.
 4. For multi-artifact gates (JS + WASM + HTML + seal), turn on **`self_seal`** so siblings cannot be freely swapped/instrumented.
 
+## Round-3 residual gates
+
+- `bla_lint_panel_derive` / `bla lint-panel-derive` flags stable `__vaultPanelDerive_*`; maximum/bankrupt protect rewrites to `_blaPd_*` unless `allow_stable_panel_derive`.
+- Multi-artifact trees: bankrupt harden reports `selfSealRecommended` — pass `self_seal: true` (auto sibling bind on harden). Single-file stays opt-in only.

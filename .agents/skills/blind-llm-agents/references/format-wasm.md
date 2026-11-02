@@ -25,3 +25,7 @@ Export rename closes the public `mix`/`seal` hook surface. It does **not** hide 
 - Avoid shipping ASCII magics such as `R2SEAL` / `R3PARM` / `R3CIPH` followed by clear salt, round counts, invertible revisions, or certificate ciphertext.
 - If the gate must load schedule params from WASM, encrypt them or bind the blob under **`self_seal`** with the entry module — especially when a sibling `seal.json` already publishes one-way digests.
 
+## Round-3 residual gate
+
+- Run `bla_lint_wasm_params` / `bla lint-wasm-params` before shipping. Bankrupt harden refuses clear param/cipher magics unless `allow_wasm_clear_params`.
+- This is a **detection gate**, not data-section encryption.
