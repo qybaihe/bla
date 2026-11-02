@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP/Skill 2.0 stage B (CLI↔MCP parity):** `bla_lint_lanes` (same engine as `bla lint-lanes`); `in_place` on `bla_protect`/`bla_defend` (still gated by `confirm_overwrite`); `honey_source_maps` on `bla_protect`; `output_directory` on `bla_harden`; `bla_verify` honesty metadata (`self_seal_enabled`, `wasm_export_rename_applied`, `numeric_template_leak_known`) so soft-caps match protect-side facts.
+- **Skill format appendices:** `references/format-{javascript,wasm,python,android}.md`; skill guide v1.4 keeps a short decision tree and drops install-breaking `../../../docs` links (weave via `bla://directives/weave-decoy`). Setup/doctor install+hash the full bundle including appendices.
 - **Agent write safety (MCP/Skill 2.0, stage A):** read-only `bla_discover`; `bla_harden` `dry_run` (CLI `harden --dry-run`) writes zero bytes and reports `truncated` / `wouldOverwrite`; `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite existing outputs without `confirm_overwrite: true` and return a `writeReceipt`.
 - **Full skill bundle install:** `bla setup` installs `SKILL.md` plus `references/` (counter-rea-matrix); `bla doctor` reports `skillMissingFiles` / `skillModifiedFiles` and fails on an incomplete bundle; uninstall removes owned bundle files.
 - **Self-seal (#40.5):** opt-in CLI `--self-seal` / MCP `self_seal` / `.blarc selfSeal` injects Node sibling-module + env-fingerprint integrity binding into JS AST shield and entangles the opaque-predicate seed.
