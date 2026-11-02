@@ -79,7 +79,6 @@ describe("self-seal helper (#40.5)", () => {
     // Seed const must appear before the first top-level Object.freeze / LABEL split use.
     const seedDecl = on.code.match(/const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\(\(\d+|\d+\s*\^)/);
     expect(seedDecl).toBeTruthy();
-    const seedName = seedDecl![1]!;
     const seedPos = on.code.indexOf(seedDecl![0]!);
     const freezePos = on.code.indexOf("Object.freeze");
     expect(seedPos).toBeGreaterThanOrEqual(0);
