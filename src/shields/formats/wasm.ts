@@ -225,9 +225,68 @@ function appendDecoyExports(
 }
 
 /**
+ * Parse WASM type-section function signatures → param counts (functype only).
+ * Returns [] on truncated / non-functype entries (defensive).
+ */
+function parseWasmFunctypeParamCounts(typeSectionPayload: Buffer): number[] {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(typeSectionPayload, 0);
+    let p = nextOffset;
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+      if (p >= typeSectionPayload.length) return out;
+      const form = typeSectionPayload[p++]!;
+      if (form !== 0x60) return out; // only functype
+      const { value: nParams, nextOffset: afterParams } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterParams + nParams; // skip param valtypes
+      if (p > typeSectionPayload.length) return out;
+      const { value: nResults, nextOffset: afterResults } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterResults + nResults;
+      if (p > typeSectionPayload.length) return out;
+      out.push(nParams);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse WASM function-section → type indices per function index.
+ */
+function parseWasmFuncTypeIndices(funcSectionPayload: Buffer): number[] {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(funcSectionPayload, 0);
+    let p = nextOffset;
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const { value: typeIdx, nextOffset: after } = decodeUnsignedLeb128(
+        funcSectionPayload,
+        p,
+      );
+      p = after;
+      out.push(typeIdx);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Collect unique function-export indices from a WASM binary (kind 0 only).
  * Used so bankrupt decoy aliases can be spread across real stubs + unlock
  * instead of all aliasing funcIndex 0 (red/blue round-10 arity-2 hygiene).
+ *
+ * Round-12: prefer host-visible arity-2 exports `(i32,i32)->…` when at least
+ * one exists, so arity-1 exports (e.g. seal) do not consume alias budget.
+ * Falls back to all func exports when no arity-2 is present.
  */
 function collectExportedFuncIndices(bytes: Buffer): number[] {
   if (
@@ -240,27 +299,42 @@ function collectExportedFuncIndices(bytes: Buffer): number[] {
     return [];
   }
   let offset = 8;
+  let typeParamCounts: number[] | null = null;
+  let funcTypeIndices: number[] | null = null;
+  let exportEntries: WasmExportEntry[] | null = null;
   while (offset < bytes.length) {
     const sectionId = bytes[offset++]!;
     const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) break;
-    if (sectionId === 7) {
-      const payload = bytes.subarray(nextOffset, sectionEnd);
-      const entries = parseWasmExportSectionPayload(payload);
-      const seen = new Set<number>();
-      const out: number[] = [];
-      for (const e of entries) {
-        if (e.kind !== 0) continue;
-        if (seen.has(e.index)) continue;
-        seen.add(e.index);
-        out.push(e.index);
-      }
-      return out;
+    const payload = bytes.subarray(nextOffset, sectionEnd);
+    if (sectionId === 1) {
+      typeParamCounts = parseWasmFunctypeParamCounts(payload);
+    } else if (sectionId === 3) {
+      funcTypeIndices = parseWasmFuncTypeIndices(payload);
+    } else if (sectionId === 7) {
+      exportEntries = parseWasmExportSectionPayload(payload);
     }
     offset = sectionEnd;
   }
-  return [];
+  if (!exportEntries) return [];
+  const seen = new Set<number>();
+  const all: number[] = [];
+  const arity2: number[] = [];
+  for (const e of exportEntries) {
+    if (e.kind !== 0) continue;
+    if (seen.has(e.index)) continue;
+    seen.add(e.index);
+    all.push(e.index);
+    if (typeParamCounts && funcTypeIndices && e.index < funcTypeIndices.length) {
+      const typeIdx = funcTypeIndices[e.index]!;
+      if (typeIdx < typeParamCounts.length && typeParamCounts[typeIdx] === 2) {
+        arity2.push(e.index);
+      }
+    }
+  }
+  // Prefer host-visible arity-2 when available (round-12 alias budget hygiene).
+  return arity2.length > 0 ? arity2 : all;
 }
 
 function planWasmExportNameDecoys(
@@ -271,6 +345,7 @@ function planWasmExportNameDecoys(
   // bankrupt: ~250 × ~12 KiB names → Wabt interface charge ≫ 32 MiB.
   // Round-10: spread aliases across exported function indices (stubs + unlock)
   // so ~all-250 do not concentrate on funcIndex 0 / the real unlock body.
+  // Round-12: caller passes arity-2-preferring indices when available.
   const count =
     intensity === "stealth"
       ? 0
@@ -480,6 +555,8 @@ export function protectWasmBinary(
   // Round-10: spread aliases across all exported function indices (not only 0).
   // Round-11: after rename + decoy append, shuffle export *order* independently
   // so first arity-2 is not a stable pointer to the unlock body.
+  // Round-12: collectExportedFuncIndices prefers arity-2 (host-visible) so
+  // arity-1 exports do not burn alias budget.
   const decoyExports = planWasmExportNameDecoys(
     prng,
     intensity,
