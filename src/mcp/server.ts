@@ -786,8 +786,10 @@ export async function handleMcpRequest(
             },
           };
         }
-        const promptArgs = req.params.arguments;
-        if (!isPlainObject(promptArgs)) {
+        // Arguments may be omitted entirely when the prompt has no required
+        // arguments (e.g. bla-harden-project, whose directory is optional).
+        // Only a present-but-malformed arguments value is an error.
+        if (req.params.arguments !== undefined && !isPlainObject(req.params.arguments)) {
           return {
             jsonrpc: "2.0",
             id: req.id,
@@ -797,6 +799,9 @@ export async function handleMcpRequest(
             },
           };
         }
+        const promptArgs: Record<string, unknown> = isPlainObject(req.params.arguments)
+          ? req.params.arguments
+          : {};
         for (const argSpec of promptDef.arguments) {
           if (argSpec.required) {
             const val = promptArgs[argSpec.name];
@@ -819,20 +824,44 @@ export async function handleMcpRequest(
               ? String(promptArgs.directory)
               : ".";
           promptText =
-            `Harden my software against REA in one step: call bla_harden with { "directory": "${directory}" }. ` +
+            `Harden my software against REA in one step: call bla_harden with { "directory": ${JSON.stringify(directory)} }. ` +
             `It auto-discovers build outputs, runs audit→defend→verify with the bankrupt profile on every artifact, and returns a per-artifact summary. ` +
-            `Do not ask which files to protect — discover them.`;
+            `Do not ask which files to protect — discover them. ` +
+            `Defaults are safe: llm_directives, weave_decoys, self_seal and emit_manifest are off unless the user explicitly asks for them. ` +
+            `Acceptance: bla_verify passes for each artifact; report defenseScore and any gaps, and do not present benchmark estimates as redteam evidence.`;
         } else if (promptDef.name === "bla-weave-decoy") {
           const targetPath =
             typeof promptArgs.target_path === "string" && promptArgs.target_path.trim().length > 0
               ? String(promptArgs.target_path)
               : ".";
           promptText =
-            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": "${targetPath}" }, then bla_harden with { "directory": "${targetPath}", "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
-        } else {
+            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": ${JSON.stringify(targetPath)} }, then bla_harden with { "directory": ${JSON.stringify(targetPath)}, "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
+        } else if (promptDef.name === "shield-against-rea") {
           const targetPath = String(promptArgs.target_path ?? ".");
           promptText =
-            `Inspect and audit '${targetPath}' using bla_inspect_release and bla_audit, then review findings before applying bla_protect or bla_defend and verifying with bla_verify.`;
+            `Shield ${targetPath} against REA, defensive only: (1) inspect and audit ${targetPath} with bla_inspect_release and bla_audit; ` +
+            `(2) review the findings with the user before applying anything — choose bla_protect for a single shield pass (default balanced) or bla_defend for the full audit→protect→verify pipeline (default bankrupt), and state which one you chose; ` +
+            `(3) verify with bla_verify and report its checks, defenseScore and gaps. ` +
+            `Forbidden: inventing new MCP tools, cracking or reverse-engineering third-party software, and turning on llm_directives unless explicitly asked. ` +
+            `Acceptance: bla_verify passes, or the failing checks are reported explicitly; do not present benchmark estimates as redteam evidence.`;
+        } else if (promptDef.name === "bla-hardening-workflow") {
+          const targetPath = String(promptArgs.target_path ?? ".");
+          promptText =
+            `Release-hardening checklist for ${targetPath}, in order: (1) bla_inspect_release for accidental .map sourcesContent and symbol leaks; ` +
+            `(2) bla_audit for REA exposure and cost simulation; (3) bla_protect (single target) or bla_defend (full pipeline) — review audit findings first, do not skip to protect; ` +
+            `(4) bla_verify, then report checks, defenseScore and gaps. ` +
+            `For a project directory instead of a single artifact, prefer bla_harden. ` +
+            `Note: lane-independence lint (lint-lanes) is CLI-only, not an MCP tool. ` +
+            `Acceptance: every step is reported, including any skipped or warned stage; no step is claimed without its tool result.`;
+        } else {
+          // bla-counter-rea
+          const targetPath = String(promptArgs.target_path ?? ".");
+          promptText =
+            `Evaluate REA exposure for ${targetPath} and plan defensive hardening, defensive only: (1) run bla_audit on ${targetPath} and summarise exposed vectors and recommended counters from existing tools only — do not invent new MCP tools; ` +
+            `(2) propose a hardening plan that states the intensity, the output location and any WASM preserve-exports or self-seal choices, and flags signed-APK / signed-binary and high-risk llm_directives cases for explicit user confirmation; ` +
+            `(3) only after the plan is reviewed, apply bla_protect or bla_defend and finish with bla_verify. ` +
+            `Keep evidence honest: distinguish audit exposure, benchmark estimates and real redteam (redteam:rea) evidence — never present an estimate as a measured result. ` +
+            `Acceptance: the plan lists vectors, counters, verification steps and open confirmations before any protect step runs.`;
         }
         return {
           jsonrpc: "2.0",
