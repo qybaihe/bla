@@ -32,6 +32,8 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 
 `weave_decoys: true` activates structural Python customer-def weave (shared-slot touch + opaque-false decoy calls) after the #51 tarpit; when false, Python stays warm-init-only. JS AST weave remains always-on.
 
+Project config parity: set `"weaveDecoys": true` in `.blarc` / `bla.config.json` (schema `bla.config.v1.json`) to enable the same flag without repeating `--weave-decoys` / MCP `weave_decoys` on every invoke. CLI/MCP flags still OR with the config value.
+
 ### MCP Resources
 
 - `bla://directives/weave-decoy` — weave-decoy theory + executor checklist (Markdown).

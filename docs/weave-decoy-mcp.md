@@ -72,6 +72,7 @@
 | Resource `bla://directives/weave-decoy` | 返回本理论的可执行 Markdown |
 | Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON |
 | `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | **真实管线属性**：激活 Python 客户 def 结构织入（JS 始终 AST 织入）；非仅报告布尔标注 |
+| `.blarc` / `bla.config.json` 字段 `weaveDecoys` | 与 CLI `--weave-decoys` / MCP `weave_decoys` 同义；CLI 读取后与旗标做 OR |
 
 实现入口：`src/shields/weave/weave-decoy.ts`、`src/shields/formats/python-ast-weave.ts`、`src/mcp/server.ts`。
 
