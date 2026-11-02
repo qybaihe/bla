@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { SeededPrng } from "../src/core/prng.js";
 import {
   generateSelfSealSnippet,
@@ -54,6 +55,49 @@ describe("self-seal helper (#40.5)", () => {
       { pathLabel: "sib-2", bytes: Buffer.from("sib-2") },
     ]);
     expect(c).not.toBe(a);
+  });
+
+  it("self-seal keeps opaque seed before top-level const uses (no TDZ)", () => {
+    // Bankrupt-style string splitting references seedVar in top-level consts.
+    // Self-seal used to push the seed decl to the program end → TDZ ReferenceError.
+    const src = [
+      '"use strict";',
+      'const HONEYPOT = Object.freeze(["P4#kR9$vM2@xL7!q", "W9$mK3#pT7!vQ2@z"]);',
+      'const LABEL = "bla-redblue-r4|wrap";',
+      'function main(k) { return HONEYPOT.includes(k) ? "hp" : LABEL + ":" + String(k).length; }',
+      'module.exports = { main, HONEYPOT };',
+      'if (require.main === module) console.log(main(process.argv[2] || ""));',
+      "",
+    ].join("\n");
+    const on = transformJavaScriptWithBlaShield(src, {
+      intensity: "bankrupt",
+      seed: "self-seal-tdz-r4",
+      selfSeal: true,
+    });
+    expect(on.selfSealEnabled).toBe(true);
+    expect(on.selfSealBindingName).toBeTruthy();
+    // Seed const must appear before the first top-level Object.freeze / LABEL split use.
+    const seedDecl = on.code.match(/const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\(\(\d+|\d+\s*\^)/);
+    expect(seedDecl).toBeTruthy();
+    const seedName = seedDecl![1]!;
+    const seedPos = on.code.indexOf(seedDecl![0]!);
+    const freezePos = on.code.indexOf("Object.freeze");
+    expect(seedPos).toBeGreaterThanOrEqual(0);
+    if (freezePos >= 0) {
+      expect(seedPos).toBeLessThan(freezePos);
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "bla-selfseal-tdz-"));
+    try {
+      const file = join(dir, "gate.cjs");
+      writeFileSync(file, on.code, "utf8");
+      const run = spawnSync(process.execPath, [file, "abc"], { encoding: "utf8" });
+      expect(run.status, run.stderr).toBe(0);
+      expect(run.stderr || "").not.toMatch(/before initialization/i);
+      expect(run.stdout).toMatch(/bla-redblue-r4\|wrap:3/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("AST shield injects self-seal only when opted in", () => {
