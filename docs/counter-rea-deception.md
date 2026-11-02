@@ -41,4 +41,4 @@ resource `bla://directives/weave-decoy`, tool `bla_weave_plan`, flag
 
 ## WASM export rename (#40.3)
 
-`protectWasmBinary` can rename non-public / internal-looking exports while preserving names listed in `preserveExports`. At `maximum`/`bankrupt`, internal-looking names (`__*`, `debug_*`, …) are renamed by default. Forced full rename: `renameNonPublicExports: true` with an explicit preserve list for the public ABI. Returns `exportsRenamed` for glue updates.
+`protectWasmBinary` can rename non-public / internal-looking exports while preserving names listed in `preserveExports`. At `maximum`/`bankrupt`, internal-looking names (`__*`, `debug_*`, …) are renamed by default. Forced full rename: `renameNonPublicExports: true` with an explicit preserve list for the public ABI. Returns `exportsRenamed` for glue updates. Project / CLI / MCP parity: `.blarc` `wasmPreserveExports`, `--wasm-preserve-exports`, MCP `wasm_preserve_exports`.

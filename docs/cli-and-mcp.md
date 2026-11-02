@@ -35,6 +35,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 Project config parity: set `"weaveDecoys": true` in `.blarc` / `bla.config.json` (schema `bla.config.v1.json`) to enable the same flag without repeating `--weave-decoys` / MCP `weave_decoys` on every invoke. CLI/MCP flags still OR with the config value.
 
 Opt-in **self-seal** (issue #40.5): CLI `--self-seal`, MCP `self_seal`, `.blarc` `"selfSeal": true`. Injects a Node self-integrity preamble (module + optional sibling paths + env fingerprint) and folds the digest into the opaque-predicate seed for JS/Node targets.
+WASM public ABI preserve list (issue #40.3): CLI `--wasm-preserve-exports a,b`, MCP `wasm_preserve_exports`, `.blarc` `"wasmPreserveExports": ["a","b"]`. Kept names stay; internal-looking exports may still rename at maximum/bankrupt.
 
 Heuristic **lane-independence lint** (issue #40.1): `bla lint-lanes <file>` warns when gate code looks like independent per-lane checks. Defensive guidance only — prefer whole-key chained mixing.
 

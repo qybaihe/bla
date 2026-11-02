@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.3.1"
+  version: "1.3.2"
 ---
 
 # BLA: Blind LLM Agents
@@ -91,6 +91,15 @@ targets (or says self-seal / 自密封):
 
 Off by default. Browser builds soft-skip (digest=0). Pair with weave decoys when
 Python structural weave is also desired.
+
+## WASM public ABI preserve (#40.3)
+
+When hardening `.wasm` at maximum/bankrupt and the customer must keep specific export names:
+
+1. CLI: `--wasm-preserve-exports main,add`
+2. MCP: `wasm_preserve_exports: ["main","add"]`
+3. Config: `"wasmPreserveExports": ["main","add"]` in `.blarc`
+Internal-looking names (`__*`, `debug_*`, …) may still be renamed; update glue via the rename map when needed.
 
 ## Lane-independence footgun lint (#40.1)
 
