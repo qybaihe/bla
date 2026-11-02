@@ -175,6 +175,8 @@ export interface ProtectionMetrics {
   readonly decoyRoutesInjected: number;
   readonly chaffPayloadsEmbedded: number;
   readonly honeySourceMapsGenerated: number;
+  /** Inline `<script>` bodies the AST shield threw on and shipped unchanged — surfaced so partial HTML protection is never silent. */
+  readonly inlineScriptsFailed: number;
   readonly binarySectionsPatched: number;
 }
 
