@@ -39,9 +39,11 @@ export interface JsonRpcResponse {
 }
 
 export interface McpPropertySchema {
-  readonly type: "string" | "boolean" | "number";
+  readonly type: "string" | "boolean" | "number" | "array";
   readonly description?: string;
   readonly enum?: readonly string[];
+  /** Present when type is "array" (JSON Schema items). */
+  readonly items?: { readonly type: "string" | "boolean" | "number" };
 }
 
 export interface McpToolDefinition {
@@ -133,6 +135,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
         },
+        wasm_preserve_exports: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -178,6 +186,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+        },
+        wasm_preserve_exports: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
         },
         seed: {
           type: "string",
@@ -233,6 +247,12 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+        },
+        wasm_preserve_exports: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
         },
         seed: {
           type: "string",
@@ -863,6 +883,12 @@ export async function handleMcpRequest(
             llmDirectives: Boolean(args.llm_directives),
             weaveDecoys: Boolean(args.weave_decoys),
             selfSeal: Boolean(args.self_seal),
+            ...(Array.isArray(args.wasm_preserve_exports)
+              ? {
+                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+                    .filter((x): x is string => typeof x === "string" && x.length > 0),
+                }
+              : {}),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_defend") {
@@ -879,6 +905,12 @@ export async function handleMcpRequest(
             llmDirectives: Boolean(args.llm_directives),
             weaveDecoys: Boolean(args.weave_decoys),
             selfSeal: Boolean(args.self_seal),
+            ...(Array.isArray(args.wasm_preserve_exports)
+              ? {
+                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+                    .filter((x): x is string => typeof x === "string" && x.length > 0),
+                }
+              : {}),
             ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
           });
         } else if (name === "bla_audit") {
@@ -894,6 +926,12 @@ export async function handleMcpRequest(
             llmDirectives: Boolean(args.llm_directives),
             weaveDecoys: Boolean(args.weave_decoys),
             selfSeal: Boolean(args.self_seal),
+            ...(Array.isArray(args.wasm_preserve_exports)
+              ? {
+                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
+                    .filter((x): x is string => typeof x === "string" && x.length > 0),
+                }
+              : {}),
           });
         } else if (name === "bla_verify") {
           payload = handlers.verifyTarget(
