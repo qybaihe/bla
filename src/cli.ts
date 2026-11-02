@@ -17,6 +17,7 @@ import { lintWasmParamCarrierFile } from "./engine/wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiFile } from "./engine/panel-derive-abi-lint.js";
 import { lintJsAesUnwrapFile } from "./engine/js-aes-unwrap-lint.js";
 import { lintJsWasmHydrateDumpFile } from "./engine/js-wasm-hydrate-dump-lint.js";
+import { lintWasmXorMaskSidecarFile } from "./engine/wasm-xor-mask-sidecar-lint.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -61,6 +62,7 @@ Commands:
   lint-panel-derive <file>   Heuristic ERROR if stable __vaultPanelDerive_* / deriveLocal oracle remains; exit 2
   lint-js-aes-unwrap <file>  Heuristic ERROR if JS AES wrap-key + create*iv + fixed hdr unwrap; exit 2
   lint-js-wasm-hydrate-dump <file>  Heuristic ERROR if JS dumps WASM hydrate salt/rounds/cipher; exit 2
+  lint-wasm-xor-mask-sidecar <file> Heuristic ERROR if WASM data has XOR-mask beside masked entitlement pack; exit 2
   lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
@@ -85,6 +87,7 @@ Options:
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
   --allow-js-wasm-hydrate-dump  Allow bankrupt despite JS←WASM hydrate param-dump (round-5); OFF by default
+  --allow-wasm-xor-mask-sidecar  Allow bankrupt despite WASM XOR-mask-beside-blob packs (round-6); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
@@ -116,6 +119,7 @@ interface ParsedCliArgs {
   readonly allowJsAesUnwrap: boolean;
   readonly allowPanelOfflineOracle: boolean;
   readonly allowJsWasmHydrateDump: boolean;
+  readonly allowWasmXorMaskSidecar: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -148,6 +152,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowStablePanelDeriveAbi = false;
   let allowJsAesUnwrap = false;
   let allowJsWasmHydrateDump = false;
+  let allowWasmXorMaskSidecar = false;
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
@@ -203,6 +208,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowPanelOfflineOracle = true;
     } else if (arg === "--allow-js-wasm-hydrate-dump") {
       allowJsWasmHydrateDump = true;
+    } else if (arg === "--allow-wasm-xor-mask-sidecar") {
+      allowWasmXorMaskSidecar = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -265,6 +272,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allowJsAesUnwrap,
     allowPanelOfflineOracle,
     allowJsWasmHydrateDump,
+    allowWasmXorMaskSidecar,
     lang,
     clients,
     allDetected,
@@ -417,6 +425,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowJsWasmHydrateDump:
             parsed.allowJsWasmHydrateDump ||
             loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -478,6 +489,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowJsWasmHydrateDump:
             parsed.allowJsWasmHydrateDump ||
             loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -641,6 +655,30 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           ? 2
           : 0;
       }
+      case "lint-wasm-xor-mask-sidecar": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-wasm-xor-mask-sidecar <file>`.");
+          return 1;
+        }
+        const report = lintWasmXorMaskSidecarFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-xor-mask-sidecar lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
 
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
@@ -709,6 +747,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowJsWasmHydrateDump:
             parsed.allowJsWasmHydrateDump ||
             loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

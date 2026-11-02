@@ -34,6 +34,10 @@ import {
   type JsWasmHydrateDumpReport,
 } from "../engine/js-wasm-hydrate-dump-lint.js";
 import {
+  lintWasmXorMaskSidecarFile,
+  type WasmXorMaskSidecarReport,
+} from "../engine/wasm-xor-mask-sidecar-lint.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -211,6 +215,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
         },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -336,6 +345,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
         },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
@@ -441,6 +455,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
         },
         seed: {
           type: "string",
@@ -722,6 +741,22 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
     },
   },
   {
+    name: "bla_lint_wasm_xor_mask_sidecar",
+    description:
+      "Read-only WASM XOR-mask sidecar lint (same engine as CLI `bla lint-wasm-xor-mask-sidecar`). Flags masked entitlement packs stored beside a plaintext 32-byte XOR mask in WASM data. Bankrupt harden refuses unless allow_wasm_xor_mask_sidecar. Prefer key-dependent unmask + one-way commitments. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "bla_run_lookup",
     description:
       "Read-only correlation of a prior harden run: load bla-harden-summary.json by path or output directory, optionally asserting a run_id. Unsigned summaries only — never treats absence as success.",
@@ -987,6 +1022,9 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_js_wasm_hydrate_dump === true
       ? { allowJsWasmHydrateDump: true }
       : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -1024,6 +1062,9 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       : {}),
     ...(args.allow_js_wasm_hydrate_dump === true
       ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
       : {}),
   });
 }
@@ -1089,6 +1130,14 @@ function runLintJsWasmHydrateDump(args: Record<string, unknown>): JsWasmHydrateD
     throw new Error(`lint-js-wasm-hydrate-dump target not found: ${abs}`);
   }
   return lintJsWasmHydrateDumpFile(abs);
+}
+
+function runLintWasmXorMaskSidecar(args: Record<string, unknown>): WasmXorMaskSidecarReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-xor-mask-sidecar target not found: ${abs}`);
+  }
+  return lintWasmXorMaskSidecarFile(abs);
 }
 
 export function validateMcpToolCall(
@@ -1557,6 +1606,9 @@ export async function handleMcpRequest(
               ...(args.allow_js_wasm_hydrate_dump === true
                 ? { allowJsWasmHydrateDump: true }
                 : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
             // Dry-run / confirmation_required leave no write receipt; real writes do.
@@ -1687,6 +1739,9 @@ export async function handleMcpRequest(
         } else if (name === "bla_lint_js_wasm_hydrate_dump") {
           payload = runLintJsWasmHydrateDump(args);
           refused = (payload as JsWasmHydrateDumpReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_xor_mask_sidecar") {
+          payload = runLintWasmXorMaskSidecar(args);
+          refused = (payload as WasmXorMaskSidecarReport).shouldRefuseBankrupt;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

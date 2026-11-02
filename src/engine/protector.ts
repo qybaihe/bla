@@ -63,6 +63,11 @@ import {
   wasmParamCarrierRefuseMessage,
 } from "./wasm-param-carrier-lint.js";
 import {
+  lintWasmXorMaskSidecarBuffer,
+  intensityEnforcesWasmXorMaskSidecarRefusal,
+  wasmXorMaskSidecarRefuseMessage,
+} from "./wasm-xor-mask-sidecar-lint.js";
+import {
   intensityEnforcesPanelOracleRefusal,
   intensityRewritesPanelDerive,
   lintPanelDeriveAbiSource,
@@ -593,6 +598,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       const wasmParm = lintWasmParamCarrierBuffer(rawWasm, { path: absInput });
       if (wasmParm.shouldRefuseBankrupt) {
         throw new Error(wasmParamCarrierRefuseMessage(wasmParm, absInput));
+      }
+    }
+    if (
+      intensityEnforcesWasmXorMaskSidecarRefusal(intensity) &&
+      options.allowWasmXorMaskSidecar !== true
+    ) {
+      const xorMask = lintWasmXorMaskSidecarBuffer(rawWasm, { path: absInput });
+      if (xorMask.shouldRefuseBankrupt) {
+        throw new Error(wasmXorMaskSidecarRefuseMessage(xorMask, absInput));
       }
     }
     const res = protectWasmBinary(rawWasm, {

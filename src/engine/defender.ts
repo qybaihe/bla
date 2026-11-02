@@ -43,6 +43,7 @@ export interface OneClickDefenseOptions {
   readonly allowPanelOfflineOracle?: boolean;
   /** Allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
   readonly allowJsWasmHydrateDump?: boolean;
+  readonly allowWasmXorMaskSidecar?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
 }
@@ -152,6 +153,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.allowJsWasmHydrateDump === true
       ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(options.allowWasmXorMaskSidecar === true
+      ? { allowWasmXorMaskSidecar: true }
       : {}),
     ...(options.selfSealSiblingPaths !== undefined &&
     options.selfSealSiblingPaths.length > 0

@@ -318,6 +318,19 @@ export {
   type WasmParamCarrierSeverity,
 } from "./engine/wasm-param-carrier-lint.js";
 export {
+  lintWasmXorMaskSidecarBuffer,
+  lintWasmXorMaskSidecarFile,
+  discoverAndLintWasmXorMaskSidecars,
+  buildTestWasmWithXorMaskSidecar,
+  wasmXorMaskSidecarRefuseMessage,
+  intensityEnforcesWasmXorMaskSidecarRefusal,
+  WASM_XOR_MASK_SIDECAR_SCHEMA,
+  type WasmXorMaskSidecarFinding,
+  type WasmXorMaskSidecarReport,
+  type WasmXorMaskSidecarFindingId,
+  type WasmXorMaskSidecarSeverity,
+} from "./engine/wasm-xor-mask-sidecar-lint.js";
+export {
   lintPanelDeriveAbiSource,
   lintPanelDeriveAbiFile,
   rewriteStablePanelDeriveSymbols,

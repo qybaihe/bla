@@ -36,6 +36,7 @@ export interface BlaProjectConfig {
   readonly allowPanelOfflineOracle?: boolean;
   /** When true, allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
   readonly allowJsWasmHydrateDump?: boolean;
+  readonly allowWasmXorMaskSidecar?: boolean;
 }
 
 /**

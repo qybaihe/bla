@@ -19,6 +19,7 @@ import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
 import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
 import { lintJsWasmHydrateDumpSource } from "./js-wasm-hydrate-dump-lint.js";
+import { lintWasmXorMaskSidecarBuffer } from "./wasm-xor-mask-sidecar-lint.js";
 import { inspectPythonPyc } from "../shields/formats/python.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { detectBunStandaloneGraph } from "../shields/formats/bun-standalone.js";
@@ -704,6 +705,20 @@ export function auditTarget(targetPath: string): AuditReport {
           reaToolUsed: "bla lint-wasm-params / static data-section scan",
           estimatedTokensToReconstruct: 4_500,
           estimatedCostUsd: 0.25,
+          reason: f.summary,
+        });
+      }
+      const xorMaskLint = lintWasmXorMaskSidecarBuffer(rawBytes, { path: absPath });
+      for (const f of xorMaskLint.findings) {
+        exposedItems.push({
+          id: `wasm_xor_mask_${f.id}_${f.offset}`,
+          name: f.id,
+          kind: "metadata-section",
+          location: `${basename(absPath)} (data @${f.offset})`,
+          riskLevel: "high",
+          reaToolUsed: "bla lint-wasm-xor-mask-sidecar / static data-section scan",
+          estimatedTokensToReconstruct: 6_000,
+          estimatedCostUsd: 0.3,
           reason: f.summary,
         });
       }
