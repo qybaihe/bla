@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent write safety (MCP/Skill 2.0, stage A):** read-only `bla_discover`; `bla_harden` `dry_run` (CLI `harden --dry-run`) writes zero bytes and reports `truncated` / `wouldOverwrite`; `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite existing outputs without `confirm_overwrite: true` and return a `writeReceipt`.
+- **Full skill bundle install:** `bla setup` installs `SKILL.md` plus `references/` (counter-rea-matrix); `bla doctor` reports `skillMissingFiles` / `skillModifiedFiles` and fails on an incomplete bundle; uninstall removes owned bundle files.
 - **Self-seal (#40.5):** opt-in CLI `--self-seal` / MCP `self_seal` / `.blarc selfSeal` injects Node sibling-module + env-fingerprint integrity binding into JS AST shield and entangles the opaque-predicate seed.
 - **WASM preserve ABI (#40.3):** `.blarc`/`CLI`/`MCP` `wasmPreserveExports` / `--wasm-preserve-exports` / `wasm_preserve_exports` keeps listed export names when rename runs.
 - **WASM export rename (#40.3):** `protectWasmBinary` renames internal-looking exports at maximum/bankrupt (preserve public ABI via `preserveExports`); returns `exportsRenamed`.

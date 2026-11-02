@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.3.2"
+  version: "1.3.3"
 ---
 
 # BLA: Blind LLM Agents
@@ -28,7 +28,8 @@ attack playbooks against software they do not own.
 If MCP/skill are not registered yet:
 
 1. CLI: `npx bla-agents@latest setup`
-2. Then: `npx bla-agents@latest doctor` (or MCP `bla_doctor`)
+2. Then: `npx bla-agents@latest doctor` (or MCP `bla_doctor`) — it also checks the
+   installed skill bundle (this file + `references/`) is complete
 
 After setup, agents load this skill and can call the `bla` MCP tools.
 
@@ -51,6 +52,17 @@ etc., detects each artifact's format, and runs the full **audit → defend (bank
 verify** pipeline. Return the per-artifact summary to the user.
 
 **Do not ask which files to protect — discover them.**
+
+## Write safety (principles)
+
+- Unsure what will be touched, or a large repo? Inventory first with `bla_discover`
+  or preview with `bla_harden` `{ "dry_run": true }` — both write nothing. If the
+  result says `truncated: true`, say so and narrow the directory; do not imply full coverage.
+- Never overwrite without the user's go-ahead. When a tool returns
+  `confirmation_required`, show the `wouldOverwrite` paths, ask, and only then retry
+  with `confirm_overwrite: true` (or pick a new output path).
+- Report what was written from the tool's own receipt (`writeReceipt`, `wouldOverwrite`),
+  not from assumptions.
 
 Optional args (defaults are safe): `intensity` (default bankrupt), `emit_manifest`
 (default false), `llm_directives` (default false — risky LLM bait; leave off unless

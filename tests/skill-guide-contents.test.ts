@@ -25,6 +25,10 @@ describe("blind-llm-agents skill guide contents", () => {
     // Prefer skill guide + existing MCP tools; refuse offensive RE/crack framing.
     expect(text.toLowerCase()).toMatch(/refuse|defensive only/);
     expect(text).toMatch(/Do not ask which files to protect/i);
+    // Write-safety principles: preview/discover first, never overwrite unconfirmed.
+    expect(text).toContain("bla_discover");
+    expect(text).toContain("dry_run");
+    expect(text).toContain("confirm_overwrite");
   });
 
   it("parseCliArgs accepts --weave-decoys for harden/defend/protect parity with MCP", async () => {

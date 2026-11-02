@@ -20,15 +20,24 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 
 ## MCP Tools (`bla` Server)
 
-- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`).
-- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`).
+- `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false). The report carries `dryRun`, `truncated`, `maxArtifacts` and `wouldOverwrite`.
+- `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts }`. Writes nothing.
+- `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `seed`, `confirm_overwrite` default false).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
-- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false).
+- `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `confirm_overwrite` default false).
+- `bla_doctor`: also reports `skillMissingFiles` / `skillModifiedFiles` per client; a missing bundle file (e.g. `references/counter-rea-matrix.md`) fails the client.
 - `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`).
 - `bla_benchmark`: Runs the 8-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations.
 - `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist; no crack/RE).
+
+### Write safety (dry-run, confirmation, receipts)
+
+- `bla_harden` with `dry_run: true` (CLI `bla harden . --dry-run`) discovers targets and plans outputs with **zero bytes written** (no `.bla-hardened/`, no summary, no `.blarc` seed).
+- Discovery is capped (`max_artifacts`, default 64); when more targets exist the result sets `truncated: true` instead of silently dropping them.
+- `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite an existing output file unless `confirm_overwrite: true`. A refusal is `isError: true` with `{ status: "confirmation_required", wouldOverwrite: [...], wrote: [] }`; nothing is written.
+- Successful `bla_defend` / `bla_protect` calls add `writeReceipt: { status: "written", wrote, overwrote, confirmed }`. In-place overwrite of the input stays CLI-only (`--in-place`).
 
 `weave_decoys: true` activates structural Python customer-def weave (shared-slot touch + opaque-false decoy calls) after the #51 tarpit; when false, Python stays warm-init-only. JS AST weave remains always-on.
 
