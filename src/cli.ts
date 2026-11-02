@@ -73,6 +73,7 @@ Options:
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --lang <c|rust|go>          Target language for emit-headers (default: c)
+  --fail-under <n>            Exit 2 when the score fails the gate: defense score < n (defend/verify) or audit exposure score > n (audit)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
   --dry-run                   Preview planned setup changes without writing files
@@ -437,6 +438,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.log(JSON.stringify(report, null, 2));
         } else {
           console.log(formatAuditReport(report));
+        }
+        // CI gating parity with defend/verify: exposureScore is 0 (fully shielded)
+        // to 100 (completely exposed), so fail when it exceeds the threshold.
+        if (parsed.failUnder !== undefined && report.exposureScore > parsed.failUnder) {
+          return 2;
         }
         return 0;
       }
