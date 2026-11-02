@@ -48,3 +48,37 @@ describe("panel-derive ABI lint/rewrite (red-blue round-3)", () => {
     expect(rw.code).toBe(src);
   });
 });
+
+describe("panel offline oracle (red-blue round-4)", () => {
+  it("flags deriveLocal + panelTokenSha256 as refuse oracle", () => {
+    const src = `
+      function deriveLocal(key) { return String(key); }
+      const expected = seal.panelTokenSha256;
+      if (sha256(deriveLocal(k)) !== expected) deny();
+    `;
+    const report = lintPanelDeriveAbiSource(src, { path: "panel.html" });
+    expect(report.shouldRefuseBankrupt).toBe(true);
+    expect(report.localDeriveSymbols).toContain("deriveLocal");
+    expect(report.findings.some((f) => f.id === "panel-token-sha-oracle")).toBe(true);
+    expect(report.findings.some((f) => f.id === "stable-local-derive")).toBe(true);
+  });
+
+  it("rewrites deriveLocal to seed-stable _blaPdLocal_*", () => {
+    const body = `function deriveLocal(k) { return k; }\nconsole.log(deriveLocal("x"));\n`;
+    const rw = rewriteStablePanelDeriveSymbols(body, "r4-panel-seed");
+    expect(rw.rewrote).toBe(true);
+    expect(rw.code).not.toContain("function deriveLocal");
+    expect(rw.renames.some((r) => r.from === "deriveLocal" && r.to.startsWith("_blaPdLocal_"))).toBe(
+      true,
+    );
+  });
+
+  it("warns on panelTokenSha256 alone without refuse", () => {
+    const src = `const digest = seal.panelTokenSha256;\n`;
+    const report = lintPanelDeriveAbiSource(src);
+    expect(report.shouldRefuseBankrupt).toBe(false);
+    expect(report.findings.some((f) => f.id === "panel-token-sha-oracle" && f.severity === "warning")).toBe(
+      true,
+    );
+  });
+});

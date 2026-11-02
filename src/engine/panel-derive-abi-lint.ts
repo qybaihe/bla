@@ -1,26 +1,37 @@
 /**
- * Stable panel-derive ABI lint + rewrite (red-blue round-3 residual).
+ * Stable panel-derive ABI lint + rewrite (red-blue round-3 / round-4 residual).
  *
- * Detects durable entitlement panel helpers such as `__vaultPanelDerive_r3`
- * and classic FNV prime literals that survive HTML/JS protect. At
- * maximum/bankrupt, protect rewrites matching symbols to a seed-stable
- * `_blaPd_<hex>` name (same root seed → same rename across JS + HTML).
+ * Detects durable entitlement panel helpers such as `__vaultPanelDerive_r3`,
+ * local `deriveLocal` entrypoints, classic FNV prime literals, and the
+ * offline-oracle packaging of a callable derive beside plaintext
+ * `panelTokenSha256` (seal digest or in-source compare target).
  *
- * Lab fixtures that must keep the stable ABI can pass
- * `allowStablePanelDeriveAbi` / `--allow-stable-panel-derive`.
+ * At maximum/bankrupt, protect rewrites `__vaultPanelDerive*` and `deriveLocal`
+ * to seed-stable `_blaPd_*` / `_blaPdLocal_*` names (same root seed → same
+ * rename across JS + HTML). Round-4 oracle combo (deriveLocal + panelTokenSha256,
+ * including sibling seal.json) is severity **error** and bankrupt refuses
+ * unless `allowPanelOfflineOracle`.
  *
- * DEFENSIVE ONLY — no crack advice.
+ * Lab fixtures that must keep the stable ABI / oracle packaging can pass
+ * `allowStablePanelDeriveAbi` / `--allow-stable-panel-derive` and/or
+ * `allowPanelOfflineOracle` / `--allow-panel-offline-oracle`.
+ *
+ * DEFENSIVE ONLY — rename is not a cryptographic fix for the oracle; honesty
+ * bound: scrub digests / avoid shipping callable derive UI when possible.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { findSiblingSealSidecars } from "./seal-commitment-lint.js";
 
 export const PANEL_DERIVE_ABI_SCHEMA = "bla-panel-derive-abi-lint/v1" as const;
 
 export type PanelDeriveFindingId =
   | "stable-panel-derive-global"
-  | "classic-fnv-prime-literal";
+  | "stable-local-derive"
+  | "classic-fnv-prime-literal"
+  | "panel-token-sha-oracle";
 
 export type PanelDeriveSeverity = "warning" | "error";
 
@@ -36,13 +47,25 @@ export interface PanelDeriveAbiReport {
   readonly path: string;
   readonly findings: readonly PanelDeriveFinding[];
   readonly looksExposed: boolean;
-  /** True when bankrupt should rewrite (or refuse if rewrite disabled). */
+  /** True when bankrupt/maximum should rewrite stable symbols. */
   readonly shouldRewriteOrRefuse: boolean;
+  /**
+   * True when bankrupt should refuse: callable local derive + plaintext
+   * panelTokenSha256 offline-oracle packaging (same file or sibling seal).
+   */
+  readonly shouldRefuseBankrupt: boolean;
   readonly oneLineAdvice: string;
   readonly stableSymbols: readonly string[];
+  readonly localDeriveSymbols: readonly string[];
 }
 
 const STABLE_PANEL_DERIVE = /__vaultPanelDerive(?:_[A-Za-z0-9]+)?/g;
+
+/** Stable local panel derive name that survived R3 global rewrite. */
+const LOCAL_DERIVE_DECL =
+  /\bfunction\s+deriveLocal\b|\b(?:const|let|var)\s+deriveLocal\s*=/;
+
+const PANEL_TOKEN_SHA = /\bpanelTokenSha256\b/;
 
 const CLASSIC_FNV =
   /\b0x811c9dc5\b|\b2166136261\b|\b0x01000193\b|\b16777619\b/gi;
@@ -81,6 +104,30 @@ export function panelDeriveReplacementName(seedRoot: string, original: string): 
   return `_blaPd_${hex}`;
 }
 
+export function panelLocalDeriveReplacementName(seedRoot: string, original: string): string {
+  const hex = createHash("sha256")
+    .update(seedRoot, "utf8")
+    .update("\0local\0", "utf8")
+    .update(original, "utf8")
+    .digest("hex")
+    .slice(0, 10);
+  return `_blaPdLocal_${hex}`;
+}
+
+function siblingSealHasPanelTokenSha(filePath: string | undefined): boolean {
+  if (!filePath || filePath === "<memory>") return false;
+  try {
+    const dir = dirname(resolve(filePath));
+    for (const sealPath of findSiblingSealSidecars(dir)) {
+      const body = readFileSync(sealPath, "utf8");
+      if (PANEL_TOKEN_SHA.test(body)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 export function lintPanelDeriveAbiSource(
   source: string,
   options: { readonly path?: string } = {},
@@ -89,6 +136,7 @@ export function lintPanelDeriveAbiSource(
   const text = source.length > 500_000 ? source.slice(0, 500_000) : source;
   const findings: PanelDeriveFinding[] = [];
   const symbols = new Set<string>();
+  const localSymbols = new Set<string>();
 
   STABLE_PANEL_DERIVE.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -107,6 +155,19 @@ export function lintPanelDeriveAbiSource(
     );
   }
 
+  const hasLocalDecl = /\bfunction\s+deriveLocal\b/.test(text) || LOCAL_DERIVE_DECL.test(text);
+  if (hasLocalDecl) {
+    localSymbols.add("deriveLocal");
+    findings.push(
+      finding(
+        "stable-local-derive",
+        "error",
+        "Stable local deriveLocal panel entrypoint — rename or let maximum/bankrupt protect rewrite to _blaPdLocal_*.",
+        "deriveLocal",
+      ),
+    );
+  }
+
   CLASSIC_FNV.lastIndex = 0;
   const fnvHit = text.match(CLASSIC_FNV);
   if (fnvHit && fnvHit.length > 0) {
@@ -120,8 +181,40 @@ export function lintPanelDeriveAbiSource(
     );
   }
 
+  const hasPanelTokenSha = PANEL_TOKEN_SHA.test(text);
+  const siblingOracle = siblingSealHasPanelTokenSha(
+    pathLabel.includes("#") ? pathLabel.replace(/#.*$/, "") : pathLabel,
+  );
+  const hasLocalDerive = localSymbols.size > 0;
+  if ((hasPanelTokenSha && hasLocalDerive) || (hasLocalDerive && siblingOracle)) {
+    findings.push(
+      finding(
+        "panel-token-sha-oracle",
+        "error",
+        "Panel offline oracle: callable deriveLocal (or local derive) beside plaintext panelTokenSha256 (in-source or sibling seal.json) — scrub digest, avoid shipping derive UI, or refuse bankrupt.",
+        hasPanelTokenSha
+          ? "deriveLocal+panelTokenSha256(same-file)"
+          : "deriveLocal+sibling seal.json panelTokenSha256",
+      ),
+    );
+  } else if (hasPanelTokenSha) {
+    findings.push(
+      finding(
+        "panel-token-sha-oracle",
+        "warning",
+        "Plaintext panelTokenSha256 compare target in source — offline oracle if a callable derive UI ships nearby.",
+        "panelTokenSha256",
+      ),
+    );
+  }
+
   const shouldRewriteOrRefuse = findings.some(
-    (f) => f.id === "stable-panel-derive-global" && f.severity === "error",
+    (f) =>
+      (f.id === "stable-panel-derive-global" || f.id === "stable-local-derive") &&
+      f.severity === "error",
+  );
+  const shouldRefuseBankrupt = findings.some(
+    (f) => f.id === "panel-token-sha-oracle" && f.severity === "error",
   );
 
   return {
@@ -130,13 +223,17 @@ export function lintPanelDeriveAbiSource(
     findings,
     looksExposed: findings.length > 0,
     shouldRewriteOrRefuse,
+    shouldRefuseBankrupt,
     stableSymbols: [...symbols].sort(),
+    localDeriveSymbols: [...localSymbols].sort(),
     oneLineAdvice:
       findings.length === 0
-        ? "No stable panel-derive ABI / classic FNV prime footgun detected (heuristic)."
-        : shouldRewriteOrRefuse
-          ? "ERROR: Stable __vaultPanelDerive_* ABI. Bankrupt/maximum protect rewrites to seed-stable _blaPd_*; pass allowStablePanelDeriveAbi / --allow-stable-panel-derive to keep. Defensive guidance only."
-          : "WARNING: Classic FNV primes remain as readable literals — scrub or split when feasible.",
+        ? "No stable panel-derive ABI / local deriveLocal / panelTokenSha256 oracle footgun detected (heuristic)."
+        : shouldRefuseBankrupt
+          ? "ERROR: Panel offline oracle (deriveLocal + panelTokenSha256). Bankrupt refuses unless allowPanelOfflineOracle / --allow-panel-offline-oracle. Rename alone is not a crypto fix — scrub digests / avoid derive UI. Defensive guidance only."
+          : shouldRewriteOrRefuse
+            ? "ERROR: Stable __vaultPanelDerive_* / deriveLocal ABI. Maximum/bankrupt protect rewrites to _blaPd_* / _blaPdLocal_*; pass allowStablePanelDeriveAbi / --allow-stable-panel-derive to keep. Defensive guidance only."
+            : "WARNING: Classic FNV primes and/or panelTokenSha256 remain as readable literals — scrub or split when feasible.",
   };
 }
 
@@ -155,8 +252,9 @@ export interface PanelDeriveRewriteResult {
 }
 
 /**
- * Rewrite stable `__vaultPanelDerive*` tokens to seed-stable `_blaPd_<hex>`.
- * Same seedRoot + original → same replacement (cross JS/HTML under one protect seed).
+ * Rewrite stable `__vaultPanelDerive*` and `deriveLocal` tokens to seed-stable
+ * `_blaPd_<hex>` / `_blaPdLocal_<hex>`. Same seedRoot + original → same
+ * replacement (cross JS/HTML under one protect seed).
  */
 export function rewriteStablePanelDeriveSymbols(
   source: string,
@@ -169,16 +267,28 @@ export function rewriteStablePanelDeriveSymbols(
   while ((m = STABLE_PANEL_DERIVE.exec(source)) !== null) {
     symbols.add(m[0]!);
   }
-  if (symbols.size === 0) {
+  const hasLocal = LOCAL_DERIVE_DECL.test(source) || /\bfunction\s+deriveLocal\b/.test(source);
+  if (symbols.size === 0 && !hasLocal) {
     return { code: source, rewrote: false, renames: [] };
   }
   const renames = [...symbols]
     .sort()
     .map((from) => ({ from, to: panelDeriveReplacementName(seedRoot, from) }));
+  if (hasLocal) {
+    renames.push({
+      from: "deriveLocal",
+      to: panelLocalDeriveReplacementName(seedRoot, "deriveLocal"),
+    });
+  }
   // Replace longer names first to avoid partial overlap (none expected, but safe).
   let code = source;
   for (const { from, to } of [...renames].sort((a, b) => b.from.length - a.from.length)) {
-    code = code.split(from).join(to);
+    if (from === "deriveLocal") {
+      // Word-boundary safe replace for the local identifier.
+      code = code.replace(/\bderiveLocal\b/g, to);
+    } else {
+      code = code.split(from).join(to);
+    }
   }
   return { code, rewrote: true, renames };
 }
@@ -187,7 +297,16 @@ export function panelDeriveRefuseMessage(
   report: PanelDeriveAbiReport,
   filePath: string,
 ): string {
-  const syms = report.stableSymbols.join(", ");
+  if (report.shouldRefuseBankrupt) {
+    return (
+      `Refusing bankrupt harden/protect: panel offline oracle at ${filePath}` +
+      ` [deriveLocal + panelTokenSha256]. ` +
+      `Scrub plaintext panel token digests and avoid shipping a callable derive UI beside them. ` +
+      `Rename alone is not a cryptographic fix. ` +
+      `To override (lab fixture only), pass allowPanelOfflineOracle / --allow-panel-offline-oracle / allow_panel_offline_oracle:true.`
+    );
+  }
+  const syms = [...report.stableSymbols, ...report.localDeriveSymbols].join(", ");
   return (
     `Refusing bankrupt harden/protect: stable panel-derive ABI at ${filePath}` +
     (syms ? ` [${syms}]` : "") +
@@ -198,4 +317,8 @@ export function panelDeriveRefuseMessage(
 
 export function intensityRewritesPanelDerive(intensity: string): boolean {
   return intensity === "maximum" || intensity === "bankrupt";
+}
+
+export function intensityEnforcesPanelOracleRefusal(intensity: string): boolean {
+  return intensity === "bankrupt";
 }
