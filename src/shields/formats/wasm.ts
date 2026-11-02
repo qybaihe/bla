@@ -125,6 +125,21 @@ function encodeWasmExportSectionPayload(
   ]);
 }
 
+/**
+ * Seed-shuffle export entries (names/kinds/indices unchanged).
+ * Round-11: bankrupt rename used to preserve cleartext export *order*, so
+ * "unlock first among arity-2" survived as an RE shortcut. Hosts must resolve
+ * by arity + FLAG shape + certificate — never by first-export position.
+ */
+export function shuffleWasmExportSectionPayload(
+  exportSectionPayload: Buffer,
+  prng: SeededPrng,
+): Buffer {
+  const entries = parseWasmExportSectionPayload(exportSectionPayload);
+  if (entries.length <= 1) return exportSectionPayload;
+  return encodeWasmExportSectionPayload(prng.shuffle(entries));
+}
+
 /** Heuristic: names that look like internal/debug ABI rather than a public export. */
 export function looksLikeInternalWasmExport(name: string): boolean {
   return /^(?:__|_|debug_|dbg_|_internal|internal_|test_|tmp_)/i.test(name);
@@ -440,6 +455,8 @@ export function protectWasmBinary(
   readonly exportDecoysInjected: number;
   /** Export renames applied this pass (issue #40.3). Empty when rename is off. */
   readonly exportsRenamed: readonly WasmExportRename[];
+  /** True when export-section entry order was seed-shuffled (round-11). */
+  readonly exportsOrderShuffled: boolean;
 } {
   if (
     bytes.length < 8 ||
@@ -461,6 +478,8 @@ export function protectWasmBinary(
   // existing funcs so REA's real Wabt→WasmInterfaceBudget path trips (custom
   // sections alone do not expand the typed interface inventory).
   // Round-10: spread aliases across all exported function indices (not only 0).
+  // Round-11: after rename + decoy append, shuffle export *order* independently
+  // so first arity-2 is not a stable pointer to the unlock body.
   const decoyExports = planWasmExportNameDecoys(
     prng,
     intensity,
@@ -470,6 +489,7 @@ export function protectWasmBinary(
   let offset = 8;
   let exportDecoysInjected = 0;
   let exportsRenamed: readonly WasmExportRename[] = [];
+  let exportsOrderShuffled = false;
   while (offset < bytes.length) {
     const sectionStart = offset;
     const sectionId = bytes[offset++]!;
@@ -502,10 +522,20 @@ export function protectWasmBinary(
         payload = Buffer.from(renamed.payload);
         exportsRenamed = renamed.renames;
       }
-      const expanded =
+      let expanded =
         decoyExports.length > 0
           ? appendDecoyExports(payload, decoyExports)
           : payload;
+      // Round-11: shuffle combined original+decoy export order at maximum/bankrupt
+      // (same intensity band as rename / decoy injection). Independent of alias
+      // funcIndex spread — closes "first arity-2 = unlock" RE shortcut.
+      const intensityWantsShuffle =
+        intensity === "maximum" || intensity === "bankrupt";
+      if (intensityWantsShuffle) {
+        const n = parseWasmExportSectionPayload(expanded).length;
+        expanded = shuffleWasmExportSectionPayload(expanded, prng);
+        exportsOrderShuffled = n > 1;
+      }
       keptChunks.push(
         Buffer.concat([
           Buffer.from([0x07]),
@@ -620,5 +650,6 @@ export function protectWasmBinary(
     exceedsRepresentationBudget: ifacePlan.exceedsRepresentationBudget,
     exportDecoysInjected,
     exportsRenamed,
+    exportsOrderShuffled,
   };
 }

@@ -360,6 +360,7 @@ export {
 export {
   parseWasmExportSectionPayload,
   renameWasmExports,
+  shuffleWasmExportSectionPayload,
   looksLikeInternalWasmExport,
   type WasmExportEntry,
   type WasmExportRename,

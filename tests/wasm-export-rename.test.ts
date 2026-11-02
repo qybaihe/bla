@@ -6,6 +6,7 @@ import {
   parseWasmExportSectionPayload,
   protectWasmBinary,
   renameWasmExports,
+  shuffleWasmExportSectionPayload,
 } from "../src/shields/formats/wasm.js";
 
 /** Minimal WASM exporting compute_score(i32)->i32 = x*42+7 */
@@ -170,5 +171,101 @@ describe("WASM export decoy arity-2 hygiene (red/blue round-10)", () => {
     // Hygiene: both indices get a non-trivial share (not 250/0 pile-on).
     expect(decoyIdx0).toBeGreaterThan(40);
     expect(decoyIdx1).toBeGreaterThan(40);
+  });
+});
+
+describe("WASM export-order shuffle (red/blue round-11)", () => {
+  /** unlock (idx1) exported FIRST among funcs, then junk (idx0), then memory. */
+  function fixtureUnlockFirst(): Buffer {
+    // types: (i32)->i32, (i32,i32)->i32; funcs type0 junk + type1 unlock; mem
+    // exports: unlock, junk, memory  (unlock first — R10 cleartext footgun)
+    return Buffer.from([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+      0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x03, 0x01, 0x00, 0x01,
+      0x07, 0x1a, 0x03, 0x06, 0x75, 0x6e, 0x6c, 0x6f, 0x63, 0x6b, 0x00, 0x01, 0x04, 0x6a, 0x75, 0x6e,
+      0x6b, 0x00, 0x00, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x0e, 0x02, 0x04,
+      0x00, 0x41, 0x00, 0x0b, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
+    ]);
+  }
+
+  function firstFuncExportIndex(bytes: Buffer): number | null {
+    let offset = 8;
+    while (offset < bytes.length) {
+      const sectionId = bytes[offset++]!;
+      let size = 0;
+      let shift = 0;
+      while (true) {
+        const b = bytes[offset++]!;
+        size |= (b & 0x7f) << shift;
+        if ((b & 0x80) === 0) break;
+        shift += 7;
+      }
+      const sectionEnd = offset + size;
+      if (sectionId === 7) {
+        const entries = parseWasmExportSectionPayload(bytes.subarray(offset, sectionEnd));
+        for (const e of entries) {
+          if (e.kind === 0) return e.index;
+        }
+        return null;
+      }
+      offset = sectionEnd;
+    }
+    return null;
+  }
+
+  it("shuffleWasmExportSectionPayload permutes entry order without changing set", () => {
+    const keep = Buffer.from("a", "utf8");
+    const dbg = Buffer.from("b", "utf8");
+    const encodeName = (b: Buffer) => Buffer.concat([Buffer.from([b.length]), b]);
+    const payload = Buffer.concat([
+      Buffer.from([0x02]),
+      encodeName(keep),
+      Buffer.from([0x00, 0x00]),
+      encodeName(dbg),
+      Buffer.from([0x00, 0x01]),
+    ]);
+    const before = parseWasmExportSectionPayload(payload);
+    let changed = false;
+    for (const seed of ["r11-u0", "r11-u1", "r11-u2", "r11-u3", "r11-u4", "r11-u5", "r11-u6", "r11-u7"]) {
+      const out = shuffleWasmExportSectionPayload(payload, new SeededPrng(seed));
+      const after = parseWasmExportSectionPayload(out);
+      expect(after).toHaveLength(2);
+      expect(new Set(after.map((e) => e.name))).toEqual(new Set(before.map((e) => e.name)));
+      if (after.map((e) => e.name).join(",") !== before.map((e) => e.name).join(",")) changed = true;
+    }
+    expect(changed).toBe(true);
+  });
+
+  it("bankrupt protect shuffles export order so first func ≠ cleartext-first unlock", () => {
+    const raw = fixtureUnlockFirst();
+    expect(WebAssembly.validate(new Uint8Array(raw))).toBe(true);
+    expect(firstFuncExportIndex(raw)).toBe(1); // unlock idx1 first in cleartext
+
+    // Across several seeds, first func export index after protect must not
+    // *always* remain unlock (idx 1). At least one seed yields a different first.
+    const firsts = new Set<number>();
+    for (const seed of [
+      "r11-export-shuffle-a",
+      "r11-export-shuffle-b",
+      "r11-export-shuffle-c",
+      "r11-export-shuffle-d",
+      "r11-export-shuffle-e",
+      "r11-export-shuffle-f",
+      "r11-export-shuffle-g",
+      "r11-export-shuffle-h",
+    ]) {
+      const res = protectWasmBinary(raw, {
+        intensity: "bankrupt",
+        seed,
+        preserveExports: ["unlock", "junk", "memory"],
+      });
+      expect(res.exportsOrderShuffled).toBe(true);
+      expect(WebAssembly.validate(new Uint8Array(res.buffer))).toBe(true);
+      const idx = firstFuncExportIndex(res.buffer);
+      expect(idx === 0 || idx === 1).toBe(true);
+      firsts.add(idx!);
+    }
+    expect(firsts.has(0)).toBe(true); // at least one seed puts junk/decoy-of-junk first
+    expect(firsts.size).toBeGreaterThan(1);
   });
 });
