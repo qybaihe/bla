@@ -313,7 +313,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -345,7 +345,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -401,7 +401,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           seed: resolved.seed,
           honeySourceMaps: parsed.honeyMaps,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
-          weaveDecoys: parsed.weaveDecoys,
+          weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

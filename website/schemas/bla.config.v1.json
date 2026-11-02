@@ -41,6 +41,11 @@
     },
     "minDefenseScore": {
       "type": "number"
+    },
+    "weaveDecoys": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on). Parity with CLI --weave-decoys / MCP weave_decoys."
     }
   },
   "additionalProperties": true

@@ -16,6 +16,8 @@ export interface BlaProjectConfig {
   readonly llmDirectives?: boolean;
   readonly honeySourceMaps?: boolean;
   readonly minDefenseScore?: number;
+  /** Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on). Parity with CLI `--weave-decoys` / MCP `weave_decoys`. */
+  readonly weaveDecoys?: boolean;
 }
 
 /**
@@ -31,6 +33,7 @@ export const DEFAULT_BLA_CONFIG: BlaProjectConfig = Object.freeze({
   llmDirectives: false,
   honeySourceMaps: true,
   minDefenseScore: 90,
+  weaveDecoys: false,
 });
 
 /** Legacy fixed seeds that fingerprint every project the same way — never reuse as a default. */
