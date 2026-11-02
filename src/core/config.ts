@@ -20,6 +20,8 @@ export interface BlaProjectConfig {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). Parity with CLI `--self-seal` / MCP `self_seal`. */
   readonly selfSeal?: boolean;
+  /** WASM export names that must remain the public ABI when export rename runs (issue #40.3). */
+  readonly wasmPreserveExports?: readonly string[];
 }
 
 /**

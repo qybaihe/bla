@@ -169,6 +169,11 @@ export interface ProtectionOptions {
    * When true, harden/protect inject a self-integrity preamble and entangle the opaque seed.
    */
   readonly selfSeal?: boolean;
+  /**
+   * WASM public ABI export names to keep when rename runs (issue #40.3).
+   * Other / internal-looking exports may be renamed at maximum/bankrupt.
+   */
+  readonly wasmPreserveExports?: readonly string[];
 }
 
 export interface ProtectionMetrics {
