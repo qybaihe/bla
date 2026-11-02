@@ -4,10 +4,15 @@ import { inspectReleaseExposure } from "../core/release-exposure.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import { auditTarget } from "../engine/auditor.js";
 import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js";
-import { verifyTarget } from "../engine/verifier.js";
+import { verifyTarget, type VerifyTargetOptions } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { discoverHardenTargets, hardenProject } from "../engine/harden.js";
+import {
+  lintLaneIndependence,
+  type LaneIndependenceReport,
+} from "../engine/lane-independence-lint.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -160,6 +165,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
         },
+        output_directory: {
+          type: "string",
+          description:
+            "Optional root directory for hardened outputs (same as CLI `harden -o`). Default: <directory>/.bla-hardened.",
+        },
       },
       additionalProperties: false,
     },
@@ -231,6 +241,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
         },
+        in_place: {
+          type: "boolean",
+          description:
+            "Overwrite the input path in place (same as CLI --in-place). When the planned output already exists — including the input itself — confirm_overwrite:true is required; otherwise the call is refused and nothing is written. Default false.",
+        },
         confirm_overwrite: {
           type: "boolean",
           description:
@@ -301,6 +316,16 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Opt-in risky LLM directive layers. Default false.",
         },
+        in_place: {
+          type: "boolean",
+          description:
+            "Overwrite the input path in place (same as CLI --in-place). When the planned output already exists — including the input itself — confirm_overwrite:true is required; otherwise the call is refused and nothing is written. Default false.",
+        },
+        honey_source_maps: {
+          type: "boolean",
+          description:
+            "Emit honey/decoy source maps with the shield (same as CLI default; pass false for --no-honey-maps). Default true.",
+        },
         confirm_overwrite: {
           type: "boolean",
           description:
@@ -314,7 +339,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_verify",
     description:
-      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification.",
+      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult.",
     inputSchema: {
       type: "object",
       properties: {
@@ -325,6 +350,21 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         original_path: {
           type: "string",
           description: "Optional path to the unprotected original for amplification comparison",
+        },
+        self_seal_enabled: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when protect/defend ran with self-seal. Omitting it soft-caps JS-like scores with self-seal-not-enabled (issue #40.6).",
+        },
+        wasm_export_rename_applied: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when WASM export rename actually rewrote non-ABI exports. Omitting it soft-caps WASM scores with wasm-export-rename-pending (issue #40.6).",
+        },
+        numeric_template_leak_known: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when known BLA-injected numeric template golden constants still leak (issue #40.6).",
         },
       },
       required: ["target_path"],
@@ -435,6 +475,22 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         max_targets: {
           type: "number",
           description: "Optional cap on files to classify (default 48)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_lanes",
+    description:
+      "Read-only heuristic lane-independence footgun lint (same engine as CLI `bla lint-lanes`). Warns when gate/activation source looks like independent per-lane checks. Defensive guidance only — prefer whole-key chained mixing. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a UTF-8 source file to lint (JS/TS/Python-like)",
         },
       },
       required: ["path"],
@@ -569,12 +625,20 @@ function optionalCount(value: unknown): number | undefined {
     : undefined;
 }
 
+function stringListArg(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((x): x is string => typeof x === "string" && x.length > 0);
+  return list.length > 0 ? list : undefined;
+}
+
 function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
   return handlers.defendTarget({
     inputPath: args.input_path as string,
     ...(typeof args.output_path === "string"
       ? { outputPath: args.output_path }
       : {}),
+    ...(args.in_place === true ? { inPlace: true } : {}),
     intensity:
       typeof args.intensity === "string"
         ? (args.intensity as ProtectionIntensity)
@@ -583,20 +647,17 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
-    ...(Array.isArray(args.wasm_preserve_exports)
-      ? {
-          wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-            .filter((x): x is string => typeof x === "string" && x.length > 0),
-        }
-      : {}),
+    ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
 
 function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
   return handlers.protectTarget({
     inputPath: args.input_path as string,
     ...(typeof args.output_path === "string" ? { outputPath: args.output_path } : {}),
+    ...(args.in_place === true ? { inPlace: true } : {}),
     ...(typeof args.intensity === "string"
       ? { intensity: args.intensity as ProtectionIntensity }
       : {}),
@@ -604,13 +665,34 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
-    ...(Array.isArray(args.wasm_preserve_exports)
-      ? {
-          wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-            .filter((x): x is string => typeof x === "string" && x.length > 0),
-        }
+    ...(typeof args.honey_source_maps === "boolean"
+      ? { honeySourceMaps: args.honey_source_maps }
       : {}),
+    ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
   });
+}
+
+function verifyHonestyOptions(args: Record<string, unknown>): VerifyTargetOptions {
+  return {
+    ...(typeof args.self_seal_enabled === "boolean"
+      ? { selfSealEnabled: args.self_seal_enabled }
+      : {}),
+    ...(typeof args.wasm_export_rename_applied === "boolean"
+      ? { wasmExportRenameApplied: args.wasm_export_rename_applied }
+      : {}),
+    ...(typeof args.numeric_template_leak_known === "boolean"
+      ? { numericTemplateLeakKnown: args.numeric_template_leak_known }
+      : {}),
+  };
+}
+
+function runLintLanes(args: Record<string, unknown>): LaneIndependenceReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-lanes target not found: ${abs}`);
+  }
+  const source = readFileSync(abs, "utf8");
+  return lintLaneIndependence(source);
 }
 
 export function validateMcpToolCall(
@@ -1028,6 +1110,11 @@ export async function handleMcpRequest(
               : process.cwd();
           const maxArtifacts = optionalCount(args.max_artifacts);
           const dryRun = args.dry_run === true;
+          const outputDirectory =
+            typeof args.output_directory === "string" &&
+            args.output_directory.trim().length > 0
+              ? (args.output_directory as string)
+              : undefined;
           let preOverwrite: readonly string[] = [];
           if (!dryRun && existsSync(hardenDir)) {
             // Zero-write preview with the real engine to find clobbered outputs.
@@ -1035,16 +1122,19 @@ export async function handleMcpRequest(
               directory: hardenDir,
               dryRun: true,
               ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+              ...(outputDirectory !== undefined ? { outputDirectory } : {}),
             }).wouldOverwrite;
           }
           if (!dryRun && preOverwrite.length > 0 && !confirmed) {
             refused = true;
             payload = confirmationRequiredPayload(name, preOverwrite);
           } else {
+            const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
             payload = handlers.hardenProject({
               directory: hardenDir,
               dryRun,
               ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+              ...(outputDirectory !== undefined ? { outputDirectory } : {}),
               intensity:
                 typeof args.intensity === "string"
                   ? (args.intensity as ProtectionIntensity)
@@ -1053,19 +1143,16 @@ export async function handleMcpRequest(
               llmDirectives: Boolean(args.llm_directives),
               weaveDecoys: Boolean(args.weave_decoys),
               selfSeal: Boolean(args.self_seal),
-              ...(Array.isArray(args.wasm_preserve_exports)
-                ? {
-                    wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                      .filter((x): x is string => typeof x === "string" && x.length > 0),
-                  }
-                : {}),
+              ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
           }
         } else if (name === "bla_defend" || name === "bla_protect") {
+          const inPlace = args.in_place === true;
           const out = resolveProtectOutputPath(
             args.input_path as string,
             typeof args.output_path === "string" ? args.output_path : undefined,
+            inPlace,
           );
           const planned =
             name === "bla_defend" && args.emit_manifest === true
@@ -1094,6 +1181,7 @@ export async function handleMcpRequest(
           payload = handlers.verifyTarget(
             args.target_path as string,
             typeof args.original_path === "string" ? args.original_path : undefined,
+            verifyHonestyOptions(args),
           );
         } else if (name === "bla_benchmark") {
           payload = await handlers.runShowcaseBenchmark();
@@ -1123,6 +1211,8 @@ export async function handleMcpRequest(
               ? { maxTargets: args.max_targets }
               : {}),
           });
+        } else if (name === "bla_lint_lanes") {
+          payload = runLintLanes(args);
         }
 
         return {
