@@ -81,6 +81,8 @@ export interface HardenArtifactSummary {
   readonly defenseScore: number;
   readonly tokenAmplificationFactor: number;
   readonly costAmplificationFactor: number;
+  /** True when a file already existed at outputPath before this run (or would, in dry-run). */
+  readonly outputExisted: boolean;
   readonly error?: string;
 }
 
@@ -99,6 +101,11 @@ export interface HardenProjectOptions {
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
+  /**
+   * Preview only: discover targets and plan output paths, but write zero bytes
+   * (no `.bla-hardened/`, no summary JSON, no manifests).
+   */
+  readonly dryRun?: boolean;
 }
 
 export interface HardenProjectReport {
@@ -114,6 +121,21 @@ export interface HardenProjectReport {
   readonly oneSentenceUsage: string;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  /** True when this report is a zero-write preview. */
+  readonly dryRun: boolean;
+  /** True when discovery stopped at `maxArtifacts`; more targets exist. */
+  readonly truncated: boolean;
+  readonly maxArtifacts: number;
+  /** Planned/actual outputs that already existed before this run. */
+  readonly wouldOverwrite: readonly string[];
+}
+
+export interface HardenDiscoveryResult {
+  readonly directory: string;
+  readonly artifacts: readonly DiscoveredArtifact[];
+  /** True when the walk hit `maxArtifacts` and further targets were not listed. */
+  readonly truncated: boolean;
+  readonly maxArtifacts: number;
 }
 
 function isProtectableFormat(format: ArtifactFormat): boolean {
@@ -207,8 +229,32 @@ export function discoverHardenableArtifacts(
   directory: string = process.cwd(),
   options: { readonly maxArtifacts?: number } = {},
 ): readonly DiscoveredArtifact[] {
+  return discoverHardenTargets(directory, options).artifacts;
+}
+
+/**
+ * Read-only discovery that also reports truncation, so agents never mistake a
+ * capped walk for the full inventory of a large repository.
+ */
+export function discoverHardenTargets(
+  directory: string = process.cwd(),
+  options: { readonly maxArtifacts?: number } = {},
+): HardenDiscoveryResult {
   const abs = resolve(directory);
-  const maxArtifacts = options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS;
+  const maxArtifacts = Math.max(1, Math.floor(options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS));
+  const all = collectHardenableArtifacts(abs, maxArtifacts + 1);
+  return {
+    directory: abs,
+    artifacts: all.slice(0, maxArtifacts),
+    truncated: all.length > maxArtifacts,
+    maxArtifacts,
+  };
+}
+
+function collectHardenableArtifacts(
+  abs: string,
+  maxArtifacts: number,
+): readonly DiscoveredArtifact[] {
   if (!existsSync(abs)) {
     throw new Error(`Path not found: ${abs}`);
   }
@@ -243,17 +289,10 @@ export function discoverHardenableArtifacts(
   return unique;
 }
 
-function deriveArtifactOutputPath(
-  artifact: DiscoveredArtifact,
-  projectRoot: string,
-  outputRoot: string,
-): string {
-  const rel = artifact.relativePath;
-  const dest = join(outputRoot, rel);
-  const dir = dirname(dest);
-  mkdirSync(dir, { recursive: true });
+/** Mirror-tree destination under the output root (pure; no filesystem writes). */
+function planArtifactOutputPath(artifact: DiscoveredArtifact, outputRoot: string): string {
   // Keep original basename; place under .bla-hardened mirror tree.
-  return dest;
+  return join(outputRoot, artifact.relativePath);
 }
 
 /**
@@ -272,20 +311,64 @@ export function hardenProject(
   const emitManifest = options.emitManifest === true;
   const maxArtifacts = options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS;
 
-  const discovered = discoverHardenableArtifacts(absDir, { maxArtifacts });
+  const dryRun = options.dryRun === true;
+  const discovery = discoverHardenTargets(absDir, { maxArtifacts });
+  const discovered = discovery.artifacts;
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
         ? join(absDir, ".bla-hardened")
         : join(dirname(absDir), ".bla-hardened")),
   );
+  const plannedOutputs = discovered.map((artifact) => {
+    const outputPath = planArtifactOutputPath(artifact, outputRoot);
+    return { artifact, outputPath, outputExisted: existsSync(outputPath) };
+  });
+  const wouldOverwrite = plannedOutputs.filter((p) => p.outputExisted).map((p) => p.outputPath);
+
+  const reportBase = {
+    blaVersion: BLA_IDENTITY.version,
+    directory: absDir,
+    intensity,
+    discoveredCount: discovered.length,
+    outputDirectory: outputRoot,
+    oneSentenceUsage:
+      'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
+    weaveDecoys: options.weaveDecoys === true,
+    selfSeal: options.selfSeal === true,
+    dryRun,
+    truncated: discovery.truncated,
+    maxArtifacts: discovery.maxArtifacts,
+    wouldOverwrite,
+  } as const;
+
+  if (dryRun) {
+    return {
+      ...reportBase,
+      overallSuccess: discovered.length > 0,
+      hardenedCount: 0,
+      failedCount: 0,
+      artifacts: plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
+        inputPath: artifact.path,
+        relativePath: artifact.relativePath,
+        format: artifact.format,
+        outputPath,
+        success: false,
+        defenseScore: 0,
+        tokenAmplificationFactor: 0,
+        costAmplificationFactor: 0,
+        outputExisted,
+      })),
+    };
+  }
+
   if (discovered.length > 0) {
     mkdirSync(outputRoot, { recursive: true });
   }
 
   const summaries: HardenArtifactSummary[] = [];
-  for (const artifact of discovered) {
-    const outputPath = deriveArtifactOutputPath(artifact, absDir, outputRoot);
+  for (const { artifact, outputPath, outputExisted } of plannedOutputs) {
+    mkdirSync(dirname(outputPath), { recursive: true });
     try {
       const report: OneClickDefenseReport = defendTarget({
         inputPath: artifact.path,
@@ -318,6 +401,7 @@ export function hardenProject(
           report.exhaustionSummary.tokenAmplificationFactor,
         costAmplificationFactor:
           report.exhaustionSummary.costAmplificationFactor,
+        outputExisted,
       });
     } catch (err) {
       summaries.push({
@@ -329,6 +413,7 @@ export function hardenProject(
         defenseScore: 0,
         tokenAmplificationFactor: 0,
         costAmplificationFactor: 0,
+        outputExisted,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -361,33 +446,36 @@ export function hardenProject(
   const hardenedCount = summaries.filter((s) => s.success).length;
   const failedCount = summaries.length - hardenedCount;
   return {
-    blaVersion: BLA_IDENTITY.version,
-    directory: absDir,
-    intensity,
+    ...reportBase,
     overallSuccess: summaries.length > 0 && failedCount === 0,
-    discoveredCount: discovered.length,
     hardenedCount,
     failedCount,
-    outputDirectory: outputRoot,
     artifacts: summaries,
-    oneSentenceUsage:
-      'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
-    weaveDecoys: options.weaveDecoys === true,
-    selfSeal: options.selfSeal === true,
   };
 }
 
 export function formatHardenProjectReport(report: HardenProjectReport): string {
   const lines: string[] = [
-    `BLA harden ${report.blaVersion} — ${report.directory}`,
+    `BLA harden ${report.blaVersion} — ${report.directory}${report.dryRun ? " (dry-run: nothing written)" : ""}`,
     `Intensity: ${report.intensity} | discovered=${report.discoveredCount} hardened=${report.hardenedCount} failed=${report.failedCount}`,
     `Overall: ${report.overallSuccess ? "SUCCESS" : report.discoveredCount === 0 ? "NO ARTIFACTS" : "PARTIAL/FAILED"}`,
   ];
   for (const a of report.artifacts) {
+    if (report.dryRun) {
+      lines.push(
+        `  • ${a.relativePath} [${a.format}] → ${a.outputPath}${a.outputExisted ? " (exists; would overwrite)" : ""}`,
+      );
+      continue;
+    }
     lines.push(
       a.success
         ? `  ✓ ${a.relativePath} [${a.format}] score=${a.defenseScore} tokens×${a.tokenAmplificationFactor.toFixed(1)} → ${a.outputPath}`
         : `  ✗ ${a.relativePath} [${a.format}] ${a.error ?? "failed"}`,
+    );
+  }
+  if (report.truncated) {
+    lines.push(
+      `  ⚠ discovery truncated at ${report.maxArtifacts} artifacts; more targets exist (raise maxArtifacts or harden a narrower directory)`,
     );
   }
   if (report.discoveredCount === 0) {
@@ -397,7 +485,9 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
   } else {
     lines.push(`Output: ${report.outputDirectory}`);
     lines.push(
-      "Next: ship or point your release at the hardened copies above (originals are untouched). See DISCLAIMER.md.",
+      report.dryRun
+        ? "Next: re-run without --dry-run (MCP: dry_run=false) to write the hardened copies."
+        : "Next: ship or point your release at the hardened copies above (originals are untouched). See DISCLAIMER.md.",
     );
   }
   lines.push(`Tip: ${report.oneSentenceUsage}`);

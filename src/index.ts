@@ -166,12 +166,14 @@ export {
 export { runShowcaseBenchmark } from "./engine/benchmark.js";
 export {
   discoverHardenableArtifacts,
+  discoverHardenTargets,
   hardenProject,
   formatHardenProjectReport,
   BLA_BUILD_OUTPUT_DIR_NAMES,
   type HardenProjectReport,
   type HardenArtifactSummary,
   type DiscoveredArtifact,
+  type HardenDiscoveryResult,
 } from "./engine/harden.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";

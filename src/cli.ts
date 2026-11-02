@@ -75,7 +75,7 @@ Options:
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
-  --dry-run                   Preview planned setup changes without writing files
+  --dry-run                   Preview planned setup/harden changes without writing files
   -y, --yes                   Approve setup actions without interactive confirmation
   --json                      Emit structured JSON output
   -v, --version               Print BLA version
@@ -325,15 +325,19 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const explicitIntensity = argv.includes("--intensity")
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
-        const resolved = resolveProjectSeed(
-          typeof directory === "string" ? directory : process.cwd(),
-          parsed.seed,
-          parsed.configPath,
-        );
+        // Dry-run must write zero bytes: skip seed persistence into .blarc.
+        const seed = parsed.dryRun
+          ? parsed.seed
+          : resolveProjectSeed(
+              typeof directory === "string" ? directory : process.cwd(),
+              parsed.seed,
+              parsed.configPath,
+            ).seed;
         const report = hardenProject({
           directory,
           intensity: explicitIntensity,
-          seed: resolved.seed,
+          ...(seed !== undefined ? { seed } : {}),
+          dryRun: parsed.dryRun,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
@@ -351,6 +355,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         } else {
           console.log(formatHardenProjectReport(report));
         }
+        if (report.dryRun) return report.discoveredCount === 0 ? 2 : 0;
         return report.overallSuccess || report.discoveredCount === 0 ? (report.discoveredCount === 0 ? 2 : 0) : 2;
       }
 
