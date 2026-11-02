@@ -54,6 +54,11 @@ export function formatAuditReport(report: AuditReport): string {
       `${ANSI.bold}Triggered Limits:${ANSI.reset}   ${ANSI.green}${report.reaSimulation.triggeredResourceLimits.join(", ")}${ANSI.reset}`,
     );
   }
+  if (report.walkSkipped && (report.walkSkipped.files > 0 || report.walkSkipped.directories > 0)) {
+    lines.push(
+      `${ANSI.bold}Walk Skipped:${ANSI.reset}      ${ANSI.yellow}${report.walkSkipped.files} file(s) over size cap + ${report.walkSkipped.directories} directory subtree(s) over depth/entry cap (results are partial)${ANSI.reset}`,
+    );
+  }
 
   lines.push(
     `${ANSI.bold}Obligation Graph:${ANSI.reset}   ${report.reaSimulation.obligationLedgerNodes} nodes (${report.reaSimulation.decoyFunctionsDetectedAsReal} decoy tarpit nodes, ${report.reaSimulation.architecturalChaffPayloads} chaff manifests)`,
