@@ -259,3 +259,25 @@ export {
   type WeavePlanStatus,
 } from "./shields/weave/weave-decoy.js";
 
+
+export {
+  lintLaneIndependence,
+  LANE_INDEPENDENCE_SCHEMA,
+  type LaneIndependenceFinding,
+  type LaneIndependenceReport,
+  type LaneIndependenceFindingId,
+} from "./engine/lane-independence-lint.js";
+export {
+  parseWasmExportSectionPayload,
+  renameWasmExports,
+  looksLikeInternalWasmExport,
+  type WasmExportEntry,
+  type WasmExportRename,
+} from "./shields/formats/wasm.js";
+
+export {
+  planSidecarEntanglement,
+  SIDECAR_ENTANGLE_SCHEMA,
+  type SidecarEntanglePlan,
+  type SidecarEntanglePlanOptions,
+} from "./shields/runtime/sidecar-entangle.js";
