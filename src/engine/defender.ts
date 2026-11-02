@@ -15,6 +15,10 @@ import { REA_BUDGET_BREAKER_MATRIX } from "../shields/exhaustion/index.js";
 import { auditTarget } from "./auditor.js";
 import { protectTarget } from "./protector.js";
 import { verifyTarget } from "./verifier.js";
+import {
+  signManifestPayload,
+  readManifestSigningKeyOrThrow,
+} from "../core/manifest-signing.js";
 
 export interface OneClickDefenseOptions {
   readonly inputPath: string;
@@ -23,6 +27,10 @@ export interface OneClickDefenseOptions {
   readonly intensity?: ProtectionIntensity;
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
+  /** Opt-in ed25519 signing of the stage-5 manifest. Requires emitManifest. */
+  readonly signManifest?: boolean;
+  /** Path to an ed25519 private key PEM used when signManifest is true. */
+  readonly manifestSigningKeyPath?: string;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
@@ -51,6 +59,8 @@ export interface OneClickDefenseReport {
   readonly weaveDecoys: boolean;
   /** True when caller opted into self-seal integrity binding. */
   readonly selfSeal: boolean;
+  /** True when stage 5 emitted an ed25519-signed manifest. */
+  readonly manifestSigned?: boolean;
   readonly overallSuccess: boolean;
   readonly stages: readonly OneClickDefenseStageSummary[];
   readonly releaseExposure: ReleaseExposureReport | null;
@@ -89,6 +99,17 @@ export interface OneClickDefenseReport {
 export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseReport {
   const absInput = resolve(options.inputPath);
   const intensity: ProtectionIntensity = options.intensity ?? "bankrupt";
+
+  // Fail closed before any pipeline work when signing is requested.
+  let manifestSigningKeyPem: string | undefined;
+  if (options.signManifest === true) {
+    if (options.emitManifest !== true) {
+      throw new Error(
+        "signManifest requires emitManifest — a manifest must be emitted before it can be signed.",
+      );
+    }
+    manifestSigningKeyPem = readManifestSigningKeyOrThrow(options.manifestSigningKeyPath ?? "");
+  }
 
   // Stage 1: Release Exposure Scan (best-effort for local files/directories)
   let releaseExposure: ReleaseExposureReport | null = null;
@@ -176,15 +197,18 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
   ];
 
   let manifestPath: string | undefined;
+  let manifestSigned = false;
   if (options.emitManifest) {
     manifestPath = `${protection.outputPath}.bla-manifest.json`;
+    const attestationKind =
+      options.signManifest === true ? ("ed25519" as const) : ("unsigned" as const);
     const manifestPayload = {
       schema: "https://bla.tools/schemas/defense-manifest-v1.json",
       blaVersion: BLA_IDENTITY.version,
       protectedAt: new Date().toISOString(),
       // Honesty: this JSON is an attestation record, not a cryptographic signature.
       // Set attestationKind to "ed25519" only when a real signature is attached.
-      attestationKind: "unsigned",
+      attestationKind,
       inputSha256: protection.originalSha256,
       protectedSha256: protection.protectedSha256,
       detectedFormat: protection.detectedFormat,
@@ -195,11 +219,22 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       exhaustionSummary,
       deceptionSummary,
     };
-    writeFileSync(manifestPath, JSON.stringify(manifestPayload, null, 2) + "\n", "utf8");
+    let payloadToWrite: Record<string, unknown> = manifestPayload;
+    if (attestationKind === "ed25519") {
+      // manifestSigningKeyPem is guaranteed non-undefined by the fail-closed
+      // validation at function entry whenever signManifest is true.
+      payloadToWrite = signManifestPayload(manifestPayload, manifestSigningKeyPem!);
+      manifestSigned = true;
+    }
+    writeFileSync(manifestPath, JSON.stringify(payloadToWrite, null, 2) + "\n", "utf8");
     stages.push({
       stage: "5-defense-attestation-manifest",
       status: "passed",
-      headline: `Emitted unsigned Counter-REA attestation manifest (not ed25519-signed) to ${manifestPath}`,
+      headline: `Emitted ${
+        manifestSigned ? "ed25519-signed" : "unsigned"
+      } Counter-REA attestation manifest${
+        manifestSigned ? "" : " (not ed25519-signed)"
+      } to ${manifestPath}`,
     });
   }
 
@@ -217,6 +252,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     protection,
     verification,
     ...(manifestPath !== undefined ? { manifestPath } : {}),
+    ...(manifestSigned ? { manifestSigned } : {}),
     exhaustionSummary,
     deceptionSummary,
   };

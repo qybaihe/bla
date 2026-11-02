@@ -90,6 +90,10 @@ export interface HardenProjectOptions {
   readonly intensity?: ProtectionIntensity;
   readonly seed?: string | number;
   readonly emitManifest?: boolean;
+  /** Opt-in ed25519 signing of each emitted manifest. Requires emitManifest. */
+  readonly signManifest?: boolean;
+  /** Path to an ed25519 private key PEM used when signManifest is true. */
+  readonly manifestSigningKeyPath?: string;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
@@ -270,6 +274,9 @@ export function hardenProject(
   const intensity: ProtectionIntensity = options.intensity ?? "bankrupt";
   // Manifests are opt-in: do not ship `.bla-manifest.json` next to customer artifacts by default.
   const emitManifest = options.emitManifest === true;
+  if (options.signManifest === true && emitManifest !== true) {
+    throw new Error("signManifest requires emitManifest in hardenProject");
+  }
   const maxArtifacts = options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS;
 
   const discovered = discoverHardenableArtifacts(absDir, { maxArtifacts });
@@ -306,6 +313,9 @@ export function hardenProject(
           ? { wasmPreserveExports: options.wasmPreserveExports }
           : {}),
         emitManifest,
+        ...(options.signManifest === true
+          ? { signManifest: true, manifestSigningKeyPath: options.manifestSigningKeyPath ?? "" }
+          : {}),
       });
       summaries.push({
         inputPath: artifact.path,

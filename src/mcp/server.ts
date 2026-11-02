@@ -119,7 +119,15 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         emit_manifest: {
           type: "boolean",
-          description: "Opt-in: emit an unsigned .bla-manifest.json attestation (not ed25519-signed) per artifact. Default false.",
+          description: "Opt-in: emit a .bla-manifest.json attestation per artifact (unsigned unless sign_manifest is true). Default false.",
+        },
+        sign_manifest: {
+          type: "boolean",
+          description: "Opt-in: ed25519-sign each emitted manifest (implies emit_manifest). Requires manifest_key_path. Default false.",
+        },
+        manifest_key_path: {
+          type: "string",
+          description: "Path to an ed25519 private key PEM file used when sign_manifest is true.",
         },
         llm_directives: {
           type: "boolean",
@@ -171,7 +179,15 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         emit_manifest: {
           type: "boolean",
-          description: "Opt-in: emit an unsigned .bla-manifest.json attestation (not ed25519-signed) next to the hardened artifact. Default false.",
+          description: "Opt-in: emit a .bla-manifest.json attestation next to the hardened artifact (unsigned unless sign_manifest is true). Default false.",
+        },
+        sign_manifest: {
+          type: "boolean",
+          description: "Opt-in: ed25519-sign the emitted manifest (implies emit_manifest). Requires manifest_key_path. Default false.",
+        },
+        manifest_key_path: {
+          type: "string",
+          description: "Path to an ed25519 private key PEM file used when sign_manifest is true.",
         },
         llm_directives: {
           type: "boolean",
@@ -880,6 +896,13 @@ export async function handleMcpRequest(
                 ? (args.intensity as ProtectionIntensity)
                 : "bankrupt",
             emitManifest: Boolean(args.emit_manifest),
+            ...(args.sign_manifest === true
+              ? {
+                  signManifest: true,
+                  manifestSigningKeyPath:
+                    typeof args.manifest_key_path === "string" ? args.manifest_key_path : "",
+                }
+              : {}),
             llmDirectives: Boolean(args.llm_directives),
             weaveDecoys: Boolean(args.weave_decoys),
             selfSeal: Boolean(args.self_seal),
@@ -902,6 +925,13 @@ export async function handleMcpRequest(
                 ? (args.intensity as ProtectionIntensity)
                 : "bankrupt",
             emitManifest: Boolean(args.emit_manifest),
+            ...(args.sign_manifest === true
+              ? {
+                  signManifest: true,
+                  manifestSigningKeyPath:
+                    typeof args.manifest_key_path === "string" ? args.manifest_key_path : "",
+                }
+              : {}),
             llmDirectives: Boolean(args.llm_directives),
             weaveDecoys: Boolean(args.weave_decoys),
             selfSeal: Boolean(args.self_seal),
