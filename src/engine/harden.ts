@@ -369,9 +369,10 @@ export function hardenProject(
   } as const;
 
   if (dryRun) {
+    // Preview only: never claim overallSuccess — nothing was hardened.
     return {
       ...reportBase,
-      overallSuccess: discovered.length > 0,
+      overallSuccess: false,
       hardenedCount: 0,
       failedCount: 0,
       artifacts: plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
@@ -490,7 +491,17 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
     `BLA harden ${report.blaVersion} — ${report.directory}${report.dryRun ? " (dry-run: nothing written)" : ""}`,
     `Run: ${report.runId} (unsigned)`,
     `Intensity: ${report.intensity} | discovered=${report.discoveredCount} hardened=${report.hardenedCount} failed=${report.failedCount}`,
-    `Overall: ${report.overallSuccess ? "SUCCESS" : report.discoveredCount === 0 ? "NO ARTIFACTS" : "PARTIAL/FAILED"}`,
+    `Overall: ${
+      report.dryRun
+        ? report.discoveredCount === 0
+          ? "NO ARTIFACTS"
+          : "DRY-RUN (nothing written)"
+        : report.overallSuccess
+          ? "SUCCESS"
+          : report.discoveredCount === 0
+            ? "NO ARTIFACTS"
+            : "PARTIAL/FAILED"
+    }`,
   ];
   for (const a of report.artifacts) {
     if (report.dryRun) {
