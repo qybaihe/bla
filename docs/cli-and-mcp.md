@@ -25,8 +25,11 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 - `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `seed`, `in_place` default false, `confirm_overwrite` default false).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
 - `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
-- `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`, optional honesty metadata `self_seal_enabled` / `wasm_export_rename_applied` / `numeric_template_leak_known` so `defenseScore` soft-caps match what protect actually ran).
+- `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`, optional honesty metadata `self_seal_enabled` / `wasm_export_rename_applied` / `numeric_template_leak_known` so `defenseScore` soft-caps match what protect actually ran; optional `summary_path` / `run_id` to correlate with a prior harden summary).
 - `bla_lint_lanes`: Read-only lane-independence footgun lint (`path`) — same engine as CLI `bla lint-lanes`.
+- `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
+- `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
+- `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. Missing report / unready REA → `status: unverified`.
 - `bla_benchmark`: Runs the 8-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).

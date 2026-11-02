@@ -11,9 +11,9 @@ const skillDir = path.resolve(
 const skillPath = path.join(skillDir, "SKILL.md");
 
 describe("blind-llm-agents skill guide contents", () => {
-  it("ships v1.4+ short decision guide with write-safety and lint-lanes", () => {
+  it("ships v1.5+ short decision guide with write-safety, lint-lanes, and run evidence", () => {
     const text = fs.readFileSync(skillPath, "utf8");
-    expect(text).toMatch(/metadata:\s*\n\s*version:\s*"1\.4\.\d+"/);
+    expect(text).toMatch(/metadata:\s*\n\s*version:\s*"1\.5\.\d+"/);
     expect(text).toContain("bla_harden");
     expect(text).toContain("npx bla-agents@latest harden .");
     expect(text).toContain("weave_decoys");
@@ -29,6 +29,10 @@ describe("blind-llm-agents skill guide contents", () => {
     expect(text).toContain("dry_run");
     expect(text).toContain("confirm_overwrite");
     expect(text).toContain("in_place");
+    expect(text).toContain("bla_run_lookup");
+    expect(text).toContain("bla_rea_drift");
+    expect(text).toContain("bla_redteam_report");
+    expect(text).toMatch(/unverified/i);
     // No brittle repo-relative ../../../docs links that break after setup install.
     expect(text).not.toMatch(/\.\.\/\.\.\/\.\.\/docs\//);
   });

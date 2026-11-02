@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # BLA: Blind LLM Agents
@@ -56,6 +56,11 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
   `wouldOverwrite`, ask, then retry with `confirm_overwrite: true` (or a new path).
   Same rule for `in_place: true` (overwrites the input).
 - Report writes from the tool receipt (`writeReceipt` / `wouldOverwrite`), not guesses.
+- After a successful harden/defend/protect, keep the returned unsigned `runId` (and
+  harden `summaryPath`). Re-check later with `bla_run_lookup` or `bla_verify` +
+  `summary_path`/`run_id` — never invent a run id.
+- `bla_rea_drift` / `bla_redteam_report` may return `status: unverified` when sibling
+  REA is absent; treat that as **not proven**, never as a pass.
 
 ## Decision tree (short)
 
@@ -66,6 +71,8 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | Inventory only | **`bla_discover`** |
 | Structural decoys (esp. Python) | Resource `bla://directives/weave-decoy` → `bla_weave_plan` → `weave_decoys: true` |
 | Custom license/activation gate review | **`bla_lint_lanes`** `{ "path": "<gate.js>" }` (CLI: `bla lint-lanes`) |
+| Re-check a prior harden run | **`bla_run_lookup`** `{ "summary_path": "<.bla-hardened or summary.json>", "run_id": "…" }` |
+| REA constant drift / empirical report | **`bla_rea_drift`** / **`bla_redteam_report`** (unverified if REA absent) |
 | Format-specific knobs | Load the matching appendix under `references/` |
 
 ## FORBIDDEN
