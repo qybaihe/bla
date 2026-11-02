@@ -111,7 +111,7 @@ describe("read-only discover + zero-write dry-run", () => {
     const rep = r.structuredContent;
     expect(rep.dryRun).toBe(true);
     expect(rep.discoveredCount).toBe(2);
-    expect(rep.artifacts[0].outputPath).toContain(".bla-hardened");
+    expect(rep.artifacts?.[0]?.outputPath).toContain(".bla-hardened");
     expect(rep.wouldOverwrite).toEqual([]);
     expect(existsSync(join(root, ".bla-hardened"))).toBe(false);
     expect(snapshot(root)).toEqual(before);
