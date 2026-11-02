@@ -555,7 +555,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_redteam_report",
     description:
-      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1247,7 +1247,7 @@ export async function handleMcpRequest(
             payload = confirmationRequiredPayload(name, preOverwrite);
           } else {
             const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
-            payload = handlers.hardenProject({
+            const report = handlers.hardenProject({
               directory: hardenDir,
               dryRun,
               ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
@@ -1263,6 +1263,21 @@ export async function handleMcpRequest(
               ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
               ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
             });
+            // Dry-run / confirmation_required leave no write receipt; real writes do.
+            if (!dryRun) {
+              const wrote = report.artifacts
+                .filter((a) => a.success)
+                .map((a) => a.outputPath);
+              if (report.summaryPath !== undefined) {
+                wrote.push(report.summaryPath);
+              }
+              payload = {
+                ...report,
+                writeReceipt: writeReceipt(wrote, preOverwrite, confirmed),
+              };
+            } else {
+              payload = report;
+            }
           }
         } else if (name === "bla_defend" || name === "bla_protect") {
           const inPlace = args.in_place === true;

@@ -69,9 +69,10 @@ async function call(name: string, args: Record<string, unknown>) {
       artifacts?: ReadonlyArray<{ relativePath?: string; outputPath?: string }>;
       truncated?: boolean;
       dryRun?: boolean;
+      overallSuccess?: boolean;
+      hardenedCount?: number;
       discoveredCount?: number;
       wouldOverwrite?: readonly string[];
-      hardenedCount?: number;
       status?: string;
       writeReceipt?: Readonly<Record<string, unknown>>;
     };
@@ -110,10 +111,32 @@ describe("read-only discover + zero-write dry-run", () => {
     expect(r.isError).toBe(false);
     const rep = r.structuredContent;
     expect(rep.dryRun).toBe(true);
+    // Preview must not claim a successful harden.
+    expect(rep.overallSuccess).toBe(false);
+    expect(rep.hardenedCount).toBe(0);
     expect(rep.discoveredCount).toBe(2);
     expect(rep.artifacts?.[0]?.outputPath).toContain(".bla-hardened");
     expect(rep.wouldOverwrite).toEqual([]);
+    expect(rep.writeReceipt).toBeUndefined();
     expect(existsSync(join(root, ".bla-hardened"))).toBe(false);
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  it("dry_run never demands confirm_overwrite even when planned outputs already exist", async () => {
+    const root = project(1);
+    const first = await call("bla_harden", { directory: root, seed: "pre" });
+    expect(first.isError).toBe(false);
+    const out = join(root, ".bla-hardened", "dist", "m0.js");
+    const hardened = readFileSync(out, "utf8");
+    const before = snapshot(root);
+
+    const preview = await call("bla_harden", { directory: root, dry_run: true, seed: "pre2" });
+    expect(preview.isError).toBe(false);
+    expect(preview.structuredContent.status).not.toBe("confirmation_required");
+    expect(preview.structuredContent.dryRun).toBe(true);
+    expect(preview.structuredContent.overallSuccess).toBe(false);
+    expect(preview.structuredContent.wouldOverwrite).toEqual([out]);
+    expect(readFileSync(out, "utf8")).toBe(hardened);
     expect(snapshot(root)).toEqual(before);
   });
 
@@ -133,6 +156,12 @@ describe("overwrite confirmation boundary", () => {
     expect(first.isError).toBe(false);
     expect(first.structuredContent.hardenedCount).toBe(1);
     const out = join(root, ".bla-hardened", "dist", "m0.js");
+    expect(first.structuredContent.writeReceipt).toMatchObject({
+      status: "written",
+      wrote: expect.arrayContaining([out]),
+      overwrote: [],
+      confirmed: false,
+    });
     const hardened = readFileSync(out, "utf8");
 
     const refused = await call("bla_harden", { directory: root, seed: "s2" });
@@ -145,6 +174,11 @@ describe("overwrite confirmation boundary", () => {
     expect(ok.isError).toBe(false);
     expect(ok.structuredContent.hardenedCount).toBe(1);
     expect(ok.structuredContent.wouldOverwrite).toEqual([out]);
+    expect(ok.structuredContent.writeReceipt).toMatchObject({
+      status: "written",
+      overwrote: [out],
+      confirmed: true,
+    });
   });
 
   it("bla_protect refuses an existing output_path without confirmation and succeeds with it", async () => {
