@@ -47,4 +47,13 @@ describe("js-wasm-hydrate-dump lint (red-blue round-5)", () => {
     const report = lintJsWasmHydrateDumpSource(src, { path });
     expect(report.shouldRefuseBankrupt).toBe(true);
   });
+
+  it("does not refuse the round-6 unlock-in-WASM license fixture", () => {
+    const path = "/workspace/bla-redblue/round-6/target/license.cjs";
+    const src = readFileSync(path, "utf8");
+    const report = lintJsWasmHydrateDumpSource(src, { path });
+    expect(report.shouldRefuseBankrupt).toBe(false);
+    expect(report.hasParamLayoutDecode).toBe(false);
+    expect(report.hasHydrateCall).toBe(false);
+  });
 });
