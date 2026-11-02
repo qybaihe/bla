@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Red/Blue round-2 · Writeback (skill):** Skill guide **v1.5.3** + `format-javascript.md` — plaintext seal/catalog sidecars are unprotected by harden; public compare digests must be one-way (reversible ARX/`revision` was the round-2 key-recovery break). Round-1 P0 (WASM export rename + lane refuse) held against the old vectors.
 - **Red/Blue round-1 · Writeback P0 — WASM export rename default:** at `maximum`/`bankrupt`, `protectWasmBinary` renames **all** non-preserved exports (not only `__*` / `debug_*`). Keeping a stable public ABI requires explicit `wasmPreserveExports` / `--wasm-preserve-exports` / `wasm_preserve_exports`. Optional `renameInternalOnly: true` for the weaker pass.
 - **Red/Blue round-1 · Writeback P0 — lane-independence is error + harden refuse:** `bla lint-lanes` / `bla_lint_lanes` findings are severity **error**; protect/defend/harden refuse JS/TS that looks lane-independent (including per-byte WASM mix/seal oracles) unless `allowLaneIndependentGates` / `--allow-lane-independent` / `allow_lane_independent`. Skill v1.5.2 principles: no silent stable WASM ABI; no JS independent lane tables; prefer whole-key mixing.
 
