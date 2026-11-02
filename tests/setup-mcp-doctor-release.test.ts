@@ -177,7 +177,7 @@ describe("Issue #8: Native Client Config Formats, Accurate Detection & Cross-Pla
     expect(writtenToml).toContain("[mcp_servers.git]");
     expect(writtenToml).toContain("[mcp_servers.bla]");
     expect(writtenToml).toContain('command = "npx"');
-    expect(writtenToml).toContain('args = ["-y", "bla-agents@latest", "mcp"]');
+    expect(writtenToml).toContain(`args = ["-y", "bla-agents@${BLA_IDENTITY.version}", "mcp"]`);
 
     // Verify VS Code native mcp.json uses root key `servers` (NOT `mcpServers`)
     const writtenVscode = JSON.parse(readFileSync(vscodeClient.configPath, "utf8")) as Record<
@@ -193,7 +193,7 @@ describe("Issue #8: Native Client Config Formats, Accurate Detection & Cross-Pla
     expect(vscodeServers.bla).toEqual({
       type: "stdio",
       command: "npx",
-      args: ["-y", "bla-agents@latest", "mcp"],
+      args: ["-y", `bla-agents@${BLA_IDENTITY.version}`, "mcp"],
     });
 
     // Verify OpenCode native opencode.json uses root key `mcp` with `type: "local"` and `command` array
@@ -208,7 +208,7 @@ describe("Issue #8: Native Client Config Formats, Accurate Detection & Cross-Pla
     expect(opencodeMcp.memory).toBeDefined();
     expect(opencodeMcp.bla).toEqual({
       type: "local",
-      command: ["npx", "-y", "bla-agents@latest", "mcp"],
+      command: ["npx", "-y", `bla-agents@${BLA_IDENTITY.version}`, "mcp"],
       enabled: true,
     });
   });
