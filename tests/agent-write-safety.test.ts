@@ -62,7 +62,20 @@ async function call(name: string, args: Record<string, unknown>) {
     params: { name, arguments: args },
   });
   expect(res?.error).toBeUndefined();
-  return res!.result as { isError: boolean; structuredContent: Record<string, any> };
+  return res!.result as {
+    isError: boolean;
+    structuredContent: {
+      readonly [key: string]: unknown;
+      artifacts?: ReadonlyArray<{ relativePath?: string; outputPath?: string }>;
+      truncated?: boolean;
+      dryRun?: boolean;
+      discoveredCount?: number;
+      wouldOverwrite?: readonly string[];
+      hardenedCount?: number;
+      status?: string;
+      writeReceipt?: Readonly<Record<string, unknown>>;
+    };
+  };
 }
 
 describe("read-only discover + zero-write dry-run", () => {
@@ -71,7 +84,7 @@ describe("read-only discover + zero-write dry-run", () => {
     const before = snapshot(root);
     const r = await call("bla_discover", { directory: root });
     expect(r.isError).toBe(false);
-    expect(r.structuredContent.artifacts.map((a: any) => a.relativePath).sort()).toEqual([
+    expect((r.structuredContent.artifacts ?? []).map((a) => a.relativePath).sort()).toEqual([
       "dist/m0.js",
       "dist/m1.js",
     ]);
