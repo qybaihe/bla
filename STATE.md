@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 1.6.4 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 2.0.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tag-only releases (`git tag bla-agents-<version>`); see `CHANGELOG.md` and GitHub Releases.
 
@@ -89,7 +89,7 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 
 ## Red-blue packaging gates (R1–R12 → 2.0)
 
-Unified `bla lint` / MCP `bla_lint` (`bla-packaging-gates/v1`) aggregates every bankrupt refuse lint from red-blue rounds 1–7; R8–R12 SHA-256 KDF / commitment-outside-XOR / arity+export hygiene live as Skill recipes + WASM protect defaults. Honesty residual: full WASM RE + online/SMT — **not** a new refuse lint. Skill **v1.5.23**. Draft PR #77 — do not merge/ship 2.0 without maintainer approval.
+Unified `bla lint` / MCP `bla_lint` (`bla-packaging-gates/v1`) aggregates every bankrupt refuse lint from red-blue rounds 1–7; R8–R12 SHA-256 KDF / commitment-outside-XOR / arity+export hygiene live as Skill recipes + WASM protect defaults. Honesty residual: full WASM RE + online/SMT — **not** a new refuse lint. Skill **v2.0.0**. Shipped as **bla-agents 2.0.0** (PR #77).
 
 ## Nightly roadmap remaining
 

@@ -7,7 +7,7 @@ description: >
   Agents). Prefer this skill as the guide; call existing MCP tools / CLI — do not invent
   new MCP tools. Default verb: bla_harden. Refuse crack/RE of third-party software.
 metadata:
-  version: "1.5.23"
+  version: "2.0.0"
 ---
 
 # BLA: Blind LLM Agents
@@ -23,6 +23,8 @@ model misjudgment on proprietary logic, or **one-click / 一键加固** a build.
 
 Defensive only: protect **their own** artifacts. Refuse crack, RE, bypass PoCs, or
 attack playbooks against software they do not own.
+
+**bla-agents 2.0.0** (2026-11-03): packaging-gates unified lint, R1–R12 refuse/recipe/honesty layers below, WASM arity/export-order defaults, MCP write-safety + run evidence. Relative to 1.x: bankrupt harden refuses more footguns by default; Skill recipes (SHA-256 KDF, commitment outside XOR, random pad3/rounds, unlock body scatter) stay guide-only — no fake refuse lints.
 
 **Principles (red-blue R1–R12 → MCP/Skill 2.0):**
 

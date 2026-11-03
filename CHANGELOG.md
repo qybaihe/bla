@@ -6,8 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-03
+
+Major MCP + Skill 2.0 release. Red/Blue R1–R12 packaging gates that held under adversarial
+dogfood are now product defaults: unified `bla lint` / `bla_lint`, bankrupt refuse lints,
+WASM export hygiene, agent write-safety, and honest Skill recipes for crypto that cannot
+be a packaging lint. Breaking only in the sense of new bankrupt refuses / ABI defaults —
+CLI/MCP verbs remain `bla_harden` / `bla_defend` / `bla_protect`.
+
 ### Added
-- **Unified packaging gates (`bla lint` / MCP `bla_lint`):** one project scan over every R1–R7 bankrupt refuse lint plus lane/panel discovery (`bla-packaging-gates/v1`). `hardenProject` shares `evaluateHardenProjectPackagingBlocks`. Skill guide **v1.5.23** layers refuse gates / product recipes / honesty residual from red-blue R1–R12. WASM protect honesty surfaces `wasmExportOrderShuffled` / `wasmExportDecoysInjected`. MCP parity includes `allow_wasm_seal_xor_known_plaintext` on harden/defend/protect.
+- **Unified packaging gates (`bla lint` / MCP `bla_lint`):** one project scan over every R1–R7 bankrupt refuse lint plus lane/panel discovery (`bla-packaging-gates/v1`). `hardenProject` shares `evaluateHardenProjectPackagingBlocks`. Skill guide **v2.0.0** layers refuse gates / product recipes / honesty residual from red-blue R1–R12. WASM protect honesty surfaces `wasmExportOrderShuffled` / `wasmExportDecoysInjected`. MCP parity includes `allow_wasm_seal_xor_known_plaintext` on harden/defend/protect.
 - **Red/Blue round-4 · Writeback — JS AES unwrap lint + panel offline-oracle gate:** CLI `bla lint-js-aes-unwrap` / MCP `bla_lint_js_aes_unwrap` detect hex/base64 wrap-key material + `createDecipheriv`/`createCipheriv` + fixed sealed hdr (e.g. `d17ea004`). Bankrupt harden/protect **refuse** unless `allowJsAesUnwrap` / `--allow-js-aes-unwrap` / `allow_js_aes_unwrap`. Gate only — **not** white-box AES. `bla_lint_panel_derive` / CLI also flag stable `deriveLocal` (maximum/bankrupt rewrite to `_blaPdLocal_*`) and `deriveLocal` + plaintext `panelTokenSha256` offline-oracle packaging (same-file or sibling `seal.json`); bankrupt **refuses** the oracle combo unless `allowPanelOfflineOracle` / `--allow-panel-offline-oracle` / `allow_panel_offline_oracle`. Skill **v1.5.7**. Self-seal sibling SHA-256 hard-fail remains from `c2ec868`.
 - **Red/Blue round-3 · Writeback residual — WASM param lint + panel rewrite + self_seal recommend:** CLI `bla lint-wasm-params` / MCP `bla_lint_wasm_params` detect clear `R3PARM`/`R3CIPH`/`R2SEAL`-class ASCII carriers with adjacent binary blobs; bankrupt harden/protect **refuse** unless `allowWasmClearParamCarriers` / `--allow-wasm-clear-params` / `allow_wasm_clear_params`. CLI `bla lint-panel-derive` / MCP `bla_lint_panel_derive` flag stable `__vaultPanelDerive_*` (and classic FNV primes as warning); maximum/bankrupt protect **rewrites** to seed-stable `_blaPd_*` unless `allowStablePanelDeriveAbi` / `--allow-stable-panel-derive` / `allow_stable_panel_derive`. Bankrupt harden sets `selfSealRecommended` for multi-artifact JS/WASM/HTML trees without auto-enabling single-file; `--self-seal` on harden auto-binds sibling paths. Audit surfaces the same WASM/panel findings. Skill **v1.5.6**. Full WASM data-section encryption remains a follow-up.
 - **Red/Blue round-3 · Red writeback (skill):** one-way SHA-256 seals **close** the round-2 ARX-invert break; skill **v1.5.5** + format appendices document residual packaging — WASM `R3PARM`/`R3CIPH`-class clear param/cipher carriers, stable `__vaultPanelDerive_*` / FNV literals, and prefer `self_seal` for multi-artifact entitlement trees. No emergency P0.
@@ -19,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Red/Blue round-1 · Writeback P0 — lane-independence is error + harden refuse:** `bla lint-lanes` / `bla_lint_lanes` findings are severity **error**; protect/defend/harden refuse JS/TS that looks lane-independent (including per-byte WASM mix/seal oracles) unless `allowLaneIndependentGates` / `--allow-lane-independent` / `allow_lane_independent`. Skill v1.5.2 principles: no silent stable WASM ABI; no JS independent lane tables; prefer whole-key mixing.
 
 ### Fixed
+- **CI hydrate-dump lint fixtures:** optional `/workspace/bla-redblue` dogfood paths no longer fail clones; in-repo synthetic R5/R6 shapes cover refuse vs unlock-in-WASM.
 - **MCP/Skill 2.0 stabilization:** `bla_harden` dry-run no longer sets `overallSuccess: true`; CLI formatter labels dry-run as `DRY-RUN (nothing written)` instead of `SUCCESS`. Successful `bla_harden` writes now return `writeReceipt` (matching defend/protect and the stage A contract). `bla_redteam_report` on-disk reads use `status: available` (not `pass`) so agents cannot mistake a static fixture for a live REA verdict; harness stdout/stderr are clipped for MCP stdio safety. Skill guide **v1.5.1** documents available vs unverified.
 
 ### Added
