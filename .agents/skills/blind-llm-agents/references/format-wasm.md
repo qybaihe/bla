@@ -33,3 +33,20 @@ Export rename closes the public `mix`/`seal` hook surface. It does **not** hide 
 ## Sealed blobs still need JS honesty (red-blue round-4)
 
 Encrypting WASM data (no clear `R3PARM`) closes the ASCII-carrier lint. If the **JS loader** still does `Buffer.from(WRAP_KEY_HEX, "hex")` + `createDecipheriv` against a fixed hdr, Node instrumentation recovers params. Run `bla_lint_js_aes_unwrap` on the loader; bankrupt refuses that footgun. BLA does **not** claim white-box AES.
+
+
+## Unlock-in-WASM + mask hygiene (red-blue R5–R12)
+
+Export rename closes public `mix`/`seal` hooks. It does **not** replace careful entitlement packaging:
+
+| Round | Do | Lint / engine |
+| :--- | :--- | :--- |
+| R5–R6 | Keep ARX+compare+decrypt **inside** `unlock`; JS must not hydrate→dump salt/rounds/cipher | `bla_lint_js_wasm_hydrate_dump` |
+| R6 | Never store plaintext XOR mask beside masked pack | `bla_lint_wasm_xor_mask_sidecar` |
+| R7 | Never put `seal.revision` under repeating XOR mask; use one-way mask KDF | `bla_lint_wasm_seal_xor_known_plaintext` |
+| R8+ | `SHA-256(key)` mask; commitment **outside** XOR; entropy pad ≠ revision | Skill recipe (R7 lint covers KP) |
+| R9 | Seed-derived rounds + nonzero pad3 | Skill recipe |
+| R10–R12 | Engine: arity-2 alias spread + export-order shuffle + prefer arity-2 decoys | protect defaults |
+| Host | Resolve by arity + FLAG shape + `certificateSha256`, never first export | Skill recipe |
+
+Project scan: `bla_lint` / `bla lint .`. Honesty: full WASM RE + online/SMT vs commitment remains possible — gates ≠ white-box.

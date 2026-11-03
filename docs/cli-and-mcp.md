@@ -8,6 +8,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | :--- | :--- |
 | `npx bla-agents setup` | Auto-registers the `bla` MCP server and `blind-llm-agents` skill with Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity. |
 | `npx bla-agents harden .` | **Default one-command UX**: auto-discover build outputs and run audit → protect → verify (bankrupt). Prefer over `defend` when you have a project directory. Agent guide: [`blind-llm-agents` skill](../.agents/skills/blind-llm-agents/SKILL.md). |
+| `npx bla-agents lint .` | **Unified packaging-footgun scan** (`bla-packaging-gates/v1`): all R1–R7 refuse lints + lanes/panel. Exit 2 when bankrupt would refuse. Writes nothing. |
 | `npx bla-agents defend <target> [--manifest] [--llm-directives] [--weave-decoys]` | **5-stage pipeline** on a known path: `inspect-release` → `audit` → `protect` → `verify` → optional **unsigned** `.bla-manifest.json` (opt-in). Risky LLM directive layers stay off unless `--llm-directives`. Structural weave decoys stay off unless `--weave-decoys`. |
 | `npx bla-agents harden . [--weave-decoys]` | Same as `harden` with opt-in structural weave (`weave_decoys`). |
 | `npx bla-agents inspect-release <target>` | Read-only local scan for embedded `.map` (`sourcesContent`) and sourceMappingURL references. |
@@ -26,13 +27,15 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
 - `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
 - `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`, optional honesty metadata `self_seal_enabled` / `wasm_export_rename_applied` / `numeric_template_leak_known` so `defenseScore` soft-caps match what protect actually ran; optional `summary_path` / `run_id` to correlate with a prior harden summary).
+- `bla_lint`: **DEFAULT** packaging-footgun project scan (`directory`, `intensity`, allow_* flags) → `bla-packaging-gates/v1` (findings + blocking + honestyNote). Prefer over calling eight separate lints. Same engines as CLI `bla lint`.
 - `bla_lint_lanes`: Read-only lane-independence footgun lint (`path`) — same engine as CLI `bla lint-lanes`.
 - `bla_lint_seal`: Read-only seal-commitment lint (`path`) — plaintext / reversible seal sidecars; same engine as CLI `bla lint-seal`.
 - `bla_lint_wasm_params`: Read-only WASM clear param/cipher carrier lint (`path`) — `R3PARM`/`R3CIPH`/`R2SEAL`-class; same engine as CLI `bla lint-wasm-params`.
 - `bla_lint_panel_derive`: Read-only panel-derive ABI lint (`path`) — stable `__vaultPanelDerive_*` / `deriveLocal` / `panelTokenSha256` oracle; same engine as CLI `bla lint-panel-derive`.
 - `bla_lint_js_aes_unwrap`: Read-only JS AES wrap-key unwrap lint (`path`) — wrap-key + create*iv + fixed hdr; same engine as CLI `bla lint-js-aes-unwrap`. Gate only — not white-box AES.
 - `bla_lint_js_wasm_hydrate_dump`: Read-only JS←WASM hydrate param-dump lint (`path`) — memory.buffer + salt/rounds/cipher after hydrate; same engine as CLI `bla lint-js-wasm-hydrate-dump`. Prefer in-WASM ARX+certify.
-- `bla_lint_wasm_xor_mask_sidecar`: Read-only WASM XOR-mask sidecar lint (`path`) — masked entitlement pack beside plaintext 32-byte mask in WASM data; bankrupt refuses unless `allow_wasm_xor_mask_sidecar`.
+- `bla_lint_wasm_xor_mask_sidecar`: Read-only WASM XOR-mask sidecar lint (`path`) — masked entitlement pack beside plaintext 32-byte mask in WASM data; bankrupt refuses unless `allow_wasm_xor_mask_sidecar`, `allow_wasm_seal_xor_known_plaintext`.
+- `bla_lint_wasm_seal_xor_known_plaintext`: Read-only seal.revision XOR known-plaintext lint (`path`, optional `seal_path`) — bankrupt refuses unless `allow_wasm_seal_xor_known_plaintext`.
 - `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.

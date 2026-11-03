@@ -87,6 +87,10 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 - Shipped **v1.4.6** counter: `android-r8.ts` + unsigned-APK wiring + identity
   constants + `verify:rea` drift entries.
 
+## Red-blue packaging gates (R1–R12 → 2.0)
+
+Unified `bla lint` / MCP `bla_lint` (`bla-packaging-gates/v1`) aggregates every bankrupt refuse lint from red-blue rounds 1–7; R8–R12 SHA-256 KDF / commitment-outside-XOR / arity+export hygiene live as Skill recipes + WASM protect defaults. Honesty residual: full WASM RE + online/SMT — **not** a new refuse lint. Skill **v1.5.23**. Draft PR #77 — do not merge/ship 2.0 without maintainer approval.
+
 ## Nightly roadmap remaining
 
 1. ~~**Self-seal / defenseScore honesty (#40)**~~ — landed soft-caps + opt-in `--self-seal` / MCP `self_seal` / `.blarc selfSeal` (batch 2026-11-02). Remaining: deeper onefile/peel score model.
