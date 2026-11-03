@@ -1,0 +1,35 @@
+name: CrackMe v8 solve (Aegis)
+description: Submit a proof-of-solve for Aegis (CrackMe v8)
+title: "CrackMe v8 solve: <short method>"
+labels: ["crackme", "challenge"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prove a break of [Aegis / CrackMe v8](https://github.com/qybaihe/bla/tree/main/challenge/v8) by posting the **SHA-256 of the FLAG** (not the raw FLAG). It must match `flagSha256` in `challenge/v8/SEAL.json`.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface used
+      options:
+        - Executed hardened app (intended)
+        - Full WASM reverse of unlock
+        - Packaging / lint footgun (should be closed in 2.0)
+        - BLA product gap / generic harden bypass
+    validations:
+      required: true
+  - type: input
+    id: flag_sha256
+    attributes:
+      label: SHA-256 of the FLAG
+      description: Lowercase hex. Prefer not to paste the raw FLAG unless you intend public disclosure.
+      placeholder: a1b2c3…
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method notes
+      description: What you recovered (KDF, commitment layout, body-index, etc.) and whether a general BLA bypass was involved.
+    validations:
+      required: true

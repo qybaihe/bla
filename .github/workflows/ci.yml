@@ -53,6 +53,8 @@ jobs:
         env:
           CRACKME_V6_KEY: ${{ secrets.CRACKME_V6_KEY }}
           CRACKME_V6_FLAG: ${{ secrets.CRACKME_V6_FLAG }}
+          CRACKME_V8_KEY: ${{ secrets.CRACKME_V8_KEY }}
+          CRACKME_V8_FLAG: ${{ secrets.CRACKME_V8_FLAG }}
         run: npm run crackme:seal
 
       - name: Run Counter-REA showcase benchmark

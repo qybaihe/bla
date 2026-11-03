@@ -1,0 +1,65 @@
+{
+  "schema": "bla-crackme-v8-seal/v1",
+  "mode": "release",
+  "product": "Aegis",
+  "blaVersion": "2.0.0",
+  "recipe": "npm run crackme:v8:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <seed> --self-seal`)",
+  "seed": "bla-crackme-v8-aegis-2026-11",
+  "intensity": "bankrupt",
+  "selfSeal": true,
+  "llmDirectives": false,
+  "emitManifest": false,
+  "keySha256": "2b91c07f1035e2ae45a85916af9df33e14da9c8e2e71b8a0a7f2b6f6b00e349e",
+  "flagSha256": "df777780af5a9e99813bf3b8dafc223c65876c220cf847afa95164f10f026a74",
+  "artifacts": {
+    "license.cjs": {
+      "sha256": "e4c8fe01dd228dea9373f20575aa68e2ba3d598b060508fe0f1ed17bbd4ed5ec",
+      "bytes": 228842
+    },
+    "panel.html": {
+      "sha256": "64b27d9637489f1195568ea2a1f1fab08b81e239091a0dfc972adf3df423dcac",
+      "bytes": 122767
+    },
+    "core.wasm.gz": {
+      "sha256": "cb9f3998d973d35e3f8f7b083f13f9b2763c370632555a1e0de6f3cd635f226a",
+      "bytes": 21347
+    },
+    "seal.json": {
+      "sha256": "9b057120186e6b32d223ee598606a6acf5265b418cf077469a71c807eafd7a5b",
+      "bytes": 654
+    },
+    "core.wasm": {
+      "sha256": "e80b050886eda3399d3bb61aa7f4eb464d58da6f6cc3643f62f4528f59d715de",
+      "bytes": 6883520,
+      "note": "raw harden output; committed gzipped"
+    }
+  },
+  "hardenSummary": [
+    {
+      "relativePath": "core.wasm",
+      "format": "wasm",
+      "defenseScore": 98,
+      "success": true
+    },
+    {
+      "relativePath": "panel.html",
+      "format": "html-bundle",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "license.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    }
+  ],
+  "recipesAbsorbed": [
+    "R7/R8 SHA-256(key) mask KDF + commitment outside XOR",
+    "R9 seed-derived rounds + pad3",
+    "R10–R12 arity-2 hygiene + export-order shuffle + unlock body-index scatter",
+    "bankrupt packaging gates + --self-seal (no --allow-*)"
+  ],
+  "honestyResidual": "P2 full WASM RE + online/SMT vs clear commitment remains possible — gates do not claim white-box secrecy.",
+  "note": "Public commitment: prove a solve by publishing SHA-256(FLAG{...}) matching flagSha256. Plaintext key/flag are not in git."
+}
