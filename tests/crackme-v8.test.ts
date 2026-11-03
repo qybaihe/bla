@@ -13,6 +13,9 @@ const V8 = join(ROOT, "challenge", "v8");
 const HARDENED = join(V8, "hardened");
 const SEAL_PATH = join(V8, "SEAL.json");
 
+// Relative specifier (not file://): Vite/vitest space-safe; no .d.ts for the mjs helper.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// @ts-expect-error v8-lib.mjs ships no type declarations; typed by its runtime shape.
 const libP: Promise<any> = import("../scripts/crackme/v8-lib.mjs");
 const seal = JSON.parse(readFileSync(SEAL_PATH, "utf8"));
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
