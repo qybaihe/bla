@@ -29,6 +29,25 @@ export interface OneClickDefenseOptions {
   readonly selfSeal?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
+  /** Allow lane-independent JS gates (issue #40.1). Default false. */
+  readonly allowLaneIndependentGates?: boolean;
+  /** Allow bankrupt despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
+  readonly allowPlaintextSeal?: boolean;
+  /** Allow bankrupt despite clear WASM param/cipher carriers (red-blue round-3). Default false. */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /** Keep stable __vaultPanelDerive_* ABI (red-blue round-3). Default false — rewrite. */
+  readonly allowStablePanelDeriveAbi?: boolean;
+  /** Allow bankrupt despite JS AES wrap-key unwrap footguns (red-blue round-4). Default false. */
+  readonly allowJsAesUnwrap?: boolean;
+  /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
+  readonly allowPanelOfflineOracle?: boolean;
+  /** Allow bankrupt despite JS←WASM hydrate param-dump (red-blue round-5). Default false. */
+  readonly allowJsWasmHydrateDump?: boolean;
+  readonly allowWasmXorMaskSidecar?: boolean;
+  /** Allow bankrupt despite seal.revision XOR known-plaintext packs (red-blue round-7). Default false. */
+  readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
+  readonly selfSealSiblingPaths?: readonly string[];
 }
 
 export interface OneClickDefenseStageSummary {
@@ -119,6 +138,33 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.wasmPreserveExports !== undefined && options.wasmPreserveExports.length > 0
       ? { wasmPreserveExports: options.wasmPreserveExports }
+      : {}),
+    ...(options.allowLaneIndependentGates === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
+    ...(options.allowWasmClearParamCarriers === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(options.allowStablePanelDeriveAbi === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(options.allowJsAesUnwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(options.allowPanelOfflineOracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(options.allowJsWasmHydrateDump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(options.allowWasmXorMaskSidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(options.allowWasmSealXorKnownPlaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(options.selfSealSiblingPaths !== undefined &&
+    options.selfSealSiblingPaths.length > 0
+      ? { selfSealSiblingPaths: options.selfSealSiblingPaths }
       : {}),
     honeySourceMaps: true,
   });

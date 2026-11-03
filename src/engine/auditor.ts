@@ -15,6 +15,11 @@ import type {
 } from "../core/types.js";
 import { unpackAsarBuffer } from "../shields/formats/asar.js";
 import { inspectWasmBinary } from "../shields/formats/wasm.js";
+import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
+import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
+import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
+import { lintJsWasmHydrateDumpSource } from "./js-wasm-hydrate-dump-lint.js";
+import { lintWasmXorMaskSidecarBuffer } from "./wasm-xor-mask-sidecar-lint.js";
 import { inspectPythonPyc } from "../shields/formats/python.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { detectBunStandaloneGraph } from "../shields/formats/bun-standalone.js";
@@ -488,6 +493,48 @@ export function auditTarget(targetPath: string): AuditReport {
       const res = analyzeJsSourceForAudit(text, basename(absPath));
       sim = res.sim;
       exposedItems.push(...res.exposed);
+      const panelLint = lintPanelDeriveAbiSource(text, { path: absPath });
+      for (const f of panelLint.findings) {
+        exposedItems.push({
+          id: `panel_derive_${f.id}`,
+          name: f.id,
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: f.severity === "error" ? "high" : "medium",
+          reaToolUsed: "bla lint-panel-derive / static source scan",
+          estimatedTokensToReconstruct: 1_200,
+          estimatedCostUsd: 0.05,
+          reason: f.summary,
+        });
+      }
+      const aesLint = lintJsAesUnwrapSource(text, { path: absPath });
+      for (const f of aesLint.findings) {
+        exposedItems.push({
+          id: `js_aes_${f.id}`,
+          name: f.id,
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: f.severity === "error" ? "high" : "medium",
+          reaToolUsed: "bla lint-js-aes-unwrap / static source scan",
+          estimatedTokensToReconstruct: 1_500,
+          estimatedCostUsd: 0.06,
+          reason: f.summary,
+        });
+      }
+      const hydrateDumpLint = lintJsWasmHydrateDumpSource(text, { path: absPath });
+      for (const f of hydrateDumpLint.findings) {
+        exposedItems.push({
+          id: `js_wasm_hydrate_${f.id}`,
+          name: f.id,
+          kind: "export",
+          location: basename(absPath),
+          riskLevel: f.severity === "error" ? "high" : "medium",
+          reaToolUsed: "bla lint-js-wasm-hydrate-dump / static source scan",
+          estimatedTokensToReconstruct: 1_600,
+          estimatedCostUsd: 0.06,
+          reason: f.summary,
+        });
+      }
       res.vectors.forEach((v) => vulnerableVectors.add(v));
     } else if (format === "html-bundle") {
       const htmlText = rawBytes.toString("utf8");
@@ -645,6 +692,34 @@ export function auditTarget(targetPath: string): AuditReport {
           reason: isProtected
             ? "Shielded by BLA WASM custom name & enclave attestation sections"
             : "Unshielded WASM export directly decompilable to WAT by REA",
+        });
+      }
+      const parmLint = lintWasmParamCarrierBuffer(rawBytes, { path: absPath });
+      for (const f of parmLint.findings) {
+        exposedItems.push({
+          id: `wasm_parm_${f.magic}_${f.offset}`,
+          name: f.magic,
+          kind: "metadata-section",
+          location: `${basename(absPath)} (data @${f.offset})`,
+          riskLevel: "high",
+          reaToolUsed: "bla lint-wasm-params / static data-section scan",
+          estimatedTokensToReconstruct: 4_500,
+          estimatedCostUsd: 0.25,
+          reason: f.summary,
+        });
+      }
+      const xorMaskLint = lintWasmXorMaskSidecarBuffer(rawBytes, { path: absPath });
+      for (const f of xorMaskLint.findings) {
+        exposedItems.push({
+          id: `wasm_xor_mask_${f.id}_${f.offset}`,
+          name: f.id,
+          kind: "metadata-section",
+          location: `${basename(absPath)} (data @${f.offset})`,
+          riskLevel: "high",
+          reaToolUsed: "bla lint-wasm-xor-mask-sidecar / static data-section scan",
+          estimatedTokensToReconstruct: 6_000,
+          estimatedCostUsd: 0.3,
+          reason: f.summary,
         });
       }
       sim = {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { runSetup, runUninstall } from "../src/setup/setup.js";
 import { runDoctor } from "../src/setup/doctor.js";
-import { handleMcpRequest } from "../src/mcp/server.js";
+import { BLA_MCP_TOOLS, handleMcpRequest } from "../src/mcp/server.js";
 import { runShowcaseBenchmark } from "../src/engine/benchmark.js";
 import { isNodeSqliteAvailable } from "../src/core/sqlite-runtime.js";
 
@@ -76,19 +76,8 @@ describe("CLI Setup, Doctor, Benchmark & MCP Server", () => {
         method: "tools/list",
       });
       const tools = (listRes?.result as { tools: Array<{ name: string }> }).tools;
-      expect(tools.map((t) => t.name)).toEqual([
-        "bla_harden",
-        "bla_defend",
-        "bla_audit",
-        "bla_protect",
-        "bla_verify",
-        "bla_benchmark",
-        "bla_emit_headers",
-        "bla_doctor",
-        "bla_inspect_release",
-        "bla_init",
-        "bla_weave_plan",
-      ]);
+      expect(tools.map((t) => t.name)).toEqual(BLA_MCP_TOOLS.map((t) => t.name));
+      expect(tools.map((t) => t.name)).toContain("bla_lint_lanes");
 
       // Test bla_audit + bla_protect + bla_verify via MCP tool calls
       const sampleFile = path.join(tmpDir, "sample.js");

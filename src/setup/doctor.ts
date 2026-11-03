@@ -18,7 +18,11 @@ import {
   type ClientConfigFormat,
   type SupportedAgentClientId,
 } from "./clients.js";
-import { readInstallManifest, resolveBundledSkillContent } from "./setup.js";
+import {
+  readInstallManifest,
+  resolveBundledSkillBundle,
+  resolveBundledSkillContent,
+} from "./setup.js";
 
 export type EngineHealthStatus = "ready" | "degraded" | "unavailable";
 export type DoctorClientCheckState = "pass" | "warn" | "fail" | "not_checked";
@@ -51,6 +55,10 @@ export interface DoctorClientDiagnostic {
   readonly mcpRegistered: boolean;
   readonly skillInstalled: boolean;
   readonly skillStatus: DoctorSkillStatus;
+  /** Supporting bundle files (references/appendices) absent next to SKILL.md. */
+  readonly skillMissingFiles: readonly string[];
+  /** Supporting bundle files whose sha256 differs from the bundled/recorded copy. */
+  readonly skillModifiedFiles: readonly string[];
   readonly status: DoctorClientCheckState;
   readonly issues: readonly string[];
 }
@@ -315,6 +323,9 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
   const clients = resolveSupportedAgentClients(home, platform, options.env);
   const manifest = readInstallManifest(home);
   const bundledSkillSha256 = sha256Hex(resolveBundledSkillContent());
+  const bundledSupportFiles = resolveBundledSkillBundle().filter(
+    (f) => f.relativePath !== "SKILL.md",
+  );
 
   const engines = checkEngines(options.sqliteAvailableOverride);
   const globalIssues: string[] = [];
@@ -382,6 +393,34 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       clientIssues.push(`MCP server is configured for ${c.displayName}, but SKILL.md is missing at '${skillPath}'`);
     }
 
+    // Full-bundle integrity: SKILL.md links into references/ etc., so a
+    // half-installed bundle silently breaks the agent guide.
+    const skillMissingFiles: string[] = [];
+    const skillModifiedFiles: string[] = [];
+    if (skillInstalled) {
+      const recorded = manifest.clients[c.id]?.writtenSkillFiles;
+      for (const file of bundledSupportFiles) {
+        const full = join(c.skillDirectory, ...file.relativePath.split("/"));
+        if (!existsSync(full)) {
+          skillMissingFiles.push(file.relativePath);
+          continue;
+        }
+        try {
+          const sha = sha256Hex(readFileSync(full, "utf8"));
+          if (sha !== file.sha256 && sha !== recorded?.[file.relativePath]) {
+            skillModifiedFiles.push(file.relativePath);
+          }
+        } catch {
+          skillMissingFiles.push(file.relativePath);
+        }
+      }
+      if (skillMissingFiles.length > 0) {
+        clientIssues.push(
+          `Skill bundle for ${c.displayName} is incomplete (missing: ${skillMissingFiles.join(", ")}); re-run \`bla setup --yes\``,
+        );
+      }
+    }
+
     let handshakeStatus: DoctorHandshakeStatus = "not_checked";
     let handshakeVerified = false;
     if (options.verifyHandshake && configured && commandResolvable && command !== null) {
@@ -399,9 +438,14 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     if (configStatus === "malformed" || configStatus === "invalid_entry") {
       status = "fail";
     } else if (configured) {
-      if (!commandResolvable || !skillInstalled || handshakeStatus === "failed") {
+      if (
+        !commandResolvable ||
+        !skillInstalled ||
+        skillMissingFiles.length > 0 ||
+        handshakeStatus === "failed"
+      ) {
         status = "fail";
-      } else if (skillStatus === "modified") {
+      } else if (skillStatus === "modified" || skillModifiedFiles.length > 0) {
         status = "warn";
       } else {
         status = "pass";
@@ -434,6 +478,8 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       mcpRegistered,
       skillInstalled,
       skillStatus,
+      skillMissingFiles,
+      skillModifiedFiles,
       status,
       issues: clientIssues,
     };

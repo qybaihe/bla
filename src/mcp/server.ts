@@ -3,10 +3,57 @@ import { initBlaConfig } from "../core/config.js";
 import { inspectReleaseExposure } from "../core/release-exposure.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import { auditTarget } from "../engine/auditor.js";
-import { protectTarget } from "../engine/protector.js";
-import { verifyTarget } from "../engine/verifier.js";
+import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js";
+import { verifyTarget, type VerifyTargetOptions } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
-import { hardenProject } from "../engine/harden.js";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+import { discoverHardenTargets, hardenProject } from "../engine/harden.js";
+import {
+  lintLaneIndependence,
+  type LaneIndependenceReport,
+} from "../engine/lane-independence-lint.js";
+import {
+  lintSealCommitmentFile,
+  type SealCommitmentReport,
+} from "../engine/seal-commitment-lint.js";
+import {
+  lintWasmParamCarrierFile,
+  type WasmParamCarrierReport,
+} from "../engine/wasm-param-carrier-lint.js";
+import {
+  lintPanelDeriveAbiFile,
+  type PanelDeriveAbiReport,
+} from "../engine/panel-derive-abi-lint.js";
+import {
+  lintJsAesUnwrapFile,
+  type JsAesUnwrapReport,
+} from "../engine/js-aes-unwrap-lint.js";
+import {
+  lintJsWasmHydrateDumpFile,
+  type JsWasmHydrateDumpReport,
+} from "../engine/js-wasm-hydrate-dump-lint.js";
+import {
+  lintWasmXorMaskSidecarFile,
+  type WasmXorMaskSidecarReport,
+} from "../engine/wasm-xor-mask-sidecar-lint.js";
+import {
+  lintWasmSealXorKnownPlaintextFile,
+  type WasmSealXorKnownPlaintextReport,
+} from "../engine/wasm-seal-xor-known-plaintext-lint.js";
+import {
+  scanPackagingGates,
+  type PackagingGatesReport,
+} from "../engine/packaging-gates.js";
+import {
+  computeArtifactRunId,
+  readHardenRunSummary,
+  sha256File,
+} from "../engine/run-evidence.js";
+import {
+  getRedteamReport,
+  runReaDriftCheck,
+} from "../engine/rea-observability.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -133,17 +180,100 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
         },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
+        },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Preview only: return discovered targets, planned output paths, wouldOverwrite and truncation without writing a single byte. Default false.",
+        },
+        max_artifacts: {
+          type: "number",
+          description: "Optional cap on discovered artifacts (default 64); the report sets truncated=true when more exist.",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
+        },
+        output_directory: {
+          type: "string",
+          description:
+            "Optional root directory for hardened outputs (same as CLI `harden -o`). Default: <directory>/.bla-hardened.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_discover",
+    description:
+      "Read-only inventory of protectable artifacts under a project/build directory using the exact discovery bla_harden uses (format per file, truncated flag when the cap is hit). Writes nothing. Use it to scope work before bla_harden / bla_defend.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        directory: {
+          type: "string",
+          description: "Project or build directory to inventory (default: current working directory)",
+        },
+        max_artifacts: {
+          type: "number",
+          description: "Optional cap on listed artifacts (default 64); truncated=true when more exist.",
         },
       },
       additionalProperties: false,
@@ -185,17 +315,72 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
         },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA uses/persists a per-project random seed in .blarc",
+        },
+        in_place: {
+          type: "boolean",
+          description:
+            "Overwrite the input path in place (same as CLI --in-place). When the planned output already exists — including the input itself — confirm_overwrite:true is required; otherwise the call is refused and nothing is written. Default false.",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
         },
       },
       required: ["input_path"],
@@ -246,13 +431,58 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         self_seal: {
           type: "boolean",
           description:
-            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. Default false.",
+            "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
           description:
-            "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3).",
+            "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description:
+            "Allow harden/defend/protect of JS/TS that looks lane-independent (per-byte oracles). Default false — refuse (issue #40.1 / red-blue round-1).",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite plaintext or reversible seal/entitlement JSON sidecars. Default false — refuse (red-blue round-2).",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class). Default false — refuse (red-blue round-3). Full data-section encryption is a follow-up.",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description:
+            "Keep stable __vaultPanelDerive_* / deriveLocal ABI (skip rewrite). Default false — maximum/bankrupt rewrite to seed-stable _blaPd_* / _blaPdLocal_* (red-blue round-3/4).",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS AES wrap-key + create*iv + fixed sealed-hdr unwrap footguns. Default false — refuse (red-blue round-4). Gate only — not white-box AES.",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite deriveLocal + plaintext panelTokenSha256 offline-oracle packaging. Default false — refuse (red-blue round-4).",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite JS←WASM hydrate memory dumps of salt/rounds/cipher. Default false — refuse (red-blue round-5). Prefer in-WASM ARX+certify; gate only.",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM data-section XOR-mask-beside-blob entitlement packs. Default false — refuse (red-blue round-6). Prefer key-dependent unmask + one-way commitments.",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description:
+            "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
         },
         seed: {
           type: "string",
@@ -262,6 +492,21 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Opt-in risky LLM directive layers. Default false.",
         },
+        in_place: {
+          type: "boolean",
+          description:
+            "Overwrite the input path in place (same as CLI --in-place). When the planned output already exists — including the input itself — confirm_overwrite:true is required; otherwise the call is refused and nothing is written. Default false.",
+        },
+        honey_source_maps: {
+          type: "boolean",
+          description:
+            "Emit honey/decoy source maps with the shield (same as CLI default; pass false for --no-honey-maps). Default true.",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Explicit write-confirmation boundary. Required (true) when this call would overwrite an existing output file; without it the call is refused with a confirmation_required receipt listing the paths. Default false.",
+        },
       },
       required: ["input_path"],
       additionalProperties: false,
@@ -270,7 +515,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_verify",
     description:
-      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification.",
+      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult. Optional run_id / summary_path correlate this verify with a prior harden summary (unsigned).",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,6 +526,31 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         original_path: {
           type: "string",
           description: "Optional path to the unprotected original for amplification comparison",
+        },
+        self_seal_enabled: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when protect/defend ran with self-seal. Omitting it soft-caps JS-like scores with self-seal-not-enabled (issue #40.6).",
+        },
+        wasm_export_rename_applied: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when WASM export rename actually rewrote non-ABI exports. Omitting it soft-caps WASM scores with wasm-export-rename-pending (issue #40.6).",
+        },
+        numeric_template_leak_known: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when known BLA-injected numeric template golden constants still leak (issue #40.6).",
+        },
+        summary_path: {
+          type: "string",
+          description:
+            "Optional path to bla-harden-summary.json (or its output directory) to correlate this verify with a prior harden run (unsigned).",
+        },
+        run_id: {
+          type: "string",
+          description:
+            "Optional harden run_id; when paired with summary_path, must match the summary or the tool errors.",
         },
       },
       required: ["target_path"],
@@ -397,6 +667,250 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
       additionalProperties: false,
     },
   },
+  {
+    name: "bla_lint",
+    description:
+      "DEFAULT packaging-footgun gate scan for a project directory (or file). Runs every R1–R7 bankrupt refuse lint plus lane-independence and panel-derive discovery in one call — same engines as the individual bla_lint_* tools / `bla lint`. Returns bla-packaging-gates/v1 with findings, blocking, and honestyNote. Writes nothing. Prefer this over calling eight separate lints when reviewing an entitlement tree before harden.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        directory: {
+          type: "string",
+          description: "Project directory or file to scan (default: cwd)",
+        },
+        intensity: {
+          type: "string",
+          enum: ["stealth", "balanced", "maximum", "bankrupt"],
+          description: "Intensity used to decide refuse (default: bankrupt)",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description: "Treat plaintext/reversible seal as non-blocking (lab only)",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description: "Treat clear WASM param carriers as non-blocking (lab only)",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description: "Treat JS AES unwrap footgun as non-blocking (lab only)",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description: "Treat JS←WASM hydrate dump as non-blocking (lab only)",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description: "Treat WASM XOR-mask sidecar as non-blocking (lab only)",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description: "Treat seal.revision XOR KP as non-blocking (lab only)",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description: "Treat lane-independent gates as non-blocking (lab only)",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description: "Treat panel offline oracle as non-blocking (lab only)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_lanes",
+    description:
+      "Read-only heuristic lane-independence footgun lint (same engine as CLI `bla lint-lanes`). Returns severity-error findings when gate/activation source looks like independent per-lane checks. Harden refuses such gates unless allow_lane_independent. Prefer whole-key chained mixing. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a UTF-8 source file to lint (JS/TS/Python-like)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_seal",
+    description:
+      "Read-only seal-commitment lint (same engine as CLI `bla lint-seal`). Flags plaintext seal/entitlement JSON sidecars and reversible public commitments (scheduleSalt+rounds+revision without a one-way algorithm). Bankrupt harden refuses error findings unless allow_plaintext_seal. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a seal.json / *.seal.json (or seal-shaped JSON) file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_wasm_params",
+    description:
+      "Read-only WASM param/cipher carrier lint (same engine as CLI `bla lint-wasm-params`). Flags clear ASCII magics such as R3PARM/R3CIPH/R2SEAL with adjacent binary blobs. Bankrupt harden refuses unless allow_wasm_clear_params. Does not encrypt WASM data sections. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm (or WASM-shaped) file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_panel_derive",
+    description:
+      "Read-only panel-derive ABI lint (same engine as CLI `bla lint-panel-derive`). Flags stable __vaultPanelDerive_* / deriveLocal, classic FNV primes, and deriveLocal+panelTokenSha256 offline-oracle packaging. Maximum/bankrupt rewrites ABI unless allow_stable_panel_derive; bankrupt refuses oracle combo unless allow_panel_offline_oracle. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_js_aes_unwrap",
+    description:
+      "Read-only JS AES wrap-key unwrap lint (same engine as CLI `bla lint-js-aes-unwrap`). Flags hex/base64 wrap-key material + createDecipheriv/createCipheriv + fixed sealed hdr (e.g. d17ea004). Bankrupt harden refuses unless allow_js_aes_unwrap. Gate only — not white-box AES. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_js_wasm_hydrate_dump",
+    description:
+      "Read-only JS←WASM hydrate param-dump lint (same engine as CLI `bla lint-js-wasm-hydrate-dump`). Flags memory.buffer reads + salt/rounds/cipher layout decode after hydrate/instantiate. Bankrupt harden refuses unless allow_js_wasm_hydrate_dump. Prefer keep ARX+certify inside WASM. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a JS/TS/HTML file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_wasm_xor_mask_sidecar",
+    description:
+      "Read-only WASM XOR-mask sidecar lint (same engine as CLI `bla lint-wasm-xor-mask-sidecar`). Flags masked entitlement packs stored beside a plaintext 32-byte XOR mask in WASM data. Bankrupt harden refuses unless allow_wasm_xor_mask_sidecar. Prefer key-dependent unmask + one-way commitments. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm file to lint",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_wasm_seal_xor_known_plaintext",
+    description:
+      "Read-only WASM+seal.revision XOR known-plaintext lint (same engine as CLI `bla lint-wasm-seal-xor-known-plaintext`). Flags entitlement packs where public seal.revision sits under a repeating XOR mask in WASM data — recovers the mask with no key (red-blue round-7). Looks for sibling seal.json. Bankrupt harden refuses unless allow_wasm_seal_xor_known_plaintext. Prefer one-way mask KDFs and keep public digests out of masked plaintext. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a .wasm file (sibling seal.json used when seal_path omitted)",
+        },
+        seal_path: {
+          type: "string",
+          description: "Optional explicit seal.json path",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_run_lookup",
+    description:
+      "Read-only correlation of a prior harden run: load bla-harden-summary.json by path or output directory, optionally asserting a run_id. Unsigned summaries only — never treats absence as success.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary_path: {
+          type: "string",
+          description:
+            "Path to bla-harden-summary.json, or the harden output directory that contains it",
+        },
+        run_id: {
+          type: "string",
+          description: "Optional expected run_id; mismatch or missing id is an error",
+        },
+      },
+      required: ["summary_path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_rea_drift",
+    description:
+      "Run the REA constant-drift harness (scripts/verify-rea-constants.mjs). This is NOT red-team evidence. Absent sibling REA → status unverified (never a silent pass).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rea_root: {
+          type: "string",
+          description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_redteam_report",
+    description:
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        execute: {
+          type: "boolean",
+          description:
+            "When true, spawn npm redteam:rea (requires sibling REA dist). Default false: read the on-disk report only.",
+        },
+        rea_root: {
+          type: "string",
+          description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
+        },
+        report_path: {
+          type: "string",
+          description: "Optional override path for the empirical JSON report",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ]);
 
 
@@ -488,6 +1002,294 @@ export const BLA_MCP_PROMPTS: readonly McpPromptDefinition[] = Object.freeze([
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Write-confirmation boundary for destructive MCP calls. Returns the existing
+ * paths a call would overwrite; the caller refuses unless confirm_overwrite.
+ */
+function existingPaths(paths: readonly string[]): string[] {
+  return paths.filter((p) => existsSync(p));
+}
+
+function confirmationRequiredPayload(
+  tool: string,
+  wouldOverwrite: readonly string[],
+): Record<string, unknown> {
+  return {
+    status: "confirmation_required",
+    tool,
+    wrote: [],
+    wouldOverwrite,
+    message: `${tool} would overwrite ${wouldOverwrite.length} existing file(s); nothing was written. Confirm with the user, then retry with confirm_overwrite: true (or choose a new output path).`,
+  };
+}
+
+function writeReceipt(
+  outputs: readonly string[],
+  overwritten: readonly string[],
+  confirmed: boolean,
+): Record<string, unknown> {
+  return { status: "written", wrote: outputs, overwrote: overwritten, confirmed };
+}
+
+function attachArtifactRunEvidence(
+  tool: string,
+  inputPath: string,
+  report: Record<string, unknown>,
+): Record<string, unknown> {
+  const outputPath =
+    typeof report.outputPath === "string" ? report.outputPath : undefined;
+  if (outputPath === undefined || !existsSync(outputPath)) {
+    return {
+      ...report,
+      runEvidence: {
+        signature: "unsigned",
+        status: "unverified",
+        reason: "Protected output path missing; cannot content-address this run",
+      },
+    };
+  }
+  const outputSha256 = sha256File(outputPath);
+  const runId = computeArtifactRunId({
+    tool,
+    inputPath,
+    outputPath,
+    outputSha256,
+  });
+  return {
+    ...report,
+    runId,
+    runEvidence: {
+      schema: "bla-artifact-run/v1",
+      signature: "unsigned",
+      runId,
+      outputPath,
+      outputSha256,
+    },
+  };
+}
+
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function stringListArg(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((x): x is string => typeof x === "string" && x.length > 0);
+  return list.length > 0 ? list : undefined;
+}
+
+function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
+  return handlers.defendTarget({
+    inputPath: args.input_path as string,
+    ...(typeof args.output_path === "string"
+      ? { outputPath: args.output_path }
+      : {}),
+    ...(args.in_place === true ? { inPlace: true } : {}),
+    intensity:
+      typeof args.intensity === "string"
+        ? (args.intensity as ProtectionIntensity)
+        : "bankrupt",
+    emitManifest: Boolean(args.emit_manifest),
+    llmDirectives: Boolean(args.llm_directives),
+    weaveDecoys: Boolean(args.weave_decoys),
+    selfSeal: Boolean(args.self_seal),
+    ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+  });
+}
+
+function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
+  const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
+  return handlers.protectTarget({
+    inputPath: args.input_path as string,
+    ...(typeof args.output_path === "string" ? { outputPath: args.output_path } : {}),
+    ...(args.in_place === true ? { inPlace: true } : {}),
+    ...(typeof args.intensity === "string"
+      ? { intensity: args.intensity as ProtectionIntensity }
+      : {}),
+    ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+    llmDirectives: Boolean(args.llm_directives),
+    weaveDecoys: Boolean(args.weave_decoys),
+    selfSeal: Boolean(args.self_seal),
+    ...(typeof args.honey_source_maps === "boolean"
+      ? { honeySourceMaps: args.honey_source_maps }
+      : {}),
+    ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
+      : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+  });
+}
+
+function verifyHonestyOptions(args: Record<string, unknown>): VerifyTargetOptions {
+  return {
+    ...(typeof args.self_seal_enabled === "boolean"
+      ? { selfSealEnabled: args.self_seal_enabled }
+      : {}),
+    ...(typeof args.wasm_export_rename_applied === "boolean"
+      ? { wasmExportRenameApplied: args.wasm_export_rename_applied }
+      : {}),
+    ...(typeof args.numeric_template_leak_known === "boolean"
+      ? { numericTemplateLeakKnown: args.numeric_template_leak_known }
+      : {}),
+  };
+}
+
+function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesReport {
+  const directory =
+    typeof args.directory === "string" && args.directory.length > 0
+      ? resolvePath(args.directory)
+      : process.cwd();
+  const intensity =
+    args.intensity === "stealth" ||
+    args.intensity === "balanced" ||
+    args.intensity === "maximum" ||
+    args.intensity === "bankrupt"
+      ? args.intensity
+      : "bankrupt";
+  return scanPackagingGates({
+    directory,
+    intensity,
+    includeProtectTimeGates: true,
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
+  });
+}
+
+function runLintLanes(args: Record<string, unknown>): LaneIndependenceReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-lanes target not found: ${abs}`);
+  }
+  const source = readFileSync(abs, "utf8");
+  return lintLaneIndependence(source);
+}
+
+function runLintSeal(args: Record<string, unknown>): SealCommitmentReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-seal target not found: ${abs}`);
+  }
+  return lintSealCommitmentFile(abs);
+}
+
+function runLintWasmParams(args: Record<string, unknown>): WasmParamCarrierReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-params target not found: ${abs}`);
+  }
+  return lintWasmParamCarrierFile(abs);
+}
+
+function runLintPanelDerive(args: Record<string, unknown>): PanelDeriveAbiReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-panel-derive target not found: ${abs}`);
+  }
+  return lintPanelDeriveAbiFile(abs);
+}
+
+function runLintJsAesUnwrap(args: Record<string, unknown>): JsAesUnwrapReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-js-aes-unwrap target not found: ${abs}`);
+  }
+  return lintJsAesUnwrapFile(abs);
+}
+
+function runLintJsWasmHydrateDump(args: Record<string, unknown>): JsWasmHydrateDumpReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-js-wasm-hydrate-dump target not found: ${abs}`);
+  }
+  return lintJsWasmHydrateDumpFile(abs);
+}
+
+function runLintWasmXorMaskSidecar(args: Record<string, unknown>): WasmXorMaskSidecarReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-xor-mask-sidecar target not found: ${abs}`);
+  }
+  return lintWasmXorMaskSidecarFile(abs);
+}
+
+function runLintWasmSealXorKnownPlaintext(args: Record<string, unknown>): WasmSealXorKnownPlaintextReport {
+  const abs = resolvePath(args.path as string);
+  if (!existsSync(abs)) {
+    throw new Error(`lint-wasm-seal-xor-known-plaintext target not found: ${abs}`);
+  }
+  const seal =
+    typeof args.seal_path === "string" && args.seal_path.trim().length > 0
+      ? resolvePath(args.seal_path as string)
+      : undefined;
+  return lintWasmSealXorKnownPlaintextFile(abs, seal);
 }
 
 export function validateMcpToolCall(
@@ -786,8 +1588,9 @@ export async function handleMcpRequest(
             },
           };
         }
-        const promptArgs = req.params.arguments;
-        if (!isPlainObject(promptArgs)) {
+        // Arguments may be omitted when the prompt has no required arguments
+        // (e.g. bla-harden-project); only a present-but-malformed value errors.
+        if (req.params.arguments !== undefined && !isPlainObject(req.params.arguments)) {
           return {
             jsonrpc: "2.0",
             id: req.id,
@@ -797,6 +1600,9 @@ export async function handleMcpRequest(
             },
           };
         }
+        const promptArgs: Record<string, unknown> = isPlainObject(req.params.arguments)
+          ? req.params.arguments
+          : {};
         for (const argSpec of promptDef.arguments) {
           if (argSpec.required) {
             const val = promptArgs[argSpec.name];
@@ -819,20 +1625,32 @@ export async function handleMcpRequest(
               ? String(promptArgs.directory)
               : ".";
           promptText =
-            `Harden my software against REA in one step: call bla_harden with { "directory": "${directory}" }. ` +
+            `Harden my software against REA in one step: call bla_harden with { "directory": ${JSON.stringify(directory)} }. ` +
             `It auto-discovers build outputs, runs audit→defend→verify with the bankrupt profile on every artifact, and returns a per-artifact summary. ` +
-            `Do not ask which files to protect — discover them.`;
+            `Do not ask which files to protect — discover them. ` +
+            `To preview without writing, pass dry_run: true. If the tool returns confirmation_required, ask the user before retrying with confirm_overwrite: true.`;
         } else if (promptDef.name === "bla-weave-decoy") {
           const targetPath =
             typeof promptArgs.target_path === "string" && promptArgs.target_path.trim().length > 0
               ? String(promptArgs.target_path)
               : ".";
           promptText =
-            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": "${targetPath}" }, then bla_harden with { "directory": "${targetPath}", "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
+            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": ${JSON.stringify(targetPath)} }, then bla_harden with { "directory": ${JSON.stringify(targetPath)}, "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
         } else {
-          const targetPath = String(promptArgs.target_path ?? ".");
-          promptText =
-            `Inspect and audit '${targetPath}' using bla_inspect_release and bla_audit, then review findings before applying bla_protect or bla_defend and verifying with bla_verify.`;
+          const targetPath = JSON.stringify(String(promptArgs.target_path ?? "."));
+          const shared =
+            `Defensive only; use existing bla_* tools, never invent new ones. ` +
+            `Writes that would overwrite existing outputs return confirmation_required — ask the user before retrying with confirm_overwrite: true.`;
+          if (promptDef.name === "shield-against-rea") {
+            promptText =
+              `Shield ${targetPath} against REA: audit it (bla_audit), apply one shield (bla_protect, or bla_defend for the full pipeline), then report bla_verify checks and defenseScore. ${shared}`;
+          } else if (promptDef.name === "bla-hardening-workflow") {
+            promptText =
+              `Release-hardening for ${targetPath}: check leaks with bla_inspect_release, audit with bla_audit, review findings with the user, then protect/defend and verify. For a whole project directory prefer bla_harden (dry_run: true to preview). ${shared}`;
+          } else {
+            promptText =
+              `Evaluate REA exposure for ${targetPath} with bla_audit and propose a hardening plan (intensity, output location, opt-in layers) before applying anything; keep audit estimates distinct from measured redteam evidence. ${shared}`;
+          }
         }
         return {
           jsonrpc: "2.0",
@@ -869,75 +1687,166 @@ export async function handleMcpRequest(
         const name = tool.name;
         let payload: unknown;
 
-        if (name === "bla_harden") {
-          payload = handlers.hardenProject({
-            directory:
-              typeof args.directory === "string" && args.directory.trim().length > 0
-                ? (args.directory as string)
-                : process.cwd(),
-            intensity:
-              typeof args.intensity === "string"
-                ? (args.intensity as ProtectionIntensity)
-                : "bankrupt",
-            emitManifest: Boolean(args.emit_manifest),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-          });
-        } else if (name === "bla_defend") {
-          payload = handlers.defendTarget({
-            inputPath: args.input_path as string,
-            ...(typeof args.output_path === "string"
-              ? { outputPath: args.output_path }
-              : {}),
-            intensity:
-              typeof args.intensity === "string"
-                ? (args.intensity as ProtectionIntensity)
-                : "bankrupt",
-            emitManifest: Boolean(args.emit_manifest),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-          });
+        let refused = false;
+        const confirmed = args.confirm_overwrite === true;
+        if (name === "bla_discover") {
+          payload = discoverHardenTargets(
+            typeof args.directory === "string" && args.directory.trim().length > 0
+              ? args.directory
+              : process.cwd(),
+            {
+              ...(optionalCount(args.max_artifacts) !== undefined
+                ? { maxArtifacts: optionalCount(args.max_artifacts)! }
+                : {}),
+            },
+          );
+        } else if (name === "bla_harden") {
+          const hardenDir =
+            typeof args.directory === "string" && args.directory.trim().length > 0
+              ? (args.directory as string)
+              : process.cwd();
+          const maxArtifacts = optionalCount(args.max_artifacts);
+          const dryRun = args.dry_run === true;
+          const outputDirectory =
+            typeof args.output_directory === "string" &&
+            args.output_directory.trim().length > 0
+              ? (args.output_directory as string)
+              : undefined;
+          let preOverwrite: readonly string[] = [];
+          if (!dryRun && existsSync(hardenDir)) {
+            // Zero-write preview with the real engine to find clobbered outputs.
+            preOverwrite = hardenProject({
+              directory: hardenDir,
+              dryRun: true,
+              ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+              ...(outputDirectory !== undefined ? { outputDirectory } : {}),
+            }).wouldOverwrite;
+          }
+          if (!dryRun && preOverwrite.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, preOverwrite);
+          } else {
+            const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
+            const report = handlers.hardenProject({
+              directory: hardenDir,
+              dryRun,
+              ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+              ...(outputDirectory !== undefined ? { outputDirectory } : {}),
+              intensity:
+                typeof args.intensity === "string"
+                  ? (args.intensity as ProtectionIntensity)
+                  : "bankrupt",
+              emitManifest: Boolean(args.emit_manifest),
+              llmDirectives: Boolean(args.llm_directives),
+              weaveDecoys: Boolean(args.weave_decoys),
+              selfSeal: Boolean(args.self_seal),
+              ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+              ...(args.allow_lane_independent === true
+                ? { allowLaneIndependentGates: true }
+                : {}),
+              ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+              ...(args.allow_wasm_clear_params === true
+                ? { allowWasmClearParamCarriers: true }
+                : {}),
+              ...(args.allow_stable_panel_derive === true
+                ? { allowStablePanelDeriveAbi: true }
+                : {}),
+              ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+              ...(args.allow_panel_offline_oracle === true
+                ? { allowPanelOfflineOracle: true }
+                : {}),
+              ...(args.allow_js_wasm_hydrate_dump === true
+                ? { allowJsWasmHydrateDump: true }
+                : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+              ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+            });
+            // Dry-run / confirmation_required leave no write receipt; real writes do.
+            if (!dryRun) {
+              const wrote = report.artifacts
+                .filter((a) => a.success)
+                .map((a) => a.outputPath);
+              if (report.summaryPath !== undefined) {
+                wrote.push(report.summaryPath);
+              }
+              payload = {
+                ...report,
+                writeReceipt: writeReceipt(wrote, preOverwrite, confirmed),
+              };
+            } else {
+              payload = report;
+            }
+          }
+        } else if (name === "bla_defend" || name === "bla_protect") {
+          const inPlace = args.in_place === true;
+          const out = resolveProtectOutputPath(
+            args.input_path as string,
+            typeof args.output_path === "string" ? args.output_path : undefined,
+            inPlace,
+          );
+          const planned =
+            name === "bla_defend" && args.emit_manifest === true
+              ? [out, `${out}.bla-manifest.json`]
+              : [out];
+          const clobbered = existingPaths(planned);
+          if (clobbered.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, clobbered);
+          } else {
+            const report = (name === "bla_defend"
+              ? runDefend(handlers, args)
+              : runProtect(handlers, args)) as Record<string, unknown>;
+            const withRun = attachArtifactRunEvidence(
+              name,
+              args.input_path as string,
+              report,
+            );
+            payload = {
+              ...withRun,
+              writeReceipt: writeReceipt(
+                existingPaths(planned),
+                clobbered,
+                confirmed,
+              ),
+            };
+          }
         } else if (name === "bla_audit") {
           payload = handlers.auditTarget(args.path as string);
-        } else if (name === "bla_protect") {
-          payload = handlers.protectTarget({
-            inputPath: args.input_path as string,
-            ...(typeof args.output_path === "string" ? { outputPath: args.output_path } : {}),
-            ...(typeof args.intensity === "string"
-              ? { intensity: args.intensity as ProtectionIntensity }
-              : {}),
-            ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-            llmDirectives: Boolean(args.llm_directives),
-            weaveDecoys: Boolean(args.weave_decoys),
-            selfSeal: Boolean(args.self_seal),
-            ...(Array.isArray(args.wasm_preserve_exports)
-              ? {
-                  wasmPreserveExports: (args.wasm_preserve_exports as unknown[])
-                    .filter((x): x is string => typeof x === "string" && x.length > 0),
-                }
-              : {}),
-          });
         } else if (name === "bla_verify") {
-          payload = handlers.verifyTarget(
+          const verification = handlers.verifyTarget(
             args.target_path as string,
             typeof args.original_path === "string" ? args.original_path : undefined,
+            verifyHonestyOptions(args),
           );
+          if (typeof args.summary_path === "string" && args.summary_path.trim().length > 0) {
+            const lookup = readHardenRunSummary(
+              args.summary_path as string,
+              typeof args.run_id === "string" && args.run_id.trim().length > 0
+                ? (args.run_id as string)
+                : undefined,
+            );
+            payload = {
+              ...verification,
+              runCorrelation: {
+                schema: "bla-run-correlation/v1",
+                signature: "unsigned",
+                runId: lookup.runId,
+                summaryPath: lookup.summaryPath,
+                runIdMatches: lookup.runIdMatches,
+              },
+            };
+          } else if (typeof args.run_id === "string" && args.run_id.trim().length > 0) {
+            throw new Error(
+              "bla_verify: run_id requires summary_path so the id can be correlated against an on-disk harden summary",
+            );
+          } else {
+            payload = verification;
+          }
         } else if (name === "bla_benchmark") {
           payload = await handlers.runShowcaseBenchmark();
         } else if (name === "bla_emit_headers") {
@@ -966,6 +1875,79 @@ export async function handleMcpRequest(
               ? { maxTargets: args.max_targets }
               : {}),
           });
+        } else if (name === "bla_lint") {
+          const full = runPackagingGatesLint(args);
+          const { details, ...compact } = full;
+          payload = {
+            ...compact,
+            detailCounts: {
+              seals: details.seals.length,
+              wasmParams: details.wasmParams.length,
+              jsAes: details.jsAes.length,
+              jsHydrateDump: details.jsHydrateDump.length,
+              wasmXorMask: details.wasmXorMask.length,
+              wasmSealXor: details.wasmSealXor.length,
+              lanes: details.lanes.length,
+              panelDerive: details.panelDerive.length,
+            },
+          };
+          refused = full.shouldRefuseBankrupt;
+        } else if (name === "bla_lint_lanes") {
+          payload = runLintLanes(args);
+        } else if (name === "bla_lint_seal") {
+          payload = runLintSeal(args);
+          refused = (payload as SealCommitmentReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_params") {
+          payload = runLintWasmParams(args);
+          refused = (payload as WasmParamCarrierReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_panel_derive") {
+          payload = runLintPanelDerive(args);
+          refused =
+            (payload as PanelDeriveAbiReport).shouldRefuseBankrupt ||
+            (payload as PanelDeriveAbiReport).shouldRewriteOrRefuse;
+        } else if (name === "bla_lint_js_aes_unwrap") {
+          payload = runLintJsAesUnwrap(args);
+          refused = (payload as JsAesUnwrapReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_js_wasm_hydrate_dump") {
+          payload = runLintJsWasmHydrateDump(args);
+          refused = (payload as JsWasmHydrateDumpReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_xor_mask_sidecar") {
+          payload = runLintWasmXorMaskSidecar(args);
+          refused = (payload as WasmXorMaskSidecarReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_wasm_seal_xor_known_plaintext") {
+          payload = runLintWasmSealXorKnownPlaintext(args);
+          refused = (payload as WasmSealXorKnownPlaintextReport).shouldRefuseBankrupt;
+        } else if (name === "bla_run_lookup") {
+          payload = readHardenRunSummary(
+            args.summary_path as string,
+            typeof args.run_id === "string" && args.run_id.trim().length > 0
+              ? (args.run_id as string)
+              : undefined,
+          );
+        } else if (name === "bla_rea_drift") {
+          payload = runReaDriftCheck({
+            ...(typeof args.rea_root === "string" && args.rea_root.trim().length > 0
+              ? { reaRoot: args.rea_root as string }
+              : {}),
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "unverified" || status === "fail";
+          }
+        } else if (name === "bla_redteam_report") {
+          payload = getRedteamReport({
+            execute: args.execute === true,
+            ...(typeof args.rea_root === "string" && args.rea_root.trim().length > 0
+              ? { reaRoot: args.rea_root as string }
+              : {}),
+            ...(typeof args.report_path === "string" && args.report_path.trim().length > 0
+              ? { reportPath: args.report_path as string }
+              : {}),
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "unverified" || status === "fail";
+          }
         }
 
         return {
@@ -979,7 +1961,8 @@ export async function handleMcpRequest(
               },
             ],
             structuredContent: payload,
-            isError: false,
+            // A refused write is a tool-level error the agent must act on.
+            isError: refused,
           },
         };
       }

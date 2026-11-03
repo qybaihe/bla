@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
 import { assertSafeOutputPath } from "../core/output-path.js";
 import { withLlmDirectives } from "../core/llm-directives.js";
@@ -46,6 +46,49 @@ import { protectPcapCaptureBuffer } from "../shields/formats/pcap-capture.js";
 import { protectGpuPtxText } from "../shields/formats/gpu-ptx.js";
 import { protectUf2FirmwareBuffer } from "../shields/formats/firmware-uf2.js";
 import { auditTarget } from "./auditor.js";
+import {
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
+  lintLaneIndependence,
+} from "./lane-independence-lint.js";
+import {
+  findSiblingSealSidecars,
+  intensityEnforcesSealRefusal,
+  lintSealCommitmentFile,
+  sealCommitmentRefuseMessage,
+} from "./seal-commitment-lint.js";
+import {
+  intensityEnforcesWasmParamRefusal,
+  lintWasmParamCarrierBuffer,
+  wasmParamCarrierRefuseMessage,
+} from "./wasm-param-carrier-lint.js";
+import {
+  lintWasmXorMaskSidecarBuffer,
+  intensityEnforcesWasmXorMaskSidecarRefusal,
+  wasmXorMaskSidecarRefuseMessage,
+} from "./wasm-xor-mask-sidecar-lint.js";
+import {
+  lintWasmSealXorKnownPlaintextFile,
+  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
+  wasmSealXorKnownPlaintextRefuseMessage,
+} from "./wasm-seal-xor-known-plaintext-lint.js";
+import {
+  intensityEnforcesPanelOracleRefusal,
+  intensityRewritesPanelDerive,
+  lintPanelDeriveAbiSource,
+  panelDeriveRefuseMessage,
+  rewriteStablePanelDeriveSymbols,
+} from "./panel-derive-abi-lint.js";
+import {
+  intensityEnforcesJsAesUnwrapRefusal,
+  jsAesUnwrapRefuseMessage,
+  lintJsAesUnwrapSource,
+} from "./js-aes-unwrap-lint.js";
+import {
+  intensityEnforcesJsWasmHydrateDumpRefusal,
+  jsWasmHydrateDumpRefuseMessage,
+  lintJsWasmHydrateDumpSource,
+} from "./js-wasm-hydrate-dump-lint.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -54,6 +97,66 @@ import { auditTarget } from "./auditor.js";
  * hardlink targets are written through directly so in-place protection of
  * aliased paths reaches the real file.
  */
+
+function selfSealTransformOption(
+  options: ProtectionOptions,
+  absOutput: string,
+): boolean | {
+  readonly siblingPaths: readonly string[];
+  readonly expectedSiblingSha256?: Readonly<Record<string, string>>;
+  readonly hardFailOnSiblingMismatch?: boolean;
+} | undefined {
+  if (options.selfSeal !== true) return undefined;
+  if (!options.selfSealSiblingPaths || options.selfSealSiblingPaths.length === 0) {
+    return true;
+  }
+  const siblingPaths = options.selfSealSiblingPaths;
+  const base = dirname(absOutput);
+  const expectedSiblingSha256: Record<string, string> = {};
+  for (const rel of siblingPaths) {
+    if (typeof rel !== "string" || rel.length === 0) continue;
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      expectedSiblingSha256[rel] = createHash("sha256")
+        .update(readFileSync(abs))
+        .digest("hex");
+    } catch {
+      /* sibling not readable yet — skip expected hash (opaque-seed only) */
+    }
+  }
+  return {
+    siblingPaths,
+    ...(Object.keys(expectedSiblingSha256).length > 0
+      ? {
+          expectedSiblingSha256,
+          hardFailOnSiblingMismatch: true,
+        }
+      : {}),
+  };
+}
+
+function applyPanelDeriveRewrite(
+  source: string,
+  seed: string,
+  intensity: string,
+  options: ProtectionOptions,
+  fileLabel: string,
+): string {
+  if (options.allowStablePanelDeriveAbi === true) {
+    return source;
+  }
+  if (!intensityRewritesPanelDerive(intensity)) {
+    // Still surface refuse at bankrupt if somehow rewrite intensity is off but
+    // symbols remain — bankrupt always rewrites; other intensities only lint via CLI.
+    return source;
+  }
+  const lint = lintPanelDeriveAbiSource(source, { path: fileLabel });
+  if (!lint.shouldRewriteOrRefuse) return source;
+  const rw = rewriteStablePanelDeriveSymbols(source, seed);
+  return rw.code;
+}
+
 function writeFileAtomicSync(
   targetPath: string,
   content: string | Buffer,
@@ -120,6 +223,19 @@ function classifyHtmlScriptTag(attrs: string): {
 
 function escapeHtmlInlineScriptBody(jsCode: string): string {
   return jsCode.replace(/<\/(script)/gi, "<\\/$1");
+}
+
+/**
+ * Where `protectTarget` will write for a given input/output/inPlace triple.
+ * Pure path math (no filesystem access) so callers can plan or confirm writes.
+ */
+export function resolveProtectOutputPath(
+  inputPath: string,
+  outputPath?: string,
+  inPlace = false,
+): string {
+  const absInput = resolve(inputPath);
+  return resolve(outputPath ?? deriveDefaultOutputPath(absInput, inPlace));
 }
 
 function deriveDefaultOutputPath(inputPath: string, inPlace = false): string {
@@ -190,17 +306,70 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
   let wasmExportsRenamed = 0;
+  let wasmExportOrderShuffled = false;
+  let wasmExportDecoysInjected = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
+  if (
+    intensityEnforcesSealRefusal(intensity) &&
+    options.allowPlaintextSeal !== true
+  ) {
+    for (const sealPath of findSiblingSealSidecars(dirname(absInput))) {
+      const sealReport = lintSealCommitmentFile(sealPath);
+      if (sealReport.shouldRefuseBankrupt) {
+        throw new Error(sealCommitmentRefuseMessage(sealReport, sealPath));
+      }
+    }
+  }
+
   if (format === "javascript" || format === "typescript") {
     const raw = readFileSync(absInput, "utf8");
-    const transformed = transformJavaScriptWithBlaShield(raw, {
+    if (
+      formatSupportsLaneIndependenceLint(format) &&
+      options.allowLaneIndependentGates !== true
+    ) {
+      const laneReport = lintLaneIndependence(raw);
+      if (laneReport.looksLaneIndependent) {
+        throw new Error(laneIndependenceRefuseMessage(laneReport, absInput));
+      }
+    }
+    if (
+      intensityEnforcesJsAesUnwrapRefusal(intensity) &&
+      options.allowJsAesUnwrap !== true
+    ) {
+      const aesReport = lintJsAesUnwrapSource(raw, { path: absInput });
+      if (aesReport.shouldRefuseBankrupt) {
+        throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
+      }
+    }
+    if (
+      intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
+      options.allowJsWasmHydrateDump !== true
+    ) {
+      const hydrateDumpReport = lintJsWasmHydrateDumpSource(raw, { path: absInput });
+      if (hydrateDumpReport.shouldRefuseBankrupt) {
+        throw new Error(jsWasmHydrateDumpRefuseMessage(hydrateDumpReport, absInput));
+      }
+    }
+    {
+      const panelLint = lintPanelDeriveAbiSource(raw, { path: absInput });
+      if (
+        intensityEnforcesPanelOracleRefusal(intensity) &&
+        options.allowPanelOfflineOracle !== true &&
+        panelLint.shouldRefuseBankrupt
+      ) {
+        throw new Error(panelDeriveRefuseMessage(panelLint, absInput));
+      }
+    }
+    const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
+    const selfSealOpt = selfSealTransformOption(options, absOutput);
+    const transformed = transformJavaScriptWithBlaShield(panelSafe, {
       intensity,
       seed,
       filename: basename(absInput),
-      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+      ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
     });
     let finalCode = transformed.code;
 
@@ -233,6 +402,34 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "html-bundle") {
     const rawHtml = readFileSync(absInput, "utf8");
+    if (
+      intensityEnforcesJsAesUnwrapRefusal(intensity) &&
+      options.allowJsAesUnwrap !== true
+    ) {
+      const aesReport = lintJsAesUnwrapSource(rawHtml, { path: absInput });
+      if (aesReport.shouldRefuseBankrupt) {
+        throw new Error(jsAesUnwrapRefuseMessage(aesReport, absInput));
+      }
+    }
+    if (
+      intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
+      options.allowJsWasmHydrateDump !== true
+    ) {
+      const hydrateDumpReport = lintJsWasmHydrateDumpSource(rawHtml, { path: absInput });
+      if (hydrateDumpReport.shouldRefuseBankrupt) {
+        throw new Error(jsWasmHydrateDumpRefuseMessage(hydrateDumpReport, absInput));
+      }
+    }
+    {
+      const panelLint = lintPanelDeriveAbiSource(rawHtml, { path: absInput });
+      if (
+        intensityEnforcesPanelOracleRefusal(intensity) &&
+        options.allowPanelOfflineOracle !== true &&
+        panelLint.shouldRefuseBankrupt
+      ) {
+        throw new Error(panelDeriveRefuseMessage(panelLint, absInput));
+      }
+    }
     let inlineScriptsTransformed = 0;
     let scriptIndex = 0;
     let transformedHtml = rawHtml.replace(
@@ -243,11 +440,20 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         if (!tagKind.executable) return fullMatch;
         const currentIndex = scriptIndex++;
         try {
-          const res = transformJavaScriptWithBlaShield(scriptBody, {
+          const scriptSeed = `${seed}:html-script-${currentIndex}`;
+          const panelSafe = applyPanelDeriveRewrite(
+            scriptBody,
+            scriptSeed,
             intensity,
-            seed: `${seed}:html-script-${currentIndex}`,
+            options,
+            `${absInput}#script-${currentIndex}`,
+          );
+          const selfSealOpt = selfSealTransformOption(options, absOutput);
+          const res = transformJavaScriptWithBlaShield(panelSafe, {
+            intensity,
+            seed: scriptSeed,
             sourceType: tagKind.isModule ? "module" : "script",
-            ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+            ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
           });
           inlineScriptsTransformed++;
           decoyFunctionsInjected += res.decoyFunctionsInjected;
@@ -272,7 +478,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         intensity,
         seed: `${seed}:html-bootstrap`,
         sourceType: "script",
-        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+        ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       });
       decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
       fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
@@ -318,7 +524,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           intensity,
           seed: `${seed}:${vf.relativePath}`,
           filename: vf.relativePath,
-          ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+          ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
         });
         const honey = generateHoneySourceMap(
           basename(vf.relativePath),
@@ -363,14 +569,14 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       {
         intensity,
         seed: `${seed}:enclave-decoy`,
-        ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+        ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       },
     );
     protectedFiles.push({
       relativePath: "enclave/hardware-tee-bridge.js",
       content: Buffer.from(decoyBridgeJs.code, "utf8"),
     
-      ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+      ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
     });
 
     // Flood ASAR Pickle JSON header past REA DEFAULT_ASAR_MAX_HEADER_BYTES at
@@ -392,11 +598,38 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("asar-header-admission");
   } else if (format === "wasm") {
     const rawWasm = readFileSync(absInput);
+    if (
+      intensityEnforcesWasmParamRefusal(intensity) &&
+      options.allowWasmClearParamCarriers !== true
+    ) {
+      const wasmParm = lintWasmParamCarrierBuffer(rawWasm, { path: absInput });
+      if (wasmParm.shouldRefuseBankrupt) {
+        throw new Error(wasmParamCarrierRefuseMessage(wasmParm, absInput));
+      }
+    }
+    if (
+      intensityEnforcesWasmXorMaskSidecarRefusal(intensity) &&
+      options.allowWasmXorMaskSidecar !== true
+    ) {
+      const xorMask = lintWasmXorMaskSidecarBuffer(rawWasm, { path: absInput });
+      if (xorMask.shouldRefuseBankrupt) {
+        throw new Error(wasmXorMaskSidecarRefuseMessage(xorMask, absInput));
+      }
+    }
+    if (
+      intensityEnforcesWasmSealXorKnownPlaintextRefusal(intensity) &&
+      options.allowWasmSealXorKnownPlaintext !== true
+    ) {
+      const sealXor = lintWasmSealXorKnownPlaintextFile(absInput);
+      if (sealXor.shouldRefuseBankrupt) {
+        throw new Error(wasmSealXorKnownPlaintextRefuseMessage(sealXor, absInput));
+      }
+    }
     const res = protectWasmBinary(rawWasm, {
       intensity,
       seed,
-      // Issue #40.3: rename internal-looking exports at maximum/bankrupt by default;
-      // wasmPreserveExports keeps the customer public ABI.
+      // Issue #40.3 / red-blue round-1: rename ALL non-preserved exports at
+      // maximum/bankrupt by default; wasmPreserveExports is the explicit ABI keep-list.
       ...(options.wasmPreserveExports && options.wasmPreserveExports.length > 0
         ? { preserveExports: options.wasmPreserveExports }
         : {}),
@@ -407,6 +640,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customSectionsAdded;
     wasmExportsRenamed = res.exportsRenamed.length;
+    wasmExportOrderShuffled = res.exportsOrderShuffled === true;
+    wasmExportDecoysInjected = res.exportDecoysInjected;
     counteredVectors.add("wasm-wat-interface");
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
@@ -607,7 +842,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               intensity,
               seed: `${seed}:${entry.name}`,
               filename: entry.name,
-              ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+              ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
             });
             const honey = generateHoneySourceMap(
               entry.name,
@@ -696,6 +931,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
+    ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),
+    ...(wasmExportDecoysInjected > 0
+      ? { wasmExportDecoysInjected }
+      : {}),
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,

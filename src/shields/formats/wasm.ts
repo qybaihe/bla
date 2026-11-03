@@ -125,6 +125,21 @@ function encodeWasmExportSectionPayload(
   ]);
 }
 
+/**
+ * Seed-shuffle export entries (names/kinds/indices unchanged).
+ * Round-11: bankrupt rename used to preserve cleartext export *order*, so
+ * "unlock first among arity-2" survived as an RE shortcut. Hosts must resolve
+ * by arity + FLAG shape + certificate — never by first-export position.
+ */
+export function shuffleWasmExportSectionPayload(
+  exportSectionPayload: Buffer,
+  prng: SeededPrng,
+): Buffer {
+  const entries = parseWasmExportSectionPayload(exportSectionPayload);
+  if (entries.length <= 1) return exportSectionPayload;
+  return encodeWasmExportSectionPayload(prng.shuffle(entries));
+}
+
 /** Heuristic: names that look like internal/debug ABI rather than a public export. */
 export function looksLikeInternalWasmExport(name: string): boolean {
   return /^(?:__|_|debug_|dbg_|_internal|internal_|test_|tmp_)/i.test(name);
@@ -144,7 +159,11 @@ export function renameWasmExports(
   prng: SeededPrng,
   options: {
     readonly preserveExports?: readonly string[];
-    /** When true (default), only rename internal-looking names. */
+    /**
+     * When true, only rename internal-looking names.
+     * Callers that want full non-preserved rename must pass `onlyInternal: false`
+     * (protectWasmBinary does this by default at maximum/bankrupt).
+     */
     readonly onlyInternal?: boolean;
   } = {},
 ): {
@@ -152,6 +171,8 @@ export function renameWasmExports(
   readonly renames: readonly WasmExportRename[];
 } {
   const preserve = new Set(options.preserveExports ?? []);
+  // Library default remains conservative (internal-only) when called directly;
+  // protectWasmBinary passes onlyInternal:false at maximum/bankrupt.
   const onlyInternal = options.onlyInternal !== false;
   const entries = parseWasmExportSectionPayload(exportSectionPayload);
   if (entries.length === 0) {
@@ -203,12 +224,128 @@ function appendDecoyExports(
   ]);
 }
 
+/**
+ * Parse WASM type-section function signatures → param counts (functype only).
+ * Returns [] on truncated / non-functype entries (defensive).
+ */
+function parseWasmFunctypeParamCounts(typeSectionPayload: Buffer): number[] {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(typeSectionPayload, 0);
+    let p = nextOffset;
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+      if (p >= typeSectionPayload.length) return out;
+      const form = typeSectionPayload[p++]!;
+      if (form !== 0x60) return out; // only functype
+      const { value: nParams, nextOffset: afterParams } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterParams + nParams; // skip param valtypes
+      if (p > typeSectionPayload.length) return out;
+      const { value: nResults, nextOffset: afterResults } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterResults + nResults;
+      if (p > typeSectionPayload.length) return out;
+      out.push(nParams);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse WASM function-section → type indices per function index.
+ */
+function parseWasmFuncTypeIndices(funcSectionPayload: Buffer): number[] {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(funcSectionPayload, 0);
+    let p = nextOffset;
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const { value: typeIdx, nextOffset: after } = decodeUnsignedLeb128(
+        funcSectionPayload,
+        p,
+      );
+      p = after;
+      out.push(typeIdx);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Collect unique function-export indices from a WASM binary (kind 0 only).
+ * Used so bankrupt decoy aliases can be spread across real stubs + unlock
+ * instead of all aliasing funcIndex 0 (red/blue round-10 arity-2 hygiene).
+ *
+ * Round-12: prefer host-visible arity-2 exports `(i32,i32)->…` when at least
+ * one exists, so arity-1 exports (e.g. seal) do not consume alias budget.
+ * Falls back to all func exports when no arity-2 is present.
+ */
+function collectExportedFuncIndices(bytes: Buffer): number[] {
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x00 ||
+    bytes[1] !== 0x61 ||
+    bytes[2] !== 0x73 ||
+    bytes[3] !== 0x6d
+  ) {
+    return [];
+  }
+  let offset = 8;
+  let typeParamCounts: number[] | null = null;
+  let funcTypeIndices: number[] | null = null;
+  let exportEntries: WasmExportEntry[] | null = null;
+  while (offset < bytes.length) {
+    const sectionId = bytes[offset++]!;
+    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) break;
+    const payload = bytes.subarray(nextOffset, sectionEnd);
+    if (sectionId === 1) {
+      typeParamCounts = parseWasmFunctypeParamCounts(payload);
+    } else if (sectionId === 3) {
+      funcTypeIndices = parseWasmFuncTypeIndices(payload);
+    } else if (sectionId === 7) {
+      exportEntries = parseWasmExportSectionPayload(payload);
+    }
+    offset = sectionEnd;
+  }
+  if (!exportEntries) return [];
+  const seen = new Set<number>();
+  const all: number[] = [];
+  const arity2: number[] = [];
+  for (const e of exportEntries) {
+    if (e.kind !== 0) continue;
+    if (seen.has(e.index)) continue;
+    seen.add(e.index);
+    all.push(e.index);
+    if (typeParamCounts && funcTypeIndices && e.index < funcTypeIndices.length) {
+      const typeIdx = funcTypeIndices[e.index]!;
+      if (typeIdx < typeParamCounts.length && typeParamCounts[typeIdx] === 2) {
+        arity2.push(e.index);
+      }
+    }
+  }
+  // Prefer host-visible arity-2 when available (round-12 alias budget hygiene).
+  return arity2.length > 0 ? arity2 : all;
+}
+
 function planWasmExportNameDecoys(
   prng: SeededPrng,
   intensity: ProtectionIntensity,
-  funcIndex: number,
+  funcIndices: readonly number[],
 ): readonly { readonly name: string; readonly funcIndex: number }[] {
   // bankrupt: ~250 × ~12 KiB names → Wabt interface charge ≫ 32 MiB.
+  // Round-10: spread aliases across exported function indices (stubs + unlock)
+  // so ~all-250 do not concentrate on funcIndex 0 / the real unlock body.
+  // Round-12: caller passes arity-2-preferring indices when available.
   const count =
     intensity === "stealth"
       ? 0
@@ -219,12 +356,14 @@ function planWasmExportNameDecoys(
           : 250;
   const namePad = intensity === "bankrupt" ? 12_000 : intensity === "maximum" ? 48 : 16;
   const tag = prng.hex(4);
+  const indices =
+    funcIndices.length > 0 ? prng.shuffle([...new Set(funcIndices)]) : [0];
   const out: { name: string; funcIndex: number }[] = [];
   for (let i = 0; i < count; i++) {
     const pad = "e".repeat(namePad);
     out.push({
       name: `enclave_export_${tag}_${i}_${pad}`,
-      funcIndex,
+      funcIndex: indices[i % indices.length]!,
     });
   }
   return out;
@@ -367,15 +506,15 @@ export function protectWasmBinary(
     readonly preserveExports?: readonly string[];
     /**
      * When true, rename exports not listed in `preserveExports`.
-     * Default: true at maximum/bankrupt for internal-looking names only;
-     * pass `renameNonPublicExports: true` with an explicit preserve list to
-     * rename every non-preserved export.
+     * Default: true at maximum/bankrupt (all non-preserved names).
+     * Keeping a stable public ABI requires an explicit `preserveExports` list
+     * (CLI `--wasm-preserve-exports` / MCP `wasm_preserve_exports` / `.blarc`).
      */
     readonly renameNonPublicExports?: boolean;
     /**
      * When renaming, only touch internal-looking names (`__*`, `debug_*`, …).
-     * Default true unless `renameNonPublicExports` is explicitly true AND
-     * `preserveExports` is provided (then all non-preserved names rename).
+     * Default **false** at maximum/bankrupt (rename every non-preserved export).
+     * Set true only when you intentionally want the weaker internal-only pass.
      */
     readonly renameInternalOnly?: boolean;
   } = {},
@@ -391,6 +530,8 @@ export function protectWasmBinary(
   readonly exportDecoysInjected: number;
   /** Export renames applied this pass (issue #40.3). Empty when rename is off. */
   readonly exportsRenamed: readonly WasmExportRename[];
+  /** True when export-section entry order was seed-shuffled (round-11). */
+  readonly exportsOrderShuffled: boolean;
 } {
   if (
     bytes.length < 8 ||
@@ -411,11 +552,21 @@ export function protectWasmBinary(
   // At bankrupt intensity, densify the export section with long-name aliases of
   // existing funcs so REA's real Wabt→WasmInterfaceBudget path trips (custom
   // sections alone do not expand the typed interface inventory).
-  const decoyExports = planWasmExportNameDecoys(prng, intensity, 0);
+  // Round-10: spread aliases across all exported function indices (not only 0).
+  // Round-11: after rename + decoy append, shuffle export *order* independently
+  // so first arity-2 is not a stable pointer to the unlock body.
+  // Round-12: collectExportedFuncIndices prefers arity-2 (host-visible) so
+  // arity-1 exports do not burn alias budget.
+  const decoyExports = planWasmExportNameDecoys(
+    prng,
+    intensity,
+    collectExportedFuncIndices(bytes),
+  );
   const keptChunks: Buffer[] = [bytes.subarray(0, 8)];
   let offset = 8;
   let exportDecoysInjected = 0;
   let exportsRenamed: readonly WasmExportRename[] = [];
+  let exportsOrderShuffled = false;
   while (offset < bytes.length) {
     const sectionStart = offset;
     const sectionId = bytes[offset++]!;
@@ -434,13 +585,13 @@ export function protectWasmBinary(
         options.renameNonPublicExports === true ||
         (options.renameNonPublicExports !== false && intensityWantsRename);
       if (renameRequested) {
+        // Red/Blue round-1: public ABI (`mix`/`seal`) surviving bankrupt enabled
+        // preload hooks. Default at maximum/bankrupt is full non-preserved rename;
+        // callers that need stable names must pass preserveExports explicitly.
         const onlyInternal =
           options.renameInternalOnly !== undefined
             ? options.renameInternalOnly
-            : !(
-                options.renameNonPublicExports === true &&
-                (options.preserveExports?.length ?? 0) > 0
-              );
+            : false;
         const renamed = renameWasmExports(payload, prng, {
           preserveExports: options.preserveExports,
           onlyInternal,
@@ -448,10 +599,20 @@ export function protectWasmBinary(
         payload = Buffer.from(renamed.payload);
         exportsRenamed = renamed.renames;
       }
-      const expanded =
+      let expanded =
         decoyExports.length > 0
           ? appendDecoyExports(payload, decoyExports)
           : payload;
+      // Round-11: shuffle combined original+decoy export order at maximum/bankrupt
+      // (same intensity band as rename / decoy injection). Independent of alias
+      // funcIndex spread — closes "first arity-2 = unlock" RE shortcut.
+      const intensityWantsShuffle =
+        intensity === "maximum" || intensity === "bankrupt";
+      if (intensityWantsShuffle) {
+        const n = parseWasmExportSectionPayload(expanded).length;
+        expanded = shuffleWasmExportSectionPayload(expanded, prng);
+        exportsOrderShuffled = n > 1;
+      }
       keptChunks.push(
         Buffer.concat([
           Buffer.from([0x07]),
@@ -566,5 +727,6 @@ export function protectWasmBinary(
     exceedsRepresentationBudget: ifacePlan.exceedsRepresentationBudget,
     exportDecoysInjected,
     exportsRenamed,
+    exportsOrderShuffled,
   };
 }

@@ -166,13 +166,34 @@ export {
 export { runShowcaseBenchmark } from "./engine/benchmark.js";
 export {
   discoverHardenableArtifacts,
+  discoverHardenTargets,
   hardenProject,
   formatHardenProjectReport,
   BLA_BUILD_OUTPUT_DIR_NAMES,
   type HardenProjectReport,
   type HardenArtifactSummary,
   type DiscoveredArtifact,
+  type HardenDiscoveryResult,
 } from "./engine/harden.js";
+export {
+  computeHardenRunId,
+  computeArtifactRunId,
+  readHardenRunSummary,
+  HARDEN_SUMMARY_FILE_NAME,
+  HARDEN_SUMMARY_SCHEMA,
+  type HardenRunIdentity,
+  type HardenRunSummary,
+  type ReadHardenRunSummaryResult,
+} from "./engine/run-evidence.js";
+export {
+  runReaDriftCheck,
+  getRedteamReport,
+  resolveReaRoot,
+  reaCheckoutPresent,
+  reaDistReady,
+  type ReaDriftReport,
+  type RedteamReportResult,
+} from "./engine/rea-observability.js";
 export * from "./shields/exhaustion/index.js";
 export * from "./shields/deception/index.js";
 export {
@@ -262,14 +283,98 @@ export {
 
 export {
   lintLaneIndependence,
+  lintLaneIndependenceFile,
+  discoverAndLintLaneIndependence,
   LANE_INDEPENDENCE_SCHEMA,
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
   type LaneIndependenceFinding,
   type LaneIndependenceReport,
   type LaneIndependenceFindingId,
+  type LaneIndependenceSeverity,
 } from "./engine/lane-independence-lint.js";
+export {
+  scanPackagingGates,
+  evaluateHardenProjectPackagingBlocks,
+  formatPackagingGatesReport,
+  PACKAGING_GATES_SCHEMA,
+  type PackagingGateId,
+  type PackagingGateFinding,
+  type PackagingGatesReport,
+  type PackagingGatesScanOptions,
+  type PackagingGatesAllowOptions,
+} from "./engine/packaging-gates.js";
+export {
+  lintSealCommitmentSource,
+  lintSealCommitmentFile,
+  discoverAndLintSealSidecars,
+  findSiblingSealSidecars,
+  sealCommitmentRefuseMessage,
+  intensityEnforcesSealRefusal,
+  SEAL_COMMITMENT_SCHEMA,
+  type SealCommitmentFinding,
+  type SealCommitmentReport,
+  type SealCommitmentFindingId,
+  type SealCommitmentSeverity,
+} from "./engine/seal-commitment-lint.js";
+export {
+  lintWasmParamCarrierBuffer,
+  lintWasmParamCarrierFile,
+  discoverAndLintWasmParamCarriers,
+  wasmParamCarrierRefuseMessage,
+  intensityEnforcesWasmParamRefusal,
+  buildTestWasmWithParamCarrier,
+  WASM_PARAM_CARRIER_SCHEMA,
+  type WasmParamCarrierFinding,
+  type WasmParamCarrierReport,
+  type WasmParamCarrierFindingId,
+  type WasmParamCarrierSeverity,
+} from "./engine/wasm-param-carrier-lint.js";
+export {
+  lintWasmXorMaskSidecarBuffer,
+  lintWasmXorMaskSidecarFile,
+  discoverAndLintWasmXorMaskSidecars,
+  buildTestWasmWithXorMaskSidecar,
+  wasmXorMaskSidecarRefuseMessage,
+  intensityEnforcesWasmXorMaskSidecarRefusal,
+  WASM_XOR_MASK_SIDECAR_SCHEMA,
+  type WasmXorMaskSidecarFinding,
+  type WasmXorMaskSidecarReport,
+  type WasmXorMaskSidecarFindingId,
+  type WasmXorMaskSidecarSeverity,
+} from "./engine/wasm-xor-mask-sidecar-lint.js";
+export {
+  lintWasmSealXorKnownPlaintextBuffer,
+  lintWasmSealXorKnownPlaintextFile,
+  discoverAndLintWasmSealXorKnownPlaintext,
+  buildTestWasmWithSealXorKnownPlaintext,
+  wasmSealXorKnownPlaintextRefuseMessage,
+  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
+  WASM_SEAL_XOR_KNOWN_PLAINTEXT_SCHEMA,
+  type WasmSealXorKnownPlaintextFinding,
+  type WasmSealXorKnownPlaintextReport,
+  type WasmSealXorKnownPlaintextFindingId,
+  type WasmSealXorKnownPlaintextSeverity,
+} from "./engine/wasm-seal-xor-known-plaintext-lint.js";
+export {
+  lintPanelDeriveAbiSource,
+  lintPanelDeriveAbiFile,
+  discoverAndLintPanelDerive,
+  rewriteStablePanelDeriveSymbols,
+  panelDeriveSeedRoot,
+  panelDeriveReplacementName,
+  intensityRewritesPanelDerive,
+  PANEL_DERIVE_ABI_SCHEMA,
+  type PanelDeriveFinding,
+  type PanelDeriveAbiReport,
+  type PanelDeriveFindingId,
+  type PanelDeriveSeverity,
+  type PanelDeriveRewriteResult,
+} from "./engine/panel-derive-abi-lint.js";
 export {
   parseWasmExportSectionPayload,
   renameWasmExports,
+  shuffleWasmExportSectionPayload,
   looksLikeInternalWasmExport,
   type WasmExportEntry,
   type WasmExportRename,

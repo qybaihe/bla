@@ -171,9 +171,54 @@ export interface ProtectionOptions {
   readonly selfSeal?: boolean;
   /**
    * WASM public ABI export names to keep when rename runs (issue #40.3).
-   * Other / internal-looking exports may be renamed at maximum/bankrupt.
+   * At maximum/bankrupt every non-listed export is renamed by default —
+   * preserving a stable ABI requires an explicit list.
    */
   readonly wasmPreserveExports?: readonly string[];
+  /**
+   * When true, allow protecting JS/TS that looks lane-independent (issue #40.1).
+   * Default false: protect/defend/harden refuse such gates (red-blue round-1).
+   */
+  readonly allowLaneIndependentGates?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite plaintext/reversible seal
+   * sidecars (red-blue round-2). Default false — refuse.
+   */
+  readonly allowPlaintextSeal?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite clear WASM param/cipher
+   * ASCII carriers (R3PARM/R3CIPH/R2SEAL-class; red-blue round-3). Default false — refuse.
+   */
+  readonly allowWasmClearParamCarriers?: boolean;
+  /**
+   * When true, keep stable `__vaultPanelDerive_*` ABI (skip rewrite/refuse).
+   * Default false — maximum/bankrupt rewrite to seed-stable `_blaPd_*` (red-blue round-3).
+   */
+  readonly allowStablePanelDeriveAbi?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite JS AES wrap-key +
+   * create*iv + fixed sealed-hdr unwrap footguns (red-blue round-4). Default false — refuse.
+   * This is a gate only — not white-box AES.
+   */
+  readonly allowJsAesUnwrap?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite panel deriveLocal +
+   * plaintext panelTokenSha256 offline-oracle packaging (red-blue round-4). Default false — refuse.
+   */
+  readonly allowPanelOfflineOracle?: boolean;
+  /**
+   * When true, allow bankrupt harden/protect despite JS←WASM hydrate memory
+   * dumps of salt/rounds/cipher (red-blue round-5). Default false — refuse.
+   */
+  readonly allowJsWasmHydrateDump?: boolean;
+  /** Red/blue round-6: allow WASM XOR-mask-beside-blob entitlement packs under bankrupt/maximum. */
+  readonly allowWasmXorMaskSidecar?: boolean;
+  readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /**
+   * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
+   * Relative paths are resolved from the protected module's directory at runtime.
+   */
+  readonly selfSealSiblingPaths?: readonly string[];
 }
 
 export interface ProtectionMetrics {
@@ -203,6 +248,10 @@ export interface ProtectionResult {
   readonly selfSeal?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
+  /** Present when WASM export-section order was seed-shuffled (red-blue round-11). */
+  readonly wasmExportOrderShuffled?: boolean;
+  /** Count of long-name decoy export aliases injected (red-blue round-10/12 hygiene). */
+  readonly wasmExportDecoysInjected?: number;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;

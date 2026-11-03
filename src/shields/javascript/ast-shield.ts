@@ -1277,11 +1277,26 @@ export function transformJavaScriptWithBlaShield(
     break;
   }
 
-  const [corpusDecl, digestFnDecl, seedDecl, heapDecl, ...restInjected] =
-    sanitizedInjectedStatements;
-  const topDecls = [corpusDecl, digestFnDecl, seedDecl, heapDecl].filter(
-    (s): s is t.Statement => s !== undefined,
-  );
+  // Prepend every injected statement through the opaque-predicate seed decl
+  // (cognitive armor + optional self-seal preamble + seed). Self-seal inserts
+  // extra statements before the seed; a fixed 4-stmt split pushed the seed to
+  // the program end and caused TDZ crashes when top-level consts referenced it
+  // (red-blue round-4). Also keep the immediate following shadow-heap decl up top.
+  const seedInjectIndex = sanitizedInjectedStatements.findIndex((stmt) => {
+    if (!t.isVariableDeclaration(stmt)) return false;
+    return stmt.declarations.some(
+      (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
+    );
+  });
+  const topEnd =
+    seedInjectIndex >= 0
+      ? Math.min(
+          sanitizedInjectedStatements.length,
+          seedInjectIndex + 1 /* seed */ + 1 /* shadow heap usually follows */,
+        )
+      : Math.min(4, sanitizedInjectedStatements.length);
+  const topDecls = sanitizedInjectedStatements.slice(0, topEnd);
+  const restInjected = sanitizedInjectedStatements.slice(topEnd);
   if (topDecls.length > 0) {
     ast.program.body.splice(insertIndex, 0, ...topDecls);
   }

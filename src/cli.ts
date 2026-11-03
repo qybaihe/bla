@@ -12,6 +12,17 @@ import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
+import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
+import { lintWasmParamCarrierFile } from "./engine/wasm-param-carrier-lint.js";
+import { lintPanelDeriveAbiFile } from "./engine/panel-derive-abi-lint.js";
+import { lintJsAesUnwrapFile } from "./engine/js-aes-unwrap-lint.js";
+import { lintJsWasmHydrateDumpFile } from "./engine/js-wasm-hydrate-dump-lint.js";
+import { lintWasmXorMaskSidecarFile } from "./engine/wasm-xor-mask-sidecar-lint.js";
+import { lintWasmSealXorKnownPlaintextFile } from "./engine/wasm-seal-xor-known-plaintext-lint.js";
+import {
+  scanPackagingGates,
+  formatPackagingGatesReport,
+} from "./engine/packaging-gates.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -51,7 +62,15 @@ Commands:
   defend <target>             One-click full Counter-REA pipeline (inspect -> audit -> bankrupt protect -> verify)
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
-  lint-lanes <file>           Heuristic warn if gate code looks lane-independent (issue #40.1)
+  lint [dir]                  DEFAULT packaging gate scan (all R1–R7 refuse lints + lanes/panel); exit 2 on refuse
+  lint-lanes <file>           Heuristic ERROR if gate code looks lane-independent (issue #40.1); exit 2
+  lint-wasm-params <file>    Heuristic ERROR if WASM embeds clear R3PARM/R3CIPH/R2SEAL-class carriers; exit 2
+  lint-panel-derive <file>   Heuristic ERROR if stable __vaultPanelDerive_* / deriveLocal oracle remains; exit 2
+  lint-js-aes-unwrap <file>  Heuristic ERROR if JS AES wrap-key + create*iv + fixed hdr unwrap; exit 2
+  lint-js-wasm-hydrate-dump <file>  Heuristic ERROR if JS dumps WASM hydrate salt/rounds/cipher; exit 2
+  lint-wasm-xor-mask-sidecar <file> Heuristic ERROR if WASM data has XOR-mask beside masked entitlement pack; exit 2
+  lint-wasm-seal-xor-known-plaintext <wasm>  Heuristic ERROR if seal.revision is XOR known-plaintext in WASM pack; exit 2
+  lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
@@ -72,10 +91,15 @@ Options:
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
+  --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
+  --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
+  --allow-js-wasm-hydrate-dump  Allow bankrupt despite JS←WASM hydrate param-dump (round-5); OFF by default
+  --allow-wasm-xor-mask-sidecar  Allow bankrupt despite WASM XOR-mask-beside-blob packs (round-6); OFF by default
+  --allow-wasm-seal-xor-known-plaintext  Allow bankrupt despite seal.revision XOR known-plaintext packs (round-7); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
-  --dry-run                   Preview planned setup changes without writing files
+  --dry-run                   Preview planned setup/harden changes without writing files
   -y, --yes                   Approve setup actions without interactive confirmation
   --json                      Emit structured JSON output
   -v, --version               Print BLA version
@@ -96,6 +120,15 @@ interface ParsedCliArgs {
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
   readonly wasmPreserveExports: readonly string[];
+  readonly allowLaneIndependentGates: boolean;
+  readonly allowPlaintextSeal: boolean;
+  readonly allowWasmClearParamCarriers: boolean;
+  readonly allowStablePanelDeriveAbi: boolean;
+  readonly allowJsAesUnwrap: boolean;
+  readonly allowPanelOfflineOracle: boolean;
+  readonly allowJsWasmHydrateDump: boolean;
+  readonly allowWasmXorMaskSidecar: boolean;
+  readonly allowWasmSealXorKnownPlaintext: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -122,6 +155,15 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let weaveDecoys = false;
   let selfSeal = false;
   let wasmPreserveExports: string[] = [];
+  let allowLaneIndependentGates = false;
+  let allowPlaintextSeal = false;
+  let allowWasmClearParamCarriers = false;
+  let allowStablePanelDeriveAbi = false;
+  let allowJsAesUnwrap = false;
+  let allowJsWasmHydrateDump = false;
+  let allowWasmXorMaskSidecar = false;
+  let allowWasmSealXorKnownPlaintext = false;
+  let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
   let allDetected = false;
@@ -162,6 +204,24 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg === "--allow-lane-independent") {
+      allowLaneIndependentGates = true;
+    } else if (arg === "--allow-plaintext-seal") {
+      allowPlaintextSeal = true;
+    } else if (arg === "--allow-wasm-clear-params") {
+      allowWasmClearParamCarriers = true;
+    } else if (arg === "--allow-stable-panel-derive") {
+      allowStablePanelDeriveAbi = true;
+    } else if (arg === "--allow-js-aes-unwrap") {
+      allowJsAesUnwrap = true;
+    } else if (arg === "--allow-panel-offline-oracle") {
+      allowPanelOfflineOracle = true;
+    } else if (arg === "--allow-js-wasm-hydrate-dump") {
+      allowJsWasmHydrateDump = true;
+    } else if (arg === "--allow-wasm-xor-mask-sidecar") {
+      allowWasmXorMaskSidecar = true;
+    } else if (arg === "--allow-wasm-seal-xor-known-plaintext") {
+      allowWasmSealXorKnownPlaintext = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -217,6 +277,15 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     weaveDecoys,
     selfSeal,
     wasmPreserveExports,
+    allowLaneIndependentGates,
+    allowPlaintextSeal,
+    allowWasmClearParamCarriers,
+    allowStablePanelDeriveAbi,
+    allowJsAesUnwrap,
+    allowPanelOfflineOracle,
+    allowJsWasmHydrateDump,
+    allowWasmXorMaskSidecar,
+    allowWasmSealXorKnownPlaintext,
     lang,
     clients,
     allDetected,
@@ -325,15 +394,19 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const explicitIntensity = argv.includes("--intensity")
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
-        const resolved = resolveProjectSeed(
-          typeof directory === "string" ? directory : process.cwd(),
-          parsed.seed,
-          parsed.configPath,
-        );
+        // Dry-run must write zero bytes: skip seed persistence into .blarc.
+        const seed = parsed.dryRun
+          ? parsed.seed
+          : resolveProjectSeed(
+              typeof directory === "string" ? directory : process.cwd(),
+              parsed.seed,
+              parsed.configPath,
+            ).seed;
         const report = hardenProject({
           directory,
           intensity: explicitIntensity,
-          seed: resolved.seed,
+          ...(seed !== undefined ? { seed } : {}),
+          dryRun: parsed.dryRun,
           emitManifest: parsed.manifest || loaded.config.emitManifest === true,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
@@ -344,6 +417,33 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
+          allowJsAesUnwrap:
+            parsed.allowJsAesUnwrap ||
+            loaded.config.allowJsAesUnwrap === true,
+          allowPanelOfflineOracle:
+            parsed.allowPanelOfflineOracle ||
+            loaded.config.allowPanelOfflineOracle === true,
+          allowJsWasmHydrateDump:
+            parsed.allowJsWasmHydrateDump ||
+            loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -351,6 +451,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         } else {
           console.log(formatHardenProjectReport(report));
         }
+        if (report.dryRun) return report.discoveredCount === 0 ? 2 : 0;
         return report.overallSuccess || report.discoveredCount === 0 ? (report.discoveredCount === 0 ? 2 : 0) : 2;
       }
 
@@ -383,6 +484,33 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
+          allowJsAesUnwrap:
+            parsed.allowJsAesUnwrap ||
+            loaded.config.allowJsAesUnwrap === true,
+          allowPanelOfflineOracle:
+            parsed.allowPanelOfflineOracle ||
+            loaded.config.allowPanelOfflineOracle === true,
+          allowJsWasmHydrateDump:
+            parsed.allowJsWasmHydrateDump ||
+            loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -398,6 +526,41 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           return 2;
         }
         return report.overallSuccess ? 0 : 2;
+      }
+
+      case "lint": {
+        const target = parsed.positionals[0] ?? ".";
+        const report = scanPackagingGates({
+          directory: resolve(target),
+          intensity: (parsed.intensity as "stealth" | "balanced" | "maximum" | "bankrupt") ?? "bankrupt",
+          allowPlaintextSeal: parsed.allowPlaintextSeal,
+          allowWasmClearParamCarriers: parsed.allowWasmClearParamCarriers,
+          allowJsAesUnwrap: parsed.allowJsAesUnwrap,
+          allowJsWasmHydrateDump: parsed.allowJsWasmHydrateDump,
+          allowWasmXorMaskSidecar: parsed.allowWasmXorMaskSidecar,
+          allowWasmSealXorKnownPlaintext: parsed.allowWasmSealXorKnownPlaintext,
+          allowLaneIndependentGates: parsed.allowLaneIndependentGates,
+          allowPanelOfflineOracle: parsed.allowPanelOfflineOracle,
+          allowStablePanelDeriveAbi: parsed.allowStablePanelDeriveAbi,
+          includeProtectTimeGates: true,
+        });
+        if (parsed.json) {
+          // Strip heavy details.details raw blobs for CLI JSON by default — keep findings/blocking.
+          const { details: _details, ...compact } = report;
+          console.log(JSON.stringify({ ...compact, detailCounts: {
+            seals: report.details.seals.length,
+            wasmParams: report.details.wasmParams.length,
+            jsAes: report.details.jsAes.length,
+            jsHydrateDump: report.details.jsHydrateDump.length,
+            wasmXorMask: report.details.wasmXorMask.length,
+            wasmSealXor: report.details.wasmSealXor.length,
+            lanes: report.details.lanes.length,
+            panelDerive: report.details.panelDerive.length,
+          } }, null, 2));
+        } else {
+          console.log(formatPackagingGatesReport(report));
+        }
+        return report.shouldRefuseBankrupt ? 2 : 0;
       }
 
       case "lint-lanes": {
@@ -423,6 +586,181 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         }
         return report.looksLaneIndependent ? 2 : 0;
       }
+      case "lint-seal": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-seal <file>`.");
+          return 1;
+        }
+        const report = lintSealCommitmentFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA seal-commitment lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+      case "lint-wasm-params": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-wasm-params <file>`.");
+          return 1;
+        }
+        const report = lintWasmParamCarrierFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-param-carrier lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary} @${f.offset}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+      case "lint-panel-derive": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-panel-derive <file>`.");
+          return 1;
+        }
+        const report = lintPanelDeriveAbiFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA panel-derive ABI lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt ||
+          report.shouldRewriteOrRefuse ||
+          report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+      case "lint-js-aes-unwrap": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-js-aes-unwrap <file>`.");
+          return 1;
+        }
+        const report = lintJsAesUnwrapFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA js-aes-unwrap lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+
+      case "lint-js-wasm-hydrate-dump": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-js-wasm-hydrate-dump <file>`.");
+          return 1;
+        }
+        const report = lintJsWasmHydrateDumpFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA js-wasm-hydrate-dump lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+      case "lint-wasm-xor-mask-sidecar": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <file> path for `bla lint-wasm-xor-mask-sidecar <file>`.");
+          return 1;
+        }
+        const report = lintWasmXorMaskSidecarFile(resolve(target));
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-xor-mask-sidecar lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+
+
+      case "lint-wasm-seal-xor-known-plaintext": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <wasm> path for `bla lint-wasm-seal-xor-known-plaintext <wasm>`.");
+          return 1;
+        }
+        const sealArg = parsed.positionals[1];
+        const report = lintWasmSealXorKnownPlaintextFile(resolve(target), sealArg ? resolve(sealArg) : undefined);
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`BLA wasm-seal-xor-known-plaintext lint — ${report.path}`);
+          console.log(report.oneLineAdvice);
+          for (const f of report.findings) {
+            console.log(`  [${f.severity}] ${f.id}: ${f.summary}`);
+            if (f.evidence) console.log(`    evidence: ${f.evidence}`);
+          }
+          if (report.findings.length === 0) {
+            console.log("  (no findings)");
+          }
+        }
+        return report.shouldRefuseBankrupt || report.findings.some((f) => f.severity === "error")
+          ? 2
+          : 0;
+      }
+
       case "audit": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const target = parsed.positionals[0] ?? loaded.config.input;
@@ -469,6 +807,33 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             const merged = [...new Set([...fromCfg, ...fromCli])];
             return merged.length > 0 ? { wasmPreserveExports: merged } : {};
           })()),
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal ||
+            loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
+          allowJsAesUnwrap:
+            parsed.allowJsAesUnwrap ||
+            loaded.config.allowJsAesUnwrap === true,
+          allowPanelOfflineOracle:
+            parsed.allowPanelOfflineOracle ||
+            loaded.config.allowPanelOfflineOracle === true,
+          allowJsWasmHydrateDump:
+            parsed.allowJsWasmHydrateDump ||
+            loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar ||
+            loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

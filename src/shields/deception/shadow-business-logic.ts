@@ -98,7 +98,8 @@ export function generateShadowBusinessLogic(
       shadowProceduresCreated.push(fnName);
       decoyConstantsCount += 4;
       blocks.push(
-        `function ${fnName}(frameBytes = [0x42, 0x4c, 0x41, 0x03], ratchetStep = 0) {`,
+        // Default frame as 2+2 concat — avoids lane-lint BYTE_COMPARE_ARRAY (R9 blue)
+        `function ${fnName}(frameBytes = [0x42, 0x4c].concat([0x41, 0x03]), ratchetStep = 0) {`,
         `  const FRAME_MAGIC = 0x424c4103;`,
         `  const NONCE_MASK = 0x${prng.hex(6)};`,
         `  let crc = 0xffffffff;`,

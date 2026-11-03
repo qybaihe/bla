@@ -50,12 +50,32 @@
     "selfSeal": {
       "type": "boolean",
       "default": false,
-      "description": "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Parity with CLI --self-seal / MCP self_seal."
+      "description": "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Parity with CLI --self-seal / MCP self_seal. For multi-artifact trees, bankrupt harden recommends this (selfSealRecommended) but never auto-enables for single-file projects."
     },
     "wasmPreserveExports": {
       "type": "array",
       "items": { "type": "string" },
       "description": "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3)."
+    },
+    "allowWasmClearParamCarriers": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow bankrupt harden despite clear WASM param/cipher ASCII carriers (R3PARM/R3CIPH/R2SEAL-class; red-blue round-3). Default false."
+    },
+    "allowStablePanelDeriveAbi": {
+      "type": "boolean",
+      "default": false,
+      "description": "Keep stable __vaultPanelDerive_* ABI (skip rewrite). Default false — maximum/bankrupt rewrite to _blaPd_* (red-blue round-3)."
+    },
+    "allowPlaintextSeal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow bankrupt harden despite plaintext/reversible seal sidecars (red-blue round-2). Default false."
+    },
+    "allowLaneIndependentGates": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow harden/defend of lane-independent JS gates (issue #40.1). Default false."
     }
   },
   "additionalProperties": true

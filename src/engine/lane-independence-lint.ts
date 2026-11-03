@@ -1,25 +1,33 @@
 /**
- * Lane-independence footgun lint (issue #40.1).
+ * Lane-independence footgun lint (issue #40.1 / red-blue round-1).
  *
- * Heuristic, defensive-only warning when customer gate code looks like
+ * Heuristic, defensive-only gate when customer gate code looks like
  * independent per-lane checks (e.g. an array of single-byte compares combined
- * with a shallow AND/OR reduction). Meridian / good designs use chained
- * whole-key mixing so no per-lane oracle exists.
+ * with a shallow AND/OR reduction, or per-byte charCodeAt → wasm mix/seal).
+ * Meridian / good designs use chained whole-key mixing so no per-lane oracle exists.
  *
- * This does NOT give reverse-engineering advice. It only flags a structural
- * pattern that historically collapses search cost.
+ * Findings are severity **"error"** — CLI `bla lint-lanes` exits 2, and
+ * harden/defend refuse the artifact unless `allowLaneIndependentGates` is set.
+ * This does NOT give reverse-engineering advice.
  */
+
+
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 export const LANE_INDEPENDENCE_SCHEMA = "bla-lane-independence-lint/v1" as const;
 
 export type LaneIndependenceFindingId =
   | "per-lane-byte-compare-array"
   | "independent-lane-and-reduce"
-  | "indexed-lane-oracle-loop";
+  | "indexed-lane-oracle-loop"
+  | "per-byte-wasm-lane-oracle";
+
+export type LaneIndependenceSeverity = "error";
 
 export interface LaneIndependenceFinding {
   readonly id: LaneIndependenceFindingId;
-  readonly severity: "warn";
+  readonly severity: LaneIndependenceSeverity;
   readonly summary: string;
   readonly evidence: string;
 }
@@ -45,8 +53,32 @@ const INDEXED_ORACLE =
   /for\s*\(\s*(?:let|var|const)\s+\w+\s*=\s*0[^)]*\)\s*\{[^}]{0,200}(?:key|input|guess)\s*\[\s*\w+\s*\][^}]{0,120}===\s*(?:target|expect|lane|ref)/i;
 
 /**
+ * Per-byte charCodeAt fed into mix/seal (or similar) with an indexed target
+ * compare — CrackMe v6 / independent WASM-lane shape (XOR or !== fold OK).
+ */
+const PER_BYTE_WASM_LANE =
+  /charCodeAt\s*\(\s*\w+\s*\)[\s\S]{0,240}(?:mix|seal)\s*\([\s\S]{0,320}(?:LANE_TARGETS|laneTargets|targets?|lanes?)\s*\[\s*\w+/i;
+
+/** Indexed XOR/OR fold of per-lane results without whole-key mixing. */
+const INDEXED_XOR_LANE_FOLD =
+  /for\s*\(\s*(?:let|var|const)\s+\w+[^)]*\)\s*\{[\s\S]{0,400}charCodeAt[\s\S]{0,400}\^\s*\((?:LANE_TARGETS|laneTargets|targets?|lanes?)\s*\[/i;
+
+function finding(
+  id: LaneIndependenceFindingId,
+  summary: string,
+  evidence: string,
+): LaneIndependenceFinding {
+  return {
+    id,
+    severity: "error",
+    summary,
+    evidence: evidence.slice(0, 120),
+  };
+}
+
+/**
  * Scan UTF-8 source (JS/TS/Python-like) for lane-independence footguns.
- * Returns findings with severity "warn" only — never fails closed.
+ * Findings are severity "error" — callers decide whether to refuse (harden) or exit 2 (CLI).
  */
 export function lintLaneIndependence(source: string): LaneIndependenceReport {
   const findings: LaneIndependenceFinding[] = [];
@@ -54,35 +86,51 @@ export function lintLaneIndependence(source: string): LaneIndependenceReport {
 
   if (BYTE_COMPARE_ARRAY.test(text) && /(?:key|guess|input|lane)/i.test(text)) {
     const m = text.match(BYTE_COMPARE_ARRAY);
-    findings.push({
-      id: "per-lane-byte-compare-array",
-      severity: "warn",
-      summary:
-        "Literal multi-byte compare table near key/guess identifiers — may allow independent per-lane probes.",
-      evidence: (m?.[0] ?? "").slice(0, 80),
-    });
+    // Round-2 blue: all-zero init arrays (e.g. pack buffers) are not compare tables.
+    const lit = m?.[0] ?? "";
+    const allZero = /^\[\s*0\s*(?:,\s*0\s*){3,}\]$/.test(lit);
+    if (!allZero) {
+      findings.push(
+        finding(
+          "per-lane-byte-compare-array",
+          "Literal multi-byte compare table near key/guess identifiers — may allow independent per-lane probes.",
+          lit,
+        ),
+      );
+    }
   }
 
   if (LANE_AND_REDUCE.test(text) || EVERY_INDEXED_LANE.test(text)) {
     const m = text.match(LANE_AND_REDUCE) ?? text.match(EVERY_INDEXED_LANE);
-    findings.push({
-      id: "independent-lane-and-reduce",
-      severity: "warn",
-      summary:
+    findings.push(
+      finding(
+        "independent-lane-and-reduce",
         "Lane/byte collection reduced with every/all/AND — suggests independent lane checks without whole-key mixing.",
-      evidence: (m?.[0] ?? "").slice(0, 80),
-    });
+        m?.[0] ?? "",
+      ),
+    );
   }
 
   if (INDEXED_ORACLE.test(text)) {
     const m = text.match(INDEXED_ORACLE);
-    findings.push({
-      id: "indexed-lane-oracle-loop",
-      severity: "warn",
-      summary:
+    findings.push(
+      finding(
+        "indexed-lane-oracle-loop",
         "Indexed loop comparing key[i] to a per-lane target — classic independent-lane oracle shape.",
-      evidence: (m?.[0] ?? "").slice(0, 120),
-    });
+        m?.[0] ?? "",
+      ),
+    );
+  }
+
+  if (PER_BYTE_WASM_LANE.test(text) || INDEXED_XOR_LANE_FOLD.test(text)) {
+    const m = text.match(PER_BYTE_WASM_LANE) ?? text.match(INDEXED_XOR_LANE_FOLD);
+    findings.push(
+      finding(
+        "per-byte-wasm-lane-oracle",
+        "Per-byte charCodeAt → mix/seal (or XOR fold) against indexed lane targets — independent 1-byte WASM lanes collapse under RE.",
+        m?.[0] ?? "",
+      ),
+    );
   }
 
   return {
@@ -92,6 +140,99 @@ export function lintLaneIndependence(source: string): LaneIndependenceReport {
     oneLineAdvice:
       findings.length === 0
         ? "No lane-independence footgun pattern detected (heuristic)."
-        : "Prefer whole-key chained mixing (no per-lane oracle). See issue #40.1 / Meridian DESIGN — defensive guidance only.",
+        : "ERROR: Prefer whole-key chained mixing (no per-lane oracle). Harden refuses this gate unless allowLaneIndependentGates / --allow-lane-independent / allow_lane_independent. See issue #40.1 / Meridian DESIGN — defensive guidance only.",
   };
+}
+
+/** Formats where lane-independence lint applies before protect/defend/harden. */
+export function formatSupportsLaneIndependenceLint(
+  format: string,
+): boolean {
+  return format === "javascript" || format === "typescript";
+}
+
+/**
+ * Build a refuse message for harden/defend when lane-independent gates are detected.
+ */
+export function laneIndependenceRefuseMessage(
+  report: LaneIndependenceReport,
+  inputPath: string,
+): string {
+  const ids = report.findings.map((f) => f.id).join(", ");
+  return (
+    `Refusing lane-independent gate at ${inputPath} [${ids}]. ` +
+    `Prefer whole-key chained mixing. To override (intentional footgun / teaching fixture), ` +
+    `pass allowLaneIndependentGates / --allow-lane-independent / allow_lane_independent:true.`
+  );
+}
+
+const SKIP_DIR_NAMES = new Set([
+  "node_modules",
+  ".git",
+  ".hg",
+  ".svn",
+  ".bla-hardened",
+  "coverage",
+  ".turbo",
+  ".cache",
+  "__pycache__",
+  ".venv",
+  "venv",
+]);
+
+const JS_EXT = /\.(?:[cm]?[jt]s|tsx?)$/i;
+const MAX_JS_FILES = 64;
+const MAX_WALK_DEPTH = 8;
+
+function walkJsGateCandidates(dir: string, depth: number, out: string[]): void {
+  if (out.length >= MAX_JS_FILES || depth > MAX_WALK_DEPTH) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (out.length >= MAX_JS_FILES) return;
+    if (entry.isDirectory()) {
+      if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+      walkJsGateCandidates(join(dir, entry.name), depth + 1, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!JS_EXT.test(entry.name)) continue;
+    out.push(join(dir, entry.name));
+  }
+}
+
+/** File wrapper matching other packaging lints. */
+export function lintLaneIndependenceFile(filePath: string): LaneIndependenceReport & {
+  readonly path: string;
+} {
+  const abs = resolve(filePath);
+  if (!existsSync(abs)) {
+    throw new Error(`lane-independence target not found: ${abs}`);
+  }
+  const report = lintLaneIndependence(readFileSync(abs, "utf8"));
+  return { ...report, path: abs };
+}
+
+/**
+ * Discover JS/TS under a directory and lint each for lane-independence footguns.
+ * Used by unified `bla lint` / packaging-gates (protect still refuses per-file).
+ */
+export function discoverAndLintLaneIndependence(
+  directory: string,
+): ReadonlyArray<LaneIndependenceReport & { readonly path: string }> {
+  const abs = resolve(directory);
+  if (!existsSync(abs)) {
+    throw new Error(`Path not found: ${abs}`);
+  }
+  const st = statSync(abs);
+  if (st.isFile()) {
+    return [lintLaneIndependenceFile(abs)];
+  }
+  const candidates: string[] = [];
+  walkJsGateCandidates(abs, 0, candidates);
+  return candidates.map((p) => lintLaneIndependenceFile(p));
 }
