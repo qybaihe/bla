@@ -42,3 +42,26 @@ try {
 } catch (err) {
   console.warn(`Skipped package-lock.json sync: ${err instanceof Error ? err.message : String(err)}`);
 }
+
+// Keep CrackMe SEAL blaVersion labels in lockstep with package.json (CI
+// v7-seal rejects seal.blaVersion !== package.json.version). Digests stay
+// untouched — only the version metadata field is rewritten.
+for (const rel of ["challenge/v6/SEAL.json", "challenge/v7/SEAL.json"]) {
+  const sealPath = resolve(root, rel);
+  try {
+    const sealText = readFileSync(sealPath, "utf8");
+    const next = sealText.replace(
+      /"blaVersion"\s*:\s*"[^"]+"/,
+      `"blaVersion": "${version}"`,
+    );
+    if (next !== sealText) {
+      writeFileSync(sealPath, next, "utf8");
+      console.log(`Synced ${rel} blaVersion -> ${version}`);
+    } else {
+      console.log(`${rel} blaVersion already at ${version}`);
+    }
+  } catch (err) {
+    console.warn(`Skipped ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
