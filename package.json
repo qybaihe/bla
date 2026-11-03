@@ -81,7 +81,7 @@
     "crackme:v8": "node challenge/v8/run.mjs"
   },
   "dependencies": {
-    "@babel/generator": "^7.26.0",
+    "@babel/generator": "^8.0.10",
     "@babel/parser": "^7.26.0",
     "@babel/traverse": "^7.26.0",
     "@babel/types": "^7.26.0"
