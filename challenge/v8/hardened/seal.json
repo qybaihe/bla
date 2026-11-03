@@ -1,0 +1,8 @@
+{
+  "schema": "bla-crackme-v8-runtime-seal/v1",
+  "algorithm": "sha256",
+  "product": "aegis-entitlement-unlock-in-wasm",
+  "revision": "ef205de28b9a961a62d30ed447c7727732b276ee2a9faaef2e5cc0957beba5e1",
+  "certificateSha256": "df777780af5a9e99813bf3b8dafc223c65876c220cf847afa95164f10f026a74",
+  "notes": "ONE-WAY seal. WASM unlock: SHA-256(key) mask KDF + seed-derived rounds/pad3 + entropy-pad pack (revision NOT under XOR) + clear separate-segment SHA-256 commitment. Unlock body index scattered; export order shuffled; host uses arity+FLAG+cert. Harden with --self-seal. No allow-* weak switches. Harden --seed must NOT be embedded in artifacts."
+}

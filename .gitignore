@@ -24,3 +24,6 @@ challenge/v6/hardened/core.wasm
 
 # CrackMe v7 private fixture
 challenge/v7/.fixture/
+
+# CrackMe v8 fixture builds
+challenge/v8/.fixture/

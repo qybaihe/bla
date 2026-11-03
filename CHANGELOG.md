@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CrackMe v8 Aegis:** product entitlement challenge rebuilt with bla-agents **2.0** (`bankrupt` + `--self-seal`, no `--allow-*`). Absorbs red/blue R1–R12 recipes (SHA-256(key) mask KDF, commitment outside XOR, seed-derived rounds/pad3, arity-2 / export-order / unlock body-index hygiene). Meridian v7 remains a historical snapshot (cleartext private; not re-hardened).
+
 ## [2.0.0] — 2026-11-03
 
 Major MCP + Skill 2.0 release. Red/Blue R1–R12 packaging gates that held under adversarial

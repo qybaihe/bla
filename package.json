@@ -1,7 +1,7 @@
 {
   "name": "bla-agents",
   "version": "2.0.0",
-  "description": "BLA (Blind LLM Agents) \u2014 Adversarial defense shield that protects binaries, Electron apps, JS bundles, Python, WebAssembly, SQLite, AI Models, and Android DEX/IL2CPP against AI reverse-engineering agents like REA.",
+  "description": "BLA (Blind LLM Agents) — Adversarial defense shield that protects binaries, Electron apps, JS bundles, Python, WebAssembly, SQLite, AI Models, and Android DEX/IL2CPP against AI reverse-engineering agents like REA.",
   "keywords": [
     "reverse-engineering-defense",
     "anti-rea",
@@ -73,9 +73,12 @@
     "redteam:rea": "node scripts/redteam/run.mjs",
     "verify:rea:drift": "node scripts/verify-rea-constants.mjs",
     "crackme:build": "node scripts/crackme/build.mjs",
-    "crackme:seal": "node scripts/crackme/seal.mjs && node scripts/crackme/v7-seal.mjs",
+    "crackme:seal": "node scripts/crackme/seal.mjs && node scripts/crackme/v7-seal.mjs && node scripts/crackme/v8-seal.mjs",
     "crackme:v6": "node challenge/v6/run.mjs",
-    "crackme:v7": "node challenge/v7/run.mjs"
+    "crackme:v7": "node challenge/v7/run.mjs",
+    "crackme:v8:build": "node scripts/crackme/v8-build.mjs",
+    "crackme:v8:seal": "node scripts/crackme/v8-seal.mjs",
+    "crackme:v8": "node challenge/v8/run.mjs"
   },
   "dependencies": {
     "@babel/generator": "^7.26.0",
