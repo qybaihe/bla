@@ -14,35 +14,26 @@ import {
   type OneClickDefenseReport,
 } from "./defender.js";
 import {
-  discoverAndLintSealSidecars,
-  intensityEnforcesSealRefusal,
   sealCommitmentRefuseMessage,
 } from "./seal-commitment-lint.js";
 import {
-  discoverAndLintWasmParamCarriers,
-  intensityEnforcesWasmParamRefusal,
   wasmParamCarrierRefuseMessage,
 } from "./wasm-param-carrier-lint.js";
 import {
-  discoverAndLintJsAesUnwrap,
-  intensityEnforcesJsAesUnwrapRefusal,
   jsAesUnwrapRefuseMessage,
 } from "./js-aes-unwrap-lint.js";
 import {
-  discoverAndLintJsWasmHydrateDump,
-  intensityEnforcesJsWasmHydrateDumpRefusal,
   jsWasmHydrateDumpRefuseMessage,
 } from "./js-wasm-hydrate-dump-lint.js";
 import {
-  discoverAndLintWasmXorMaskSidecars,
-  intensityEnforcesWasmXorMaskSidecarRefusal,
   wasmXorMaskSidecarRefuseMessage,
 } from "./wasm-xor-mask-sidecar-lint.js";
 import {
-  discoverAndLintWasmSealXorKnownPlaintext,
-  intensityEnforcesWasmSealXorKnownPlaintextRefusal,
   wasmSealXorKnownPlaintextRefuseMessage,
 } from "./wasm-seal-xor-known-plaintext-lint.js";
+import {
+  evaluateHardenProjectPackagingBlocks,
+} from "./packaging-gates.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
@@ -381,41 +372,22 @@ export function hardenProject(
   const discovery = discoverHardenTargets(absDir, { maxArtifacts });
   const discovered = discovery.artifacts;
 
-  const sealReports = discoverAndLintSealSidecars(absDir);
-  const blockingSeals =
-    intensityEnforcesSealRefusal(intensity) && options.allowPlaintextSeal !== true
-      ? sealReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
-  const wasmParmReports = discoverAndLintWasmParamCarriers(absDir);
-  const blockingWasmParms =
-    intensityEnforcesWasmParamRefusal(intensity) &&
-    options.allowWasmClearParamCarriers !== true
-      ? wasmParmReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
-  const jsAesReports = discoverAndLintJsAesUnwrap(absDir);
-  const blockingJsAes =
-    intensityEnforcesJsAesUnwrapRefusal(intensity) &&
-    options.allowJsAesUnwrap !== true
-      ? jsAesReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
-  const jsHydrateDumpReports = discoverAndLintJsWasmHydrateDump(absDir);
-  const blockingJsHydrateDump =
-    intensityEnforcesJsWasmHydrateDumpRefusal(intensity) &&
-    options.allowJsWasmHydrateDump !== true
-      ? jsHydrateDumpReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
-  const wasmXorMaskReports = discoverAndLintWasmXorMaskSidecars(absDir);
-  const blockingWasmXorMask =
-    intensityEnforcesWasmXorMaskSidecarRefusal(intensity) &&
-    options.allowWasmXorMaskSidecar !== true
-      ? wasmXorMaskReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
-  const wasmSealXorReports = discoverAndLintWasmSealXorKnownPlaintext(absDir);
-  const blockingWasmSealXor =
-    intensityEnforcesWasmSealXorKnownPlaintextRefusal(intensity) &&
-    options.allowWasmSealXorKnownPlaintext !== true
-      ? wasmSealXorReports.filter((r) => r.shouldRefuseBankrupt)
-      : [];
+  const packagingBlocks = evaluateHardenProjectPackagingBlocks({
+    directory: absDir,
+    intensity,
+    allowPlaintextSeal: options.allowPlaintextSeal,
+    allowWasmClearParamCarriers: options.allowWasmClearParamCarriers,
+    allowJsAesUnwrap: options.allowJsAesUnwrap,
+    allowJsWasmHydrateDump: options.allowJsWasmHydrateDump,
+    allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
+    allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
+  });
+  const blockingSeals = packagingBlocks.blockingSeals;
+  const blockingWasmParms = packagingBlocks.blockingWasmParms;
+  const blockingJsAes = packagingBlocks.blockingJsAes;
+  const blockingJsHydrateDump = packagingBlocks.blockingJsHydrateDump;
+  const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
+  const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()

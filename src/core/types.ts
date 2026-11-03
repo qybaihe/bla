@@ -248,6 +248,10 @@ export interface ProtectionResult {
   readonly selfSeal?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
+  /** Present when WASM export-section order was seed-shuffled (red-blue round-11). */
+  readonly wasmExportOrderShuffled?: boolean;
+  /** Count of long-name decoy export aliases injected (red-blue round-10/12 hygiene). */
+  readonly wasmExportDecoysInjected?: number;
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;

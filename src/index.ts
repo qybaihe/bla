@@ -283,6 +283,8 @@ export {
 
 export {
   lintLaneIndependence,
+  lintLaneIndependenceFile,
+  discoverAndLintLaneIndependence,
   LANE_INDEPENDENCE_SCHEMA,
   formatSupportsLaneIndependenceLint,
   laneIndependenceRefuseMessage,
@@ -291,6 +293,17 @@ export {
   type LaneIndependenceFindingId,
   type LaneIndependenceSeverity,
 } from "./engine/lane-independence-lint.js";
+export {
+  scanPackagingGates,
+  evaluateHardenProjectPackagingBlocks,
+  formatPackagingGatesReport,
+  PACKAGING_GATES_SCHEMA,
+  type PackagingGateId,
+  type PackagingGateFinding,
+  type PackagingGatesReport,
+  type PackagingGatesScanOptions,
+  type PackagingGatesAllowOptions,
+} from "./engine/packaging-gates.js";
 export {
   lintSealCommitmentSource,
   lintSealCommitmentFile,
@@ -346,6 +359,7 @@ export {
 export {
   lintPanelDeriveAbiSource,
   lintPanelDeriveAbiFile,
+  discoverAndLintPanelDerive,
   rewriteStablePanelDeriveSymbols,
   panelDeriveSeedRoot,
   panelDeriveReplacementName,

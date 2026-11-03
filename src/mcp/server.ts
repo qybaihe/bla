@@ -42,6 +42,10 @@ import {
   type WasmSealXorKnownPlaintextReport,
 } from "../engine/wasm-seal-xor-known-plaintext-lint.js";
 import {
+  scanPackagingGates,
+  type PackagingGatesReport,
+} from "../engine/packaging-gates.js";
+import {
   computeArtifactRunId,
   readHardenRunSummary,
   sha256File,
@@ -664,6 +668,58 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
     },
   },
   {
+    name: "bla_lint",
+    description:
+      "DEFAULT packaging-footgun gate scan for a project directory (or file). Runs every R1–R7 bankrupt refuse lint plus lane-independence and panel-derive discovery in one call — same engines as the individual bla_lint_* tools / `bla lint`. Returns bla-packaging-gates/v1 with findings, blocking, and honestyNote. Writes nothing. Prefer this over calling eight separate lints when reviewing an entitlement tree before harden.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        directory: {
+          type: "string",
+          description: "Project directory or file to scan (default: cwd)",
+        },
+        intensity: {
+          type: "string",
+          enum: ["stealth", "balanced", "maximum", "bankrupt"],
+          description: "Intensity used to decide refuse (default: bankrupt)",
+        },
+        allow_plaintext_seal: {
+          type: "boolean",
+          description: "Treat plaintext/reversible seal as non-blocking (lab only)",
+        },
+        allow_wasm_clear_params: {
+          type: "boolean",
+          description: "Treat clear WASM param carriers as non-blocking (lab only)",
+        },
+        allow_js_aes_unwrap: {
+          type: "boolean",
+          description: "Treat JS AES unwrap footgun as non-blocking (lab only)",
+        },
+        allow_js_wasm_hydrate_dump: {
+          type: "boolean",
+          description: "Treat JS←WASM hydrate dump as non-blocking (lab only)",
+        },
+        allow_wasm_xor_mask_sidecar: {
+          type: "boolean",
+          description: "Treat WASM XOR-mask sidecar as non-blocking (lab only)",
+        },
+        allow_wasm_seal_xor_known_plaintext: {
+          type: "boolean",
+          description: "Treat seal.revision XOR KP as non-blocking (lab only)",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description: "Treat lane-independent gates as non-blocking (lab only)",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description: "Treat panel offline oracle as non-blocking (lab only)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "bla_lint_lanes",
     description:
       "Read-only heuristic lane-independence footgun lint (same engine as CLI `bla lint-lanes`). Returns severity-error findings when gate/activation source looks like independent per-lane checks. Harden refuses such gates unless allow_lane_independent. Prefer whole-key chained mixing. Writes nothing.",
@@ -1126,6 +1182,45 @@ function verifyHonestyOptions(args: Record<string, unknown>): VerifyTargetOption
       ? { numericTemplateLeakKnown: args.numeric_template_leak_known }
       : {}),
   };
+}
+
+function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesReport {
+  const directory =
+    typeof args.directory === "string" && args.directory.length > 0
+      ? resolvePath(args.directory)
+      : process.cwd();
+  const intensity =
+    args.intensity === "stealth" ||
+    args.intensity === "balanced" ||
+    args.intensity === "maximum" ||
+    args.intensity === "bankrupt"
+      ? args.intensity
+      : "bankrupt";
+  return scanPackagingGates({
+    directory,
+    intensity,
+    includeProtectTimeGates: true,
+    ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+    ...(args.allow_wasm_clear_params === true
+      ? { allowWasmClearParamCarriers: true }
+      : {}),
+    ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+    ...(args.allow_js_wasm_hydrate_dump === true
+      ? { allowJsWasmHydrateDump: true }
+      : {}),
+    ...(args.allow_wasm_xor_mask_sidecar === true
+      ? { allowWasmXorMaskSidecar: true }
+      : {}),
+    ...(args.allow_wasm_seal_xor_known_plaintext === true
+      ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(args.allow_lane_independent === true
+      ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(args.allow_panel_offline_oracle === true
+      ? { allowPanelOfflineOracle: true }
+      : {}),
+  });
 }
 
 function runLintLanes(args: Record<string, unknown>): LaneIndependenceReport {
@@ -1780,6 +1875,23 @@ export async function handleMcpRequest(
               ? { maxTargets: args.max_targets }
               : {}),
           });
+        } else if (name === "bla_lint") {
+          const full = runPackagingGatesLint(args);
+          const { details, ...compact } = full;
+          payload = {
+            ...compact,
+            detailCounts: {
+              seals: details.seals.length,
+              wasmParams: details.wasmParams.length,
+              jsAes: details.jsAes.length,
+              jsHydrateDump: details.jsHydrateDump.length,
+              wasmXorMask: details.wasmXorMask.length,
+              wasmSealXor: details.wasmSealXor.length,
+              lanes: details.lanes.length,
+              panelDerive: details.panelDerive.length,
+            },
+          };
+          refused = full.shouldRefuseBankrupt;
         } else if (name === "bla_lint_lanes") {
           payload = runLintLanes(args);
         } else if (name === "bla_lint_seal") {

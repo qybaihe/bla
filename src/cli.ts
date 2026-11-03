@@ -19,6 +19,10 @@ import { lintJsAesUnwrapFile } from "./engine/js-aes-unwrap-lint.js";
 import { lintJsWasmHydrateDumpFile } from "./engine/js-wasm-hydrate-dump-lint.js";
 import { lintWasmXorMaskSidecarFile } from "./engine/wasm-xor-mask-sidecar-lint.js";
 import { lintWasmSealXorKnownPlaintextFile } from "./engine/wasm-seal-xor-known-plaintext-lint.js";
+import {
+  scanPackagingGates,
+  formatPackagingGatesReport,
+} from "./engine/packaging-gates.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -58,6 +62,7 @@ Commands:
   defend <target>             One-click full Counter-REA pipeline (inspect -> audit -> bankrupt protect -> verify)
   inspect-release <target>    Read-only local source-map & symbol exposure check
   audit <target>              Pre-flight REA exposure & vulnerability scan
+  lint [dir]                  DEFAULT packaging gate scan (all R1–R7 refuse lints + lanes/panel); exit 2 on refuse
   lint-lanes <file>           Heuristic ERROR if gate code looks lane-independent (issue #40.1); exit 2
   lint-wasm-params <file>    Heuristic ERROR if WASM embeds clear R3PARM/R3CIPH/R2SEAL-class carriers; exit 2
   lint-panel-derive <file>   Heuristic ERROR if stable __vaultPanelDerive_* / deriveLocal oracle remains; exit 2
@@ -521,6 +526,41 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           return 2;
         }
         return report.overallSuccess ? 0 : 2;
+      }
+
+      case "lint": {
+        const target = parsed.positionals[0] ?? ".";
+        const report = scanPackagingGates({
+          directory: resolve(target),
+          intensity: (parsed.intensity as "stealth" | "balanced" | "maximum" | "bankrupt") ?? "bankrupt",
+          allowPlaintextSeal: parsed.allowPlaintextSeal,
+          allowWasmClearParamCarriers: parsed.allowWasmClearParamCarriers,
+          allowJsAesUnwrap: parsed.allowJsAesUnwrap,
+          allowJsWasmHydrateDump: parsed.allowJsWasmHydrateDump,
+          allowWasmXorMaskSidecar: parsed.allowWasmXorMaskSidecar,
+          allowWasmSealXorKnownPlaintext: parsed.allowWasmSealXorKnownPlaintext,
+          allowLaneIndependentGates: parsed.allowLaneIndependentGates,
+          allowPanelOfflineOracle: parsed.allowPanelOfflineOracle,
+          allowStablePanelDeriveAbi: parsed.allowStablePanelDeriveAbi,
+          includeProtectTimeGates: true,
+        });
+        if (parsed.json) {
+          // Strip heavy details.details raw blobs for CLI JSON by default — keep findings/blocking.
+          const { details: _details, ...compact } = report;
+          console.log(JSON.stringify({ ...compact, detailCounts: {
+            seals: report.details.seals.length,
+            wasmParams: report.details.wasmParams.length,
+            jsAes: report.details.jsAes.length,
+            jsHydrateDump: report.details.jsHydrateDump.length,
+            wasmXorMask: report.details.wasmXorMask.length,
+            wasmSealXor: report.details.wasmSealXor.length,
+            lanes: report.details.lanes.length,
+            panelDerive: report.details.panelDerive.length,
+          } }, null, 2));
+        } else {
+          console.log(formatPackagingGatesReport(report));
+        }
+        return report.shouldRefuseBankrupt ? 2 : 0;
       }
 
       case "lint-lanes": {

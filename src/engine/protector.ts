@@ -306,6 +306,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
   let wasmExportsRenamed = 0;
+  let wasmExportOrderShuffled = false;
+  let wasmExportDecoysInjected = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   const counteredVectors = new Set<ReaAttackVectorId>();
@@ -638,6 +640,8 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customSectionsAdded;
     wasmExportsRenamed = res.exportsRenamed.length;
+    wasmExportOrderShuffled = res.exportsOrderShuffled === true;
+    wasmExportDecoysInjected = res.exportDecoysInjected;
     counteredVectors.add("wasm-wat-interface");
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
@@ -927,6 +931,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
+    ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),
+    ...(wasmExportDecoysInjected > 0
+      ? { wasmExportDecoysInjected }
+      : {}),
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,

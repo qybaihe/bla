@@ -21,8 +21,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { findSiblingSealSidecars } from "./seal-commitment-lint.js";
 
 export const PANEL_DERIVE_ABI_SCHEMA = "bla-panel-derive-abi-lint/v1" as const;
@@ -321,4 +321,63 @@ export function intensityRewritesPanelDerive(intensity: string): boolean {
 
 export function intensityEnforcesPanelOracleRefusal(intensity: string): boolean {
   return intensity === "bankrupt";
+}
+
+const PANEL_SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".hg",
+  ".svn",
+  ".bla-hardened",
+  "coverage",
+  ".turbo",
+  ".cache",
+  "__pycache__",
+  ".venv",
+  "venv",
+]);
+
+const PANEL_JS_EXT = /\.(?:[cm]?[jt]s|tsx?|html?)$/i;
+const PANEL_MAX_FILES = 64;
+const PANEL_MAX_DEPTH = 8;
+
+function walkPanelCandidates(dir: string, depth: number, out: string[]): void {
+  if (out.length >= PANEL_MAX_FILES || depth > PANEL_MAX_DEPTH) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (out.length >= PANEL_MAX_FILES) return;
+    if (entry.isDirectory()) {
+      if (PANEL_SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+      walkPanelCandidates(join(dir, entry.name), depth + 1, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!PANEL_JS_EXT.test(entry.name)) continue;
+    out.push(join(dir, entry.name));
+  }
+}
+
+/**
+ * Discover JS/TS/HTML under a directory and lint each for panel-derive footguns.
+ * Used by unified `bla lint` / packaging-gates.
+ */
+export function discoverAndLintPanelDerive(
+  directory: string,
+): readonly PanelDeriveAbiReport[] {
+  const abs = resolve(directory);
+  if (!existsSync(abs)) {
+    throw new Error(`Path not found: ${abs}`);
+  }
+  const st = statSync(abs);
+  if (st.isFile()) {
+    return [lintPanelDeriveAbiFile(abs)];
+  }
+  const candidates: string[] = [];
+  walkPanelCandidates(abs, 0, candidates);
+  return candidates.map((p) => lintPanelDeriveAbiFile(p));
 }

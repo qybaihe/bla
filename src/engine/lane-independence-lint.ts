@@ -11,6 +11,10 @@
  * This does NOT give reverse-engineering advice.
  */
 
+
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+
 export const LANE_INDEPENDENCE_SCHEMA = "bla-lane-independence-lint/v1" as const;
 
 export type LaneIndependenceFindingId =
@@ -160,4 +164,75 @@ export function laneIndependenceRefuseMessage(
     `Prefer whole-key chained mixing. To override (intentional footgun / teaching fixture), ` +
     `pass allowLaneIndependentGates / --allow-lane-independent / allow_lane_independent:true.`
   );
+}
+
+const SKIP_DIR_NAMES = new Set([
+  "node_modules",
+  ".git",
+  ".hg",
+  ".svn",
+  ".bla-hardened",
+  "coverage",
+  ".turbo",
+  ".cache",
+  "__pycache__",
+  ".venv",
+  "venv",
+]);
+
+const JS_EXT = /\.(?:[cm]?[jt]s|tsx?)$/i;
+const MAX_JS_FILES = 64;
+const MAX_WALK_DEPTH = 8;
+
+function walkJsGateCandidates(dir: string, depth: number, out: string[]): void {
+  if (out.length >= MAX_JS_FILES || depth > MAX_WALK_DEPTH) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (out.length >= MAX_JS_FILES) return;
+    if (entry.isDirectory()) {
+      if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+      walkJsGateCandidates(join(dir, entry.name), depth + 1, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!JS_EXT.test(entry.name)) continue;
+    out.push(join(dir, entry.name));
+  }
+}
+
+/** File wrapper matching other packaging lints. */
+export function lintLaneIndependenceFile(filePath: string): LaneIndependenceReport & {
+  readonly path: string;
+} {
+  const abs = resolve(filePath);
+  if (!existsSync(abs)) {
+    throw new Error(`lane-independence target not found: ${abs}`);
+  }
+  const report = lintLaneIndependence(readFileSync(abs, "utf8"));
+  return { ...report, path: abs };
+}
+
+/**
+ * Discover JS/TS under a directory and lint each for lane-independence footguns.
+ * Used by unified `bla lint` / packaging-gates (protect still refuses per-file).
+ */
+export function discoverAndLintLaneIndependence(
+  directory: string,
+): ReadonlyArray<LaneIndependenceReport & { readonly path: string }> {
+  const abs = resolve(directory);
+  if (!existsSync(abs)) {
+    throw new Error(`Path not found: ${abs}`);
+  }
+  const st = statSync(abs);
+  if (st.isFile()) {
+    return [lintLaneIndependenceFile(abs)];
+  }
+  const candidates: string[] = [];
+  walkJsGateCandidates(abs, 0, candidates);
+  return candidates.map((p) => lintLaneIndependenceFile(p));
 }
