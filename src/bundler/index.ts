@@ -1,5 +1,5 @@
 import type { ProtectionIntensity } from "../core/types.js";
-import { SeededPrng } from "../core/prng.js";
+import { SeededPrng, deriveSeedLabel } from "../core/prng.js";
 import { generateChaffPayloads } from "../shields/chaff/chaff-generator.js";
 import { generateHoneySourceMap } from "../shields/formats/sourcemap.js";
 import {
@@ -120,7 +120,7 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
       if (!include.test(chunk.fileName)) {
         return null;
       }
-      const seed = `${options.seed ?? "bla-rollup"}:${chunk.fileName}`;
+      const seed = deriveSeedLabel(options.seed ?? "bla-rollup", chunk.fileName);
       const sourceType = inferCarrierFromRollupFormat(
         outputOptions?.format,
         chunk.fileName,
@@ -235,7 +235,7 @@ export class BlaWebpackPlugin {
               () =>
                 transformJavaScriptWithBlaShield(rawSource, {
                   intensity,
-                  seed: `${this.options.seed ?? "bla-webpack"}:${assetName}`,
+                  seed: deriveSeedLabel(this.options.seed ?? "bla-webpack", assetName),
                   filename: assetName,
                   sourceType,
                   loader,
@@ -285,7 +285,7 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
           () =>
             transformJavaScriptWithBlaShield(source, {
               intensity,
-              seed: `${options.seed ?? "bla-esbuild"}:${args.path}`,
+              seed: deriveSeedLabel(options.seed ?? "bla-esbuild", args.path),
               filename: args.path,
               loader,
               sourceType,
