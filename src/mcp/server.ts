@@ -54,6 +54,9 @@ import {
   getRedteamReport,
   runReaDriftCheck,
 } from "../engine/rea-observability.js";
+import {
+  comparePolymorphArtifacts,
+} from "../engine/polymorph-report.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -884,6 +887,41 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
         },
       },
+      additionalProperties: false,
+    },
+  },
+
+  {
+    name: "bla_polymorph_report",
+    description:
+      "Compare two hardened artifact directories and report objective structural drift (export-name Jaccard, export-order Kendall-tau, byte-diff ratio, identifier overlap, aggregate driftScore). Honesty: drift ≠ cracking resistance — prove equivalence with bla_verify / REA. expect=same refuses when driftScore is not near zero; expect=different refuses when drift is too low.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dir_a: {
+          type: "string",
+          description: "First artifact directory (e.g. harden output with seed A)",
+        },
+        dir_b: {
+          type: "string",
+          description: "Second artifact directory (e.g. harden output with seed B or a re-run of A)",
+        },
+        expect: {
+          type: "string",
+          enum: ["same", "different", "report"],
+          description:
+            "same → fail unless near-byte-identical; different → fail unless driftScore ≥ threshold; report (default) → metrics only",
+        },
+        same_threshold: {
+          type: "number",
+          description: "driftScore upper bound for expect=same (default 0.01)",
+        },
+        different_threshold: {
+          type: "number",
+          description: "driftScore lower bound for expect=different (default 0.25)",
+        },
+      },
+      required: ["dir_a", "dir_b"],
       additionalProperties: false,
     },
   },
@@ -1933,6 +1971,28 @@ export async function handleMcpRequest(
           {
             const status = (payload as { status: string }).status;
             refused = status === "unverified" || status === "fail";
+          }
+        
+        } else if (name === "bla_polymorph_report") {
+          const expectArg = typeof args.expect === "string" ? args.expect : "report";
+          const expectMode =
+            expectArg === "same" || expectArg === "different" || expectArg === "report"
+              ? expectArg
+              : "report";
+          payload = comparePolymorphArtifacts({
+            dirA: args.dir_a as string,
+            dirB: args.dir_b as string,
+            expect: expectMode,
+            ...(typeof args.same_threshold === "number"
+              ? { sameThreshold: args.same_threshold as number }
+              : {}),
+            ...(typeof args.different_threshold === "number"
+              ? { differentThreshold: args.different_threshold as number }
+              : {}),
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "fail" || status === "error";
           }
         } else if (name === "bla_redteam_report") {
           payload = getRedteamReport({

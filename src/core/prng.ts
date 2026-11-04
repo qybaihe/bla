@@ -1,9 +1,27 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   realisticIdentifier,
   type IdentifierStyle,
   type RealisticIdentifierOptions,
 } from "./identifiers.js";
+
+/**
+ * Derive an independent, deterministic sub-seed from a root seed + label via
+ * HMAC-SHA256. Same (root, label) → same child seed; different labels do not
+ * share PRNG state. Prefer this over string-concat (`${seed}:${name}`) so
+ * substreams stay cryptographically independent.
+ */
+export function deriveSeedLabel(
+  rootSeed: string | number,
+  label: string,
+): string {
+  if (typeof label !== "string" || label.length === 0) {
+    throw new Error("deriveSeedLabel: label must be a non-empty string");
+  }
+  return createHmac("sha256", String(rootSeed))
+    .update(label, "utf8")
+    .digest("hex");
+}
 
 /**
  * Deterministic seeded PRNG (SplitMix32 / Mulberry32) so BLA builds can be
@@ -19,6 +37,14 @@ export class SeededPrng {
     const digest = createHash("sha256").update(this.seedString).digest();
     this.#state = digest.readUInt32LE(0) ^ digest.readUInt32LE(4) ^ 0x9e3779b9;
     if (this.#state === 0) this.#state = 0x6d2b79f5;
+  }
+
+  /**
+   * Fork an independent substream keyed by `label` (HMAC-SHA256 of root seed).
+   * Drawing from the child does not advance this instance's state.
+   */
+  derive(label: string): SeededPrng {
+    return new SeededPrng(deriveSeedLabel(this.seedString, label));
   }
 
   nextUint32(): number {

@@ -1,6 +1,6 @@
 export { BLA_IDENTITY, REA_INTERNAL_LIMITS } from "./identity.js";
 export * from "./core/types.js";
-export { SeededPrng } from "./core/prng.js";
+export { SeededPrng, deriveSeedLabel } from "./core/prng.js";
 export { detectArtifactFormat } from "./core/detector.js";
 export { estimateAgentReverseEngineeringCosts } from "./core/token-estimator.js";
 export { generateChaffPayloads, type ChaffPayload } from "./shields/chaff/chaff-generator.js";
@@ -54,6 +54,16 @@ export {
   type ElectronHardeningReport,
 } from "./shields/formats/electron-fuses.js";
 export { inspectWasmBinary, protectWasmBinary } from "./shields/formats/wasm.js";
+export {
+  comparePolymorphArtifacts,
+  POLYMORPH_REPORT_SCHEMA,
+} from "./engine/polymorph-report.js";
+export type {
+  PolymorphReport,
+  PolymorphReportOptions,
+  PolymorphExpectMode,
+  FilePairMetric,
+} from "./engine/polymorph-report.js";
 export {
   InvalidPythonSourceError,
   findPythonPrologueInsertionOffset,

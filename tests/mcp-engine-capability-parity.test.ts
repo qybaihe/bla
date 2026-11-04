@@ -160,6 +160,10 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
     params: ["rea_root"],
   },
   {
+    tool: "bla_polymorph_report",
+    params: ["dir_a", "dir_b", "expect", "same_threshold", "different_threshold"],
+  },
+  {
     tool: "bla_redteam_report",
     params: ["execute", "rea_root", "report_path"],
   },
