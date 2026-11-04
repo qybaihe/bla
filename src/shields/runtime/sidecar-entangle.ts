@@ -1,14 +1,26 @@
 /**
- * Sidecar / entry entanglement planner stub (issue #40 / STATE).
+ * Sidecar / entry entanglement planner (issue #40 / Direction-3).
  *
- * Full binary rewriting is intentionally deferred — see
- * `docs/design/sidecar-entry-entanglement.md`. This module returns a typed plan
- * agents can inspect before enabling the future opt-in flag.
+ * Elevates the former planned-stub into a coverage-matrix planner that assigns
+ * interleaved SHA-256 check edges across entry + sidecar paths. Full binary
+ * rewriting of non-JS sidecars remains out of scope (see
+ * `docs/design/sidecar-entry-entanglement.md`); JS checker hosts receive
+ * `generateSelfSealSnippet` payloads via protect/harden.
  *
- * DEFENSIVE ONLY.
+ * DEFENSIVE ONLY. Hash-only — no guessing.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { join, isAbsolute } from "node:path";
+import {
+  INTEGRITY_COVERAGE_SCHEMA,
+  buildInterleavedCoverageMatrix,
+  evaluateCoverageMatrix,
+  finalizeCoverageMatrixHashes,
+  type CoverageEvaluation,
+  type CoverageMatrix,
+} from "../../engine/integrity-coverage.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -18,6 +30,13 @@ export interface SidecarEntanglePlanOptions {
   readonly seedTag?: string;
   /** When true, plan folds the binding into self-seal / opaque seed rather than a hard throw. */
   readonly softFold?: boolean;
+  /**
+   * Optional on-disk bytes (or absolute paths to read) keyed by the same relative
+   * paths listed in entry/sidecars — used to finalize expectedSha256.
+   */
+  readonly fileBytes?: Readonly<Record<string, Buffer | string>>;
+  /** Absolute directory used to resolve relative paths when reading hashes. */
+  readonly baseDir?: string;
 }
 
 export interface SidecarEntanglePlan {
@@ -30,8 +49,11 @@ export interface SidecarEntanglePlan {
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
   readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "unspecified";
-  readonly status: "planned-stub";
+  /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
+  readonly status: "ready" | "incomplete";
   readonly note: string;
+  readonly coverageMatrix: CoverageMatrix;
+  readonly coverageEvaluation: CoverageEvaluation;
 }
 
 function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] {
@@ -42,8 +64,13 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   return "unspecified";
 }
 
+function isJsChecker(path: string): boolean {
+  return /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(path);
+}
+
 /**
- * Plan a sidecar↔entry entanglement binding. Does not read or rewrite files.
+ * Plan interleaved sidecar↔entry entanglement as a coverage matrix.
+ * Reads optional on-disk bytes to finalize hashes when `baseDir` + paths exist.
  */
 export function planSidecarEntanglement(
   options: SidecarEntanglePlanOptions,
@@ -59,6 +86,69 @@ export function planSidecarEntanglement(
     .digest("hex")
     .slice(0, 16);
 
+  const fileNodes = [...new Set([options.entryPath, ...sidecars])].sort();
+  const checkerHosts = fileNodes.filter(isJsChecker);
+  // Prefer entry as a checker host even if list empty.
+  const hosts =
+    checkerHosts.length > 0
+      ? checkerHosts
+      : isJsChecker(options.entryPath)
+        ? [options.entryPath]
+        : [];
+
+  let expected: Record<string, string> = {};
+  const supplied = options.fileBytes ?? {};
+  for (const [k, v] of Object.entries(supplied)) {
+    expected[k] = createHash("sha256")
+      .update(typeof v === "string" ? Buffer.from(v) : v)
+      .digest("hex");
+  }
+
+  // Optionally read from disk when baseDir is provided.
+  if (options.baseDir) {
+    for (const rel of fileNodes) {
+      if (expected[rel]) continue;
+      const abs = isAbsolute(rel) ? rel : join(options.baseDir, rel);
+      try {
+        if (existsSync(abs)) {
+          expected[rel] = createHash("sha256")
+            .update(readFileSync(abs))
+            .digest("hex");
+        }
+      } catch {
+        /* leave missing — evaluate will refuse */
+      }
+    }
+  }
+
+  let matrix = buildInterleavedCoverageMatrix({
+    fileNodes,
+    checkerHosts: hosts.length > 0 ? hosts : [options.entryPath],
+    expectedSha256: expected,
+    colocatedSites: 2,
+  });
+  matrix = finalizeCoverageMatrixHashes(matrix, {
+    ...Object.fromEntries(
+      Object.entries(supplied).map(([k, v]) => [
+        k,
+        typeof v === "string" ? Buffer.from(v) : v,
+      ]),
+    ),
+  });
+  // Re-apply disk hashes into finalize if we computed expected above.
+  if (Object.keys(expected).length > 0) {
+    matrix = {
+      schema: INTEGRITY_COVERAGE_SCHEMA,
+      nodes: matrix.nodes,
+      edges: matrix.edges,
+      expectedSha256: { ...matrix.expectedSha256, ...expected },
+    };
+    matrix = finalizeCoverageMatrixHashes(matrix, {});
+  }
+
+  const coverageEvaluation = evaluateCoverageMatrix(matrix);
+  const status = coverageEvaluation.ok ? "ready" : "incomplete";
+
   return {
     schema: SIDECAR_ENTANGLE_SCHEMA,
     entryPath: options.entryPath,
@@ -68,8 +158,11 @@ export function planSidecarEntanglement(
     softFold: options.softFold === true,
     planId,
     entryHookKind: guessHookKind(options.entryPath),
-    status: "planned-stub",
-    note:
-      "Stub planner only — enable full rewrite when sidecarEntangle lands in protect paths. See docs/design/sidecar-entry-entanglement.md.",
+    status,
+    note: coverageEvaluation.ok
+      ? "Interleaved coverage matrix ready — wire checkers via self-seal / protect."
+      : `Coverage incomplete: ${coverageEvaluation.reasons.join(", ")}. ${coverageEvaluation.oneLineAdvice}`,
+    coverageMatrix: matrix,
+    coverageEvaluation,
   };
 }
