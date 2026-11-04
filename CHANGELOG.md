@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **seal-commitment lint:** new warnings `public-materialization-seed` and `public-key-digest-oracle` (CrackMe v8 red-team exposures) surface via `bla lint` / `bla_lint`. Warning only — not bankrupt refuse.
 - **CrackMe v8 Aegis:** product entitlement challenge rebuilt with bla-agents **2.0** (`bankrupt` + `--self-seal`, no `--allow-*`). Absorbs red/blue R1–R12 recipes (SHA-256(key) mask KDF, commitment outside XOR, seed-derived rounds/pad3, arity-2 / export-order / unlock body-index hygiene). Meridian v7 remains a historical snapshot (cleartext private; not re-hardened).
 
 ## [2.0.0] — 2026-11-03

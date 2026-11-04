@@ -53,6 +53,7 @@ Held across R8–R12 (NO PRIZE). Keep in gate design; do **not** invent packagin
 - Mask via **one-way** KDF (`SHA-256(key[16])`), never algebraically invertible byte mix.
 - Keep public digests (**`seal.revision`**) **out** of XOR-masked plaintext; commitment in a separate clear segment.
 - Randomize pack header `pad3` + seed-derived rounds (close structural KP).
+- Keep the **crypto schedule / harden seed private** (derive from release secrets); a public `seed` in SEAL re-opens header KP and strips the mask without WASM RE. Publish only `flagSha256`/`certificateSha256` for prove-solve — **never** `keySha256` (offline key oracle). `bla_lint` warns (`public-materialization-seed`, `public-key-digest-oracle`); warning only, not a refuse gate.
 - Host resolves unlock by **arity + `FLAG{…}` shape + `sha256===certificateSha256`**, never export name/order.
 - JS honeypot/canary ≠ WASM unlock (decoy must fail certificate check).
 
