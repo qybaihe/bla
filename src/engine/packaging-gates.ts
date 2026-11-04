@@ -65,6 +65,11 @@ import {
   plaintextSecretRefuseMessage,
   type PlaintextSecretReport,
 } from "./plaintext-secret-lint.js";
+import {
+  discoverAndLintIntegrityCoverage,
+  integrityCoverageRefuseMessage,
+  type IntegrityCoverageFileReport,
+} from "./integrity-coverage.js";
 
 export const PACKAGING_GATES_SCHEMA = "bla-packaging-gates/v1" as const;
 
@@ -77,7 +82,8 @@ export type PackagingGateId =
   | "wasm-seal-xor-known-plaintext"
   | "lane-independence"
   | "panel-derive"
-  | "plaintext-secret";
+  | "plaintext-secret"
+  | "integrity-coverage";
 
 export interface PackagingGateFinding {
   readonly gate: PackagingGateId;
@@ -100,6 +106,8 @@ export interface PackagingGatesAllowOptions {
   readonly allowPanelOfflineOracle?: boolean;
   readonly allowStablePanelDeriveAbi?: boolean;
   readonly allowPlaintextString?: boolean;
+  /** Lab escape: allow bankrupt despite failing integrity coverage matrix. */
+  readonly allowSinglePointIntegrity?: boolean;
 }
 
 export interface PackagingGatesScanOptions extends PackagingGatesAllowOptions {
@@ -136,6 +144,7 @@ export interface PackagingGatesReport {
     readonly lanes: ReadonlyArray<LaneIndependenceReport & { readonly path: string }>;
     readonly panelDerive: readonly PanelDeriveAbiReport[];
     readonly plaintextSecrets: readonly PlaintextSecretReport[];
+    readonly integrityCoverage: readonly IntegrityCoverageFileReport[];
   };
 }
 
@@ -158,6 +167,7 @@ function emptyCounts(): Record<PackagingGateId, number> {
     "lane-independence": 0,
     "panel-derive": 0,
     "plaintext-secret": 0,
+    "integrity-coverage": 0,
   };
 }
 
@@ -187,6 +197,7 @@ export function scanPackagingGates(
   const plaintextSecrets = discoverAndLintPlaintextSecrets(absDir, {
     allowPlaintextString: options.allowPlaintextString,
   });
+  const integrityCoverage = discoverAndLintIntegrityCoverage(absDir);
 
   const findings: PackagingGateFinding[] = [];
   const counts = emptyCounts();
@@ -328,6 +339,21 @@ export function scanPackagingGates(
       findingCount: r.findings.length,
     });
   }
+  for (const r of integrityCoverage) {
+    if (r.ok && !r.shouldRefuseBankrupt) continue;
+    counts["integrity-coverage"] += 1;
+    findings.push({
+      gate: "integrity-coverage",
+      path: r.path,
+      relativePath: relPath(absDir, r.path),
+      shouldRefuseBankrupt: r.shouldRefuseBankrupt,
+      refuseMessage: r.shouldRefuseBankrupt
+        ? integrityCoverageRefuseMessage(r, r.path)
+        : undefined,
+      oneLineAdvice: r.oneLineAdvice,
+      findingCount: r.reasons.length,
+    });
+  }
 
   const blocking = filterBlockingFindings(findings, intensity, options);
 
@@ -358,6 +384,7 @@ export function scanPackagingGates(
       lanes,
       panelDerive,
       plaintextSecrets,
+      integrityCoverage,
     },
   };
 }
@@ -415,6 +442,12 @@ function filterBlockingFindings(
         return (
           intensityEnforcesPlaintextSecretRefusal(intensity) &&
           allow.allowPlaintextString !== true &&
+          f.shouldRefuseBankrupt
+        );
+      case "integrity-coverage":
+        return (
+          intensity === "bankrupt" &&
+          allow.allowSinglePointIntegrity !== true &&
           f.shouldRefuseBankrupt
         );
       default:
