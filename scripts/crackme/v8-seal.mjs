@@ -18,7 +18,7 @@ import {
   ROOT,
   SCHEMA,
   SEAL_PATH,
-  SEED,
+  SEED_LABEL,
   extractFlag,
   hardenChallenge,
   prepareRunnable,
@@ -45,12 +45,15 @@ try {
   const seal = JSON.parse(readFileSync(SEAL_PATH, "utf8"));
   if (seal.schema !== SCHEMA || seal.mode !== "release") fail("SEAL schema/mode drift");
   if (seal.product !== PRODUCT) fail("SEAL product drift");
-  if (seal.seed !== SEED || seal.intensity !== INTENSITY) fail("SEAL seed/intensity drift");
+  if (seal.label !== SEED_LABEL || seal.intensity !== INTENSITY) fail("SEAL label/intensity drift");
+  for (const leak of ["seed", "materializationSeed", "hardenSeed", "keySha256", "keyDigest"]) {
+    if (leak in seal) fail(`SEAL must not publish ${leak} (public-seed KP / offline key oracle)`);
+  }
   if (seal.selfSeal !== true) fail("SEAL must pin selfSeal=true");
   if (seal.llmDirectives !== false || seal.emitManifest !== false) fail("SEAL must pin llmDirectives=false, emitManifest=false");
   const pkgVersion = String(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version);
   if (seal.blaVersion !== pkgVersion) fail(`SEAL blaVersion ${seal.blaVersion} != package.json ${pkgVersion}`);
-  if (!/^[0-9a-f]{64}$/.test(seal.flagSha256) || !/^[0-9a-f]{64}$/.test(seal.keySha256)) fail("SEAL digests missing");
+  if (!/^[0-9a-f]{64}$/.test(seal.flagSha256)) fail("SEAL flagSha256 missing");
 
   for (const rel of COMMITTED_FILES) {
     const got = sha256File(join(HARDENED_DIR, rel));
@@ -90,7 +93,7 @@ try {
   const key = process.env.CRACKME_V8_KEY;
   const flag = process.env.CRACKME_V8_FLAG;
   if (key && flag) {
-    if (sha256Hex(key) === seal.keySha256 && sha256Hex(flag) === seal.flagSha256) {
+    if (sha256Hex(flag) === seal.flagSha256) {
       validateSecrets(key, flag);
       const r = runLicense(run, key);
       if (!r.ok || extractFlag(r.stdout) !== flag) fail("release unlock failed: " + r.stdout);

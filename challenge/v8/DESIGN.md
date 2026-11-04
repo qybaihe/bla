@@ -28,6 +28,7 @@ graduation of the standing red/blue entitlement design instead.
 | R2–R4 | Reversible seals, JS AES unwrap, panel oracles, soft self-seal | One-way SHA-256 seal; no AES unwrap; no panel derive; **`--self-seal`** |
 | R5–R6 | Hydrate dump / XOR-mask sidecar | Unlock stays in WASM; no mask sidecar |
 | R7–R9 | Seal.revision XOR-KP + weak mask KDF + structure KP | **SHA-256(key) mask KDF**; commitment **outside** XOR; seed-derived rounds+pad3 |
+| v8 red | Public SEAL `seed` → schedule KP; public `keySha256` → offline key oracle | Harden/schedule seed **private** (derived from release secrets), SEAL v2 publishes only `label` + `flagSha256`; `bla_lint` warns `public-materialization-seed` / `public-key-digest-oracle` |
 | R10–R12 | Arity-2 alias stack / export-order / body idx 0 | Prefer arity-2 aliases; export-order shuffle; unlock body-index scatter |
 | P2 | Full WASM RE + SMT | **Honest residual** — not refused as a packaging lint |
 
