@@ -119,6 +119,7 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | Custom license/activation gate review | **`bla_lint_lanes`** `{ "path": "<gate.js>" }` (CLI: `bla lint-lanes`) |
 | Re-check a prior harden run | **`bla_run_lookup`** `{ "summary_path": "<.bla-hardened or summary.json>", "run_id": "…" }` |
 | REA constant drift / empirical report | **`bla_rea_drift`** / **`bla_redteam_report`** (unverified if REA absent; on-disk read → available) |
+| Cross-build structural drift (seeded polymorphism) | **`bla_polymorph_report`** (driftScore only — not a cracking claim; prove equivalence with verify/REA) |
 | Format-specific knobs | Load the matching appendix under `references/` |
 
 ## FORBIDDEN
