@@ -164,6 +164,14 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
     params: ["dir_a", "dir_b", "expect", "same_threshold", "different_threshold"],
   },
   {
+    tool: "bla_encrypt_strings",
+    params: ["path", "seed", "out_dir", "include_urls", "dry_run"],
+  },
+  {
+    tool: "bla_lint_plaintext_secrets",
+    params: ["path", "allow_plaintext_string"],
+  },
+  {
     tool: "bla_redteam_report",
     params: ["execute", "rea_root", "report_path"],
   },

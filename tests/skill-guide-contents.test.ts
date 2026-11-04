@@ -32,6 +32,8 @@ describe("blind-llm-agents skill guide contents", () => {
     expect(text).toContain("bla_run_lookup");
     expect(text).toContain("bla_rea_drift");
     expect(text).toContain("bla_polymorph_report");
+    expect(text).toContain("bla_encrypt_strings");
+    expect(text).toContain("bla_lint_plaintext_secrets");
     expect(text).toContain("bla_redteam_report");
     expect(text).toMatch(/unverified/i);
     expect(text).toContain("available");

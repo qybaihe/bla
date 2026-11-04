@@ -57,6 +57,11 @@ import {
 import {
   comparePolymorphArtifacts,
 } from "../engine/polymorph-report.js";
+import { encryptStrings } from "../engine/encrypt-strings.js";
+import {
+  discoverAndLintPlaintextSecrets,
+  lintPlaintextSecretsFile,
+} from "../engine/plaintext-secret-lint.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -718,6 +723,10 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Treat panel offline oracle as non-blocking (lab only)",
         },
+        allow_plaintext_string: {
+          type: "boolean",
+          description: "Treat cleartext sensitive literals as non-blocking (lab only)",
+        },
       },
       additionalProperties: false,
     },
@@ -922,6 +931,58 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
       },
       required: ["dir_a", "dir_b"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_encrypt_strings",
+    description:
+      "Encrypt sensitive string literals in panel.html / license.cjs with a seed-derived XOR keystream and inject a runtime decrypt stub. Reuses SeededPrng.derive(\"string.encrypt\") — never JS AES wrap-key (that footgun is refused by bla_lint_js_aes_unwrap). Honesty: raises static grep cost only; prove equivalence with verify / CrackMe / REA. Writes outputs (or dry_run).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "File or directory containing panel.html / license.cjs",
+        },
+        seed: {
+          type: "string",
+          description: "Project seed for reproducible XOR keystream",
+        },
+        out_dir: {
+          type: "string",
+          description: "Optional output directory (default: in-place)",
+        },
+        include_urls: {
+          type: "boolean",
+          description: "Also encrypt http(s) URL literals (default true)",
+        },
+        dry_run: {
+          type: "boolean",
+          description: "Report only; write nothing",
+        },
+      },
+      required: ["path", "seed"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_plaintext_secrets",
+    description:
+      "Read-only lint for cleartext sensitive literals (FLAG{…}, high-entropy tokens, PEM headers, long hex/base64, derive key-name strings) in panel.html / license.cjs. Bankrupt packaging gates refuse error findings unless allow_plaintext_string. URLs are warning-class. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "File or directory to scan",
+        },
+        allow_plaintext_string: {
+          type: "boolean",
+          description: "Treat error-class cleartext secrets as non-blocking (lab only)",
+        },
+      },
+      required: ["path"],
       additionalProperties: false,
     },
   },
@@ -1257,6 +1318,9 @@ function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesRep
       : {}),
     ...(args.allow_panel_offline_oracle === true
       ? { allowPanelOfflineOracle: true }
+      : {}),
+    ...(args.allow_plaintext_string === true
+      ? { allowPlaintextString: true }
       : {}),
   });
 }
@@ -1994,6 +2058,41 @@ export async function handleMcpRequest(
             const status = (payload as { status: string }).status;
             refused = status === "fail" || status === "error";
           }
+        } else if (name === "bla_encrypt_strings") {
+          payload = encryptStrings({
+            path: args.path as string,
+            seed: args.seed as string,
+            ...(typeof args.out_dir === "string" && args.out_dir.trim().length > 0
+              ? { outDir: args.out_dir as string }
+              : {}),
+            ...(typeof args.include_urls === "boolean"
+              ? { includeUrls: args.include_urls as boolean }
+              : {}),
+            dryRun: args.dry_run === true,
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "error";
+          }
+        } else if (name === "bla_lint_plaintext_secrets") {
+          const allow = args.allow_plaintext_string === true;
+          const target = args.path as string;
+          const reports = discoverAndLintPlaintextSecrets(target, {
+            allowPlaintextString: allow,
+          });
+          const shouldRefuse = reports.some((r) => r.shouldRefuseBankrupt);
+          payload = {
+            schema: "bla-plaintext-secret-lint/v1",
+            path: target,
+            reports,
+            shouldRefuseBankrupt: shouldRefuse,
+            oneLineAdvice: shouldRefuse
+              ? "ERROR: Cleartext sensitive literals — run bla_encrypt_strings or allow_plaintext_string (lab only)."
+              : reports.some((r) => r.looksExposed)
+                ? "WARNING: Non-refusing sensitive literals remain."
+                : "No cleartext sensitive-literal findings (heuristic).",
+          };
+          refused = shouldRefuse;
         } else if (name === "bla_redteam_report") {
           payload = getRedteamReport({
             execute: args.execute === true,

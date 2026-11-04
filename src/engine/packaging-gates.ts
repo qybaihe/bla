@@ -59,6 +59,12 @@ import {
   panelDeriveRefuseMessage,
   type PanelDeriveAbiReport,
 } from "./panel-derive-abi-lint.js";
+import {
+  discoverAndLintPlaintextSecrets,
+  intensityEnforcesPlaintextSecretRefusal,
+  plaintextSecretRefuseMessage,
+  type PlaintextSecretReport,
+} from "./plaintext-secret-lint.js";
 
 export const PACKAGING_GATES_SCHEMA = "bla-packaging-gates/v1" as const;
 
@@ -70,7 +76,8 @@ export type PackagingGateId =
   | "wasm-xor-mask-sidecar"
   | "wasm-seal-xor-known-plaintext"
   | "lane-independence"
-  | "panel-derive";
+  | "panel-derive"
+  | "plaintext-secret";
 
 export interface PackagingGateFinding {
   readonly gate: PackagingGateId;
@@ -92,6 +99,7 @@ export interface PackagingGatesAllowOptions {
   readonly allowLaneIndependentGates?: boolean;
   readonly allowPanelOfflineOracle?: boolean;
   readonly allowStablePanelDeriveAbi?: boolean;
+  readonly allowPlaintextString?: boolean;
 }
 
 export interface PackagingGatesScanOptions extends PackagingGatesAllowOptions {
@@ -127,6 +135,7 @@ export interface PackagingGatesReport {
     readonly wasmSealXor: readonly WasmSealXorKnownPlaintextReport[];
     readonly lanes: ReadonlyArray<LaneIndependenceReport & { readonly path: string }>;
     readonly panelDerive: readonly PanelDeriveAbiReport[];
+    readonly plaintextSecrets: readonly PlaintextSecretReport[];
   };
 }
 
@@ -148,6 +157,7 @@ function emptyCounts(): Record<PackagingGateId, number> {
     "wasm-seal-xor-known-plaintext": 0,
     "lane-independence": 0,
     "panel-derive": 0,
+    "plaintext-secret": 0,
   };
 }
 
@@ -174,6 +184,9 @@ export function scanPackagingGates(
   const panelDerive = includeProtectTime
     ? discoverAndLintPanelDerive(absDir)
     : [];
+  const plaintextSecrets = discoverAndLintPlaintextSecrets(absDir, {
+    allowPlaintextString: options.allowPlaintextString,
+  });
 
   const findings: PackagingGateFinding[] = [];
   const counts = emptyCounts();
@@ -300,6 +313,21 @@ export function scanPackagingGates(
       findingCount: r.findings.length,
     });
   }
+  for (const r of plaintextSecrets) {
+    if (r.findings.length === 0 && !r.shouldRefuseBankrupt) continue;
+    counts["plaintext-secret"] += 1;
+    findings.push({
+      gate: "plaintext-secret",
+      path: r.path,
+      relativePath: relPath(absDir, r.path),
+      shouldRefuseBankrupt: r.shouldRefuseBankrupt,
+      refuseMessage: r.shouldRefuseBankrupt
+        ? plaintextSecretRefuseMessage(r, r.path)
+        : undefined,
+      oneLineAdvice: r.oneLineAdvice,
+      findingCount: r.findings.length,
+    });
+  }
 
   const blocking = filterBlockingFindings(findings, intensity, options);
 
@@ -329,6 +357,7 @@ export function scanPackagingGates(
       wasmSealXor,
       lanes,
       panelDerive,
+      plaintextSecrets,
     },
   };
 }
@@ -380,6 +409,12 @@ function filterBlockingFindings(
         return (
           intensityEnforcesPanelOracleRefusal(intensity) &&
           allow.allowPanelOfflineOracle !== true &&
+          f.shouldRefuseBankrupt
+        );
+      case "plaintext-secret":
+        return (
+          intensityEnforcesPlaintextSecretRefusal(intensity) &&
+          allow.allowPlaintextString !== true &&
           f.shouldRefuseBankrupt
         );
       default:
