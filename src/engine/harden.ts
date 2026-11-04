@@ -34,6 +34,7 @@ import {
 import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
+import { planSidecarEntanglement } from "../shields/runtime/sidecar-entangle.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
@@ -185,6 +186,8 @@ export interface HardenProjectReport {
   readonly runId: string;
   /** Absolute path of the unsigned summary when written; omitted on dry-run. */
   readonly summaryPath?: string;
+  /** Absolute path of bla-integrity-coverage/v1 matrix when selfSeal wrote one. */
+  readonly integrityCoveragePath?: string;
 }
 
 export interface HardenDiscoveryResult {
@@ -705,6 +708,39 @@ export function hardenProject(
     }
   }
 
+  let integrityCoveragePath: string | undefined;
+  if (options.selfSeal === true && !dryRun && summaries.some((s) => s.success)) {
+    try {
+      const jsLike = summaries.filter(
+        (s) =>
+          s.success &&
+          /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const entry =
+        jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
+        jsLike[0];
+      if (entry) {
+        const sidecars = summaries
+          .filter((s) => s.success && s.relativePath !== entry.relativePath)
+          .map((s) => s.relativePath.replaceAll("\\", "/"));
+        const plan = planSidecarEntanglement({
+          entryPath: entry.relativePath.replaceAll("\\", "/"),
+          sidecarPaths: sidecars,
+          seedTag: String(options.seed ?? runId),
+          baseDir: outputRoot,
+        });
+        integrityCoveragePath = join(outputRoot, "integrity-coverage.json");
+        writeFileSync(
+          integrityCoveragePath,
+          `${JSON.stringify(plan.coverageMatrix, null, 2)}\n`,
+          "utf8",
+        );
+      }
+    } catch {
+      integrityCoveragePath = undefined;
+    }
+  }
+
   const hardenedCount = summaries.filter((s) => s.success).length;
   const failedCount = summaries.length - hardenedCount;
   return {
@@ -714,6 +750,9 @@ export function hardenProject(
     failedCount,
     artifacts: summaries,
     ...(summaryPath !== undefined ? { summaryPath } : {}),
+    ...(integrityCoveragePath !== undefined
+      ? { integrityCoveragePath }
+      : {}),
   };
 }
 

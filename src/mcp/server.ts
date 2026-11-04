@@ -62,6 +62,13 @@ import {
   discoverAndLintPlaintextSecrets,
   lintPlaintextSecretsFile,
 } from "../engine/plaintext-secret-lint.js";
+import {
+  discoverAndLintIntegrityCoverage,
+  evaluateCoverageMatrix,
+  INTEGRITY_COVERAGE_SCHEMA,
+  type CoverageMatrix,
+} from "../engine/integrity-coverage.js";
+import { planSidecarEntanglement } from "../shields/runtime/sidecar-entangle.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
   emitCompileTimeNativeHeader,
@@ -861,6 +868,25 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
       },
       required: ["path"],
       additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_integrity_coverage",
+    description:
+      "Read-only integrity coverage matrix lint (Direction-3). Evaluates bla-integrity-coverage/v1 JSON (path to file or directory discovering integrity-coverage.json). Refuses when full coverage / anti-single-point / hashes / connectivity fail. Hash-only — no guessing. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to integrity-coverage.json or a project directory containing one",
+        },
+        allow_single_point_integrity: {
+          type: "boolean",
+          description: "Lab escape: report findings without bankrupt refuse semantics",
+        },
+      },
+      required: ["path"],
     },
   },
   {
@@ -2019,6 +2045,22 @@ export async function handleMcpRequest(
         } else if (name === "bla_lint_wasm_seal_xor_known_plaintext") {
           payload = runLintWasmSealXorKnownPlaintext(args);
           refused = (payload as WasmSealXorKnownPlaintextReport).shouldRefuseBankrupt;
+        } else if (name === "bla_lint_integrity_coverage") {
+          const target = String(args.path ?? "");
+          const allow = args.allow_single_point_integrity === true;
+          const reports = discoverAndLintIntegrityCoverage(target);
+          const anyRefuse = reports.some((r) => r.shouldRefuseBankrupt);
+          payload = {
+            schema: INTEGRITY_COVERAGE_SCHEMA,
+            path: target,
+            reports,
+            shouldRefuseBankrupt: allow ? false : anyRefuse,
+            oneLineAdvice: anyRefuse
+              ? "ERROR: Integrity coverage matrix failed — fix interleaved checkers or allow_single_point_integrity (lab only)."
+              : reports.length === 0
+                ? "No integrity-coverage.json found (not an error — emit via harden --self-seal)."
+                : "Integrity coverage matrix OK.",
+          };
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,

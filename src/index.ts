@@ -242,6 +242,16 @@ export {
   type SelfSealOptions,
   type SelfSealSnippet,
 } from "./shields/runtime/self-seal.js";
+export {
+  INTEGRITY_COVERAGE_SCHEMA,
+  buildInterleavedCoverageMatrix,
+  evaluateCoverageMatrix,
+  finalizeCoverageMatrixHashes,
+  discoverAndLintIntegrityCoverage,
+  type CoverageMatrix,
+  type CoverageEvaluation,
+  type CoverageRefuseReason,
+} from "./engine/integrity-coverage.js";
 export * from "./shields/formats/apple-plist.js";
 export * from "./shields/formats/dotnet-managed.js";
 export * from "./shields/formats/jvm-bytecode.js";
