@@ -65,6 +65,35 @@ export type {
   FilePairMetric,
 } from "./engine/polymorph-report.js";
 export {
+  encryptStrings,
+  ENCRYPT_STRINGS_SCHEMA,
+  buildKeystream,
+  xorEncodeToBytes,
+  xorDecodeBytes,
+} from "./engine/encrypt-strings.js";
+export type {
+  EncryptStringsOptions,
+  EncryptStringsReport,
+  EncryptStringsFileResult,
+} from "./engine/encrypt-strings.js";
+export {
+  lintPlaintextSecretsSource,
+  lintPlaintextSecretsFile,
+  discoverAndLintPlaintextSecrets,
+  plaintextSecretRefuseMessage,
+  intensityEnforcesPlaintextSecretRefusal,
+  shannonEntropy,
+  classifySensitiveLiteral,
+  extractStringLiterals,
+  PLAINTEXT_SECRET_SCHEMA,
+} from "./engine/plaintext-secret-lint.js";
+export type {
+  PlaintextSecretFinding,
+  PlaintextSecretReport,
+  PlaintextSecretFindingId,
+  PlaintextSecretSeverity,
+} from "./engine/plaintext-secret-lint.js";
+export {
   InvalidPythonSourceError,
   findPythonPrologueInsertionOffset,
   protectPythonSource,
