@@ -14,7 +14,7 @@ import {
   PRODUCT,
   SCHEMA,
   SEAL_PATH,
-  SEED,
+  SEED_LABEL,
   hardenChallenge,
   resolveSecrets,
   sha256Hex,
@@ -34,25 +34,24 @@ const seal = {
   product: PRODUCT,
   blaVersion: result.blaVersion,
   recipe:
-    "npm run crackme:v8:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <seed> --self-seal`)",
-  seed: SEED,
+    "npm run crackme:v8:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <private> --self-seal`); harden/schedule seed is private (derived from release secrets) and NOT published",
+  label: SEED_LABEL,
   intensity: INTENSITY,
   selfSeal: true,
   llmDirectives: false,
   emitManifest: false,
-  keySha256: sha256Hex(secrets.key),
   flagSha256: sha256Hex(secrets.flag),
   artifacts: result.artifacts,
   hardenSummary: result.hardenSummary,
   recipesAbsorbed: [
     "R7/R8 SHA-256(key) mask KDF + commitment outside XOR",
-    "R9 seed-derived rounds + pad3",
+    "R9 seed-derived rounds + pad3 (private seed — v8 red-team public-seed KP closed)",
     "R10–R12 arity-2 hygiene + export-order shuffle + unlock body-index scatter",
     "bankrupt packaging gates + --self-seal (no --allow-*)",
   ],
   honestyResidual:
     "P2 full WASM RE + online/SMT vs clear commitment remains possible — gates do not claim white-box secrecy.",
-  note: "Public commitment: prove a solve by publishing SHA-256(FLAG{...}) matching flagSha256. Plaintext key/flag are not in git.",
+  note: "Public commitment: prove a solve by publishing SHA-256(FLAG{...}) matching flagSha256. Plaintext key/flag/seed are not in git; no key digest is published (no offline key oracle).",
 };
 const sealPath = secrets.mode === "release" && outIdx < 0 ? SEAL_PATH : join(outDir, "SEAL.json");
 writeJson(sealPath, seal);

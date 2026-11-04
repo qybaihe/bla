@@ -21,7 +21,9 @@ export const SEAL_COMMITMENT_SCHEMA = "bla-seal-commitment-lint/v1" as const;
 export type SealCommitmentFindingId =
   | "plaintext-seal-sidecar"
   | "reversible-public-commitment"
-  | "seal-offline-oracle-package";
+  | "seal-offline-oracle-package"
+  | "public-materialization-seed"
+  | "public-key-digest-oracle";
 
 export type SealCommitmentSeverity = "warning" | "error";
 
@@ -45,6 +47,26 @@ export interface SealCommitmentReport {
 
 const ONE_WAY_ALGO =
   /^(?:sha-?256|sha-?384|sha-?512|sha-?3(?:-?(?:256|384|512))?|hmac(?:-?sha-?(?:256|512))?|blake2?b?(?:-?\d+)?|argon2id?|scrypt|pbkdf2)$/i;
+
+const PUBLIC_SEED_FIELDS = [
+  "seed",
+  "materializationSeed",
+  "materialization_seed",
+  "hardenSeed",
+  "harden_seed",
+  "scheduleSeed",
+  "schedule_seed",
+] as const;
+
+const PUBLIC_KEY_DIGEST_FIELDS = [
+  "keySha256",
+  "key_sha256",
+  "keyDigest",
+  "key_digest",
+  "keyHash",
+  "key_hash",
+  "licenseKeySha256",
+] as const;
 
 const SEAL_NAME =
   /^(?:seal|license-seal|entitlement-seal|catalog-seal)(?:\.[\w-]+)*\.json$/i;
@@ -252,6 +274,35 @@ export function lintSealCommitmentSource(
         "error",
         "Seal packages revision/commitment together with certificate ciphertext in cleartext — offline oracle / forge surface.",
         `cipherLen=${cipher.length} revisionLen=${revision.length}`,
+      ),
+    );
+  }
+
+  // CrackMe v8 red team: a public materialization/harden seed lets an attacker
+  // re-derive seed-scheduled salt/rounds/pad3/entropy pads and strip XOR masks
+  // without reversing WASM. Warning (not refuse): the seed alone is not a prize.
+  const seedKey = PUBLIC_SEED_FIELDS.find((k) => asString(parsed[k]) !== undefined);
+  if (seedKey) {
+    findings.push(
+      finding(
+        "public-materialization-seed",
+        "warning",
+        "Public seal carries the materialization/harden seed — seed-derived schedule (salt/rounds/pads) becomes known plaintext. Keep the crypto schedule seed private; publish only a non-cryptographic label.",
+        `field=${seedKey}`,
+      ),
+    );
+  }
+
+  // A public digest of the secret key is an offline key verifier (accelerates
+  // guessing; one-way, so warning). Keep only the prove-solve digest of the FLAG.
+  const keyDigestKey = PUBLIC_KEY_DIGEST_FIELDS.find((k) => asString(parsed[k]) !== undefined);
+  if (keyDigestKey) {
+    findings.push(
+      finding(
+        "public-key-digest-oracle",
+        "warning",
+        "Public seal publishes a digest of the secret key — free offline key oracle. Omit it; keep flag/certificate digest for prove-solve.",
+        `field=${keyDigestKey}`,
       ),
     );
   }

@@ -26,13 +26,13 @@ describe("CrackMe v8 Aegis (harden-native + R1–R12)", () => {
     expect(seal.schema).toBe(lib.SCHEMA);
     expect(seal.product).toBe(lib.PRODUCT);
     expect(seal.mode).toBe("release");
-    expect(seal.seed).toBe(lib.SEED);
+    expect(seal.label).toBe(lib.SEED_LABEL);
+    for (const leak of ["seed", "keySha256"]) expect(seal).not.toHaveProperty(leak);
     expect(seal.intensity).toBe("bankrupt");
     expect(seal.selfSeal).toBe(true);
     expect(seal.llmDirectives).toBe(false);
     expect(seal.emitManifest).toBe(false);
     expect(seal.flagSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(seal.keySha256).toMatch(/^[0-9a-f]{64}$/);
     for (const rel of lib.COMMITTED_FILES) {
       expect(lib.sha256File(join(HARDENED, rel)), rel).toBe(seal.artifacts[rel].sha256);
     }
@@ -110,7 +110,6 @@ describe("CrackMe v8 Aegis (harden-native + R1–R12)", () => {
       const lib = await libP;
       const key = process.env.CRACKME_V8_KEY!;
       const flag = process.env.CRACKME_V8_FLAG!;
-      expect(sha(key)).toBe(seal.keySha256);
       expect(sha(flag)).toBe(seal.flagSha256);
       const run = lib.prepareRunnable(HARDENED);
       try {

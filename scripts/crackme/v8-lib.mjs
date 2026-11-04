@@ -45,9 +45,19 @@ export const HARDENED_DIR = join(V8_DIR, "hardened");
 export const SEAL_PATH = join(V8_DIR, "SEAL.json");
 export const FIXTURE_DIR = join(V8_DIR, ".fixture");
 
-export const SCHEMA = "bla-crackme-v8-seal/v1";
+export const SCHEMA = "bla-crackme-v8-seal/v2";
 export const PRODUCT = "Aegis";
-export const SEED = "bla-crackme-v8-aegis-2026-11";
+/** Public, NON-cryptographic label only. Never feeds the crypto schedule. */
+export const SEED_LABEL = "bla-crackme-v8-aegis-2026-11";
+
+/**
+ * Private materialization + harden seed, derived from release secrets so it is
+ * never published (CrackMe v8 red team: a public seed re-derives salt/rounds/
+ * pad3/entropy pad and strips the XOR mask without reversing WASM).
+ */
+export function privateSeed(key, flag) {
+  return `v8p-${createHash("sha256").update(`bla-crackme-v8-private-seed|${key}|${flag}`).digest("hex").slice(0, 32)}`;
+}
 export const INTENSITY = "bankrupt";
 export const FIXTURE_KEY = "DemoV8-AegisKey!";
 export const FIXTURE_FLAG = "FLAG{bla_v8_aegis_demo_fixture_not_the_real_prize}";
@@ -91,22 +101,22 @@ function packWordBuf(buf, start) {
   return w | 0;
 }
 
-export function scheduleSalt(seed = SEED) {
+export function scheduleSalt(seed) {
   return sha256Buf(`${seed}|v8-schedule`).readInt32LE(0);
 }
 
 /** Seed-derived rounds in 32..63 — avoids fixed rounds=40 structural KP on mask[4]. */
-export function scheduleRounds(seed = SEED) {
+export function scheduleRounds(seed) {
   return 32 + (sha256Buf(`${seed}|v8-rounds`)[0] & 31);
 }
 
 /** Seed-derived 3-byte header pad — closes R8 zero-pad3 KP on mask[5..7]. */
-export function headerPad3(seed = SEED) {
+export function headerPad3(seed) {
   return sha256Buf(`${seed}|v8-header-pad3`).subarray(0, 3);
 }
 
 /** Seed-derived entropy pad — public-looking bytes that are NOT the commitment. */
-export function entropyPad(seed = SEED) {
+export function entropyPad(seed) {
   return sha256Buf(`${seed}|v8-entropy-pad-not-revision`);
 }
 
@@ -479,12 +489,12 @@ function buildUnlockBody(blobLen, shaFuncIdx) {
   return b;
 }
 
-export function schedulePadCount(seed = SEED) {
+export function schedulePadCount(seed) {
   // 3..7 pad funcs before core — unlock body index is never 0.
   return 3 + (sha256Buf(`${seed}|v8-func-pad-count`)[0] % 5);
 }
 
-export function assembleCoreWasm(masked, commitClear, seed = SEED) {
+export function assembleCoreWasm(masked, commitClear, seed) {
   const blob = Buffer.from(masked);
   const N = blob.length;
   if (commitClear.length !== 32) throw new Error("commitClear must be 32 bytes");
@@ -839,7 +849,7 @@ export function resolveSecrets({ fixture = false } = {}) {
 /**
  * Materialize cleartext target tree (license + panel + core.wasm + seal.json).
  */
-export async function materializeTarget({ key, flag, seed = SEED, outDir }) {
+export async function materializeTarget({ key, flag, seed = privateSeed(key, flag), outDir }) {
   if (!outDir) throw new Error("outDir required");
   if (key.length !== KEY_LENGTH) throw new Error("key must be 16 chars");
   mkdirSync(outDir, { recursive: true });
@@ -934,7 +944,7 @@ export function ensureDistBuilt() {
  * Materialize cleartext then run real `bla harden` (bankrupt + self-seal, no allow-*).
  * Writes license.cjs / panel.html / core.wasm.gz / seal.json to outDir.
  */
-export async function hardenChallenge({ key, flag, outDir, seed = SEED }) {
+export async function hardenChallenge({ key, flag, outDir, seed = privateSeed(key, flag) }) {
   ensureDistBuilt();
   const { hardenProject } = await import("../../dist/engine/harden.js");
   const { BLA_IDENTITY } = await import("../../dist/identity.js");
