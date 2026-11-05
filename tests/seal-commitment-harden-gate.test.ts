@@ -53,6 +53,14 @@ describe("harden/protect seal-sidecar gate (red-blue round-2 P1)", () => {
         (a) => a.error && /allowPlaintextSeal|plaintext\/reversible seal|reversible/i.test(a.error),
       ),
     ).toBe(true);
+    // Per-artifact attribution: the blocker carries its specific refusal, an
+    // unrelated planned artifact says the run was blocked, and every artifact
+    // is counted as failed.
+    const blocker = report.artifacts.find((a) => a.inputPath.endsWith("seal.json"));
+    const planned = report.artifacts.find((a) => a.inputPath.endsWith("gate.js"));
+    expect(blocker?.error).toMatch(/reversible|plaintext/i);
+    expect(planned?.error).toMatch(/run blocked by/);
+    expect(report.failedCount).toBe(report.artifacts.length);
   });
 
   it("bankrupt harden allows one-way sha256 seal.json", () => {
