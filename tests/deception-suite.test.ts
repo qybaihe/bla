@@ -75,6 +75,15 @@ describe("Counter-REA Model-Misjudgment Induction Suite", () => {
     const reaTwoSlashPrefix = /^[\x00-\x20]*(?:([A-Za-z][A-Za-z0-9+.-]*):)?\/\//u;
     expect(reaTwoSlashPrefix.exec(sampleUrl)).toBeNull();
 
+    // Canary tokens must stay obviously synthetic: live-provider prefixes such
+    // as `ghp_` or `sk-` match real secret-scanning rules and can block a user
+    // from pushing protected output. The AWS documentation placeholder is kept.
+    for (const token of canary.syntheticCanaryTokens) {
+      expect(token.startsWith("ghp_")).toBe(false);
+      expect(token.startsWith("sk-")).toBe(false);
+    }
+    expect(canary.syntheticCanaryTokens.some((t) => t.startsWith("AKIAIOSFODNN7EXAMPLE"))).toBe(true);
+
     const diag = generateSystemDiagnosticDecoy(prng, "bankrupt");
     expect(diag.diagnosticsInjected).toHaveLength(8);
     expect(diag.estimatedTroubleshootingTokensInduced).toBeGreaterThanOrEqual(12_000);
