@@ -14,7 +14,7 @@ metadata:
 
 **This skill is the primary one-click harden GUIDE.** MCP (`bla` server) and the
 `bla-agents` CLI are the **execution layer**. Prefer teaching/calling existing tools
-(`bla_harden`, `bla_defend`, `bla_weave_plan`, **`bla_lint`** (unified), `bla_lint_lanes`, `bla_lint_seal`, `bla_lint_wasm_params`, `bla_lint_panel_derive`, `bla_lint_js_aes_unwrap`, `bla_lint_js_wasm_hydrate_dump`, `bla_lint_wasm_xor_mask_sidecar`, `bla_lint_wasm_seal_xor_known_plaintext`, `bla_lint_plaintext_secrets`, `bla_encrypt_strings`, `bla_lint_integrity_coverage`, …) over inventing new
+(`bla_harden`, `bla_defend`, `bla_weave_plan`, **`bla_lint`** (unified), `bla_lint_lanes`, `bla_lint_seal`, `bla_lint_wasm_params`, `bla_lint_panel_derive`, `bla_lint_js_aes_unwrap`, `bla_lint_js_wasm_hydrate_dump`, `bla_lint_wasm_xor_mask_sidecar`, `bla_lint_wasm_seal_xor_known_plaintext`, `bla_lint_plaintext_secrets`, `bla_encrypt_strings`, `bla_lint_integrity_coverage`, `bla_bind_scope`, `bla_lint_bind_scope`, …) over inventing new
 MCP surfaces.
 
 Use BLA whenever the user asks to harden a project against AI reverse-engineering
@@ -50,6 +50,7 @@ Also: do **not** ship a stable public WASM ABI without explicit `wasm_preserve_e
 
 - Sensitive literals in panel.html / license.cjs must not remain cleartext in shipped artifacts; prefer `bla_encrypt_strings` (seed-derived XOR — never JS AES wrap-key). Lint with `bla_lint_plaintext_secrets`.
 - Integrity checkers must be interleaved and mutually covering (coverage matrix `bla-integrity-coverage/v1`); single-point self-seal is refuse-worthy. Lint with `bla_lint_integrity_coverage`.
+- Optional bind-scope (domain/date) is a **public** license contract (`bla_bind_scope` → `bind-scope.json` + `BLA_BIND_SCOPE_CHECK`). Default OFF. Never a covert backdoor — `public:true` mandatory; lint with `bla_lint_bind_scope`.
 - Coverage claims must be real, not paper: an entry may only count as covering itself when its runtime check hard-fails on its own bytes (canonical self-digest, finalized at write). Check `integrityCoverageSelfVerified` on the harden report; when false the matrix drops self edges and refuses. Keep host-trust values (e.g. certificate digests) inside a covered artifact — unhardened data sidecars like `seal.json` are not covered.
 
 Held across R8–R12 (NO PRIZE). Keep in gate design; do **not** invent packaging refuse lints for these:
@@ -128,6 +129,7 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | REA constant drift / empirical report | **`bla_rea_drift`** / **`bla_redteam_report`** (unverified if REA absent; on-disk read → available) |
 | Cross-build structural drift (seeded polymorphism) | **`bla_polymorph_report`** (driftScore only — not a cracking claim; prove equivalence with verify/REA) |
 | Cleartext panel/license secrets | **`bla_encrypt_strings`** + **`bla_lint_plaintext_secrets`** (XOR only — never JS AES) |
+| Optional public domain/date lock | **`bla_bind_scope`** + **`bla_lint_bind_scope`** (default OFF; never covert) |
 | Format-specific knobs | Load the matching appendix under `references/` |
 
 ## FORBIDDEN

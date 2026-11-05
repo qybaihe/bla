@@ -176,6 +176,14 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
     params: ["path", "allow_plaintext_string"],
   },
   {
+    tool: "bla_bind_scope",
+    params: ["directory", "domains", "valid_from", "valid_until", "entry_path", "out_dir", "dry_run"],
+  },
+  {
+    tool: "bla_lint_bind_scope",
+    params: ["path", "allow_missing_bind_runtime"],
+  },
+  {
     tool: "bla_redteam_report",
     params: ["execute", "rea_root", "report_path"],
   },
