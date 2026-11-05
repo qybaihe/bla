@@ -219,6 +219,19 @@ export interface ProtectionOptions {
    * Relative paths are resolved from the protected module's directory at runtime.
    */
   readonly selfSealSiblingPaths?: readonly string[];
+  /**
+   * Opt-in sidecar/entry entanglement (issue #40 / Direction-3). When true and
+   * `sidecarEntanglePaths` is non-empty, JS protect prepends a strip⇒fail
+   * preamble that re-measures sibling sidecar bytes. OFF by default.
+   */
+  readonly sidecarEntangle?: boolean;
+  /**
+   * Sibling sidecar paths (relative to the protected module dir, or absolute)
+   * measured by the strip⇒fail preamble when `sidecarEntangle` is true.
+   */
+  readonly sidecarEntanglePaths?: readonly string[];
+  /** Soft-fold mismatch into opaque seed instead of hard throw. Default false. */
+  readonly sidecarEntangleSoftFold?: boolean;
 }
 
 export interface ProtectionMetrics {
@@ -246,6 +259,8 @@ export interface ProtectionResult {
   readonly weaveDecoys?: boolean;
   /** Present when protect was called with selfSeal:true (JS self-integrity binding active). */
   readonly selfSeal?: boolean;
+  /** Present when protect applied sidecar entry entanglement (strip⇒fail preamble). */
+  readonly sidecarEntangle?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
   /** Present when WASM export-section order was seed-shuffled (red-blue round-11). */

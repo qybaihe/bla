@@ -35,8 +35,14 @@ import {
 import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
-import { planSidecarEntanglement } from "../shields/runtime/sidecar-entangle.js";
-import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
+import {
+  entangleJsEntryWithSidecars,
+  planSidecarEntanglement,
+} from "../shields/runtime/sidecar-entangle.js";
+import {
+  finalizeSelfSealSelfDigest,
+  verifySelfSealSelfDigest,
+} from "../shields/runtime/self-seal.js";
 import { withoutHostSelfCoverage } from "./integrity-coverage.js";
 import {
   computeHardenRunId,
@@ -130,6 +136,8 @@ export interface HardenProjectOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). */
+  readonly sidecarEntangle?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
   /** Allow lane-independent JS gates (issue #40.1). Default false — refuse. */
@@ -194,6 +202,8 @@ export interface HardenProjectReport {
   readonly oneSentenceUsage: string;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  /** True when caller opted into sidecar entry entanglement. */
+  readonly sidecarEntangle: boolean;
   /**
    * True when bankrupt discovered a multi-artifact JS/WASM/HTML tree and
    * `selfSeal` was not enabled — agents should pass `self_seal: true`.
@@ -512,6 +522,7 @@ export function hardenProject(
       'Harden my software against REA — call bla_harden with { "directory": "." } (or `bla harden .`).',
     weaveDecoys: options.weaveDecoys === true,
     selfSeal: options.selfSeal === true,
+    sidecarEntangle: options.sidecarEntangle === true,
     selfSealRecommended,
     ...(selfSealRecommendation !== undefined
       ? { selfSealRecommendation }
@@ -792,6 +803,7 @@ export function hardenProject(
             intensity,
             weaveDecoys: options.weaveDecoys === true,
             selfSeal: options.selfSeal === true,
+            sidecarEntangle: options.sidecarEntangle === true,
             artifacts: summaries,
             written,
             ...(cancelled ? { cancelled: true } : {}),
@@ -803,6 +815,51 @@ export function hardenProject(
       );
     } catch {
       summaryPath = undefined;
+    }
+  }
+
+  // Sidecar entanglement post-pass: rewrite the JS entry with a strip⇒fail
+  // preamble measured against FINAL sibling bytes (after all protects wrote).
+  // Per-artifact protect deliberately skips inject to avoid partial/double prepend.
+  if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
+    try {
+      const jsLike = summaries.filter(
+        (s) =>
+          s.success &&
+          /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const entry =
+        jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
+        jsLike[0];
+      if (entry) {
+        const entryAbs = join(outputRoot, entry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === entry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entrySource = readFileSync(entryAbs, "utf8");
+            const bound = entangleJsEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entrySource,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              const finalized = finalizeSelfSealSelfDigest(bound.code);
+              writeFileSync(entryAbs, finalized.content, "utf8");
+            }
+          }
+        }
+      }
+    } catch {
+      /* best-effort — leave entry as-is */
     }
   }
 

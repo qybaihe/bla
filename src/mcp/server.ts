@@ -239,6 +239,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
+        sidecar_entangle: {
+          type: "boolean",
+          description:
+            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+        },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
@@ -386,6 +391,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
+        sidecar_entangle: {
+          type: "boolean",
+          description:
+            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+        },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
@@ -501,6 +511,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
+        },
+        sidecar_entangle: {
+          type: "boolean",
+          description:
+            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -1346,6 +1361,7 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
+    sidecarEntangle: Boolean(args.sidecar_entangle),
     ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
     ...(args.allow_lane_independent === true
       ? { allowLaneIndependentGates: true }
@@ -1387,6 +1403,7 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
+    sidecarEntangle: Boolean(args.sidecar_entangle),
     ...(typeof args.honey_source_maps === "boolean"
       ? { honeySourceMaps: args.honey_source_maps }
       : {}),
@@ -2021,6 +2038,7 @@ export async function handleMcpRequest(
                 llmDirectives: Boolean(args.llm_directives),
                 weaveDecoys: Boolean(args.weave_decoys),
                 selfSeal: Boolean(args.self_seal),
+                sidecarEntangle: Boolean(args.sidecar_entangle),
                 ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
                 ...(args.allow_lane_independent === true
                   ? { allowLaneIndependentGates: true }

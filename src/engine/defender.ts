@@ -35,6 +35,11 @@ export interface OneClickDefenseOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). */
+  readonly sidecarEntangle?: boolean;
+  /** Sibling sidecar paths measured when sidecarEntangle is true. */
+  readonly sidecarEntanglePaths?: readonly string[];
+  readonly sidecarEntangleSoftFold?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
   /** Allow lane-independent JS gates (issue #40.1). Default false. */
@@ -78,6 +83,8 @@ export interface OneClickDefenseReport {
   readonly weaveDecoys: boolean;
   /** True when caller opted into self-seal integrity binding. */
   readonly selfSeal: boolean;
+  /** True when caller opted into sidecar entry entanglement. */
+  readonly sidecarEntangle: boolean;
   /** True when stage 5 emitted an ed25519-signed manifest. */
   readonly manifestSigned?: boolean;
   readonly overallSuccess: boolean;
@@ -187,6 +194,16 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     options.selfSealSiblingPaths.length > 0
       ? { selfSealSiblingPaths: options.selfSealSiblingPaths }
       : {}),
+    ...(options.sidecarEntangle !== undefined
+      ? { sidecarEntangle: options.sidecarEntangle }
+      : {}),
+    ...(options.sidecarEntanglePaths !== undefined &&
+    options.sidecarEntanglePaths.length > 0
+      ? { sidecarEntanglePaths: options.sidecarEntanglePaths }
+      : {}),
+    ...(options.sidecarEntangleSoftFold === true
+      ? { sidecarEntangleSoftFold: true }
+      : {}),
     honeySourceMaps: true,
   });
 
@@ -291,6 +308,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     intensity,
     weaveDecoys: options.weaveDecoys === true,
     selfSeal: options.selfSeal === true,
+    sidecarEntangle: options.sidecarEntangle === true,
     overallSuccess: verification.overallPassed,
     stages,
     releaseExposure,
