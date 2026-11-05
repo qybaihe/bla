@@ -77,6 +77,28 @@ export type {
   EncryptStringsFileResult,
 } from "./engine/encrypt-strings.js";
 export {
+  applyBindScope,
+  buildBindScopeContract,
+  buildBindScopeRuntimeSnippet,
+  validateBindScopeContract,
+  lintBindScopeFile,
+  discoverAndLintBindScope,
+  bindScopeRefuseMessage,
+  hostMatchesBindDomain,
+  evaluateBindHost,
+  evaluateBindTime,
+  BIND_SCOPE_SCHEMA,
+  BIND_SCOPE_FILE_NAME,
+  BIND_SCOPE_RUNTIME_MARKER,
+} from "./engine/bind-scope.js";
+export type {
+  BindScopeContract,
+  BindScopeLintReport,
+  BindScopeApplyOptions,
+  BindScopeApplyReport,
+  BindScopeRefuseReason,
+} from "./engine/bind-scope.js";
+export {
   lintPlaintextSecretsSource,
   lintPlaintextSecretsFile,
   discoverAndLintPlaintextSecrets,

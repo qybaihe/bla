@@ -70,6 +70,12 @@ import {
   integrityCoverageRefuseMessage,
   type IntegrityCoverageFileReport,
 } from "./integrity-coverage.js";
+import {
+  bindScopeRefuseMessage,
+  discoverAndLintBindScope,
+  intensityEnforcesBindScopeRefusal,
+  type BindScopeLintReport,
+} from "./bind-scope.js";
 
 export const PACKAGING_GATES_SCHEMA = "bla-packaging-gates/v1" as const;
 
@@ -83,7 +89,8 @@ export type PackagingGateId =
   | "lane-independence"
   | "panel-derive"
   | "plaintext-secret"
-  | "integrity-coverage";
+  | "integrity-coverage"
+  | "bind-scope";
 
 export interface PackagingGateFinding {
   readonly gate: PackagingGateId;
@@ -108,6 +115,8 @@ export interface PackagingGatesAllowOptions {
   readonly allowPlaintextString?: boolean;
   /** Lab escape: allow bankrupt despite failing integrity coverage matrix. */
   readonly allowSinglePointIntegrity?: boolean;
+  /** Lab escape: allow bind-scope contract without runtime check / non-public fields. */
+  readonly allowMissingBindRuntime?: boolean;
 }
 
 export interface PackagingGatesScanOptions extends PackagingGatesAllowOptions {
@@ -145,6 +154,7 @@ export interface PackagingGatesReport {
     readonly panelDerive: readonly PanelDeriveAbiReport[];
     readonly plaintextSecrets: readonly PlaintextSecretReport[];
     readonly integrityCoverage: readonly IntegrityCoverageFileReport[];
+    readonly bindScope: readonly BindScopeLintReport[];
   };
 }
 
@@ -168,6 +178,7 @@ function emptyCounts(): Record<PackagingGateId, number> {
     "panel-derive": 0,
     "plaintext-secret": 0,
     "integrity-coverage": 0,
+    "bind-scope": 0,
   };
 }
 
@@ -198,6 +209,7 @@ export function scanPackagingGates(
     allowPlaintextString: options.allowPlaintextString,
   });
   const integrityCoverage = discoverAndLintIntegrityCoverage(absDir);
+  const bindScope = discoverAndLintBindScope(absDir);
 
   const findings: PackagingGateFinding[] = [];
   const counts = emptyCounts();
@@ -354,6 +366,21 @@ export function scanPackagingGates(
       findingCount: r.reasons.length,
     });
   }
+  for (const r of bindScope) {
+    if (r.ok && !r.shouldRefuseBankrupt) continue;
+    counts["bind-scope"] += 1;
+    findings.push({
+      gate: "bind-scope",
+      path: r.path,
+      relativePath: relPath(absDir, r.path),
+      shouldRefuseBankrupt: r.shouldRefuseBankrupt,
+      refuseMessage: r.shouldRefuseBankrupt
+        ? bindScopeRefuseMessage(r, r.path)
+        : undefined,
+      oneLineAdvice: r.oneLineAdvice,
+      findingCount: r.reasons.length,
+    });
+  }
 
   const blocking = filterBlockingFindings(findings, intensity, options);
 
@@ -385,6 +412,7 @@ export function scanPackagingGates(
       panelDerive,
       plaintextSecrets,
       integrityCoverage,
+      bindScope,
     },
   };
 }
@@ -448,6 +476,12 @@ function filterBlockingFindings(
         return (
           intensity === "bankrupt" &&
           allow.allowSinglePointIntegrity !== true &&
+          f.shouldRefuseBankrupt
+        );
+      case "bind-scope":
+        return (
+          intensityEnforcesBindScopeRefusal(intensity) &&
+          allow.allowMissingBindRuntime !== true &&
           f.shouldRefuseBankrupt
         );
       default:
