@@ -68,6 +68,8 @@ async function call(name: string, args: Record<string, unknown>) {
       readonly [key: string]: unknown;
       artifacts?: ReadonlyArray<{ relativePath?: string; outputPath?: string }>;
       truncated?: boolean;
+      offset?: number;
+      nextOffset?: number;
       dryRun?: boolean;
       overallSuccess?: boolean;
       hardenedCount?: number;
@@ -218,5 +220,76 @@ describe("overwrite confirmation boundary", () => {
     const again = await call("bla_defend", { input_path: input, seed: "x" });
     expect(again.isError).toBe(true);
     expect(again.structuredContent.wouldOverwrite).toEqual([expected]);
+  });
+});
+
+describe("discover offset paging (issue #75)", () => {
+  it("pages through a 70-artifact tree without losing the tail", () => {
+    const root = project(70);
+    const pageSize = 20;
+    const seen = new Set<string>();
+    let offset = 0;
+    let pages = 0;
+    for (;;) {
+      const page = discoverHardenTargets(root, { maxArtifacts: pageSize, offset });
+      expect(page.offset).toBe(offset);
+      expect(page.artifacts.length).toBeGreaterThan(0);
+      expect(page.artifacts.length).toBeLessThanOrEqual(pageSize);
+      for (const a of page.artifacts) {
+        expect(seen.has(a.relativePath)).toBe(false);
+        seen.add(a.relativePath);
+      }
+      pages += 1;
+      if (!page.truncated) {
+        expect(page.nextOffset).toBeUndefined();
+        break;
+      }
+      expect(page.nextOffset).toBe(offset + page.artifacts.length);
+      offset = page.nextOffset!;
+      expect(pages).toBeLessThan(10);
+    }
+    expect(seen.size).toBe(70);
+    expect(pages).toBe(4); // 20+20+20+10
+  });
+
+  it("bla_discover MCP returns nextOffset when truncated", async () => {
+    const root = project(5);
+    const r1 = await call("bla_discover", {
+      directory: root,
+      max_artifacts: 2,
+    });
+    expect(r1.isError).toBe(false);
+    expect(r1.structuredContent.truncated).toBe(true);
+    expect(r1.structuredContent.offset).toBe(0);
+    expect(r1.structuredContent.nextOffset).toBe(2);
+    expect((r1.structuredContent.artifacts ?? []).length).toBe(2);
+
+    const r2 = await call("bla_discover", {
+      directory: root,
+      max_artifacts: 2,
+      offset: r1.structuredContent.nextOffset,
+    });
+    expect(r2.isError).toBe(false);
+    expect((r2.structuredContent.artifacts ?? []).length).toBe(2);
+    expect(r2.structuredContent.offset).toBe(2);
+    expect(r2.structuredContent.truncated).toBe(true);
+    expect(r2.structuredContent.nextOffset).toBe(4);
+
+    const r3 = await call("bla_discover", {
+      directory: root,
+      max_artifacts: 2,
+      offset: r2.structuredContent.nextOffset,
+    });
+    expect(r3.isError).toBe(false);
+    expect((r3.structuredContent.artifacts ?? []).length).toBe(1);
+    expect(r3.structuredContent.truncated).toBe(false);
+    expect(r3.structuredContent.nextOffset).toBeUndefined();
+
+    const all = [
+      ...(r1.structuredContent.artifacts ?? []),
+      ...(r2.structuredContent.artifacts ?? []),
+      ...(r3.structuredContent.artifacts ?? []),
+    ].map((a) => a.relativePath);
+    expect(new Set(all).size).toBe(5);
   });
 });
