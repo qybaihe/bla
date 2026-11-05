@@ -209,6 +209,14 @@ export interface HardenDiscoveryResult {
   /** True when the walk hit `maxArtifacts` and further targets were not listed. */
   readonly truncated: boolean;
   readonly maxArtifacts: number;
+  /** Zero-based index into the stable discovery order for this page. */
+  readonly offset: number;
+  /**
+   * When `truncated` is true, pass this as the next `offset` to retrieve the
+   * following page without losing the tail (issue #75 paging). Absent when
+   * this page exhausted the inventory.
+   */
+  readonly nextOffset?: number;
 }
 
 function isProtectableFormat(format: ArtifactFormat): boolean {
@@ -260,7 +268,10 @@ function walkCollect(
   if (out.length >= maxArtifacts || depth > MAX_WALK_DEPTH) return;
   let entries;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    // Locale-independent name sort so offset paging is stable across platforms.
+    entries = readdirSync(dir, { withFileTypes: true }).slice().sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    );
   } catch {
     return;
   }
@@ -300,7 +311,7 @@ function walkCollect(
  */
 export function discoverHardenableArtifacts(
   directory: string = process.cwd(),
-  options: { readonly maxArtifacts?: number } = {},
+  options: { readonly maxArtifacts?: number; readonly offset?: number } = {},
 ): readonly DiscoveredArtifact[] {
   return discoverHardenTargets(directory, options).artifacts;
 }
@@ -308,19 +319,28 @@ export function discoverHardenableArtifacts(
 /**
  * Read-only discovery that also reports truncation, so agents never mistake a
  * capped walk for the full inventory of a large repository.
+ *
+ * Pass `offset` (from a prior `nextOffset`) to page through 64+ trees without
+ * raising the cap or losing the tail — acceptance for issue #75 paging.
  */
 export function discoverHardenTargets(
   directory: string = process.cwd(),
-  options: { readonly maxArtifacts?: number } = {},
+  options: { readonly maxArtifacts?: number; readonly offset?: number } = {},
 ): HardenDiscoveryResult {
   const abs = resolve(directory);
   const maxArtifacts = Math.max(1, Math.floor(options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS));
-  const all = collectHardenableArtifacts(abs, maxArtifacts + 1);
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  // Collect one past the page end so truncated/nextOffset stay honest.
+  const all = collectHardenableArtifacts(abs, offset + maxArtifacts + 1);
+  const page = all.slice(offset, offset + maxArtifacts);
+  const truncated = all.length > offset + maxArtifacts;
   return {
     directory: abs,
-    artifacts: all.slice(0, maxArtifacts),
-    truncated: all.length > maxArtifacts,
+    artifacts: page,
+    truncated,
     maxArtifacts,
+    offset,
+    ...(truncated ? { nextOffset: offset + page.length } : {}),
   };
 }
 
