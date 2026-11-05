@@ -232,6 +232,8 @@ export {
   formatHardenProjectReport,
   BLA_BUILD_OUTPUT_DIR_NAMES,
   type HardenProjectReport,
+  type HardenProgressEvent,
+  type HardenProgressPhase,
   type HardenArtifactSummary,
   type DiscoveredArtifact,
   type HardenDiscoveryResult,
