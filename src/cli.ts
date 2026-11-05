@@ -142,6 +142,7 @@ interface ParsedCliArgs {
   readonly json: boolean;
   readonly sarif: boolean;
   readonly failUnder?: number;
+  readonly argErrors: readonly string[];
   readonly honeyMaps: boolean;
   readonly help: boolean;
   readonly version: boolean;
@@ -173,6 +174,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
+  const argErrors: string[] = [];
   let allDetected = false;
   let dryRun = false;
   let yes = false;
@@ -252,20 +254,40 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       output = argv[++i]!;
     } else if ((arg === "-c" || arg === "--config") && i + 1 < argv.length) {
       configPath = argv[++i]!;
-    } else if (arg === "--fail-under" && i + 1 < argv.length) {
-      const n = Number(argv[++i]!);
-      if (Number.isFinite(n)) failUnder = n;
-    } else if (arg === "--intensity" && i + 1 < argv.length) {
-      const val = argv[++i]! as ProtectionIntensity;
-      if (["stealth", "balanced", "maximum", "bankrupt"].includes(val)) {
-        intensity = val;
+    } else if (arg === "--fail-under") {
+      const raw = argv[++i];
+      const n = raw === undefined ? Number.NaN : Number(raw);
+      if (raw === undefined) {
+        argErrors.push("--fail-under requires a value");
+      } else if (!Number.isFinite(n) || n < 0 || n > 100) {
+        argErrors.push(`--fail-under must be a number between 0 and 100 (received '${raw}')`);
+      } else {
+        failUnder = n;
       }
-    } else if (arg === "--seed" && i + 1 < argv.length) {
-      seed = argv[++i]!;
-    } else if (arg === "--lang" && i + 1 < argv.length) {
-      const val = argv[++i]! as NativeHeaderLanguage;
-      if (["c", "rust", "go"].includes(val)) {
-        lang = val;
+    } else if (arg === "--intensity") {
+      const val = argv[++i];
+      if (val === undefined) {
+        argErrors.push("--intensity requires a value");
+      } else if (!["stealth", "balanced", "maximum", "bankrupt"].includes(val)) {
+        argErrors.push(`--intensity must be one of stealth, balanced, maximum, bankrupt (received '${val}')`);
+      } else {
+        intensity = val as ProtectionIntensity;
+      }
+    } else if (arg === "--seed") {
+      const val = argv[++i];
+      if (val === undefined || val.trim().length === 0) {
+        argErrors.push("--seed requires a non-empty value");
+      } else {
+        seed = val;
+      }
+    } else if (arg === "--lang") {
+      const val = argv[++i];
+      if (val === undefined) {
+        argErrors.push("--lang requires a value");
+      } else if (!["c", "rust", "go"].includes(val)) {
+        argErrors.push(`--lang must be one of c, rust, go (received '${val}')`);
+      } else {
+        lang = val as NativeHeaderLanguage;
       }
     } else if (arg === "--client" && i + 1 < argv.length) {
       clients.push(argv[++i]! as SupportedAgentClientId);
@@ -307,6 +329,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     json,
     sarif,
     ...(failUnder !== undefined ? { failUnder } : {}),
+    argErrors,
     honeyMaps,
     help,
     version,
@@ -329,6 +352,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   if (parsed.help || !parsed.command) {
     printHelp();
     return 0;
+  }
+
+  if (parsed.argErrors.length > 0) {
+    for (const message of parsed.argErrors) console.error(`Error: ${message}`);
+    return 1;
   }
 
   try {
