@@ -5,6 +5,7 @@ import { BLA_IDENTITY } from "./identity.js";
 import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "./core/config.js";
 import { inspectReleaseExposure } from "./core/release-exposure.js";
 import { buildSarifReport } from "./core/sarif.js";
+import { verifyManifestFile } from "./core/manifest-verify.js";
 import type { ProtectionIntensity } from "./core/types.js";
 import { auditTarget } from "./engine/auditor.js";
 import { protectTarget } from "./engine/protector.js";
@@ -75,6 +76,7 @@ Commands:
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
   emit-headers                Generate compile-time C/C++, Rust, or Go defense headers
+  verify-manifest <file>      Verify a signed .bla-manifest.json (exit 2 when invalid)
   doctor                      Check readiness of BLA engines & agent registrations
   update                      Update global bla-shield installation & print setup refresh instructions
   uninstall                   Remove BLA MCP configuration & skill files
@@ -89,6 +91,7 @@ Options:
   --manifest                  Emit .bla-manifest.json next to protected artifacts (opt-in; unsigned by default)
   --sign-manifest             Ed25519-sign the emitted manifest (implies --manifest; requires --manifest-key)
   --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest
+  --public-key <path>         Trusted ed25519 public key PEM for verify-manifest
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
@@ -121,6 +124,7 @@ interface ParsedCliArgs {
   readonly manifest: boolean;
   readonly signManifest: boolean;
   readonly manifestKey?: string;
+  readonly publicKey?: string;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
@@ -158,6 +162,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let manifest = false;
   let signManifest = false;
   let manifestKey: string | undefined;
+  let publicKey: string | undefined;
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
@@ -209,6 +214,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       signManifest = true;
     } else if (arg === "--manifest-key" && i + 1 < argv.length) {
       manifestKey = argv[++i]!;
+    } else if (arg === "--public-key" && i + 1 < argv.length) {
+      publicKey = argv[++i]!;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -286,6 +293,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     manifest,
     signManifest,
     ...(manifestKey !== undefined ? { manifestKey } : {}),
+    ...(publicKey !== undefined ? { publicKey } : {}),
     llmDirectives,
     weaveDecoys,
     selfSeal,
@@ -905,6 +913,21 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.log(emitted.content);
         }
         return 0;
+      }
+
+      case "verify-manifest": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>]`.");
+          return 1;
+        }
+        const result = verifyManifestFile(target, parsed.publicKey);
+        if (parsed.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`${result.ok ? "VALID" : "INVALID"}: ${result.reason}`);
+        }
+        return result.ok ? 0 : 2;
       }
 
       default:
