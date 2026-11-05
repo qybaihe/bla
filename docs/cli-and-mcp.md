@@ -9,7 +9,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | `npx bla-agents setup` | Auto-registers the `bla` MCP server and `blind-llm-agents` skill with Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity. |
 | `npx bla-agents harden .` | **Default one-command UX**: auto-discover build outputs and run audit → protect → verify (bankrupt). Prefer over `defend` when you have a project directory. Agent guide: [`blind-llm-agents` skill](../.agents/skills/blind-llm-agents/SKILL.md). |
 | `npx bla-agents lint .` | **Unified packaging-footgun scan** (`bla-packaging-gates/v1`): all R1–R7 refuse lints + lanes/panel. Exit 2 when bankrupt would refuse. Writes nothing. |
-| `npx bla-agents defend <target> [--manifest] [--llm-directives] [--weave-decoys]` | **5-stage pipeline** on a known path: `inspect-release` → `audit` → `protect` → `verify` → optional **unsigned** `.bla-manifest.json` (opt-in). Risky LLM directive layers stay off unless `--llm-directives`. Structural weave decoys stay off unless `--weave-decoys`. |
+| `npx bla-agents defend <target> [--manifest] [--sign-manifest --manifest-key <pem>] [--llm-directives] [--weave-decoys]` | **5-stage pipeline** on a known path: `inspect-release` → `audit` → `protect` → `verify` → optional `.bla-manifest.json` (opt-in; unsigned unless `--sign-manifest` is set). Risky LLM directive layers stay off unless `--llm-directives`. Structural weave decoys stay off unless `--weave-decoys`. |
 | `npx bla-agents harden . [--weave-decoys]` | Same as `harden` with opt-in structural weave (`weave_decoys`). |
 | `npx bla-agents inspect-release <target>` | Read-only local scan for embedded `.map` (`sourcesContent`) and sourceMappingURL references. |
 | `npx bla-agents audit <target>` | Pre-flight 16-vector REA vulnerability & token-cost audit. |
@@ -18,6 +18,34 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | `npx bla-agents benchmark` | Runs the 8-target Counter-REA Showcase Benchmark suite. |
 | `npx bla-agents emit-headers --lang <c\|rust\|go>` | Emits compile-time native defense headers (`bla_shield.h`, `bla_shield.rs`, `bla_shield.go`). |
 | `npx bla-agents doctor` | Checks readiness of all BLA protection engines and agent MCP registrations. |
+
+### Signed manifests (ed25519)
+
+`.bla-manifest.json` is unsigned by default. To sign it:
+
+```bash
+bla defend ./dist --manifest --sign-manifest --manifest-key ./release-key.pem
+```
+
+The manifest keeps the plain JSON payload and adds a `signature` object with
+`algorithm: "ed25519"`, the SPKI public key, and a base64 signature over the
+payload JSON (the `signature` field is excluded). `attestationKind` is
+`"unsigned"` or `"ed25519"`, so consumers can tell whether a signature exists.
+
+Verify with the library:
+
+```ts
+import { readFileSync } from "node:fs";
+import { verifyManifestSignature } from "bla-agents";
+
+const manifest = JSON.parse(readFileSync(".bla-manifest.json", "utf8"));
+// Without a pinned key this only proves the payload matches the embedded key.
+verifyManifestSignature(manifest);
+```
+
+Signing fails closed: `--sign-manifest` without `--manifest-key`, a missing key
+file, or a key path without `--manifest` is an error, never a silently unsigned
+manifest.
 
 ## MCP Tools (`bla` Server)
 
