@@ -2,7 +2,7 @@
 
 **Version:** 2.1.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
-**Publishing:** tag-only releases (`git tag bla-agents-<version>`); see `CHANGELOG.md` and GitHub Releases.
+**Publishing:** tagged releases (`git tag bla-agents-<version>`) plus GitHub Releases. The release workflow can also publish the packed tarball to npm with provenance when `NPM_TOKEN`/OIDC is configured; a release cut may intentionally skip the npm step (see `CHANGELOG.md`).
 
 ## One-sentence usage
 

@@ -1,6 +1,6 @@
 # Installation & Setup Guide
 
-**BLA (`bla-agents` — Blind LLM Agents)** is distributed as a zero-config Node.js CLI and MCP server that runs anywhere Node.js `^22.13.0 || >=24.0.0` is installed.
+**BLA (`bla-agents` — Blind LLM Agents)** is distributed as a zero-config Node.js CLI and MCP server that runs anywhere Node.js `^22.23.4 || >=24.0.0` is installed (matches `package.json` `engines`).
 
 ---
 
