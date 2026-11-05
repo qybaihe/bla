@@ -68,6 +68,11 @@ import {
   INTEGRITY_COVERAGE_SCHEMA,
   type CoverageMatrix,
 } from "../engine/integrity-coverage.js";
+import {
+  applyBindScope,
+  BIND_SCOPE_SCHEMA,
+  discoverAndLintBindScope,
+} from "../engine/bind-scope.js";
 import { planSidecarEntanglement } from "../shields/runtime/sidecar-entangle.js";
 import { runShowcaseBenchmark } from "../engine/benchmark.js";
 import {
@@ -1026,6 +1031,67 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         allow_plaintext_string: {
           type: "boolean",
           description: "Treat error-class cleartext secrets as non-blocking (lab only)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_bind_scope",
+    description:
+      "Optional honest code-lock: write a PUBLIC bind-scope.json (domains + validity window) and inject a deterministic runtime check into license.cjs/entry. Default OFF. Never a covert backdoor — public:true is mandatory; hidden fields refuse. Host for Node comes from BLA_BIND_HOST (or location.hostname in browsers).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        directory: {
+          type: "string",
+          description: "Project/artifact directory containing license.cjs (or pass entry_path)",
+        },
+        domains: {
+          type: "array",
+          items: { type: "string" },
+          description: "Allowed hostnames or *.suffix globs (public)",
+        },
+        valid_from: {
+          type: "string",
+          description: "Inclusive ISO 8601 start",
+        },
+        valid_until: {
+          type: "string",
+          description: "Inclusive ISO 8601 end",
+        },
+        entry_path: {
+          type: "string",
+          description: "Optional entry JS/CJS to inject BLA_BIND_SCOPE_CHECK into",
+        },
+        out_dir: {
+          type: "string",
+          description: "Optional output directory (default: in-place)",
+        },
+        dry_run: {
+          type: "boolean",
+          description: "Report only; write nothing",
+        },
+      },
+      required: ["directory"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_lint_bind_scope",
+    description:
+      "Read-only lint for bla-bind-scope/v1. Refuses when public≠true, constraints empty, dates/domains invalid, hidden fields present, or bind-scope.json exists without BLA_BIND_SCOPE_CHECK in the entry. Writes nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to bind-scope.json or a project directory",
+        },
+        allow_missing_bind_runtime: {
+          type: "boolean",
+          description: "Lab escape: do not refuse missing runtime check / non-public fields",
         },
       },
       required: ["path"],
@@ -2172,6 +2238,48 @@ export async function handleMcpRequest(
                 : "No cleartext sensitive-literal findings (heuristic).",
           };
           refused = shouldRefuse;
+        } else if (name === "bla_bind_scope") {
+          const domains = Array.isArray(args.domains)
+            ? args.domains.filter((d) => typeof d === "string")
+            : undefined;
+          payload = applyBindScope({
+            directory: args.directory as string,
+            ...(domains && domains.length > 0 ? { domains } : {}),
+            ...(typeof args.valid_from === "string" && args.valid_from.trim()
+              ? { validFrom: args.valid_from as string }
+              : {}),
+            ...(typeof args.valid_until === "string" && args.valid_until.trim()
+              ? { validUntil: args.valid_until as string }
+              : {}),
+            ...(typeof args.entry_path === "string" && args.entry_path.trim()
+              ? { entryPath: args.entry_path as string }
+              : {}),
+            ...(typeof args.out_dir === "string" && args.out_dir.trim()
+              ? { outDir: args.out_dir as string }
+              : {}),
+            dryRun: args.dry_run === true,
+          });
+          {
+            const status = (payload as { status: string }).status;
+            refused = status === "error";
+          }
+        } else if (name === "bla_lint_bind_scope") {
+          const allow = args.allow_missing_bind_runtime === true;
+          const target = args.path as string;
+          const reports = discoverAndLintBindScope(target);
+          const anyRefuse = reports.some((r) => r.shouldRefuseBankrupt);
+          payload = {
+            schema: BIND_SCOPE_SCHEMA,
+            path: target,
+            reports,
+            shouldRefuseBankrupt: allow ? false : anyRefuse,
+            oneLineAdvice: anyRefuse
+              ? "ERROR: Bind-scope contract failed honesty/runtime checks — fix or allow_missing_bind_runtime (lab only)."
+              : reports.length === 0
+                ? "No bind-scope.json found (OK — bind-scope is opt-in / default OFF)."
+                : "Bind-scope contract OK.",
+          };
+          refused = allow ? false : anyRefuse;
         } else if (name === "bla_redteam_report") {
           payload = getRedteamReport({
             execute: args.execute === true,
