@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -180,10 +180,12 @@ function writeFileAtomicSync(
   } catch {
     /* target does not exist yet — proceed with the atomic path */
   }
-  const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
   try {
-    if (encoding) writeFileSync(tmpPath, content, encoding);
-    else writeFileSync(tmpPath, content);
+    // Exclusive create: a pre-planted symlink or file at the temp path must
+    // fail (EEXIST) instead of being followed.
+    if (encoding) writeFileSync(tmpPath, content, { encoding, flag: "wx" });
+    else writeFileSync(tmpPath, content, { flag: "wx" });
     renameSync(tmpPath, targetPath);
   } catch (err) {
     try {
