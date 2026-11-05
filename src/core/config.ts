@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ProtectionIntensity } from "./types.js";
 
@@ -67,6 +67,90 @@ export const LEGACY_FIXED_SEEDS: ReadonlySet<string> = new Set([
 
 const CONFIG_FILENAMES = ["bla.config.json", ".blarc.json", ".blarc"] as const;
 
+/** A project config is small; anything bigger is a mistake or an attack. */
+const MAX_CONFIG_BYTES = 64 * 1024;
+
+const INTENSITIES = ["stealth", "balanced", "maximum", "bankrupt"] as const;
+
+const STRING_CONFIG_KEYS = ["$schema", "input", "output", "seed"] as const;
+const BOOLEAN_CONFIG_KEYS = [
+  "emitManifest",
+  "llmDirectives",
+  "honeySourceMaps",
+  "weaveDecoys",
+  "selfSeal",
+  "allowLaneIndependentGates",
+  "allowPlaintextSeal",
+  "allowWasmClearParamCarriers",
+  "allowStablePanelDeriveAbi",
+  "allowJsAesUnwrap",
+  "allowPanelOfflineOracle",
+  "allowJsWasmHydrateDump",
+  "allowWasmXorMaskSidecar",
+  "allowWasmSealXorKnownPlaintext",
+] as const;
+
+/**
+ * Validate the shape of a parsed BLA config before merging it with defaults.
+ * A malformed config must fail loudly: silently falling back changes the
+ * effective intensity/seed/manifest behavior without telling the operator.
+ */
+export function validateBlaConfigShape(value: unknown, source: string): BlaProjectConfig {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid BLA config at ${source}: expected a JSON object`);
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of STRING_CONFIG_KEYS) {
+    if (obj[key] !== undefined && typeof obj[key] !== "string") {
+      throw new Error(`Invalid BLA config at ${source}: '${key}' must be a string`);
+    }
+  }
+  if (obj.intensity !== undefined && !INTENSITIES.includes(obj.intensity as ProtectionIntensity)) {
+    throw new Error(
+      `Invalid BLA config at ${source}: 'intensity' must be one of ${INTENSITIES.join(", ")}`,
+    );
+  }
+  for (const key of BOOLEAN_CONFIG_KEYS) {
+    if (obj[key] !== undefined && typeof obj[key] !== "boolean") {
+      throw new Error(`Invalid BLA config at ${source}: '${key}' must be a boolean`);
+    }
+  }
+  if (
+    obj.minDefenseScore !== undefined &&
+    (typeof obj.minDefenseScore !== "number" ||
+      !Number.isFinite(obj.minDefenseScore) ||
+      obj.minDefenseScore < 0 ||
+      obj.minDefenseScore > 100)
+  ) {
+    throw new Error(`Invalid BLA config at ${source}: 'minDefenseScore' must be a number between 0 and 100`);
+  }
+  if (
+    obj.wasmPreserveExports !== undefined &&
+    (!Array.isArray(obj.wasmPreserveExports) ||
+      !obj.wasmPreserveExports.every((v) => typeof v === "string"))
+  ) {
+    throw new Error(`Invalid BLA config at ${source}: 'wasmPreserveExports' must be an array of strings`);
+  }
+  return obj as BlaProjectConfig;
+}
+
+function readConfigFile(path: string): BlaProjectConfig {
+  const size = statSync(path).size;
+  if (size > MAX_CONFIG_BYTES) {
+    throw new Error(
+      `Invalid BLA config at ${path}: file is ${size} bytes (limit ${MAX_CONFIG_BYTES})`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid BLA config at ${path}: ${message}`);
+  }
+  return validateBlaConfigShape(parsed, path);
+}
+
 export function generateProjectSeed(): string {
   return `bla-${randomBytes(16).toString("hex")}`;
 }
@@ -90,7 +174,7 @@ export function loadBlaConfig(
     if (!existsSync(absExplicit)) {
       throw new Error(`BLA config file not found: ${absExplicit}`);
     }
-    const parsed = JSON.parse(readFileSync(absExplicit, "utf8")) as BlaProjectConfig;
+    const parsed = readConfigFile(absExplicit);
     return {
       config: { ...DEFAULT_BLA_CONFIG, ...parsed },
       sourcePath: absExplicit,
@@ -100,15 +184,11 @@ export function loadBlaConfig(
   for (const name of CONFIG_FILENAMES) {
     const candidate = join(root, name);
     if (existsSync(candidate)) {
-      try {
-        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as BlaProjectConfig;
-        return {
-          config: { ...DEFAULT_BLA_CONFIG, ...parsed },
-          sourcePath: candidate,
-        };
-      } catch {
-        // ignore malformed optional config
-      }
+      const parsed = readConfigFile(candidate);
+      return {
+        config: { ...DEFAULT_BLA_CONFIG, ...parsed },
+        sourcePath: candidate,
+      };
     }
   }
 
@@ -116,16 +196,19 @@ export function loadBlaConfig(
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
-        bla?: BlaProjectConfig;
+        bla?: unknown;
       };
-      if (pkg.bla && typeof pkg.bla === "object") {
+      if (pkg.bla !== undefined && pkg.bla !== null) {
+        const parsed = validateBlaConfigShape(pkg.bla, `${pkgPath} (bla field)`);
         return {
-          config: { ...DEFAULT_BLA_CONFIG, ...pkg.bla },
+          config: { ...DEFAULT_BLA_CONFIG, ...parsed },
           sourcePath: pkgPath,
         };
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      // A broken package.json is not necessarily a BLA config; but if it parsed
+      // and the `bla` field is invalid, surface that explicitly.
+      if (err instanceof Error && err.message.startsWith("Invalid BLA config")) throw err;
     }
   }
 
