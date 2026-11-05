@@ -221,6 +221,31 @@ export function buildInterleavedCoverageMatrix(
   };
 }
 
+/**
+ * Honesty downgrade: drop every edge by which `host#siteN` checkers claim to
+ * verify their own host file or sibling sites. Use when the host's runtime self
+ * check cannot hard-fail (e.g. self-digest not finalized) — editing the host
+ * removes all colocated sites at once, so the matrix must not count them as
+ * covering it. Re-evaluate afterwards; single-host trees will then refuse.
+ */
+export function withoutHostSelfCoverage(
+  matrix: CoverageMatrix,
+  host: string,
+): CoverageMatrix {
+  const prefix = `${host}#site`;
+  const isSelf = (n: string): boolean => n === host || n.startsWith(prefix);
+  const edges: Record<string, readonly string[]> = {};
+  for (const [checker, targets] of Object.entries(matrix.edges)) {
+    edges[checker] = isSelf(checker) ? targets.filter((t) => !isSelf(t)) : [...targets];
+  }
+  return {
+    schema: INTEGRITY_COVERAGE_SCHEMA,
+    nodes: matrix.nodes,
+    edges,
+    expectedSha256: matrix.expectedSha256,
+  };
+}
+
 export function sha256Hex(buf: Buffer | string): string {
   return createHash("sha256").update(buf).digest("hex");
 }
