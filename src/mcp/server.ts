@@ -286,7 +286,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_discover",
     description:
-      "Read-only inventory of protectable artifacts under a project/build directory using the exact discovery bla_harden uses (format per file, truncated flag when the cap is hit). Writes nothing. Use it to scope work before bla_harden / bla_defend.",
+      "Read-only inventory of protectable artifacts under a project/build directory using the exact discovery bla_harden uses (format per file, truncated flag when the cap is hit). For 64+ trees: pass offset from a prior nextOffset to page without losing the tail. Writes nothing. Use it to scope work before bla_harden / bla_defend.",
     inputSchema: {
       type: "object",
       properties: {
@@ -296,7 +296,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
         max_artifacts: {
           type: "number",
-          description: "Optional cap on listed artifacts (default 64); truncated=true when more exist.",
+          description: "Optional page size / cap (default 64); truncated=true when more exist beyond this page.",
+        },
+        offset: {
+          type: "number",
+          description: "Zero-based offset into the stable discovery order (use prior nextOffset to page). Default 0.",
         },
       },
       additionalProperties: false,
@@ -1841,6 +1845,7 @@ export async function handleMcpRequest(
         let refused = false;
         const confirmed = args.confirm_overwrite === true;
         if (name === "bla_discover") {
+          const offset = optionalCount(args.offset);
           payload = discoverHardenTargets(
             typeof args.directory === "string" && args.directory.trim().length > 0
               ? args.directory
@@ -1849,6 +1854,7 @@ export async function handleMcpRequest(
               ...(optionalCount(args.max_artifacts) !== undefined
                 ? { maxArtifacts: optionalCount(args.max_artifacts)! }
                 : {}),
+              ...(offset !== undefined ? { offset } : {}),
             },
           );
         } else if (name === "bla_harden") {
