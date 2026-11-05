@@ -103,6 +103,10 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
   raise `max_artifacts` / narrow the directory.
 - Never overwrite without the user's go-ahead. On `confirmation_required`, show
   `wouldOverwrite`, ask, then retry with `confirm_overwrite: true` (or a new path).
+- Long `bla_harden` runs may emit MCP `notifications/progress` when the client
+  sets `_meta.progressToken`. Cancel with `notifications/cancelled`
+  `{ requestId }` — already-written paths are listed on the cancelled report
+  (`cancelled: true`, `written: [...]`); there is no silent half-harden.
   Same rule for `in_place: true` (overwrites the input).
 - Report writes from the tool receipt (`writeReceipt` / `wouldOverwrite`), not guesses.
 - After a successful harden/defend/protect, keep the returned unsigned `runId` (and

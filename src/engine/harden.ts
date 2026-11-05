@@ -156,6 +156,29 @@ export interface HardenProjectOptions {
    * (no `.bla-hardened/`, no summary JSON, no manifests).
    */
   readonly dryRun?: boolean;
+  /**
+   * Cooperative cancel (issue #75). Checked between artifacts — already-written
+   * outputs are listed on the cancelled report; there is no silent half-harden.
+   */
+  readonly signal?: AbortSignal;
+  /** Optional progress hook (index is 0-based into the planned artifact list). */
+  readonly onProgress?: (event: HardenProgressEvent) => void;
+}
+
+export type HardenProgressPhase =
+  | "start"
+  | "artifact"
+  | "cancelled"
+  | "done";
+
+export interface HardenProgressEvent {
+  readonly phase: HardenProgressPhase;
+  /** 0-based index of the artifact about to run / just finished; -1 for start/done. */
+  readonly index: number;
+  readonly total: number;
+  readonly relativePath?: string;
+  /** Absolute paths already written successfully when this event fires. */
+  readonly written: readonly string[];
 }
 
 export interface HardenProjectReport {
@@ -201,6 +224,13 @@ export interface HardenProjectReport {
    * self-coverage edges so packaging gates do not trust paper coverage.
    */
   readonly integrityCoverageSelfVerified?: boolean;
+  /**
+   * True when `signal` aborted mid-run (issue #75). `written` lists every
+   * artifact already on disk — never a silent half-harden.
+   */
+  readonly cancelled?: boolean;
+  /** Absolute output paths written before cancel or at completion. */
+  readonly written?: readonly string[];
 }
 
 export interface HardenDiscoveryResult {
@@ -624,7 +654,31 @@ export function hardenProject(
   }
 
   const summaries: HardenArtifactSummary[] = [];
-  for (const { artifact, outputPath, outputExisted } of plannedOutputs) {
+  const written: string[] = [];
+  const total = plannedOutputs.length;
+  const emitProgress = (
+    phase: HardenProgressPhase,
+    index: number,
+    relativePath?: string,
+  ): void => {
+    options.onProgress?.({
+      phase,
+      index,
+      total,
+      ...(relativePath !== undefined ? { relativePath } : {}),
+      written: written.slice(),
+    });
+  };
+  emitProgress("start", -1);
+  let cancelled = false;
+  for (let i = 0; i < plannedOutputs.length; i++) {
+    if (options.signal?.aborted) {
+      cancelled = true;
+      emitProgress("cancelled", i);
+      break;
+    }
+    const { artifact, outputPath, outputExisted } = plannedOutputs[i]!;
+    emitProgress("artifact", i, artifact.relativePath);
     mkdirSync(dirname(outputPath), { recursive: true });
     try {
       const report: OneClickDefenseReport = defendTarget({
@@ -703,6 +757,9 @@ export function hardenProject(
           report.exhaustionSummary.costAmplificationFactor,
         outputExisted,
       });
+      if (report.overallSuccess && existsSync(report.outputPath)) {
+        written.push(report.outputPath);
+      }
     } catch (err) {
       summaries.push({
         inputPath: artifact.path,
@@ -736,6 +793,8 @@ export function hardenProject(
             weaveDecoys: options.weaveDecoys === true,
             selfSeal: options.selfSeal === true,
             artifacts: summaries,
+            written,
+            ...(cancelled ? { cancelled: true } : {}),
           },
           null,
           2,
@@ -790,12 +849,17 @@ export function hardenProject(
 
   const hardenedCount = summaries.filter((s) => s.success).length;
   const failedCount = summaries.length - hardenedCount;
+  if (!cancelled) {
+    emitProgress("done", total > 0 ? total - 1 : -1);
+  }
   return {
     ...reportBase,
-    overallSuccess: summaries.length > 0 && failedCount === 0,
+    overallSuccess: !cancelled && summaries.length > 0 && failedCount === 0,
     hardenedCount,
     failedCount,
     artifacts: summaries,
+    written: written.slice(),
+    ...(cancelled ? { cancelled: true } : {}),
     ...(summaryPath !== undefined ? { summaryPath } : {}),
     ...(integrityCoveragePath !== undefined
       ? { integrityCoveragePath }
@@ -816,13 +880,23 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
         ? report.discoveredCount === 0
           ? "NO ARTIFACTS"
           : "DRY-RUN (nothing written)"
-        : report.overallSuccess
-          ? "SUCCESS"
-          : report.discoveredCount === 0
-            ? "NO ARTIFACTS"
-            : "PARTIAL/FAILED"
+        : report.cancelled
+          ? "CANCELLED"
+          : report.overallSuccess
+            ? "SUCCESS"
+            : report.discoveredCount === 0
+              ? "NO ARTIFACTS"
+              : "PARTIAL/FAILED"
     }`,
   ];
+  if (report.cancelled) {
+    lines.push(
+      `  ⚠ cancelled after ${(report.written ?? []).length} written artifact(s); list is authoritative — no silent half-harden`,
+    );
+    for (const w of report.written ?? []) {
+      lines.push(`    · written: ${w}`);
+    }
+  }
   if (report.selfSealRecommended) {
     lines.push(
       `  ⚠ self_seal recommended: ${report.selfSealRecommendation ?? "multi-artifact tree — pass --self-seal / self_seal:true"}`,

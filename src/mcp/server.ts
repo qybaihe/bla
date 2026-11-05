@@ -87,6 +87,35 @@ import {
   WEAVE_DIRECTIVES_URI,
 } from "../shields/weave/weave-decoy.js";
 
+/** In-flight bla_harden AbortControllers keyed by JSON-RPC request id (issue #75). */
+const activeHardenAborts = new Map<string | number, AbortController>();
+
+function progressTokenOf(req: JsonRpcRequest): string | number | undefined {
+  const params = req.params as { _meta?: { progressToken?: unknown } } | undefined;
+  const token = params?._meta?.progressToken;
+  if (typeof token === "string" || typeof token === "number") return token;
+  return undefined;
+}
+
+function emitMcpProgress(
+  token: string | number,
+  progress: number,
+  total: number,
+  message: string,
+): void {
+  const note = {
+    jsonrpc: "2.0" as const,
+    method: "notifications/progress",
+    params: {
+      progressToken: token,
+      progress,
+      total,
+      message,
+    },
+  };
+  process.stdout.write(JSON.stringify(note) + "\n");
+}
+
 export interface JsonRpcRequest {
   readonly jsonrpc: "2.0";
   readonly id?: string | number | null;
@@ -1661,6 +1690,21 @@ export async function handleMcpRequest(
     };
   }
 
+  // Cancel must be honored even when the notification has no `id` (MCP spec)
+  // and must not wait behind a serial harden call (issue #75).
+  if (req.method === "notifications/cancelled") {
+    const params = (req.params ?? {}) as {
+      requestId?: string | number;
+      reason?: string;
+    };
+    const rid = params.requestId;
+    if (rid !== undefined && rid !== null) {
+      const ctl = activeHardenAborts.get(rid);
+      if (ctl) ctl.abort(params.reason ?? "cancelled");
+    }
+    return null;
+  }
+
   // Notifications without an `id` do not produce a response
   if (req.id === undefined) {
     return null;
@@ -1950,57 +1994,95 @@ export async function handleMcpRequest(
             payload = confirmationRequiredPayload(name, preOverwrite);
           } else {
             const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
-            const report = handlers.hardenProject({
-              directory: hardenDir,
-              dryRun,
-              ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
-              ...(outputDirectory !== undefined ? { outputDirectory } : {}),
-              intensity:
-                typeof args.intensity === "string"
-                  ? (args.intensity as ProtectionIntensity)
-                  : "bankrupt",
-              emitManifest: Boolean(args.emit_manifest) || args.sign_manifest === true,
-              ...(args.sign_manifest === true
-                ? {
-                    signManifest: true,
-                    manifestSigningKeyPath:
-                      typeof args.manifest_key_path === "string" ? args.manifest_key_path : "",
+            const abortCtl = new AbortController();
+            if (typeof req.id === "string" || typeof req.id === "number") {
+              activeHardenAborts.set(req.id, abortCtl);
+            }
+            const progressToken = progressTokenOf(req);
+            let report;
+            try {
+              report = handlers.hardenProject({
+                directory: hardenDir,
+                dryRun,
+                ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
+                ...(outputDirectory !== undefined ? { outputDirectory } : {}),
+                intensity:
+                  typeof args.intensity === "string"
+                    ? (args.intensity as ProtectionIntensity)
+                    : "bankrupt",
+                emitManifest: Boolean(args.emit_manifest) || args.sign_manifest === true,
+                ...(args.sign_manifest === true
+                  ? {
+                      signManifest: true,
+                      manifestSigningKeyPath:
+                        typeof args.manifest_key_path === "string" ? args.manifest_key_path : "",
+                    }
+                  : {}),
+                llmDirectives: Boolean(args.llm_directives),
+                weaveDecoys: Boolean(args.weave_decoys),
+                selfSeal: Boolean(args.self_seal),
+                ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
+                ...(args.allow_lane_independent === true
+                  ? { allowLaneIndependentGates: true }
+                  : {}),
+                ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
+                ...(args.allow_wasm_clear_params === true
+                  ? { allowWasmClearParamCarriers: true }
+                  : {}),
+                ...(args.allow_stable_panel_derive === true
+                  ? { allowStablePanelDeriveAbi: true }
+                  : {}),
+                ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
+                ...(args.allow_panel_offline_oracle === true
+                  ? { allowPanelOfflineOracle: true }
+                  : {}),
+                ...(args.allow_js_wasm_hydrate_dump === true
+                  ? { allowJsWasmHydrateDump: true }
+                  : {}),
+                ...(args.allow_wasm_xor_mask_sidecar === true
+                  ? { allowWasmXorMaskSidecar: true }
+                  : {}),
+                ...(args.allow_wasm_seal_xor_known_plaintext === true
+                  ? { allowWasmSealXorKnownPlaintext: true }
+                  : {}),
+                ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
+                signal: abortCtl.signal,
+                onProgress: (ev) => {
+                  if (progressToken === undefined) return;
+                  if (ev.phase === "artifact") {
+                    emitMcpProgress(
+                      progressToken,
+                      ev.index + 1,
+                      ev.total,
+                      ev.relativePath ?? `artifact ${ev.index + 1}/${ev.total}`,
+                    );
+                  } else if (ev.phase === "cancelled") {
+                    emitMcpProgress(
+                      progressToken,
+                      ev.written.length,
+                      ev.total,
+                      `cancelled after ${ev.written.length} written`,
+                    );
+                  } else if (ev.phase === "done") {
+                    emitMcpProgress(
+                      progressToken,
+                      ev.total,
+                      ev.total,
+                      "done",
+                    );
                   }
-                : {}),
-              llmDirectives: Boolean(args.llm_directives),
-              weaveDecoys: Boolean(args.weave_decoys),
-              selfSeal: Boolean(args.self_seal),
-              ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
-              ...(args.allow_lane_independent === true
-                ? { allowLaneIndependentGates: true }
-                : {}),
-              ...(args.allow_plaintext_seal === true ? { allowPlaintextSeal: true } : {}),
-              ...(args.allow_wasm_clear_params === true
-                ? { allowWasmClearParamCarriers: true }
-                : {}),
-              ...(args.allow_stable_panel_derive === true
-                ? { allowStablePanelDeriveAbi: true }
-                : {}),
-              ...(args.allow_js_aes_unwrap === true ? { allowJsAesUnwrap: true } : {}),
-              ...(args.allow_panel_offline_oracle === true
-                ? { allowPanelOfflineOracle: true }
-                : {}),
-              ...(args.allow_js_wasm_hydrate_dump === true
-                ? { allowJsWasmHydrateDump: true }
-                : {}),
-    ...(args.allow_wasm_xor_mask_sidecar === true
-      ? { allowWasmXorMaskSidecar: true }
-      : {}),
-    ...(args.allow_wasm_seal_xor_known_plaintext === true
-      ? { allowWasmSealXorKnownPlaintext: true }
-      : {}),
-              ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
-            });
+                },
+              });
+            } finally {
+              if (typeof req.id === "string" || typeof req.id === "number") {
+                activeHardenAborts.delete(req.id);
+              }
+            }
             // Dry-run / confirmation_required leave no write receipt; real writes do.
             if (!dryRun) {
-              const wrote = report.artifacts
+              const wrote = (report.written ?? report.artifacts
                 .filter((a) => a.success)
-                .map((a) => a.outputPath);
+                .map((a) => a.outputPath)).slice();
               if (report.summaryPath !== undefined) {
                 wrote.push(report.summaryPath);
               }
@@ -2403,9 +2485,29 @@ export function startMcpStdioServer(): void {
   let processingQueue = Promise.resolve();
   const processor = createStdioLineProcessor({
     onLine: (line: string) => {
+      // Parse first so cancel can abort an in-flight harden without waiting
+      // for the serial request queue (issue #75).
+      let req: JsonRpcRequest;
+      try {
+        req = JSON.parse(line) as JsonRpcRequest;
+      } catch {
+        const parseErr: JsonRpcResponse = {
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32700,
+            message: "Parse error",
+          },
+        };
+        process.stdout.write(JSON.stringify(parseErr) + "\n");
+        return;
+      }
+      if (req.method === "notifications/cancelled") {
+        void handleMcpRequest(req);
+        return;
+      }
       processingQueue = processingQueue.then(async () => {
         try {
-          const req = JSON.parse(line) as JsonRpcRequest;
           const res = await handleMcpRequest(req);
           if (res !== null) {
             process.stdout.write(JSON.stringify(res) + "\n");

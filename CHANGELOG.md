@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`bla_harden` progress/cancel (issue #75):** cooperative `AbortSignal` + `onProgress` between artifacts; cancelled reports set `cancelled: true` and list every already-written path (no silent half-harden). MCP `notifications/progress` when `_meta.progressToken` is present; `notifications/cancelled` aborts in-flight harden immediately (stdio fast-path, not behind the serial queue).
+
+
 ## [2.1.0] — 2026-11-05
 
 Minor release after 2.0.0: competitor-research absorptions that stay honest (seeded
