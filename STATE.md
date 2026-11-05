@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 2.0.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 2.1.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tag-only releases (`git tag bla-agents-<version>`); see `CHANGELOG.md` and GitHub Releases.
 

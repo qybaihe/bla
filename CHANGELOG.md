@@ -6,10 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-11-05
+
+Minor release after 2.0.0: competitor-research absorptions that stay honest (seeded
+polymorphism / string XOR pass / interleaved integrity + real entry self-digest),
+CrackMe v8 Aegis + public-SEAL hygiene, and community MCP/CLI/test/signing polish.
+No npm publish in this cut — GitHub tag + Release only.
+
 ### Added
-- **Self-seal entry self-digest (CrackMe v8 red team 2026-11-05):** the self-seal measure now embeds a canonical SHA-256 of the entry file (all digest literals zeroed) finalized at the protector's write chokepoint, so editing or appending to the entry itself hard-fails with `integrity check failed` instead of only shifting the opaque digest. Un-finalized snippets soft-skip (never brick). `hardenProject` reports `integrityCoverageSelfVerified`; when the on-disk entry does not verify, `integrity-coverage.json` drops `host#site*` → host self edges (honest refuse) rather than claiming paper coverage.
-- **seal-commitment lint:** new warnings `public-materialization-seed` and `public-key-digest-oracle` (CrackMe v8 red-team exposures) surface via `bla lint` / `bla_lint`. Warning only — not bankrupt refuse.
-- **CrackMe v8 Aegis:** product entitlement challenge rebuilt with bla-agents **2.0** (`bankrupt` + `--self-seal`, no `--allow-*`). Absorbs red/blue R1–R12 recipes (SHA-256(key) mask KDF, commitment outside XOR, seed-derived rounds/pad3, arity-2 / export-order / unlock body-index hygiene). Meridian v7 remains a historical snapshot (cleartext private; not re-hardened).
+- **Seeded polymorphism + drift report (#84):** HMAC-SHA256 `deriveSeedLabel` for independent PRNG substreams; bundler chunk seeds derived from the harden seed; MCP `bla_polymorph_report` objectively quantifies cross-build structural drift (same seed → reproducible; different seed → measurable divergence). Skill: re-randomize every release; functional equivalence stays REA-proven.
+- **String/constant XOR encrypt pass (#85):** MCP `bla_encrypt_strings` + `bla_lint_plaintext_secrets` / gate `plaintext-secret`. Seed-derived XOR only (no JS AES — stays clear of the house `lint-js-aes-unwrap` refuse). Sensitive panel/license literals must not remain cleartext.
+- **Interleaved integrity coverage (#86):** schema `bla-integrity-coverage/v1`, MCP `bla_lint_integrity_coverage` / gate `integrity-coverage`. Multi-check coverage matrix refuses paper-only plans (full cover / anti-single-point / hash completeness / weak connectivity).
+- **Self-seal entry self-digest (#87, CrackMe v8 red team 2026-11-05):** embeds a canonical SHA-256 of the entry (digest literals zeroed) finalized at the protector write chokepoint — editing/appending the entry hard-fails with `integrity check failed`. Un-finalized snippets soft-skip (never brick). `hardenProject` reports `integrityCoverageSelfVerified`; when on-disk entry does not verify, `integrity-coverage.json` drops host self-edges (honest refuse) rather than claiming paper coverage. Skill: real-not-paper self-coverage.
+- **Opt-in ed25519 defense attestation (#88, rebase of #81):** sign defense attestation manifests when a key is supplied; verify path for signed manifests.
+- **`bla audit --fail-under` (#79):** exit non-zero when exposure score is at or above the given threshold (CI-friendly gate).
+- **Core unit coverage (#80):** detector, prng, identifiers, sarif, llm-directives, reporter, python.
+- **CrackMe v8 Aegis (#82):** product entitlement challenge rebuilt with bla-agents **2.0** (`bankrupt` + `--self-seal`, no `--allow-*`). Absorbs red/blue R1–R12 recipes (SHA-256(key) mask KDF, commitment outside XOR, seed-derived rounds/pad3, arity-2 / export-order / unlock body-index hygiene). Meridian v7 remains a historical snapshot (cleartext private; not re-hardened).
+- **seal-commitment lint warnings (#83):** `public-materialization-seed` and `public-key-digest-oracle` surface via `bla lint` / `bla_lint`. Warning only — not bankrupt refuse. CrackMe v8 SEAL v2 keeps harden seed private and drops published `keySha256`.
+
+### Fixed
+- **MCP registration pin (#78):** `bla setup` pins MCP package registration to the running BLA version instead of `@latest`, so agent configs cannot silently float onto a mismatched release.
+
+### Changed
+- Skill guide **v2.1.0** documents polymorph / plaintext-secret / integrity-coverage / entry self-digest principles alongside the 2.0 refuse/recipe/honesty layers.
+
 
 ## [2.0.0] — 2026-11-03
 
