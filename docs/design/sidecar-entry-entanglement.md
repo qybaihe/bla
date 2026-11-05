@@ -1,6 +1,6 @@
 # DESIGN: Sidecar / entry entanglement (issue #40 / STATE)
 
-Status: **first-slice stub** — design locked; full multi-format entanglement TBD.
+Status: **JS strip⇒fail vertical slice** — binding digest + JS preamble + protect/harden opt-in landed; Python/WASM still TBD.
 
 ## Goal
 

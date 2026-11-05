@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sidecar entry entanglement JS strip⇒fail (issue #40):** `computeSidecarBindingDigest` + `generateSidecarJsPreamble` / `bindSidecarEntanglement`. Opt-in CLI `--sidecar-entangle` / MCP `sidecar_entangle` / `.blarc sidecarEntangle`. `protectTarget` prepends a Node preamble that re-measures sibling sidecars (sidecars-mode digest is preamble-safe); strip/alter fails closed. `hardenProject` post-pass rewrites the JS entry against FINAL sibling bytes. Python/WASM still open.
 - **`bla_harden` progress/cancel (issue #75):** cooperative `AbortSignal` + `onProgress` between artifacts; cancelled reports set `cancelled: true` and list every already-written path (no silent half-harden). MCP `notifications/progress` when `_meta.progressToken` is present; `notifications/cancelled` aborts in-flight harden immediately (stdio fast-path, not behind the serial queue).
 
 
