@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Self-seal entry self-digest (CrackMe v8 red team 2026-11-05):** the self-seal measure now embeds a canonical SHA-256 of the entry file (all digest literals zeroed) finalized at the protector's write chokepoint, so editing or appending to the entry itself hard-fails with `integrity check failed` instead of only shifting the opaque digest. Un-finalized snippets soft-skip (never brick). `hardenProject` reports `integrityCoverageSelfVerified`; when the on-disk entry does not verify, `integrity-coverage.json` drops `host#site*` → host self edges (honest refuse) rather than claiming paper coverage.
 - **seal-commitment lint:** new warnings `public-materialization-seed` and `public-key-digest-oracle` (CrackMe v8 red-team exposures) surface via `bla lint` / `bla_lint`. Warning only — not bankrupt refuse.
 - **CrackMe v8 Aegis:** product entitlement challenge rebuilt with bla-agents **2.0** (`bankrupt` + `--self-seal`, no `--allow-*`). Absorbs red/blue R1–R12 recipes (SHA-256(key) mask KDF, commitment outside XOR, seed-derived rounds/pad3, arity-2 / export-order / unlock body-index hygiene). Meridian v7 remains a historical snapshot (cleartext private; not re-hardened).
 

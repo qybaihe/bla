@@ -89,6 +89,7 @@ import {
   jsWasmHydrateDumpRefuseMessage,
   lintJsWasmHydrateDumpSource,
 } from "./js-wasm-hydrate-dump-lint.js";
+import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -164,6 +165,11 @@ function writeFileAtomicSync(
 ): void {
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
+  // Self-seal entry self-digest must cover the FINAL bytes — finalize here, at
+  // the single write chokepoint, after every other transform.
+  const finalizeable =
+    typeof content !== "string" || encoding === undefined || encoding === "utf8";
+  if (finalizeable) content = finalizeSelfSealSelfDigest(content).content;
   try {
     const st = lstatSync(targetPath);
     if (st.isSymbolicLink() || st.nlink > 1) {

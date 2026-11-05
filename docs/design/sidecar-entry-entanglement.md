@@ -37,6 +37,7 @@ checks beat orphan honeypot files.
 
 ## Follow-ups
 
+- ~~Entry self-coverage~~ — landed 2026-11-05: self-seal embeds a canonical entry self-digest finalized at write time; harden reports `integrityCoverageSelfVerified` and drops paper self edges when it does not verify.
 - Wire planner into `protectTarget` for JS + Python when `sidecarEntangle` is set.
 - Extend to ASAR / Bun snapshot / native companion files.
 - Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).

@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -35,6 +36,8 @@ import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
 import { planSidecarEntanglement } from "../shields/runtime/sidecar-entangle.js";
+import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
+import { withoutHostSelfCoverage } from "./integrity-coverage.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
@@ -188,6 +191,12 @@ export interface HardenProjectReport {
   readonly summaryPath?: string;
   /** Absolute path of bla-integrity-coverage/v1 matrix when selfSeal wrote one. */
   readonly integrityCoveragePath?: string;
+  /**
+   * True when the entry checker's canonical self-digest verifies on disk (entry
+   * self-tamper hard-fails). When false the written matrix drops the entry's
+   * self-coverage edges so packaging gates do not trust paper coverage.
+   */
+  readonly integrityCoverageSelfVerified?: boolean;
 }
 
 export interface HardenDiscoveryResult {
@@ -709,6 +718,7 @@ export function hardenProject(
   }
 
   let integrityCoveragePath: string | undefined;
+  let integrityCoverageSelfVerified: boolean | undefined;
   if (options.selfSeal === true && !dryRun && summaries.some((s) => s.success)) {
     try {
       const jsLike = summaries.filter(
@@ -729,10 +739,17 @@ export function hardenProject(
           seedTag: String(options.seed ?? runId),
           baseDir: outputRoot,
         });
+        const entryRel = entry.relativePath.replaceAll("\\", "/");
+        const entryAbs = join(outputRoot, entryRel);
+        integrityCoverageSelfVerified =
+          existsSync(entryAbs) && verifySelfSealSelfDigest(readFileSync(entryAbs)).verified;
+        const matrix = integrityCoverageSelfVerified
+          ? plan.coverageMatrix
+          : withoutHostSelfCoverage(plan.coverageMatrix, entryRel);
         integrityCoveragePath = join(outputRoot, "integrity-coverage.json");
         writeFileSync(
           integrityCoveragePath,
-          `${JSON.stringify(plan.coverageMatrix, null, 2)}\n`,
+          `${JSON.stringify(matrix, null, 2)}\n`,
           "utf8",
         );
       }
@@ -752,6 +769,9 @@ export function hardenProject(
     ...(summaryPath !== undefined ? { summaryPath } : {}),
     ...(integrityCoveragePath !== undefined
       ? { integrityCoveragePath }
+      : {}),
+    ...(integrityCoverageSelfVerified !== undefined
+      ? { integrityCoverageSelfVerified }
       : {}),
   };
 }

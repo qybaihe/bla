@@ -20,6 +20,15 @@
  * hashes. Pair with `buildInterleavedCoverageMatrix` so packaging gates can refuse
  * single-point topologies. Hash-only — no guessing.
  *
+ * Entry self-coverage (CrackMe v8 red team 2026-11-05): in hard-fail mode each
+ * site also hard-fails when the checker host's **own** bytes diverge. A file
+ * cannot embed its own SHA-256, so the emitted literal starts as
+ * {@link SELF_DIGEST_PLACEHOLDER} and {@link finalizeSelfSealSelfDigest} (run on
+ * the final bytes at write time) replaces it with
+ * `SHA-256(file with every digest occurrence → "0"×64)`. Runtime recomputes the
+ * same canonical form. Until finalized the literal is not 64-hex and the self
+ * check soft-skips (never bricks an un-finalized build).
+ *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice. Browser builds soft-skip (digest=0).
  */
 
@@ -31,6 +40,92 @@ import {
 } from "../../engine/integrity-coverage.js";
 
 export const SELF_SEAL_SCHEMA = "bla-self-seal/v1" as const;
+
+/**
+ * Build-time placeholder for the entry self-digest literal (exactly 64 chars,
+ * deliberately non-hex so runtime soft-skips if a write path never finalized).
+ * Never ships: {@link finalizeSelfSealSelfDigest} replaces every occurrence.
+ */
+export const SELF_DIGEST_PLACEHOLDER =
+  "~self-digest-pending-finalize~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" as const;
+
+const SELF_DIGEST_ZERO = "0".repeat(64);
+const HEX64_LOWER = /^[0-9a-f]{64}$/;
+
+function replaceAllBytes(buf: Buffer, needle: Buffer, replacement: Buffer): Buffer {
+  if (needle.length !== replacement.length) {
+    throw new Error("replaceAllBytes requires equal-length needle/replacement");
+  }
+  const out = Buffer.from(buf);
+  let at = out.indexOf(needle);
+  while (at !== -1) {
+    replacement.copy(out, at);
+    at = out.indexOf(needle, at + needle.length);
+  }
+  return out;
+}
+
+/** Canonical self-digest: SHA-256 of bytes with every `digestLiteral` → "0"×64. */
+export function canonicalSelfDigest(bytes: Buffer, digestLiteral: string): string {
+  const canon = replaceAllBytes(
+    bytes,
+    Buffer.from(digestLiteral, "latin1"),
+    Buffer.from(SELF_DIGEST_ZERO, "latin1"),
+  );
+  return createHash("sha256").update(canon).digest("hex");
+}
+
+export interface SelfDigestFinalizeResult<T extends string | Buffer> {
+  readonly content: T;
+  /** True when at least one placeholder was replaced. */
+  readonly applied: boolean;
+  readonly digest?: string;
+  readonly occurrences: number;
+}
+
+/**
+ * Replace {@link SELF_DIGEST_PLACEHOLDER} with the canonical self-digest of the
+ * **final** artifact bytes. Idempotent no-op when the placeholder is absent.
+ * Must run after every other transform (string encryption, source-map
+ * directives…) — any later byte change trips the runtime self check.
+ */
+export function finalizeSelfSealSelfDigest<T extends string | Buffer>(
+  content: T,
+): SelfDigestFinalizeResult<T> {
+  const asBuf: Buffer =
+    typeof content === "string" ? Buffer.from(content as string, "utf8") : (content as Buffer);
+  const needle = Buffer.from(SELF_DIGEST_PLACEHOLDER, "latin1");
+  let occurrences = 0;
+  for (let at = asBuf.indexOf(needle); at !== -1; at = asBuf.indexOf(needle, at + needle.length)) {
+    occurrences += 1;
+  }
+  if (occurrences === 0) return { content, applied: false, occurrences };
+  const zero = Buffer.from(SELF_DIGEST_ZERO, "latin1");
+  const canon = replaceAllBytes(asBuf, needle, zero);
+  const digest = createHash("sha256").update(canon).digest("hex");
+  const finalBuf = replaceAllBytes(asBuf, needle, Buffer.from(digest, "latin1"));
+  const out = (typeof content === "string" ? finalBuf.toString("utf8") : finalBuf) as T;
+  return { content: out, applied: true, digest, occurrences };
+}
+
+/**
+ * Offline check: does any 64-hex literal in `bytes` verify as the canonical
+ * self-digest? Used by harden to keep the coverage matrix honest (only claim
+ * entry self-coverage when the runtime check can actually hard-fail).
+ */
+export function verifySelfSealSelfDigest(bytes: Buffer): { readonly verified: boolean; readonly digest?: string } {
+  const text = bytes.toString("latin1");
+  const seen = new Set<string>();
+  const re = /["'`]([0-9a-f]{64})["'`]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const lit = m[1]!;
+    if (seen.has(lit)) continue;
+    seen.add(lit);
+    if (canonicalSelfDigest(bytes, lit) === lit) return { verified: true, digest: lit };
+  }
+  return { verified: false };
+}
 
 export interface SelfSealOptions {
   /** Extra sibling module paths to hash at runtime (relative or absolute). */
@@ -60,6 +155,12 @@ export interface SelfSealOptions {
   readonly checkerHostPath?: string;
   /** All protected file nodes (for coverage matrix); defaults to siblingPaths + host. */
   readonly coverageFileNodes?: readonly string[];
+  /**
+   * Emit the canonical self-digest check on the checker host's own bytes.
+   * Default: true whenever siblings are present (hard-fail when
+   * hardFailOnSiblingMismatch, else poison digest).
+   */
+  readonly selfDigestCheck?: boolean;
 }
 
 export interface SelfSealSnippet {
@@ -77,6 +178,8 @@ export interface SelfSealSnippet {
   readonly interleavedSites: number;
   /** Coverage matrix for packaging gates / bla_lint_integrity_coverage. */
   readonly coverageMatrix: CoverageMatrix;
+  /** True when sites embed {@link SELF_DIGEST_PLACEHOLDER} (finalize at write time). */
+  readonly selfDigestCheck: boolean;
 }
 
 function emitMeasureFunction(
@@ -85,6 +188,7 @@ function emitMeasureFunction(
   expectedLiteral: string,
   hardFailOnSiblingMismatch: boolean,
   envFingerprint: boolean,
+  selfDigestCheck: boolean,
 ): string[] {
   const lines: string[] = [];
   lines.push(`function ${helperName}() {`);
@@ -100,9 +204,30 @@ function emitMeasureFunction(
   lines.push(
     `    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`,
   );
+  lines.push(`    var selfBuf = null;`);
   lines.push(
-    `    if (selfPath) { try { h.update(_fs.readFileSync(selfPath)); } catch (_e) {} }`,
+    `    if (selfPath) { try { selfBuf = _fs.readFileSync(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
   );
+  if (selfDigestCheck) {
+    // Canonical self-digest: zero every occurrence of the embedded literal, hash,
+    // compare. Literal is finalized at write time; non-hex → soft-skip.
+    lines.push(`    var selfExpected = ${JSON.stringify(SELF_DIGEST_PLACEHOLDER)};`);
+    lines.push(`    if (selfBuf && /^[0-9a-f]{64}$/.test(selfExpected)) {`);
+    lines.push(`      var _lit = Buffer.from(selfExpected, "latin1");`);
+    lines.push(`      var _zero = Buffer.alloc(64, 0x30);`);
+    lines.push(`      var _canon = Buffer.from(selfBuf);`);
+    lines.push(`      for (var _at = _canon.indexOf(_lit); _at !== -1; _at = _canon.indexOf(_lit, _at + 64)) _zero.copy(_canon, _at);`);
+    lines.push(
+      `      if (_c.createHash("sha256").update(_canon).digest("hex") !== selfExpected) {`,
+    );
+    if (hardFailOnSiblingMismatch) {
+      lines.push(`        throw new Error("integrity check failed");`);
+    } else {
+      lines.push(`        digest = 0xffffffff;`);
+    }
+    lines.push(`      }`);
+    lines.push(`    }`);
+  }
   lines.push(`    var siblings = ${siblingsLiteral};`);
   lines.push(`    var expected = ${expectedLiteral};`);
   lines.push(`    for (var i = 0; i < siblings.length; i++) {`);
@@ -191,6 +316,9 @@ export function generateSelfSealSnippet(
         ? 2
         : 1;
 
+  const selfDigestCheck =
+    options.selfDigestCheck !== undefined ? options.selfDigestCheck : siblings.length > 0;
+
   const siblingsLiteral = JSON.stringify(siblings);
   const expectedLiteral = JSON.stringify(
     Object.fromEntries(expectedEntries.map(([k, v]) => [k, v.toLowerCase()])),
@@ -212,6 +340,7 @@ export function generateSelfSealSnippet(
         expectedLiteral,
         hardFailOnSiblingMismatch,
         envFingerprint,
+        selfDigestCheck,
       ),
     );
   }
@@ -256,6 +385,7 @@ export function generateSelfSealSnippet(
     hardFailOnSiblingMismatch,
     interleavedSites,
     coverageMatrix,
+    selfDigestCheck,
   };
 }
 
