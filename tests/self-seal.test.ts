@@ -193,6 +193,45 @@ describe("self-seal helper (#40.5)", () => {
     expect(snip.code).toContain("a".repeat(64));
   });
 
+  it("protect+self-seal hard-fails when an expected sibling is deleted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-selfseal-missing-"));
+    try {
+      const sib = join(dir, "core.wasm");
+      writeFileSync(sib, Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0xaa]));
+      const src = [
+        '"use strict";',
+        "function main() { return 42; }",
+        "module.exports = { main };",
+        'if (require.main === module) console.log(main());',
+        "",
+      ].join("\n");
+      const entry = join(dir, "gate.cjs");
+      writeFileSync(entry, src, "utf8");
+
+      const out = join(dir, "gate.out.cjs");
+      protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "self-seal-missing-protect",
+        selfSeal: true,
+        selfSealSiblingPaths: ["core.wasm"],
+      });
+
+      const intact = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(intact.status, intact.stderr).toBe(0);
+
+      rmSync(sib, { force: true });
+      const deleted = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(deleted.status, deleted.stdout + deleted.stderr).not.toBe(0);
+      expect((deleted.stderr || "") + (deleted.stdout || "")).toMatch(
+        /integrity check failed/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("protect+self-seal hard-fails when an on-disk sibling is tampered", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-selfseal-hf-"));
     try {

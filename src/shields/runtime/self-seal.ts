@@ -254,6 +254,13 @@ function emitMeasureFunction(
   lines.push(
     `        if (_e2 && _e2.message === "integrity check failed") throw _e2;`,
   );
+  if (hardFailOnSiblingMismatch) {
+    // A missing sibling is a failed integrity invariant, not a benign state:
+    // otherwise deleting the anchor file silently downgrades the hard-fail check.
+    lines.push(
+      `        if (expected[String(siblings[i])]) throw new Error("integrity check failed");`,
+    );
+  }
   lines.push(`        h.update("missing:" + String(siblings[i]));`);
   lines.push(`      }`);
   lines.push(`    }`);
