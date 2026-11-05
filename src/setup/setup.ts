@@ -377,7 +377,9 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
   }
 
   const mcpCommand = options.mcpCommand ?? "npx";
-  const mcpArgs = options.mcpArgs ? [...options.mcpArgs] : ["-y", `${BLA_IDENTITY.packageName}@latest`, "mcp"];
+  // Pin the registered version to the BLA that is running setup so agent startup
+  // never fetches a mutable `latest` tag from the registry (supply-chain hardening).
+  const mcpArgs = options.mcpArgs ? [...options.mcpArgs] : ["-y", `${BLA_IDENTITY.packageName}@${BLA_IDENTITY.version}`, "mcp"];
 
   const isDryRunOrPlanOnly = options.dryRun === true || options.yes === false;
   if (isDryRunOrPlanOnly) {
