@@ -295,7 +295,12 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
   if (rep.manifestPath) {
     lines.push(
       "",
-      `  ${ANSI.bold}Signed Manifest:${ANSI.reset}   ${ANSI.green}${rep.manifestPath}${ANSI.reset}`,
+      `  ${ANSI.bold}Manifest:${ANSI.reset}   ${ANSI.green}${rep.manifestPath}${ANSI.reset}`,
+      ...(rep.manifestSigned
+        ? [
+            `  ${ANSI.bold}Signature:${ANSI.reset}   ${ANSI.green}ed25519${ANSI.reset}`,
+          ]
+        : []),
     );
   }
 

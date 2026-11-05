@@ -265,6 +265,14 @@ export * from "./core/release-plan.js";
 export * from "./core/debug-posture.js";
 export * from "./core/coverage-contract.js";
 export {
+  generateManifestSigningKeyPair,
+  signManifestPayload,
+  verifyManifestSignature,
+  readManifestSigningKeyOrThrow,
+  type ManifestSignature,
+  type ManifestSigningKeyPair,
+} from "./core/manifest-signing.js";
+export {
   resolveSupportedAgentClients,
   detectInstalledClients,
   CLIENT_COMPATIBILITY_MATRIX,
