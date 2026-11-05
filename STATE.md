@@ -91,10 +91,14 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 
 Unified `bla lint` / MCP `bla_lint` (`bla-packaging-gates/v1`) aggregates every bankrupt refuse lint from red-blue rounds 1–7; R8–R12 SHA-256 KDF / commitment-outside-XOR / arity+export hygiene live as Skill recipes + WASM protect defaults. Honesty residual: full WASM RE + online/SMT — **not** a new refuse lint. Skill **v2.0.0**. Shipped as **bla-agents 2.0.0** (PR #77).
 
+## Post-2.0 continuous hardening (2026-11-05)
+
+CrackMe v8 red team (round-20261105): **NO PRIZE** — key/FLAG not recovered; `redteam:rea` **unverified** (REA dist absent). Last round's public-seed KP and `keySha256` oracle verified closed by harness. New exposure (empirical tamper matrix, not REA): entry `license.cjs` self-tamper was undetected although the coverage matrix claimed `license.cjs#siteN → license.cjs` (paper coverage). Fixed by canonical entry self-digest + `integrityCoverageSelfVerified` honesty downgrade. Residual: unhardened `seal.json` data sidecar not covered (not a prize — public `flagSha256` is the proof); bankrupt `plaintext-secret` lint flags BLA's own decoy literals (false positive, not exploitable). Shipped `challenge/v8` artifacts predate PRs #84–86 + this fix (rebuild needs release secrets).
+
 ## Nightly roadmap remaining
 
 1. ~~**Self-seal / defenseScore honesty (#40)**~~ — landed soft-caps + opt-in `--self-seal` / MCP `self_seal` / `.blarc selfSeal` (batch 2026-11-02). Remaining: deeper onefile/peel score model.
-2. **Sidecar entry entanglement** — DESIGN + `planSidecarEntanglement()` stub landed; full strip⇒fail rewrite still open.
+2. **Sidecar entry entanglement** — DESIGN + `planSidecarEntanglement()` stub landed; self-seal entry self-digest (edit⇒fail on the entry itself) landed 2026-11-05; full strip⇒fail rewrite still open.
 3. **Deception shields → more formats** — WASM export rename + `wasmPreserveExports` landed; DEX/SQLite/model densify and broader numeric template hygiene still open.
 4. **Empirical JADX / Android red-team** — real REA mapping+JNI vs BLA-hardened unsigned APK.
 5. **ESP flash / esp-image (#8228)** — if REA moved there; UF2 empirical red-team otherwise.
