@@ -41,6 +41,8 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.
 - `bla_benchmark`: Runs the 8-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
+- `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor.
+- `bla_lint_bind_scope`: Read-only lint for `bla-bind-scope/v1` (refuses non-public / hidden fields / missing runtime check).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).
 - `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist; no crack/RE).
 
