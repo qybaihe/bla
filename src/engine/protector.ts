@@ -881,8 +881,15 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
                 chaffPayloadsEmbedded += subRes.metrics.chaffPayloadsEmbedded;
                 binarySectionsPatched += subRes.metrics.binarySectionsPatched;
                 for (const v of subRes.counteredReaVectors) counteredVectors.add(v);
-              } catch {
-                copyFileSync(srcFull, dstFull);
+              } catch (err) {
+                // A detected child artifact that failed protection must not be
+                // silently replaced by an unprotected copy: the directory report
+                // would claim success while shipping the original bytes.
+                const reason = err instanceof Error ? err.message : String(err);
+                throw new Error(
+                  `Directory protection failed for '${entry.name}': ${reason}`,
+                  { cause: err },
+                );
               }
             } else {
               copyFileSync(srcFull, dstFull);
