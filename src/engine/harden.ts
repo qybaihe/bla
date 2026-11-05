@@ -1,13 +1,13 @@
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
+import { walkBounded } from "../core/walk.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
 import {
@@ -287,50 +287,38 @@ function resolveSearchRoots(absRoot: string): {
   return { preferred, includeProjectRootSupplemental: true };
 }
 
-function walkCollect(
-  dir: string,
+function collectRootArtifacts(
   root: string,
-  depth: number,
-  out: DiscoveredArtifact[],
+  projectRoot: string,
   maxArtifacts: number,
-  skipDirs: ReadonlySet<string> = SKIP_DIR_NAMES,
-): void {
-  if (out.length >= maxArtifacts || depth > MAX_WALK_DEPTH) return;
-  let entries;
-  try {
+  skipDirs: ReadonlySet<string>,
+): DiscoveredArtifact[] {
+  const formats = new Map<string, ArtifactFormat>();
+  const files = walkBounded(root, {
+    maxDepth: MAX_WALK_DEPTH,
+    maxFiles: maxArtifacts,
+    skipDirs,
+    skipHiddenDirs: true,
     // Locale-independent name sort so offset paging is stable across platforms.
-    entries = readdirSync(dir, { withFileTypes: true }).slice().sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    );
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (out.length >= maxArtifacts) return;
-    if (entry.name.startsWith(".") && entry.name !== ".asar") {
-      // Still allow probing files that begin with '.', but skip hidden dirs.
-      if (entry.isDirectory()) continue;
-    }
-    if (entry.isDirectory()) {
-      if (skipDirs.has(entry.name)) continue;
-      walkCollect(join(dir, entry.name), root, depth + 1, out, maxArtifacts, skipDirs);
-      continue;
-    }
-    const full = join(dir, entry.name);
-    const format = detectArtifactFormat(full);
-    if (!isProtectableFormat(format)) continue;
-    // Skip already-shielded outputs to avoid re-hardening loops.
-    if (/\.shielded(\.|$)/i.test(entry.name)) continue;
-    if (entry.name.endsWith(".bla-manifest.json")) continue;
-    if (entry.name.endsWith(".bunfs-snapshot")) continue;
-    out.push({
-      path: full,
-      format,
-      // Normalize to POSIX separators so reports, manifests, and MCP
-      // structuredContent stay platform-independent (`dist/app.js`).
-      relativePath: (relative(root, full) || basename(full)).split(sep).join("/"),
-    });
-  }
+    sortEntries: true,
+    accept: (full, name) => {
+      const format = detectArtifactFormat(full);
+      if (!isProtectableFormat(format)) return false;
+      // Skip already-shielded outputs to avoid re-hardening loops.
+      if (/\.shielded(\.|$)/i.test(name)) return false;
+      if (name.endsWith(".bla-manifest.json")) return false;
+      if (name.endsWith(".bunfs-snapshot")) return false;
+      formats.set(full, format);
+      return true;
+    },
+  });
+  return files.map((full) => ({
+    path: full,
+    format: formats.get(full) ?? detectArtifactFormat(full),
+    // Normalize to POSIX separators so reports, manifests, and MCP
+    // structuredContent stay platform-independent (`dist/app.js`).
+    relativePath: (relative(projectRoot, full) || basename(full)).split(sep).join("/"),
+  }));
 }
 
 /**
@@ -396,10 +384,14 @@ function collectHardenableArtifacts(
   const found: DiscoveredArtifact[] = [];
   const { preferred, includeProjectRootSupplemental } = resolveSearchRoots(abs);
   for (const root of preferred) {
-    walkCollect(root, abs, 0, found, maxArtifacts, SKIP_DIR_NAMES);
+    const remaining = maxArtifacts - found.length;
+    if (remaining <= 0) break;
+    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES));
   }
-  if (includeProjectRootSupplemental) {
-    walkCollect(abs, abs, 0, found, maxArtifacts, SUPPLEMENTAL_SKIP_DIR_NAMES);
+  if (includeProjectRootSupplemental && found.length < maxArtifacts) {
+    found.push(
+      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES),
+    );
   }
   // De-dupe by absolute path (cargo release may overlap target/)
   const seen = new Set<string>();
