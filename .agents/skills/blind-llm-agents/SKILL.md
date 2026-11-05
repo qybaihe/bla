@@ -97,7 +97,9 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 ## Write safety (principles)
 
 - Unsure what will be touched? `bla_discover` or `bla_harden` `{ "dry_run": true }` —
-  both write nothing. If `truncated: true`, say so and narrow the directory.
+  both write nothing. If `truncated: true`, page with `offset` from `nextOffset` until
+  the tail is retrieved (do not silently drop artifacts past the 64 default cap), or
+  raise `max_artifacts` / narrow the directory.
 - Never overwrite without the user's go-ahead. On `confirmation_required`, show
   `wouldOverwrite`, ask, then retry with `confirm_overwrite: true` (or a new path).
   Same rule for `in_place: true` (overwrites the input).
@@ -118,7 +120,7 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | :--- | :--- |
 | Project / build dir | **`bla_harden`** |
 | Named artifact | **`bla_defend`** (or granular `bla_audit` → `bla_protect` → `bla_verify`) |
-| Inventory only | **`bla_discover`** |
+| Inventory only (page 64+ with `offset`/`nextOffset`) | **`bla_discover`** |
 | Structural decoys (esp. Python) | Resource `bla://directives/weave-decoy` → `bla_weave_plan` → `weave_decoys: true` |
 | Packaging footguns before harden (entitlement tree) | **`bla_lint`** `{ "directory": "." }` (CLI: `bla lint .`) — unified R1–R7+lanes/panel |
 | Custom license/activation gate review | **`bla_lint_lanes`** `{ "path": "<gate.js>" }` (CLI: `bla lint-lanes`) |

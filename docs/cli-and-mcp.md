@@ -22,7 +22,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 ## MCP Tools (`bla` Server)
 
 - `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `allow_wasm_clear_params`, `allow_stable_panel_derive`, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false, `output_directory` optional). The report carries `dryRun`, `truncated`, `maxArtifacts`, `wouldOverwrite`, and `outputDirectory`.
-- `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts }`. Writes nothing.
+- `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`, `offset`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts, offset, nextOffset? }`. When `truncated`, pass `nextOffset` as the next `offset` to page 64+ trees without losing the tail. Writes nothing.
 - `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `seed`, `in_place` default false, `confirm_overwrite` default false).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
 - `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
@@ -47,7 +47,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 ### Write safety (dry-run, confirmation, receipts)
 
 - `bla_harden` with `dry_run: true` (CLI `bla harden . --dry-run`) discovers targets and plans outputs with **zero bytes written** (no `.bla-hardened/`, no summary, no `.blarc` seed). Dry-run sets `overallSuccess: false` — it never claims a successful harden.
-- Discovery is capped (`max_artifacts`, default 64); when more targets exist the result sets `truncated: true` instead of silently dropping them.
+- Discovery is capped (`max_artifacts`, default 64); when more targets exist the result sets `truncated: true` and `nextOffset` instead of silently dropping them — page with `offset` until `truncated` is false.
 - `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite an existing output file unless `confirm_overwrite: true`. A refusal is `isError: true` with `{ status: "confirmation_required", wouldOverwrite: [...], wrote: [] }`; nothing is written.
 - Successful `bla_harden` / `bla_defend` / `bla_protect` writes add `writeReceipt: { status: "written", wrote, overwrote, confirmed }` (`bla_harden` dry-run omits it).
 - `in_place: true` (MCP) / `--in-place` (CLI) plans the output as the input path; because that path already exists, `confirm_overwrite: true` is required on MCP or the call is refused with `confirmation_required`.
