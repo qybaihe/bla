@@ -121,7 +121,7 @@ describe("bla_harden progress + cooperative cancel (#75)", () => {
     const root = createTempDir();
     writeTinyJsTree(root, ["alpha.js", "beta.js"]);
     const reqId = "harden-cancel-1";
-    const handlers = baseHandlers((opts) =>
+    const handlers = baseHandlers((opts = {}) =>
       hardenProject({
         ...opts,
         onProgress: (ev) => {
