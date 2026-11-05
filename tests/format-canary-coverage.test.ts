@@ -72,9 +72,24 @@ describe("Canary + system-diagnostic coverage on remaining formats", () => {
     cls.writeUInt16BE(55, 6); // major
     cls.writeUInt16BE(1, 8); // cp count
     const res = protectJvmClassBuffer(cls, { intensity: "balanced", seed: "jvm-canary" });
+    expect(res.mode).toBe("trailer");
+    expect(res.constantPoolEntriesAdded).toBe(0);
+    expect(res.customAttributesAdded).toBe(0);
     expect(res.canaryTokensEmbedded).toBeGreaterThan(0);
     expect(res.diagnosticsEmbedded).toBeGreaterThan(0);
     expect(res.buffer.toString("latin1")).toContain("PROTECTED_CANARY_CREDENTIAL=");
+  });
+
+  it("reports structural constant-pool injection only for a parseable class layout", () => {
+    const cls = Buffer.alloc(26, 0);
+    cls.writeUInt32BE(0xcafebabe, 0);
+    cls.writeUInt16BE(0, 4);
+    cls.writeUInt16BE(55, 6);
+    cls.writeUInt16BE(1, 8); // empty constant pool
+    const res = protectJvmClassBuffer(cls, { intensity: "balanced", seed: "jvm-structural" });
+    expect(res.mode).toBe("structural");
+    expect(res.constantPoolEntriesAdded).toBeGreaterThan(0);
+    expect(res.customAttributesAdded).toBe(1);
   });
 
   it("embeds canary decoys into ZIP members and recursively hardens nested DEX", () => {
