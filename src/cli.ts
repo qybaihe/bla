@@ -97,6 +97,7 @@ Options:
   --allow-wasm-xor-mask-sidecar  Allow bankrupt despite WASM XOR-mask-beside-blob packs (round-6); OFF by default
   --allow-wasm-seal-xor-known-plaintext  Allow bankrupt despite seal.revision XOR known-plaintext packs (round-7); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
+  --fail-under <n>            Exit 2 when the score fails the gate: defense score < n (defend/verify) or audit exposure score > n (audit)
   --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
   --dry-run                   Preview planned setup/harden changes without writing files
@@ -775,6 +776,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.log(JSON.stringify(report, null, 2));
         } else {
           console.log(formatAuditReport(report));
+        }
+        // CI gating parity with defend/verify: exposureScore is 0 (fully shielded)
+        // to 100 (completely exposed), so fail when it exceeds the threshold.
+        if (parsed.failUnder !== undefined && report.exposureScore > parsed.failUnder) {
+          return 2;
         }
         return 0;
       }
