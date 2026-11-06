@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -174,9 +174,9 @@ function isBlaOwnedMcpEntry(entry: McpServerRegistration): boolean {
 function writeFileAtomicSync(targetPath: string, content: string | Buffer): void {
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
-  const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
   try {
-    writeFileSync(tmpPath, content);
+    writeFileSync(tmpPath, content, { flag: "wx" });
     renameSync(tmpPath, targetPath);
   } catch (err) {
     try {
