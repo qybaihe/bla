@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sidecar Python strip⇒fail preamble (issue #40 follow-up):** `generateSidecarPythonPreamble` / `bindPythonSidecarEntanglement` / `entanglePythonEntryWithSidecars`. Same SHA-256 binding layout as JS; inserts after shebang / PEP 263 / module docstring / `from __future__`. `protectTarget` (python-source) + `hardenProject` post-pass (prefers `policy.py`) wire when `sidecarEntangle` is on. CLI/MCP/`.blarc` flags unchanged (now cover JS+Python). Default still OFF.
+
+
 ## [3.0.0] — 2026-11-06
 
 Major **Agent-Driven Hardening 3.0** release. Upgrades BLA from a passive post-build

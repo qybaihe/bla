@@ -20,7 +20,7 @@ export interface BlaProjectConfig {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). Parity with CLI `--self-seal` / MCP `self_seal`. */
   readonly selfSeal?: boolean;
-  /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). Parity with CLI `--sidecar-entangle` / MCP `sidecar_entangle`. */
+  /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). Parity with CLI `--sidecar-entangle` / MCP `sidecar_entangle`. */
   readonly sidecarEntangle?: boolean;
   /** WASM export names that must remain the public ABI when export rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];

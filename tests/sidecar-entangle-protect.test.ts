@@ -5,6 +5,7 @@ import {
   rmSync,
   readFileSync,
   realpathSync,
+  existsSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -94,3 +95,113 @@ describe("sidecar entangle protectTarget wiring", () => {
     expect(fwd).not.toBe(rev);
   });
 });
+
+describe("sidecar entangle protectTarget Python wiring", () => {
+  it("flag off leaves Python entry free of strip⇒fail preamble", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-off-"));
+    try {
+      const entry = join(dir, "main.py");
+      const sib = join(dir, "sib.bin");
+      writeFileSync(entry, "print(1)\n", "utf8");
+      writeFileSync(sib, "sidecar\n", "utf8");
+      const out = join(dir, "main.out.py");
+      const res = protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "py-off-test",
+        sidecarEntangle: false,
+        sidecarEntanglePaths: ["sib.bin"],
+      });
+      expect(res.sidecarEntangle).toBeUndefined();
+      const code = readFileSync(out, "utf8");
+      expect(code).not.toContain("integrity binding mismatch");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("flag on writes Python binding; intact runs; strip fails closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-on-"));
+    try {
+      const entry = join(dir, "main.py");
+      const entrySrc = "print('py-ok')\n";
+      const sibSrc = "sidecar-bytes-py-v1\n";
+      writeFileSync(entry, entrySrc, "utf8");
+      const out = join(dir, "main.out.py");
+      writeFileSync(join(dir, "sib-for-out.bin"), sibSrc, "utf8");
+      const res = protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "py-on-test-seed",
+        sidecarEntangle: true,
+        sidecarEntanglePaths: ["sib-for-out.bin"],
+      });
+      expect(res.sidecarEntangle).toBe(true);
+      const code = readFileSync(out, "utf8");
+      expect(code).toContain("hashlib");
+      expect(code).toContain("integrity binding mismatch");
+
+      const intact = spawnSync("python3", [out], { encoding: "utf8" });
+      expect(intact.status, `${intact.stderr || ""}${intact.stdout || ""}`).toBe(0);
+      expect((intact.stdout || "")).toContain("py-ok");
+
+      rmSync(join(dir, "sib-for-out.bin"));
+      const stripped = spawnSync("python3", [out], { encoding: "utf8" });
+      const strippedOut = `${stripped.stderr || ""}${stripped.stdout || ""}`;
+      expect(stripped.status, strippedOut).not.toBe(0);
+      expect(strippedOut).toMatch(/integrity binding mismatch/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("sidecar entangle hardenProject Python-only post-pass", () => {
+  it("Python-only project binds entry; strip of sibling fails closed", async () => {
+    const { hardenProject } = await import("../src/engine/harden.js");
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-harden-"));
+    try {
+      writeFileSync(
+        join(dir, "policy.py"),
+        "def check():\n    return 7\n\nif __name__ == '__main__':\n    print(check())\n",
+        "utf8",
+      );
+      // Second discovered Python artifact becomes the measured sibling.
+      writeFileSync(join(dir, "helper.py"), "HELPER = 1\n", "utf8");
+      const report = await hardenProject({
+        directory: dir,
+        intensity: "balanced",
+        seed: "py-harden-seed",
+        sidecarEntangle: true,
+        dryRun: false,
+      });
+      expect(report.overallSuccess).toBe(true);
+      const policyOut = report.artifacts.find(
+        (a) => a.relativePath.replaceAll("\\", "/").endsWith("policy.py") && a.success,
+      );
+      expect(policyOut).toBeTruthy();
+      const code = readFileSync(policyOut!.outputPath, "utf8");
+      expect(code).toContain("hashlib");
+      expect(code).toContain("integrity binding mismatch");
+
+      const intact = spawnSync("python3", [policyOut!.outputPath], { encoding: "utf8" });
+      expect(intact.status, `${intact.stderr || ""}${intact.stdout || ""}`).toBe(0);
+      expect((intact.stdout || "").trim()).toContain("7");
+
+      const helperOut = report.artifacts.find(
+        (a) => a.relativePath.replaceAll("\\", "/").endsWith("helper.py") && a.success,
+      );
+      expect(helperOut).toBeTruthy();
+      rmSync(helperOut!.outputPath);
+      const stripped = spawnSync("python3", [policyOut!.outputPath], { encoding: "utf8" });
+      const strippedOut = `${stripped.stderr || ""}${stripped.stdout || ""}`;
+      expect(stripped.status, strippedOut).not.toBe(0);
+      expect(strippedOut).toMatch(/integrity binding mismatch/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

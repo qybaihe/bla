@@ -1,6 +1,6 @@
 # DESIGN: Sidecar / entry entanglement (issue #40 / STATE)
 
-Status: **JS strip⇒fail vertical slice** — binding digest + JS preamble + protect/harden opt-in landed; Python/WASM still TBD.
+Status: **JS + Python strip⇒fail** — binding digest + JS/Python preambles + protect/harden opt-in landed; WASM custom-section still TBD.
 
 ## Goal
 
@@ -38,6 +38,6 @@ checks beat orphan honeypot files.
 ## Follow-ups
 
 - ~~Entry self-coverage~~ — landed 2026-11-05: self-seal embeds a canonical entry self-digest finalized at write time; harden reports `integrityCoverageSelfVerified` and drops paper self edges when it does not verify.
-- Wire planner into `protectTarget` for JS + Python when `sidecarEntangle` is set.
+- ~~Wire planner into `protectTarget` for JS + Python when `sidecarEntangle` is set.~~ — JS 2026-11-05; Python 2026-11-06 nightly.
 - Extend to ASAR / Bun snapshot / native companion files.
 - Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).
