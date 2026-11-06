@@ -1245,9 +1245,13 @@ export function transformJavaScriptWithBlaShield(
   });
 
   const sanitizedInjectedStatements: t.Statement[] = [];
+  const injectedFnIdentifiers: t.Identifier[] = [];
   for (const stmt of combinedInjectedAst.program.body) {
     if (t.isExportNamedDeclaration(stmt) && stmt.declaration) {
       sanitizedInjectedStatements.push(stmt.declaration);
+      if (t.isFunctionDeclaration(stmt.declaration) && stmt.declaration.id) {
+        injectedFnIdentifiers.push(t.identifier(stmt.declaration.id.name));
+      }
     } else if (
       !t.isImportDeclaration(stmt) &&
       !t.isExportNamedDeclaration(stmt) &&
@@ -1255,7 +1259,17 @@ export function transformJavaScriptWithBlaShield(
       !t.isExportAllDeclaration(stmt)
     ) {
       sanitizedInjectedStatements.push(stmt);
+      if (t.isFunctionDeclaration(stmt) && stmt.id) {
+        injectedFnIdentifiers.push(t.identifier(stmt.id.name));
+      }
     }
+  }
+  if (injectedFnIdentifiers.length > 0) {
+    sanitizedInjectedStatements.push(
+      t.expressionStatement(
+        t.unaryExpression("void", t.arrayExpression(injectedFnIdentifiers)),
+      ),
+    );
   }
 
   // Prepend Cognitive-Armor corpus, digest function, `seedVarName`, and shadow heap at top of program

@@ -1,5 +1,9 @@
 import { resolve } from "node:path";
-import type { VerificationCheck, VerificationReport } from "../core/types.js";
+import type {
+  VerificationAgentAction,
+  VerificationCheck,
+  VerificationReport,
+} from "../core/types.js";
 import { auditTarget } from "./auditor.js";
 import {
   applyDefenseScoreHonesty,
@@ -118,6 +122,59 @@ export function verifyTarget(
     numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,
   });
 
+  const agentActions: VerificationAgentAction[] = [];
+  for (const check of checks) {
+    if (!check.passed) {
+      agentActions.push({
+        id: `fix-check-${check.id}`,
+        priority: "high",
+        reason: `Verification check '${check.id}' failed (${check.details}).`,
+        instruction:
+          `Re-run hardening at 'bankrupt' intensity with weave_decoys:true on ${absTarget}, then re-verify.`,
+        recommendedMcpTool: "bla_defend",
+        recommendedArgs: {
+          input_path: originalPath ? resolve(originalPath) : absTarget,
+          intensity: "bankrupt",
+          weave_decoys: true,
+          self_seal: true,
+        },
+      });
+    }
+  }
+
+  for (const gap of honesty.gaps) {
+    if (gap.id === "self-seal-not-enabled") {
+      agentActions.push({
+        id: "enable-self-seal",
+        priority: "medium",
+        reason: gap.summary,
+        instruction:
+          "Enable self_seal: true (and sidecar_entangle: true for multi-file trees) during bla_harden / bla_defend, and pass self_seal_enabled: true when calling bla_verify directly.",
+        recommendedMcpTool: "bla_defend",
+        recommendedArgs: {
+          input_path: originalPath ? resolve(originalPath) : absTarget,
+          intensity: "bankrupt",
+          self_seal: true,
+          sidecar_entangle: true,
+          weave_decoys: true,
+        },
+      });
+    } else if (gap.id === "wasm-export-rename-pending") {
+      agentActions.push({
+        id: "enable-wasm-export-rename",
+        priority: "medium",
+        reason: gap.summary,
+        instruction:
+          "Protect the WASM artifact at maximum/bankrupt intensity (specifying only public ABI exports in wasm_preserve_exports) and pass wasm_export_rename_applied: true to bla_verify.",
+        recommendedMcpTool: "bla_defend",
+        recommendedArgs: {
+          input_path: originalPath ? resolve(originalPath) : absTarget,
+          intensity: "bankrupt",
+        },
+      });
+    }
+  }
+
   return {
     targetPath: absTarget,
     ...(originalPath ? { originalPath: resolve(originalPath) } : {}),
@@ -131,6 +188,7 @@ export function verifyTarget(
       scoreCap: g.scoreCap,
     })),
     defenseScoreDisclaimer: DEFENSE_SCORE_DISCLAIMER,
+    agentActions,
     checks,
     tokenAmplificationFactor: tokenAmp,
     costAmplificationFactor: costAmp,

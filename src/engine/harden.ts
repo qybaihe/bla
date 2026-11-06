@@ -679,14 +679,41 @@ export function hardenProject(
   };
   emitProgress("start", -1);
   let cancelled = false;
-  for (let i = 0; i < plannedOutputs.length; i++) {
+
+  // Identify the primary JS entry artifact so its siblings are hardened first
+  // (allowing the entry's selfSeal expectedSiblingSha256 map to hash final
+  // sibling bytes on disk without circular JS<->JS hash deadlocks).
+  const jsPlanned = plannedOutputs.filter(({ artifact }) =>
+    /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(artifact.relativePath.replaceAll("\\", "/")),
+  );
+  const designatedEntryOutput =
+    (jsPlanned.find(({ artifact }) =>
+      /license\.(cjs|js)$/i.test(artifact.relativePath),
+    ) ?? jsPlanned[0])?.outputPath;
+
+  const executionIndices =
+    options.selfSeal === true
+      ? plannedOutputs
+          .map((_, idx) => idx)
+          .sort((a, b) => {
+            const aIsEntry =
+              plannedOutputs[a]!.outputPath === designatedEntryOutput ? 1 : 0;
+            const bIsEntry =
+              plannedOutputs[b]!.outputPath === designatedEntryOutput ? 1 : 0;
+            return aIsEntry - bIsEntry;
+          })
+      : plannedOutputs.map((_, idx) => idx);
+  const summaryByIndex = new Map<number, HardenArtifactSummary>();
+
+  for (let step = 0; step < executionIndices.length; step++) {
+    const i = executionIndices[step]!;
     if (options.signal?.aborted) {
       cancelled = true;
-      emitProgress("cancelled", i);
+      emitProgress("cancelled", step);
       break;
     }
     const { artifact, outputPath, outputExisted } = plannedOutputs[i]!;
-    emitProgress("artifact", i, artifact.relativePath);
+    emitProgress("artifact", step, artifact.relativePath);
     mkdirSync(dirname(outputPath), { recursive: true });
     try {
       const report: OneClickDefenseReport = defendTarget({
@@ -726,6 +753,9 @@ export function hardenProject(
           : {}),
         ...((() => {
           if (options.selfSeal !== true) return {};
+          if (designatedEntryOutput !== undefined && outputPath !== designatedEntryOutput) {
+            return {};
+          }
           const siblings = plannedOutputs
             .filter(
               (p) =>
@@ -752,7 +782,7 @@ export function hardenProject(
           ? { signManifest: true, manifestSigningKeyPath: options.manifestSigningKeyPath ?? "" }
           : {}),
       });
-      summaries.push({
+      summaryByIndex.set(i, {
         inputPath: artifact.path,
         relativePath: artifact.relativePath,
         format: artifact.format,
@@ -769,7 +799,7 @@ export function hardenProject(
         written.push(report.outputPath);
       }
     } catch (err) {
-      summaries.push({
+      summaryByIndex.set(i, {
         inputPath: artifact.path,
         relativePath: artifact.relativePath,
         format: artifact.format,
@@ -782,6 +812,10 @@ export function hardenProject(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  for (let i = 0; i < plannedOutputs.length; i++) {
+    const s = summaryByIndex.get(i);
+    if (s) summaries.push(s);
   }
 
   // Persist a project-level summary for agents to read back (unsigned).

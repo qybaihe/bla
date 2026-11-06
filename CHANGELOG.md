@@ -6,12 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Self-seal missing-sibling hard-fail (#95, CrackMe v8 red 2026-11-06):** when `hardFailOnSiblingMismatch` is on, an unreadable/deleted expected sibling throws `integrity check failed` instead of soft-folding `missing:` into the digest (delete-anchor bypass). Soft mode unchanged.
+## [3.0.0] — 2026-11-06
+
+Major **Agent-Driven Hardening 3.0** release. Upgrades BLA from a passive post-build
+pipeline button into a full **Host Agent + MCP collaborative hardening system** where
+the host coding agent performs semantic source refactoring and structural decoy weaving,
+guided and verified by BLA MCP tools, before post-build Counter-REA exhaustion shields run.
 
 ### Added
-- **Sidecar entry entanglement JS strip⇒fail (issue #40):** `computeSidecarBindingDigest` + `generateSidecarJsPreamble` / `bindSidecarEntanglement`. Opt-in CLI `--sidecar-entangle` / MCP `sidecar_entangle` / `.blarc sidecarEntangle`. `protectTarget` prepends a Node preamble that re-measures sibling sidecars (sidecars-mode digest is preamble-safe); strip/alter fails closed. `hardenProject` post-pass rewrites the JS entry against FINAL sibling bytes. Python/WASM still open.
-- **`bla_harden` progress/cancel (issue #75):** cooperative `AbortSignal` + `onProgress` between artifacts; cancelled reports set `cancelled: true` and list every already-written path (no silent half-harden). MCP `notifications/progress` when `_meta.progressToken` is present; `notifications/cancelled` aborts in-flight harden immediately (stdio fast-path, not behind the serial queue).
+- **CrackMe v9 Sovereign (`challenge/v9`, `scripts/crackme/v9-*`, `tests/crackme-v9.test.ts`):** polyglot (JS + WASM + HTML + Python) entitlement challenge built through the full BLA 3.0 4-Stage Agent-Driven Hardening Playbook (`bla_weave_plan` → `bla_verify_weave` 100/100 → `bla_encrypt_strings` → `bla_lint` → `bla_harden --weave-decoys --self-seal --sidecar-entangle` → post-harden `bla_verify_weave` 100/100). Closes the v8 `seal.json` sidecar coverage residual by pinning `EXPECTED_SEAL_SHA256` inside `license.cjs` and binding `policy.py`, `panel.html`, and `core.wasm`.
+- **AST-level Surgical Weave Workorders (`bla_weave_plan` / CLI `bla weave-plan`):** `bla-weave-plan/v1` now extracts per-file `surgicalWorkorder` (`entryFunctions`, `sharedStateSlots`, `branchCandidates`, `suggestedIdentifierStems`, `agentRewriteRecipe`), `surgicalTargetsCount`, `siblingEntanglementCandidates`, and the 4-stage `agentPlaybook`.
+- **Structural Weave Verifier (`bla_verify_weave` / CLI `bla verify-weave`):** new `bla-weave-verify/v1` engine + MCP tool + CLI command that validates Agent-authored source weaves against all 6 `WEAVE_ACCEPTANCE_TESTS` (`no-forbidden-markers`, `mixed-stems`, `shared-state-mutation`, `customer-entry-edges`, `opaque-true-entanglement`, `filter-resistance`), returning `weaveScore` and actionable `agentActions` for autonomous self-repair.
+- **Autonomous Packaging Gate Remediation (`bla_lint` `remediationPlan`):** `bla-packaging-gates/v1` now emits a structured `remediationPlan` (`priority`, `owner`, `recommendedMcpTool`, `sourceRefactorRecipe`, `verifyCommand`) so host agents refactor fragile auth/entitlement code (e.g. converting per-byte lane checks to whole-key chained accumulators) instead of relying on lab `--allow-*` overrides.
+- **Actionable Verification Feedback (`bla_verify` `agentActions`):** `VerificationReport` now includes structured `agentActions` pointing to the exact MCP tool and arguments needed to resolve failed checks or `defenseScore` honesty soft-caps (`self-seal-not-enabled`, `wasm-export-rename-pending`).
+- **Sidecar entry entanglement JS strip⇒fail (issue #40):** `computeSidecarBindingDigest` + `generateSidecarJsPreamble` / `bindSidecarEntanglement`. Opt-in CLI `--sidecar-entangle` / MCP `sidecar_entangle` / `.blarc sidecarEntangle`. `protectTarget` prepends a Node preamble that re-measures sibling sidecars; `hardenProject` post-pass rewrites the JS entry against FINAL sibling bytes.
+- **`bla_harden` progress/cancel (issue #75):** cooperative `AbortSignal` + `onProgress` between artifacts; cancelled reports set `cancelled: true` and list every already-written path.
+
+### Changed
+- **Skill Guide v3.0.0 (`.agents/skills/blind-llm-agents/SKILL.md`):** introduces the 4-Stage Agent-Driven Hardening Playbook (Stage 1 Recon & Gates → Stage 2 Agent Source Surgery → Stage 3 Build & Exhaustion Harden → Stage 4 Equivalence & Weave Verification).
+- **CLI WASM preserve-export flag merging (#108):** centralized `.blarc` + CLI `wasmPreserveExports` de-duplication into `mergeWasmPreserveExports`.
+
+### Fixed
+- **Self-seal missing-sibling hard-fail (#95, CrackMe v8 red 2026-11-06):** when `hardFailOnSiblingMismatch` is on, an unreadable/deleted expected sibling throws `integrity check failed` instead of soft-folding `missing:` into the digest (delete-anchor bypass). Soft mode unchanged.
 
 
 ## [2.1.0] — 2026-11-05

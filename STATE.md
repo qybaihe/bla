@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 2.1.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 3.0.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tagged releases (`git tag bla-agents-<version>`) plus GitHub Releases. The release workflow can also publish the packed tarball to npm with provenance when `NPM_TOKEN`/OIDC is configured; a release cut may intentionally skip the npm step (see `CHANGELOG.md`).
 
@@ -90,6 +90,14 @@ Outside the repo, `npm pack` → install tarball → isolated `HOME`:
 ## Red-blue packaging gates (R1–R12 → 2.0)
 
 Unified `bla lint` / MCP `bla_lint` (`bla-packaging-gates/v1`) aggregates every bankrupt refuse lint from red-blue rounds 1–7; R8–R12 SHA-256 KDF / commitment-outside-XOR / arity+export hygiene live as Skill recipes + WASM protect defaults. Honesty residual: full WASM RE + online/SMT — **not** a new refuse lint. Skill **v2.0.0**. Shipped as **bla-agents 2.0.0** (PR #77).
+
+## Agent-Driven Hardening 3.0 & CrackMe v9 Sovereign (2026-11-06)
+
+- **CrackMe v9 Sovereign (`challenge/v9`):** flagship BLA 3.0 polyglot challenge (`license.cjs` + `core.wasm.gz` + `panel.html` + `policy.py` + covered `seal.json`). Built via the 4-Stage Playbook (`weaveDecoys: true`, `selfSeal: true`, `sidecarEntangle: true`, `weaveScore: 100`, `integrityCoverageSelfVerified: true`, `encryptStrings`). Closes the v8 uncovered `seal.json` data-sidecar residual (`EXPECTED_SEAL_SHA256`) and binds Python/HTML/WASM siblings so modifying or deleting any file hard-fails at runtime.
+- **AST-level Surgical Weave Workorders (`bla_weave_plan`):** extracts `surgicalWorkorder` (`entryFunctions`, `sharedStateSlots`, `branchCandidates`, `suggestedIdentifierStems`, `agentRewriteRecipe`), `siblingEntanglementCandidates`, and the 4-Stage `agentPlaybook` so host coding agents can weave domain-plausible shadow business logic into source before post-build exhaustion hardening.
+- **Structural Weave Verifier (`bla_verify_weave` / CLI `bla verify-weave`):** evaluates JS/TS/Python sources against all 6 `WEAVE_ACCEPTANCE_TESTS` (`bla-weave-verify/v1`), computing `weaveScore` and returning actionable `agentActions` for autonomous Agent self-repair.
+- **Autonomous Gate & Verification Remediation (`bla_lint` + `bla_verify`):** `bla_lint` now returns structured `remediationPlan` recipes (`owner`, `sourceRefactorRecipe`, `recommendedMcpTool`) for every packaging gate; `bla_verify` returns `agentActions` whenever checks fail or `defenseScore` soft-caps apply.
+- **Skill Guide v3.0.0:** complete 4-Stage Agent-Driven Hardening Playbook (`Stage 1 Recon & Gates → Stage 2 Agent Source Surgery → Stage 3 Build & Exhaustion Harden → Stage 4 Equivalence & Weave Verification`).
 
 ## Post-2.0 continuous hardening (2026-11-06)
 

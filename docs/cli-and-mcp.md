@@ -72,7 +72,8 @@ manifest.
 - `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor.
 - `bla_lint_bind_scope`: Read-only lint for `bla-bind-scope/v1` (refuses non-public / hidden fields / missing runtime check).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).
-- `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist; no crack/RE).
+- `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist + AST `surgicalWorkorder` with `entryFunctions`, `sharedStateSlots`, `branchCandidates`, and `agentRewriteRecipe`; no crack/RE).
+- `bla_verify_weave`: Read-only structural weave verifier (`path`, optional `max_targets`) → `bla-weave-verify/v1` JSON (`overallPassed`, `weaveScore`, per-file 6-check verification, and actionable `agentActions` for autonomous Agent self-repair).
 
 ### Write safety (dry-run, confirmation, receipts)
 

@@ -100,6 +100,19 @@ export interface PackagingGateFinding {
   readonly refuseMessage?: string;
   readonly oneLineAdvice: string;
   readonly findingCount: number;
+  readonly remediationRecipe?: string;
+  readonly recommendedMcpTool?: string;
+}
+
+export interface PackagingGateRemediation {
+  readonly gate: PackagingGateId;
+  readonly path: string;
+  readonly relativePath: string;
+  readonly priority: "critical" | "high" | "medium";
+  readonly owner: "agent-source-refactor" | "mcp-tool-call";
+  readonly recommendedMcpTool?: string;
+  readonly sourceRefactorRecipe: string;
+  readonly verifyCommand: string;
 }
 
 export interface PackagingGatesAllowOptions {
@@ -138,6 +151,8 @@ export interface PackagingGatesReport {
   readonly findings: readonly PackagingGateFinding[];
   /** Findings that would refuse bankrupt/maximum under current allow flags. */
   readonly blocking: readonly PackagingGateFinding[];
+  /** Structured Agent remediation plan for autonomous source refactoring before harden. */
+  readonly remediationPlan: readonly PackagingGateRemediation[];
   readonly shouldRefuseBankrupt: boolean;
   readonly gateCounts: Readonly<Record<PackagingGateId, number>>;
   readonly oneLineAdvice: string;
@@ -180,6 +195,77 @@ function emptyCounts(): Record<PackagingGateId, number> {
     "integrity-coverage": 0,
     "bind-scope": 0,
   };
+}
+
+function buildGateRemediationMeta(
+  gate: PackagingGateId,
+  rel: string,
+): {
+  readonly owner: "agent-source-refactor" | "mcp-tool-call";
+  readonly recommendedMcpTool?: string;
+  readonly sourceRefactorRecipe: string;
+} {
+  switch (gate) {
+    case "lane-independence":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, replace per-byte / per-segment independent comparisons (e.g. \`key[i] === ...\` or \`parts[0] === ...\`) with a single whole-key chained ARX/FNV/SHA-256 accumulator so no byte can be solved in isolation, or move unlock verification into WASM.`,
+      };
+    case "seal-commitment":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, remove plaintext keys/flags/seeds and replace reversible \`(scheduleSalt + rounds + revision)\` fields with a one-way \`SHA-256\` commitment (\`certificateSha256\`), keeping the materialization \`seed\` private.`,
+      };
+    case "wasm-param-carrier":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, remove clear ASCII magic headers (\`R3PARM\`/\`R3CIPH\`/\`R2SEAL\`) from WASM data segments and derive mask keys via one-way \`SHA-256(key)\` inside WASM.`,
+      };
+    case "js-aes-unwrap":
+      return {
+        owner: "agent-source-refactor",
+        recommendedMcpTool: "bla_encrypt_strings",
+        sourceRefactorRecipe: `In \`${rel}\`, remove hardcoded AES wrap-key material + \`createDecipheriv\` from JS; move payload unlocking inside WASM or use \`bla_encrypt_strings\` (seed-derived XOR stream) for non-cryptographic literal masking.`,
+      };
+    case "js-wasm-hydrate-dump":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, stop reading \`memory.buffer\` salt/rounds/cipher layouts in JS after WASM instantiation; keep the entire ARX/KDF + certificate check inside WASM \`unlock(keyPtr, keyLen) -> outLen\`.`,
+      };
+    case "wasm-xor-mask-sidecar":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, do not store a static 32-byte XOR mask beside the masked blob in WASM linear memory; derive the keystream from user key bytes via one-way KDF at runtime.`,
+      };
+    case "wasm-seal-xor-known-plaintext":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, remove public \`seal.revision\` digests from the XOR-masked WASM payload (known-plaintext recovers the repeating XOR mask without a key); store public commitments in a separate unmasked segment.`,
+      };
+    case "panel-derive":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `In \`${rel}\`, remove the offline oracle combo (\`deriveLocal\` + plaintext \`panelTokenSha256\`) and let \`bla_harden\` at \`bankrupt\` intensity rewrite \`__vaultPanelDerive_*\` symbols to seed-stable identifiers.`,
+      };
+    case "plaintext-secret":
+      return {
+        owner: "mcp-tool-call",
+        recommendedMcpTool: "bla_encrypt_strings",
+        sourceRefactorRecipe: `Call MCP \`bla_encrypt_strings\` on \`${rel}\` with your project seed to XOR-mask cleartext sensitive literals (\`FLAG{...}\`, high-entropy tokens, derive key names), then re-run \`bla_lint\`.`,
+      };
+    case "integrity-coverage":
+      return {
+        owner: "mcp-tool-call",
+        recommendedMcpTool: "bla_harden",
+        sourceRefactorRecipe: `Ensure \`${rel}\` forms a strongly-connected interleaved verification graph where each node checks >=1 sibling and no single node is a single point of failure, or re-run \`bla_harden\` with \`self_seal: true\`.`,
+      };
+    case "bind-scope":
+      return {
+        owner: "mcp-tool-call",
+        recommendedMcpTool: "bla_bind_scope",
+        sourceRefactorRecipe: `Ensure \`${rel}\` sets \`"public": true\`, valid ISO dates / domain globs, and inject \`BLA_BIND_SCOPE_CHECK\` into the entry module via MCP \`bla_bind_scope\`.`,
+      };
+  }
 }
 
 /**
@@ -382,21 +468,52 @@ export function scanPackagingGates(
     });
   }
 
-  const blocking = filterBlockingFindings(findings, intensity, options);
+  const enrichedFindings: PackagingGateFinding[] = findings.map((f) => {
+    const meta = buildGateRemediationMeta(f.gate, f.relativePath);
+    return {
+      ...f,
+      remediationRecipe: meta.sourceRefactorRecipe,
+      ...(meta.recommendedMcpTool !== undefined
+        ? { recommendedMcpTool: meta.recommendedMcpTool }
+        : {}),
+    };
+  });
+
+  const blocking = filterBlockingFindings(enrichedFindings, intensity, options);
+
+  const remediationPlan: PackagingGateRemediation[] = enrichedFindings.map((f) => {
+    const meta = buildGateRemediationMeta(f.gate, f.relativePath);
+    const isBlocking = blocking.some(
+      (b) => b.gate === f.gate && b.path === f.path,
+    );
+    return {
+      gate: f.gate,
+      path: f.path,
+      relativePath: f.relativePath,
+      priority: isBlocking ? "critical" : f.shouldRefuseBankrupt ? "high" : "medium",
+      owner: meta.owner,
+      ...(meta.recommendedMcpTool !== undefined
+        ? { recommendedMcpTool: meta.recommendedMcpTool }
+        : {}),
+      sourceRefactorRecipe: meta.sourceRefactorRecipe,
+      verifyCommand: "bla_lint",
+    };
+  });
 
   const oneLineAdvice =
     blocking.length === 0
-      ? findings.length === 0
+      ? enrichedFindings.length === 0
         ? "No packaging footgun findings (heuristic). Gates ≠ white-box secrecy."
-        : `Packaging scan: ${findings.length} finding(s), none refuse under current intensity/allows.`
-      : `ERROR: ${blocking.length} packaging gate(s) would refuse bankrupt harden. Fix or pass the matching --allow-* / allow_* flag (lab only).`;
+        : `Packaging scan: ${enrichedFindings.length} finding(s), none refuse under current intensity/allows.`
+      : `ERROR: ${blocking.length} packaging gate(s) would refuse bankrupt harden. Follow remediationPlan to refactor source or pass the matching --allow-* / allow_* flag (lab only).`;
 
   return {
     schema: PACKAGING_GATES_SCHEMA,
     directory: absDir,
     intensity,
-    findings,
+    findings: enrichedFindings,
     blocking,
+    remediationPlan,
     shouldRefuseBankrupt: blocking.length > 0,
     gateCounts: counts,
     oneLineAdvice,
@@ -574,6 +691,9 @@ export function formatPackagingGatesReport(report: PackagingGatesReport): string
     lines.push(`blocking (${report.blocking.length}):`);
     for (const b of report.blocking) {
       lines.push(`  - ${b.gate} · ${b.relativePath}`);
+      if (b.remediationRecipe) {
+        lines.push(`    recipe: ${b.remediationRecipe}`);
+      }
     }
   }
   return lines.join("\n");

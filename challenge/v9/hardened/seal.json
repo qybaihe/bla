@@ -1,0 +1,8 @@
+{
+  "schema": "bla-crackme-v9-runtime-seal/v1",
+  "algorithm": "sha256",
+  "product": "sovereign-entitlement-unlock-in-wasm",
+  "revision": "f8fe2a8bb3a768fc94a3aa167923e4a33cfe2e1d4830443bf2844392974e0268",
+  "certificateSha256": "06772462f4ba0586ca27aaecf8fd4da5919a336b84f6855de009fc0751c5cf0e",
+  "notes": "ONE-WAY seal covered by host EXPECTED_SEAL_SHA256. WASM unlock: SHA-256(key) mask KDF + seed-derived rounds/pad3 + entropy-pad pack + clear separate-segment SHA-256 commitment. Hardened with BLA 3.0 Playbook (weave_decoys + self_seal + sidecar_entangle)."
+}

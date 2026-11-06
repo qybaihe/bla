@@ -373,6 +373,12 @@ export function bindSidecarEntanglement(
   });
   const entrySource =
     options.entrySource ?? new TextDecoder().decode(options.entryBytes);
+  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
+  const shebang = shebangMatch ? shebangMatch[0] : "";
+  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
+  const strictMatch = afterShebang.match(/^["']use strict["'];?\r?\n/);
+  const strict = strictMatch ? strictMatch[0] : "";
+  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
   const boundPlan: SidecarEntanglePlan = {
     ...plan,
     status: "bound",
@@ -382,7 +388,7 @@ export function bindSidecarEntanglement(
     plan: boundPlan,
     digest,
     inject,
-    code: `${inject.preamble}\n${entrySource}`,
+    code: `${shebang}${strict}${inject.preamble}\n${body}`,
   };
 }
 

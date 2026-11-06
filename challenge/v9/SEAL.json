@@ -1,0 +1,78 @@
+{
+  "schema": "bla-crackme-v9-seal/v1",
+  "mode": "release",
+  "product": "Sovereign",
+  "blaVersion": "3.0.0",
+  "recipe": "npm run crackme:v9:build (4-Stage BLA 3.0 Playbook: bla_lint -> bla_weave_plan -> bla_verify_weave -> bla_harden --intensity bankrupt --weave-decoys --self-seal --sidecar-entangle); harden/schedule seed is private",
+  "label": "bla-crackme-v9-sovereign-2026-11",
+  "intensity": "bankrupt",
+  "weaveDecoys": true,
+  "selfSeal": true,
+  "sidecarEntangle": true,
+  "weaveScore": 100,
+  "integrityCoverageSelfVerified": true,
+  "llmDirectives": false,
+  "emitManifest": false,
+  "flagSha256": "06772462f4ba0586ca27aaecf8fd4da5919a336b84f6855de009fc0751c5cf0e",
+  "artifacts": {
+    "license.cjs": {
+      "sha256": "a56604751015fe59c7a034dc30799c9286c45d0ae00b1f9df8e4ddc42457fec0",
+      "bytes": 201111
+    },
+    "panel.html": {
+      "sha256": "b3e6787d8029cdb6caf4e500e2333648729390c967f981d56f279d77e7c58bbf",
+      "bytes": 126216
+    },
+    "policy.py": {
+      "sha256": "a3ffe58c2dc7c1ac7d7f0605cfc1fad1fa1b20f83d4a42710051262c7a2c7e1c",
+      "bytes": 41561
+    },
+    "core.wasm.gz": {
+      "sha256": "67aacf5c86c29572df02f142804fd6a784372705f4bc20d90f67942aa903dd96",
+      "bytes": 21393
+    },
+    "seal.json": {
+      "sha256": "cbbd7a672a96170a95682d574fa6f31bfa1eb5e32ee88d2651bca471e5455085",
+      "bytes": 569
+    },
+    "core.wasm": {
+      "sha256": "b38e5d6b7526ca515ac196f6da6ce76d7f1c8261eab9d599f1a466152371b44c",
+      "bytes": 6883604,
+      "note": "raw harden output; committed gzipped"
+    }
+  },
+  "hardenSummary": [
+    {
+      "relativePath": "core.wasm",
+      "format": "wasm",
+      "defenseScore": 98,
+      "success": true
+    },
+    {
+      "relativePath": "panel.html",
+      "format": "html-bundle",
+      "defenseScore": 99,
+      "success": true
+    },
+    {
+      "relativePath": "policy.py",
+      "format": "python-source",
+      "defenseScore": 98,
+      "success": true
+    },
+    {
+      "relativePath": "license.cjs",
+      "format": "javascript",
+      "defenseScore": 99,
+      "success": true
+    }
+  ],
+  "recipesAbsorbed": [
+    "BLA 3.0 4-Stage Playbook: AST surgicalWorkorder + pre/post bla_verify_weave (100/100)",
+    "Closes v8 seal.json sidecar residual: license.cjs pins EXPECTED_SEAL_SHA256 at runtime",
+    "Multi-format sibling entanglement: self_seal + sidecar_entangle across license.cjs, panel.html, policy.py, core.wasm",
+    "R7–R12 SHA-256(key) mask KDF + commitment outside XOR + private seed + arity-2/export-order/body-index scatter"
+  ],
+  "honestyResidual": "P2 full WASM RE + online/SMT vs clear commitment remains possible — gates do not claim white-box secrecy.",
+  "note": "Public commitment: prove a solve by publishing SHA-256(FLAG{...}) matching flagSha256. Plaintext key/flag/seed are not in git; no key digest is published (no offline key oracle)."
+}

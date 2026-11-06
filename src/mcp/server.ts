@@ -83,6 +83,7 @@ import { runDoctor } from "../setup/doctor.js";
 import {
   buildWeavePlan,
   getWeaveDirectivesMarkdown,
+  verifyWeaveTarget,
   WEAVE_DECOY_DOC_PATH,
   WEAVE_DIRECTIVES_URI,
 } from "../shields/weave/weave-decoy.js";
@@ -734,7 +735,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_weave_plan",
     description:
-      "Read-only weave-decoy planner: analyze a project or artifact, return bla-weave-plan/v1 JSON (principles, forbidden patterns, checklist, per-file maturity). Defensive only — no crack/RE steps. Prefer before bla_harden with weave_decoys:true.",
+      "Read-only weave-decoy planner: analyze a project or artifact, return bla-weave-plan/v1 JSON (principles, forbidden patterns, checklist, per-file maturity, plus AST surgicalWorkorder with entryFunctions, sharedStateSlots, branchCandidates, and agentRewriteRecipe). Defensive only — no crack/RE steps. Prefer before Agent source surgery and bla_harden with weave_decoys:true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -745,6 +746,26 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         max_targets: {
           type: "number",
           description: "Optional cap on files to classify (default 48)",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bla_verify_weave",
+    description:
+      "Read-only structural weave verifier (bla-weave-verify/v1): validates Agent-authored source weave edits and hardened outputs against WEAVE_ACCEPTANCE_TESTS (no forbidden banners, mixed mundane/security stems, shared-state mutation across functions, customer entry call-graph reachability, opaque-true entanglement, and filter resistance). Returns weaveScore and actionable agentActions for autonomous self-repair.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to the source file, artifact, or directory to verify",
+        },
+        max_targets: {
+          type: "number",
+          description: "Optional cap on files to verify (default 48)",
         },
       },
       required: ["path"],
@@ -1917,7 +1938,7 @@ export async function handleMcpRequest(
               ? String(promptArgs.target_path)
               : ".";
           promptText =
-            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": ${JSON.stringify(targetPath)} }, then bla_harden with { "directory": ${JSON.stringify(targetPath)}, "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
+            `Defensive weave-decoy only (no crack/RE): read resource ${WEAVE_DIRECTIVES_URI}, call bla_weave_plan with { "path": ${JSON.stringify(targetPath)} } to inspect surgicalWorkorder, weave domain-plausible helpers sharing state slots, verify with bla_verify_weave, then call bla_harden with { "directory": ${JSON.stringify(targetPath)}, "weave_decoys": true }. Do not add dismissible honeypot noise layers.`;
         } else {
           const targetPath = JSON.stringify(String(promptArgs.target_path ?? "."));
           const shared =
@@ -2206,6 +2227,14 @@ export async function handleMcpRequest(
               ? { maxTargets: args.max_targets }
               : {}),
           });
+        } else if (name === "bla_verify_weave") {
+          const verifyReport = verifyWeaveTarget(args.path as string, {
+            ...(typeof args.max_targets === "number"
+              ? { maxTargets: args.max_targets }
+              : {}),
+          });
+          payload = verifyReport;
+          refused = !verifyReport.overallPassed;
         } else if (name === "bla_lint") {
           const full = runPackagingGatesLint(args);
           const { details, ...compact } = full;
@@ -2220,6 +2249,9 @@ export async function handleMcpRequest(
               wasmSealXor: details.wasmSealXor.length,
               lanes: details.lanes.length,
               panelDerive: details.panelDerive.length,
+              plaintextSecrets: details.plaintextSecrets.length,
+              integrityCoverage: details.integrityCoverage.length,
+              bindScope: details.bindScope.length,
             },
           };
           refused = full.shouldRefuseBankrupt;

@@ -46,7 +46,12 @@ try {
 // Keep CrackMe SEAL blaVersion labels in lockstep with package.json (CI
 // v7-seal rejects seal.blaVersion !== package.json.version). Digests stay
 // untouched — only the version metadata field is rewritten.
-for (const rel of ["challenge/v6/SEAL.json", "challenge/v7/SEAL.json", "challenge/v8/SEAL.json"]) {
+for (const rel of [
+  "challenge/v6/SEAL.json",
+  "challenge/v7/SEAL.json",
+  "challenge/v8/SEAL.json",
+  "challenge/v9/SEAL.json",
+]) {
   const sealPath = resolve(root, rel);
   try {
     const sealText = readFileSync(sealPath, "utf8");

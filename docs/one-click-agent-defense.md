@@ -43,15 +43,14 @@ npx bla-agents@latest defend ./dist/app.js --manifest
 Run bla_defend on ./dist/app.js with bankrupt intensity and emit a defense manifest.
 ```
 
-## Optional stronger path: structural weave decoys
+## Optional stronger path: Agent-driven surgical weave decoys (BLA 3.0)
 
-For structural (non-noise) decoy entanglement — especially Python customer defs /
-`.pyc` — follow the skill’s weave path:
+For structural (non-noise) decoy entanglement — combining host Agent source refactoring with BLA's pipeline — follow the skill’s 4-stage weave path:
 
-1. Read `bla://directives/weave-decoy`
-2. Call `bla_weave_plan` on the project/artifact
-3. Re-run `bla_harden` / `bla_defend` / `bla_protect` with **`weave_decoys: true`**
-   (CLI: `--weave-decoys`)
+1. Read `bla://directives/weave-decoy` and call `bla_lint` (fixing any blocking `remediationPlan` recipes in source)
+2. Call `bla_weave_plan` on the project/artifact and follow each target's `surgicalWorkorder` (`entryFunctions`, `sharedStateSlots`, `branchCandidates`) to weave domain-plausible helpers sharing mutable state
+3. Call `bla_verify_weave` and resolve any `agentActions` until `overallPassed: true`
+4. Run `bla_harden` / `bla_defend` / `bla_protect` with **`weave_decoys: true`** (CLI: `--weave-decoys`)
 
 See [`weave-decoy-mcp.md`](./weave-decoy-mcp.md). Do **not** add dismissible
 `_bla_*` banners, empty honeypot stubs, or rule-based name→snippet noise layers.

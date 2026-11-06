@@ -38,6 +38,7 @@ import { type SupportedAgentClientId } from "./setup/clients.js";
 import { runSetup, runUninstall } from "./setup/setup.js";
 import { runDoctor } from "./setup/doctor.js";
 import { startMcpStdioServer } from "./mcp/server.js";
+import { buildWeavePlan, verifyWeaveTarget } from "./shields/weave/weave-decoy.js";
 import {
   formatAuditReport,
   formatBanner,
@@ -79,6 +80,8 @@ Commands:
   lint-seal <file>            Heuristic lint for plaintext/reversible seal sidecars (red-blue round-2); exit 2 on error
   protect <target>            Inject multi-layer Counter-REA adversarial shield
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
+  weave-plan <target>         Emit AST-level surgical weave workorder (bla-weave-plan/v1)
+  verify-weave <target>       Verify Agent-authored source weave & return agentActions (exit 2 on fail)
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
   emit-headers                Generate compile-time C/C++, Rust, or Go defense headers
   verify-manifest <file>      Verify a signed .bla-manifest.json (exit 2 when invalid)
@@ -966,6 +969,27 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.log(`${result.ok ? "VALID" : "INVALID"}: ${result.reason}`);
         }
         return result.ok ? 0 : 2;
+      }
+
+      case "weave-plan": {
+        const target = parsed.positionals[0] ?? process.cwd();
+        const plan = buildWeavePlan(target);
+        console.log(JSON.stringify(plan, null, 2));
+        return plan.overallStatus === "unsupported" ? 2 : 0;
+      }
+
+      case "verify-weave": {
+        const target = parsed.positionals[0] ?? process.cwd();
+        const report = verifyWeaveTarget(target);
+        if (parsed.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`${report.overallPassed ? "PASSED" : "FAILED"} (weaveScore: ${report.weaveScore}/100): ${report.summary}`);
+          for (const action of report.agentActions) {
+            console.log(`  - [${action.priority}] ${action.file} (${action.checkId}): ${action.instruction}`);
+          }
+        }
+        return report.overallPassed ? 0 : 2;
       }
 
       default:

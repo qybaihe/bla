@@ -292,6 +292,15 @@ export interface DefenseScoreGapAnnotation {
   readonly scoreCap: number;
 }
 
+export interface VerificationAgentAction {
+  readonly id: string;
+  readonly priority: "high" | "medium";
+  readonly reason: string;
+  readonly instruction: string;
+  readonly recommendedMcpTool: string;
+  readonly recommendedArgs?: Readonly<Record<string, unknown>>;
+}
+
 export interface VerificationReport {
   readonly targetPath: string;
   readonly originalPath?: string;
@@ -305,6 +314,8 @@ export interface VerificationReport {
   readonly defenseScoreGaps?: readonly DefenseScoreGapAnnotation[];
   /** Fixed disclaimer: score ≠ preimage hardness. */
   readonly defenseScoreDisclaimer?: string;
+  /** Actionable follow-up steps for host coding agents to raise defenseScore or fix failed checks. */
+  readonly agentActions?: readonly VerificationAgentAction[];
   readonly checks: readonly VerificationCheck[];
   readonly tokenAmplificationFactor: number;
   readonly costAmplificationFactor: number;

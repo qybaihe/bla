@@ -92,12 +92,25 @@ export interface SelfDigestFinalizeResult<T extends string | Buffer> {
 export function finalizeSelfSealSelfDigest<T extends string | Buffer>(
   content: T,
 ): SelfDigestFinalizeResult<T> {
-  const asBuf: Buffer =
-    typeof content === "string" ? Buffer.from(content as string, "utf8") : (content as Buffer);
+  let asBuf: Buffer =
+    typeof content === "string" ? Buffer.from(content as string, "utf8") : Buffer.from(content as Buffer);
   const needle = Buffer.from(SELF_DIGEST_PLACEHOLDER, "latin1");
   let occurrences = 0;
   for (let at = asBuf.indexOf(needle); at !== -1; at = asBuf.indexOf(needle, at + needle.length)) {
     occurrences += 1;
+  }
+  if (occurrences === 0) {
+    // Support re-finalizing an already-finalized self-seal buffer after a post-pass
+    // (such as sidecarEntangle prepending a preamble in hardenProject).
+    const text = asBuf.toString("latin1");
+    const existingMatch = text.match(/var\s+selfExpected\s*=\s*["']([0-9a-f]{64})["']/);
+    if (existingMatch && existingMatch[1]) {
+      const oldHexBuf = Buffer.from(existingMatch[1], "latin1");
+      asBuf = replaceAllBytes(asBuf, oldHexBuf, needle);
+      for (let at = asBuf.indexOf(needle); at !== -1; at = asBuf.indexOf(needle, at + needle.length)) {
+        occurrences += 1;
+      }
+    }
   }
   if (occurrences === 0) return { content, applied: false, occurrences };
   const zero = Buffer.from(SELF_DIGEST_ZERO, "latin1");

@@ -2,7 +2,7 @@
   "schema": "bla-crackme-v8-seal/v2",
   "mode": "release",
   "product": "Aegis",
-  "blaVersion": "2.1.0",
+  "blaVersion": "3.0.0",
   "recipe": "npm run crackme:v8:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <private> --self-seal`); harden/schedule seed is private (derived from release secrets) and NOT published",
   "label": "bla-crackme-v8-aegis-2026-11",
   "intensity": "bankrupt",

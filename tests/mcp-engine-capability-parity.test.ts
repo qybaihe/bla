@@ -184,6 +184,14 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
     params: ["path", "allow_missing_bind_runtime"],
   },
   {
+    tool: "bla_weave_plan",
+    params: ["path", "max_targets"],
+  },
+  {
+    tool: "bla_verify_weave",
+    params: ["path", "max_targets"],
+  },
+  {
     tool: "bla_redteam_report",
     params: ["execute", "rea_root", "report_path"],
   },

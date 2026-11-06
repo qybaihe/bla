@@ -50,11 +50,12 @@
 ## 5. 后续 AI 执行清单（不依赖聊天记录）
 
 1. `resources/read` → `bla://directives/weave-decoy`（或读本文件）  
-2. `bla_weave_plan` → `{ "path": "<project-or-artifact>" }`，保存返回的 JSON 工单  
-3. `bla_harden` / `bla_defend` / `bla_protect` 传 **`weave_decoys: true`**  
-4. JS：验证现有 AST 织入，**不要**再堆 sidecar 噪声  
-5. Python `.py`：确认客户 `def` 体内出现共享槽 touch / 诱饵 xref；**不要**用空 scare 模块填补  
-6. 按 §6 验收；失败则回滚噪声改动
+2. `bla_weave_plan` → `{ "path": "<project-or-artifact>" }`，读取返回的 JSON 工单及每个目标的 `surgicalWorkorder`（`entryFunctions`、`sharedStateSlots`、`branchCandidates`、`agentRewriteRecipe`）  
+3. **Agent 源码级织入（Stage 2）**：按 `surgicalWorkorder` 在源码中编写共享同一运行时状态槽的领域诱饵函数并从真实入口调用，随后调用 **`bla_verify_weave`** 验证 6 项结构验收，确保 `overallPassed: true` 且 `agentActions` 清零  
+4. `bla_harden` / `bla_defend` / `bla_protect` 传 **`weave_decoys: true`**  
+5. JS：验证现有 AST 织入，**不要**再堆 sidecar 噪声  
+6. Python `.py`：确认客户 `def` 体内出现共享槽 touch / 诱饵 xref；**不要**用空 scare 模块填补  
+7. 按 §6 验收；失败则回滚噪声改动
 
 ## 6. 验收（apply 后必须通过）
 
@@ -70,7 +71,8 @@
 | 表面 | 作用 |
 | :--- | :--- |
 | Resource `bla://directives/weave-decoy` | 返回本理论的可执行 Markdown |
-| Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON |
+| Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON（含 AST 级 `surgicalWorkorder`） |
+| Tool `bla_verify_weave` | 只读：校验源码/产物的 6 项织入验收 → `bla-weave-verify/v1` JSON（含 `weaveScore` 与 `agentActions`） |
 | `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | **真实管线属性**：激活 Python 客户 def 结构织入（JS 始终 AST 织入）；非仅报告布尔标注 |
 | `.blarc` / `bla.config.json` 字段 `weaveDecoys` | 与 CLI `--weave-decoys` / MCP `weave_decoys` 同义；CLI 读取后与旗标做 OR |
 

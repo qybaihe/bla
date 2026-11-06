@@ -714,6 +714,7 @@ export function protectPythonSource(
     "def probe_canary_honeypot(idx=0):",
     "    _i = (idx & 0x7FFFFFFF) % len(CANARY_TOKENS)",
     "    return AMBIGUOUS_TRANSPORT[_i]",
+    "_ = probe_canary_honeypot(0)",
   ].join(eol);
 
   let customerTail = tail;

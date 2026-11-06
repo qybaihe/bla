@@ -22,7 +22,9 @@ export type LaneIndependenceFindingId =
   | "per-lane-byte-compare-array"
   | "independent-lane-and-reduce"
   | "indexed-lane-oracle-loop"
-  | "per-byte-wasm-lane-oracle";
+  | "per-byte-wasm-lane-oracle"
+  | "chained-per-index-compare"
+  | "split-segment-lane-compare";
 
 export type LaneIndependenceSeverity = "error";
 
@@ -63,6 +65,20 @@ const PER_BYTE_WASM_LANE =
 /** Indexed XOR/OR fold of per-lane results without whole-key mixing. */
 const INDEXED_XOR_LANE_FOLD =
   /for\s*\(\s*(?:let|var|const)\s+\w+[^)]*\)\s*\{[\s\S]{0,400}charCodeAt[\s\S]{0,400}\^\s*\((?:LANE_TARGETS|laneTargets|targets?|lanes?)\s*\[/i;
+
+/**
+ * 3 or more constant-index charCodeAt / codePointAt / bracket comparisons
+ * chained with && / and (e.g. `key.charCodeAt(0) === 65 && key.charCodeAt(1) === 66 && key.charCodeAt(2) === 67`).
+ */
+const CHAINED_PER_INDEX_COMPARE =
+  /(?:\b(?:key|input|guess|token|license|serial|code)\w*\s*(?:\.\s*(?:charCodeAt|codePointAt)\s*\(\s*\d+\s*\)|\[\s*\d+\s*\])\s*===?\s*(?:0x[0-9a-fA-F]+|\d+|['"][^'"]+['"])\s*(?:&&|\band\b)\s*){2,}\b(?:key|input|guess|token|license|serial|code)\w*\s*(?:\.\s*(?:charCodeAt|codePointAt)\s*\(\s*\d+\s*\)|\[\s*\d+\s*\])\s*===?\s*(?:0x[0-9a-fA-F]+|\d+|['"][^'"]+['"])/i;
+
+/**
+ * `.split(...)` followed by 2+ independent indexed segment equality checks
+ * (e.g. `const parts = key.split("-"); return parts[0] === "AAAA" && parts[1] === "BBBB"`).
+ */
+const SPLIT_SEGMENT_LANE_COMPARE =
+  /\.split\s*\(\s*['"][^'"]+['"]\s*\)[\s\S]{0,300}\b(\w+)\s*\[\s*0\s*\]\s*===?\s*['"][^'"]+['"]\s*(?:&&|\band\b)[\s\S]{0,160}\b\1\s*\[\s*1\s*\]\s*===?\s*['"][^'"]+['"]/i;
 
 function finding(
   id: LaneIndependenceFindingId,
@@ -129,6 +145,28 @@ export function lintLaneIndependence(source: string): LaneIndependenceReport {
       finding(
         "per-byte-wasm-lane-oracle",
         "Per-byte charCodeAt → mix/seal (or XOR fold) against indexed lane targets — independent 1-byte WASM lanes collapse under RE.",
+        m?.[0] ?? "",
+      ),
+    );
+  }
+
+  if (CHAINED_PER_INDEX_COMPARE.test(text)) {
+    const m = text.match(CHAINED_PER_INDEX_COMPARE);
+    findings.push(
+      finding(
+        "chained-per-index-compare",
+        "Chained per-index charCodeAt/bracket comparisons joined with &&/and — allows byte-by-byte key recovery without whole-key mixing.",
+        m?.[0] ?? "",
+      ),
+    );
+  }
+
+  if (SPLIT_SEGMENT_LANE_COMPARE.test(text)) {
+    const m = text.match(SPLIT_SEGMENT_LANE_COMPARE);
+    findings.push(
+      finding(
+        "split-segment-lane-compare",
+        "Key split into segments compared independently (`parts[0] === ... && parts[1] === ...`) — allows segment-by-segment brute force.",
         m?.[0] ?? "",
       ),
     );
