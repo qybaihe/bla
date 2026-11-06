@@ -84,17 +84,17 @@ jobs:
             exit 1
           fi
 
-          PRIMARY_NPM_VERSION=$(npm view "bla-agents@${LOCAL_VERSION}" version 2>/dev/null || echo "none")
           echo "local_version=${LOCAL_VERSION}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-          if [ "${LOCAL_VERSION}" != "${PRIMARY_NPM_VERSION}" ] && ! gh release view "${TAG}" >/dev/null 2>&1; then
-            SHOULD_PUBLISH="true"
-          else
-            SHOULD_PUBLISH="true"
-            echo "Release requested for bla-agents@${LOCAL_VERSION}; will attempt idempotent publish/GitHub Release."
-          fi
+          # Publish is always attempted for a verified trigger. Every later step is
+          # individually idempotent: the npm step exits early when the version is
+          # already on the registry, the GitHub Release step reuses an existing
+          # Release, and the cross-commit check below refuses a moved tag. This was
+          # previously an if/else whose two branches both assigned "true".
+          SHOULD_PUBLISH="true"
+          echo "Release requested for bla-agents@${LOCAL_VERSION}; will attempt idempotent publish/GitHub Release."
 
           EXISTING_TAG_SHA=""
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
