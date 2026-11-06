@@ -90,7 +90,10 @@ import {
   lintJsWasmHydrateDumpSource,
 } from "./js-wasm-hydrate-dump-lint.js";
 import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
-import { entangleJsEntryWithSidecars } from "../shields/runtime/sidecar-entangle.js";
+import {
+  entangleJsEntryWithSidecars,
+  entanglePythonEntryWithSidecars,
+} from "../shields/runtime/sidecar-entangle.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -164,6 +167,41 @@ function applySidecarEntangleToJs(
   if (sidecars.length === 0) return { code: source, applied: false };
   const entryLabel = basename(absOutput);
   const bound = entangleJsEntryWithSidecars({
+    entryPath: entryLabel,
+    entrySource: source,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { code: source, applied: false };
+  return { code: bound.code, applied: true };
+}
+
+function applySidecarEntangleToPython(
+  source: string,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { code: string; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { code: source, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { code: source, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { code: source, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entanglePythonEntryWithSidecars({
     entryPath: entryLabel,
     entrySource: source,
     sidecars,
@@ -703,7 +741,13 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       seed,
       weaveDecoys: options.weaveDecoys === true,
     });
-    writeFileAtomicSync(absOutput, res.code, "utf8");
+    let finalPy = res.code;
+    {
+      const entangled = applySidecarEntangleToPython(finalPy, options, absOutput, seed);
+      finalPy = entangled.code;
+      if (entangled.applied) sidecarEntangleApplied = true;
+    }
+    writeFileAtomicSync(absOutput, finalPy, "utf8");
     decoyFunctionsInjected = res.decoyFunctionsInjected;
     fakeCrossReferencesCreated = res.crossReferenceEdges;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
