@@ -106,7 +106,7 @@ CrackMe v8 red team (round-20261106): **NO PRIZE** — key/FLAG not recovered; `
 ## Nightly roadmap remaining
 
 1. ~~**Self-seal / defenseScore honesty (#40)**~~ — landed soft-caps + opt-in `--self-seal` / MCP `self_seal` / `.blarc selfSeal` (batch 2026-11-02). Remaining: deeper onefile/peel score model.
-2. **Sidecar entry entanglement** — JS strip⇒fail vertical slice landed 2026-11-05 nightly (`sidecarEntangle` / binding digest / JS preamble / protect+harden post-pass). Remaining: Python preamble, WASM custom-section, ASAR/Bun companions, defenseScore gap when off.
+2. **Sidecar entry entanglement** — JS strip⇒fail landed 2026-11-05; Python preamble landed 2026-11-06 nightly (`generateSidecarPythonPreamble` / protect+harden). Remaining: WASM custom-section, ASAR/Bun companions, defenseScore gap when off.
 3. **Deception shields → more formats** — WASM export rename + `wasmPreserveExports` landed; DEX/SQLite/model densify and broader numeric template hygiene still open.
 4. **Empirical JADX / Android red-team** — real REA mapping+JNI vs BLA-hardened unsigned APK.
 5. **ESP flash / esp-image (#8228)** — if REA moved there; UF2 empirical red-team otherwise.
