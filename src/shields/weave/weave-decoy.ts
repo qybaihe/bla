@@ -92,11 +92,32 @@ export interface WeaveBranchCandidate {
   readonly rewriteHint: string;
 }
 
+export interface WeaveCrownJewelCandidate {
+  readonly functionName: string;
+  readonly line: number;
+  readonly vulnerabilityKind:
+    | "single-point-boolean-gate"
+    | "isolated-verify-oracle"
+    | "cleartext-comparison"
+    | "unentangled-export";
+  readonly riskSummary: string;
+  readonly agentRefactorDirective: string;
+}
+
+export interface WeaveDataFlowEntanglementPlan {
+  readonly stateCarrierName: string;
+  readonly antiPatchStrategy: string;
+  readonly codeTransformSteps: readonly string[];
+  readonly crossModuleBindingRecipe?: string;
+}
+
 export interface WeaveSurgicalWorkorder {
   readonly language: "javascript-ts" | "python" | "native-source" | "other";
   readonly entryFunctions: readonly WeaveFunctionCandidate[];
   readonly sharedStateSlots: readonly WeaveStateSlotCandidate[];
   readonly branchCandidates: readonly WeaveBranchCandidate[];
+  readonly crownJewelCandidates: readonly WeaveCrownJewelCandidate[];
+  readonly dataFlowEntanglementPlan: WeaveDataFlowEntanglementPlan;
   readonly suggestedIdentifierStems: {
     readonly mundane: readonly string[];
     readonly security: readonly string[];
@@ -537,6 +558,7 @@ function buildJsSurgicalWorkorder(
   const entryFunctions: WeaveFunctionCandidate[] = [];
   const sharedStateSlots: WeaveStateSlotCandidate[] = [];
   const branchCandidates: WeaveBranchCandidate[] = [];
+  const crownJewelCandidates: WeaveCrownJewelCandidate[] = [];
   const discoveredMundaneStems = new Set<string>();
 
   try {
@@ -662,14 +684,85 @@ function buildJsSurgicalWorkorder(
           t.isExportNamedDeclaration(path.parent) ||
           t.isExportDefaultDeclaration(path.parent);
         const line = path.node.loc?.start.line ?? 1;
+        const role = classifyFunctionRole(fnName, exported);
         if (entryFunctions.length < 12) {
           entryFunctions.push({
             name: fnName,
             line,
             exported,
             paramCount: path.node.params.length,
-            role: classifyFunctionRole(fnName, exported),
+            role,
           });
+        }
+
+        let hasBooleanLiteralReturn = false;
+        let hasCleartextComparison = false;
+        let boolReturnLine = line;
+        let cleartextLine = line;
+
+        path.traverse({
+          ReturnStatement(retPath) {
+            const arg = retPath.node.argument;
+            if (t.isBooleanLiteral(arg)) {
+              hasBooleanLiteralReturn = true;
+              boolReturnLine = retPath.node.loc?.start.line ?? line;
+            }
+          },
+          BinaryExpression(binPath) {
+            if (
+              binPath.node.operator === "===" ||
+              binPath.node.operator === "==" ||
+              binPath.node.operator === "!==" ||
+              binPath.node.operator === "!="
+            ) {
+              const left = binPath.node.left;
+              const right = binPath.node.right;
+              const strLit = t.isStringLiteral(left)
+                ? left
+                : t.isStringLiteral(right)
+                  ? right
+                  : null;
+              if (
+                strLit &&
+                strLit.value.length >= 4 &&
+                !/^(?:string|number|object|function|boolean|undefined)$/.test(
+                  strLit.value,
+                )
+              ) {
+                hasCleartextComparison = true;
+                cleartextLine = binPath.node.loc?.start.line ?? line;
+              }
+            }
+          },
+        });
+
+        if (crownJewelCandidates.length < 10) {
+          if (hasBooleanLiteralReturn && (role === "gate-or-auth" || exported)) {
+            crownJewelCandidates.push({
+              functionName: fnName,
+              line: boolReturnLine,
+              vulnerabilityKind: "single-point-boolean-gate",
+              riskSummary: `Function \`${fnName}\` (line ${boolReturnLine}) returns a raw boolean literal — an AI RE agent can 1-byte patch or NOP this branch without computing the real key/state.`,
+              agentRefactorDirective: `Refactor \`${fnName}\` so it accumulates a state digest on the shared carrier (e.g. FNV-1a / ARX mix into \`sessionLedgerState.digest\`) and couples downstream return values to that digest instead of an isolated \`true/false\` branch.`,
+            });
+          } else if (role === "gate-or-auth") {
+            crownJewelCandidates.push({
+              functionName: fnName,
+              line,
+              vulnerabilityKind: "isolated-verify-oracle",
+              riskSummary: `Auth/gate function \`${fnName}\` (line ${line}) acts as a standalone verification boundary.`,
+              agentRefactorDirective: `Entangle \`${fnName}\` with module-level shared state and invoke 2–3 domain-plausible shadow helpers so static call-graph slicing cannot isolate the verification oracle.`,
+            });
+          }
+          if (hasCleartextComparison && crownJewelCandidates.length < 10) {
+            crownJewelCandidates.push({
+              functionName: fnName,
+              line: cleartextLine,
+              vulnerabilityKind: "cleartext-comparison",
+              riskSummary: `Function \`${fnName}\` (line ${cleartextLine}) compares against a cleartext string literal — trivial to recover via AST/strings scan.`,
+              agentRefactorDirective: `Replace cleartext string equality in \`${fnName}\` with a whole-input chained digest comparison (FNV-1a / SHA-256) or mask literals via MCP \`bla_encrypt_strings\`.`,
+            });
+          }
         }
 
         if (t.isBlockStatement(path.node.body) && branchCandidates.length < 12) {
@@ -726,11 +819,33 @@ function buildJsSurgicalWorkorder(
   const primarySlot = sharedStateSlots[0]!.name;
   const primaryEntry = entryFunctions[0]?.name ?? "mainEntry";
 
+  if (crownJewelCandidates.length === 0 && entryFunctions.length > 0) {
+    crownJewelCandidates.push({
+      functionName: primaryEntry,
+      line: entryFunctions[0]!.line,
+      vulnerabilityKind: "unentangled-export",
+      riskSummary: `Exported entry \`${primaryEntry}\` has not yet been entangled with shared mutable state and shadow business helpers.`,
+      agentRefactorDirective: `Couple \`${primaryEntry}\` to \`${primarySlot}\` and invoke 2–3 domain-plausible helpers before returning.`,
+    });
+  }
+
+  const dataFlowEntanglementPlan: WeaveDataFlowEntanglementPlan = {
+    stateCarrierName: primarySlot,
+    antiPatchStrategy: `Eliminate single-point boolean/constant patch targets in \`${primaryEntry}\` by folding inputs into \`${primarySlot}.digest\` via chained arithmetic/bitwise mixing and gating downstream values on \`(${primarySlot}.epoch & 1) !== 0\`.`,
+    codeTransformSteps: [
+      `Step 1 (Crown-Jewel Anti-Patch): In \`${relPath}\`, inspect \`crownJewelCandidates\` (${crownJewelCandidates.map((c) => `${c.functionName}:${c.line}`).join(", ") || primaryEntry}). Replace direct cleartext or per-byte checks with a whole-input accumulator mixed into \`${primarySlot}\`.`,
+      `Step 2 (Shadow Business Helpers): Define 2–3 non-trivial helpers using mundane stems (${mundaneStems.slice(0, 3).join(", ")}) + security stems (${DEFAULT_SECURITY_STEMS.slice(0, 2).join(", ")}) that read and mutate \`${primarySlot}\`.`,
+      `Step 3 (Call-Graph & Return Coupling): Invoke the shadow helpers along the live execution path of \`${primaryEntry}\` and read \`${primarySlot}\` in the return expression or guard so static dead-code elimination cannot strip them.`,
+    ],
+    crossModuleBindingRecipe:
+      "When hardening a multi-file project, export or pass the state digest across module boundaries and run `bla_harden` with `self_seal: true` and `sidecar_entangle: true`.",
+  };
+
   const agentRewriteRecipe = [
-    `1. Shared State Carrier: Use \`${primarySlot}\` (${sharedStateSlots[0]!.kind}) in \`${relPath}\` so real business logic and shadow helpers mutate the same runtime state.`,
-    `2. Shadow Business Logic: Author 2–3 helper functions using 2/3 mundane stems (${mundaneStems.slice(0, 3).join(", ")}) and 1/3 security stems (${DEFAULT_SECURITY_STEMS.slice(0, 2).join(", ")}) that compute non-trivial state transitions on \`${primarySlot}\` (never empty stubs or \`_bla_*\` names).`,
-    `3. Entry Entanglement: In \`${primaryEntry}\`${entryFunctions.length > 1 ? ` (and ${entryFunctions.slice(1, 3).map((f) => f.name).join(", ")})` : ""}, invoke the shadow helpers and guard the happy path with an opaque-true predicate over \`${primarySlot}\`.`,
-    `4. Verification Gate: Run MCP \`bla_verify_weave\` on \`${relPath}\` to confirm 0 unreferenced helpers, shared-state read/write coupling, and no forbidden banners.`,
+    `1. Crown-Jewel Refactor: ${crownJewelCandidates[0]?.agentRefactorDirective ?? `Entangle \`${primaryEntry}\` with shared state.`}`,
+    `2. Shared State Carrier: Use \`${primarySlot}\` (${sharedStateSlots[0]!.kind}) in \`${relPath}\` so real business logic and shadow helpers mutate and read the same runtime state.`,
+    `3. Shadow Business Logic: Author 2–3 helper functions using 2/3 mundane stems (${mundaneStems.slice(0, 3).join(", ")}) and 1/3 security stems (${DEFAULT_SECURITY_STEMS.slice(0, 2).join(", ")}) that compute non-trivial state transitions on \`${primarySlot}\` (never empty stubs or \`_bla_*\` names).`,
+    `4. Entry Entanglement & Verification: In \`${primaryEntry}\`${entryFunctions.length > 1 ? ` (and ${entryFunctions.slice(1, 3).map((f) => f.name).join(", ")})` : ""}, invoke the shadow helpers, guard the happy path with an opaque-true predicate over \`${primarySlot}\`, and run MCP \`bla_verify_weave\` on \`${relPath}\` until \`overallPassed: true\`.`,
   ];
 
   return {
@@ -738,6 +853,8 @@ function buildJsSurgicalWorkorder(
     entryFunctions,
     sharedStateSlots,
     branchCandidates,
+    crownJewelCandidates,
+    dataFlowEntanglementPlan,
     suggestedIdentifierStems: {
       mundane: mundaneStems,
       security: DEFAULT_SECURITY_STEMS,
@@ -753,6 +870,7 @@ function buildPythonSurgicalWorkorder(
   const entryFunctions: WeaveFunctionCandidate[] = [];
   const sharedStateSlots: WeaveStateSlotCandidate[] = [];
   const branchCandidates: WeaveBranchCandidate[] = [];
+  const crownJewelCandidates: WeaveCrownJewelCandidate[] = [];
   const lines = source.split(/\r?\n/);
 
   for (let i = 0; i < lines.length; i++) {
@@ -766,13 +884,23 @@ function buildPythonSurgicalWorkorder(
           ? 0
           : paramsRaw.split(",").filter((p) => p.trim() !== "self").length;
       const exported = !fnName.startsWith("_");
+      const role = classifyFunctionRole(fnName, exported);
       if (entryFunctions.length < 12) {
         entryFunctions.push({
           name: fnName,
           line: i + 1,
           exported,
           paramCount,
-          role: classifyFunctionRole(fnName, exported),
+          role,
+        });
+      }
+      if (role === "gate-or-auth" && crownJewelCandidates.length < 8) {
+        crownJewelCandidates.push({
+          functionName: fnName,
+          line: i + 1,
+          vulnerabilityKind: "isolated-verify-oracle",
+          riskSummary: `Python auth/policy def \`${fnName}\` (line ${i + 1}) is a high-value verification boundary.`,
+          agentRefactorDirective: `Couple \`${fnName}\` with module state dict and weave 2 domain-plausible helper defs so static slicing cannot isolate the policy check.`,
         });
       }
       continue;
@@ -785,6 +913,17 @@ function buildPythonSurgicalWorkorder(
         kind: "existing-container",
         line: i + 1,
         touchRecipe: `Mutate and read keys on \`${slotName}\` inside both customer defs and woven helper defs.`,
+      });
+    }
+    const boolReturnMatch = lineText.match(/^\s+return\s+(True|False)\b/);
+    if (boolReturnMatch && entryFunctions.length > 0 && crownJewelCandidates.length < 8) {
+      const currentFn = entryFunctions[entryFunctions.length - 1]!.name;
+      crownJewelCandidates.push({
+        functionName: currentFn,
+        line: i + 1,
+        vulnerabilityKind: "single-point-boolean-gate",
+        riskSummary: `Def \`${currentFn}\` (line ${i + 1}) returns raw \`${boolReturnMatch[1]}\` — vulnerable to trivial branch patching.`,
+        agentRefactorDirective: `Fold a shared-state digest update before line ${i + 1} in \`${currentFn}\` and couple the return condition to the shared state dict.`,
       });
     }
     const returnMatch = lineText.match(/^\s+return\s+\S+/);
@@ -811,20 +950,131 @@ function buildPythonSurgicalWorkorder(
   const primarySlot = sharedStateSlots[0]!.name;
   const primaryEntry = entryFunctions[0]?.name ?? "main";
 
+  if (crownJewelCandidates.length === 0 && entryFunctions.length > 0) {
+    crownJewelCandidates.push({
+      functionName: primaryEntry,
+      line: entryFunctions[0]!.line,
+      vulnerabilityKind: "unentangled-export",
+      riskSummary: `Public def \`${primaryEntry}\` is not yet coupled with shared state helpers.`,
+      agentRefactorDirective: `Mutate and read \`${primarySlot}\` across \`${primaryEntry}\` and 2 woven helper defs.`,
+    });
+  }
+
+  const dataFlowEntanglementPlan: WeaveDataFlowEntanglementPlan = {
+    stateCarrierName: primarySlot,
+    antiPatchStrategy: `Entangle \`${primaryEntry}\` with module state dict \`${primarySlot}\` so removing helper calls alters runtime state invariants.`,
+    codeTransformSteps: [
+      `Step 1: Define or reuse \`${primarySlot}\` in \`${relPath}\`.`,
+      `Step 2: Add 2 helper defs with mundane + security stems that update and return values from \`${primarySlot}\`.`,
+      `Step 3: Call the helpers from \`${primaryEntry}\` under an opaque-true state guard (e.g. \`if (${primarySlot}["epoch"] & 1) != 0:\`).`,
+    ],
+  };
+
   return {
     language: "python",
     entryFunctions,
     sharedStateSlots,
     branchCandidates,
+    crownJewelCandidates,
+    dataFlowEntanglementPlan,
     suggestedIdentifierStems: {
       mundane: DEFAULT_MUNDANE_STEMS.slice(0, 6),
       security: DEFAULT_SECURITY_STEMS,
     },
     agentRewriteRecipe: [
-      `1. Shared State Carrier: Use module dict \`${primarySlot}\` in \`${relPath}\` across customer defs and shadow helpers.`,
-      `2. Shadow Helpers: Add 2 non-trivial helper defs (using mundane + security stems, never \`pass\` or \`_bla_*\`) that update \`${primarySlot}\`.`,
-      `3. Customer Def Entanglement: Call the shadow helpers from \`${primaryEntry}\` and run \`bla_harden\` with \`weave_decoys: true\`.`,
-      `4. Verification Gate: Run \`bla_verify_weave\` on \`${relPath}\` to verify call-graph reachability and shared-state mutation.`,
+      `1. Crown-Jewel Refactor: ${crownJewelCandidates[0]?.agentRefactorDirective ?? `Entangle \`${primaryEntry}\` with \`${primarySlot}\`.`}`,
+      `2. Shared State Carrier: Use module dict \`${primarySlot}\` in \`${relPath}\` across customer defs and shadow helpers.`,
+      `3. Shadow Helpers: Add 2 non-trivial helper defs (using mundane + security stems, never \`pass\` or \`_bla_*\`) that update \`${primarySlot}\`.`,
+      `4. Verification Gate: Call the shadow helpers from \`${primaryEntry}\`, run \`bla_verify_weave\` on \`${relPath}\`, then run \`bla_harden\` with \`weave_decoys: true\`.`,
+    ],
+  };
+}
+
+function buildNativeSurgicalWorkorder(
+  source: string,
+  relPath: string,
+  ext: string,
+): WeaveSurgicalWorkorder {
+  const entryFunctions: WeaveFunctionCandidate[] = [];
+  const branchCandidates: WeaveBranchCandidate[] = [];
+  const crownJewelCandidates: WeaveCrownJewelCandidate[] = [];
+  const lines = source.split(/\r?\n/);
+  const headerLang =
+    ext === ".rs" ? "rust" : ext === ".go" ? "go" : "c";
+
+  const fnRegex =
+    ext === ".rs"
+      ? /^\s*(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/
+      : ext === ".go"
+        ? /^\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/
+        : /^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^;{}]*)\)\s*\{?$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineText = lines[i]!;
+    const m = lineText.match(fnRegex);
+    if (m) {
+      const fnName = m[1]!;
+      if (/^(?:if|for|while|switch|return|sizeof)$/.test(fnName)) continue;
+      const exported =
+        ext === ".rs"
+          ? /\bpub\s+fn\b/.test(lineText)
+          : ext === ".go"
+            ? /^[A-Z]/.test(fnName)
+            : !/\bstatic\b/.test(lineText);
+      const role = classifyFunctionRole(fnName, exported);
+      if (entryFunctions.length < 12) {
+        entryFunctions.push({
+          name: fnName,
+          line: i + 1,
+          exported,
+          paramCount: m[2]!.trim().length === 0 ? 0 : m[2]!.split(",").length,
+          role,
+        });
+      }
+      if (role === "gate-or-auth" && crownJewelCandidates.length < 8) {
+        crownJewelCandidates.push({
+          functionName: fnName,
+          line: i + 1,
+          vulnerabilityKind: "isolated-verify-oracle",
+          riskSummary: `Native function \`${fnName}\` (line ${i + 1}) is a high-value symbol for Ghidra/IDA/REA decompilation.`,
+          agentRefactorDirective: `Call MCP \`bla_emit_headers\` ({ "language": "${headerLang}", "intensity": "bankrupt" }), include the generated shield header in \`${relPath}\`, and weave opaque state macros into \`${fnName}\`.`,
+        });
+      }
+    }
+  }
+
+  const primaryEntry = entryFunctions[0]?.name ?? "main";
+  const sharedStateSlots: WeaveStateSlotCandidate[] = [
+    {
+      name: "g_session_ledger_epoch",
+      kind: "recommended-carrier",
+      touchRecipe: `Maintain a module/static state accumulator in \`${relPath}\` updated by both \`${primaryEntry}\` and native shadow helpers.`,
+    },
+  ];
+
+  return {
+    language: "native-source",
+    entryFunctions,
+    sharedStateSlots,
+    branchCandidates,
+    crownJewelCandidates,
+    dataFlowEntanglementPlan: {
+      stateCarrierName: "g_session_ledger_epoch",
+      antiPatchStrategy: `Emit compile-time native shield headers via \`bla_emit_headers\` (${headerLang}) and entangle \`${primaryEntry}\` with opaque arithmetic invariants before compiling.`,
+      codeTransformSteps: [
+        `Step 1: Call MCP \`bla_emit_headers\` with \`{ "language": "${headerLang}", "intensity": "bankrupt" }\` and write the header next to \`${relPath}\`.`,
+        `Step 2: Include/import the header in \`${relPath}\` and wrap critical branches in \`${primaryEntry}\` with opaque invariants and shared state updates.`,
+        `Step 3: Compile the native binary and run \`bla_harden\` on the build output.`,
+      ],
+    },
+    suggestedIdentifierStems: {
+      mundane: DEFAULT_MUNDANE_STEMS.slice(0, 6),
+      security: DEFAULT_SECURITY_STEMS,
+    },
+    agentRewriteRecipe: [
+      `1. Emit Native Shield Header: Call \`bla_emit_headers\` ({ "language": "${headerLang}", "intensity": "bankrupt" }) and include it in \`${relPath}\`.`,
+      `2. Entangle Crown Jewels: In \`${primaryEntry}\`, replace isolated boolean checks with state-accumulating opaque guards.`,
+      `3. Build & Harden: Compile the binary and run \`bla_harden\` on the output directory.`,
     ],
   };
 }
@@ -848,6 +1098,11 @@ function buildSurgicalWorkorderForFile(
     if (format === "python-source") {
       const src = readFileSync(absPath, "utf8");
       return buildPythonSurgicalWorkorder(src, relPath);
+    }
+    const ext = extname(absPath).toLowerCase();
+    if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".rs" || ext === ".go") {
+      const src = readFileSync(absPath, "utf8");
+      return buildNativeSurgicalWorkorder(src, relPath, ext);
     }
   } catch {
     return undefined;
@@ -875,6 +1130,11 @@ const INTERESTING_EXT = new Set([
   ".jsx",
   ".py",
   ".pyc",
+  ".c",
+  ".cpp",
+  ".cc",
+  ".rs",
+  ".go",
   ".asar",
   ".wasm",
   ".uf2",

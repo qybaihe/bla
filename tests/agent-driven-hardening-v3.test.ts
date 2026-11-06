@@ -122,8 +122,64 @@ def compute_invoice_total(units, price):
       ),
     ).toBe(true);
     expect(
+      jsTargetPlan!.surgicalWorkorder!.crownJewelCandidates.some(
+        (c) =>
+          c.functionName === "verifyLicenseKey" &&
+          (c.vulnerabilityKind === "single-point-boolean-gate" ||
+            c.vulnerabilityKind === "isolated-verify-oracle"),
+      ),
+    ).toBe(true);
+    expect(
+      jsTargetPlan!.surgicalWorkorder!.dataFlowEntanglementPlan.stateCarrierName,
+    ).toBe("target");
+    expect(
       jsTargetPlan!.surgicalWorkorder!.agentRewriteRecipe.length,
     ).toBeGreaterThanOrEqual(3);
+
+    // Calling bla_harden with require_agent_weave: true BEFORE Stage 2 source
+    // surgery is refused by the Agent-First gate and returns surgicalWorkorders + agentActions
+    const prematureHardenRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 115,
+      method: "tools/call",
+      params: {
+        name: "bla_harden",
+        arguments: {
+          directory: dir,
+          require_agent_weave: true,
+          weave_decoys: true,
+        },
+      },
+    });
+    expect((prematureHardenRes?.result as { isError: boolean }).isError).toBe(
+      true,
+    );
+    const prematureReport = (
+      prematureHardenRes?.result as {
+        structuredContent: {
+          overallSuccess: boolean;
+          agentWeaveGateBlocked?: boolean;
+          agentWeaveAssessment?: {
+            weaveVerified: boolean;
+            unwovenSourceFiles: string[];
+            agentActions: unknown[];
+            surgicalWorkorders: Record<string, unknown>;
+          };
+        };
+      }
+    ).structuredContent;
+    expect(prematureReport.overallSuccess).toBe(false);
+    expect(prematureReport.agentWeaveGateBlocked).toBe(true);
+    expect(prematureReport.agentWeaveAssessment?.weaveVerified).toBe(false);
+    expect(prematureReport.agentWeaveAssessment?.unwovenSourceFiles).toContain(
+      "license.cjs",
+    );
+    expect(
+      prematureReport.agentWeaveAssessment?.agentActions.length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      prematureReport.agentWeaveAssessment?.surgicalWorkorders["license.cjs"],
+    ).toBeDefined();
 
     // =========================================================================
     // STAGE 2: Verify Weave (initial failure -> Agent source surgery -> pass)
@@ -244,7 +300,7 @@ module.exports = { verifyLicenseKey };
     expect(verifyWeave2.agentActions).toHaveLength(0);
 
     // =========================================================================
-    // STAGE 3: Post-Build Counter-REA Exhaustion Harden
+    // STAGE 3: Post-Build Counter-REA Exhaustion Harden (with require_agent_weave: true)
     // =========================================================================
     const hardenRes = await handleMcpRequest({
       jsonrpc: "2.0",
@@ -254,6 +310,7 @@ module.exports = { verifyLicenseKey };
         name: "bla_harden",
         arguments: {
           directory: dir,
+          require_agent_weave: true,
           weave_decoys: true,
           self_seal: true,
           sidecar_entangle: true,
@@ -265,6 +322,11 @@ module.exports = { verifyLicenseKey };
       hardenRes?.result as {
         structuredContent: {
           overallSuccess: boolean;
+          agentWeaveGateBlocked?: boolean;
+          agentWeaveAssessment?: {
+            weaveVerified: boolean;
+            weaveScore: number;
+          };
           artifacts: Array<{
             relativePath: string;
             outputPath: string;
@@ -274,6 +336,9 @@ module.exports = { verifyLicenseKey };
       }
     ).structuredContent;
     expect(hardenReport.overallSuccess).toBe(true);
+    expect(hardenReport.agentWeaveGateBlocked).toBeUndefined();
+    expect(hardenReport.agentWeaveAssessment?.weaveVerified).toBe(true);
+    expect(hardenReport.agentWeaveAssessment?.weaveScore).toBe(100);
     expect(hardenReport.artifacts.length).toBe(2);
 
     // =========================================================================
@@ -334,5 +399,65 @@ module.exports = { verifyLicenseKey };
     // CLI parity for weave-plan and verify-weave
     expect(await runCli(["weave-plan", dir])).toBe(0);
     expect(await runCli(["verify-weave", dir, "--json"])).toBe(0);
+  });
+
+  it("extracts crownJewelCandidates and native surgicalWorkorders for C/Rust/Go sources", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-v3-native-workorder-"));
+    temps.push(dir);
+
+    writeFileSync(
+      join(dir, "auth.rs"),
+      `
+pub fn verify_license_token(token: &str) -> bool {
+    token.len() == 16
+}
+`.trim() + "\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(dir, "gate.js"),
+      `
+export function checkSubscriptionTier(secret) {
+  if (secret === "PRO_ENTERPRISE_2026") return true;
+  return false;
+}
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const planRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 20,
+      method: "tools/call",
+      params: {
+        name: "bla_weave_plan",
+        arguments: { path: dir },
+      },
+    });
+    const plan = (planRes?.result as { structuredContent: WeavePlan })
+      .structuredContent;
+    const rustTarget = plan.targets.find((t) =>
+      t.relativePath.endsWith("auth.rs"),
+    );
+    expect(rustTarget?.surgicalWorkorder?.language).toBe("native-source");
+    expect(
+      rustTarget?.surgicalWorkorder?.crownJewelCandidates.some(
+        (c) => c.functionName === "verify_license_token",
+      ),
+    ).toBe(true);
+
+    const jsTarget = plan.targets.find((t) =>
+      t.relativePath.endsWith("gate.js"),
+    );
+    expect(
+      jsTarget?.surgicalWorkorder?.crownJewelCandidates.some(
+        (c) => c.vulnerabilityKind === "single-point-boolean-gate",
+      ),
+    ).toBe(true);
+    expect(
+      jsTarget?.surgicalWorkorder?.crownJewelCandidates.some(
+        (c) => c.vulnerabilityKind === "cleartext-comparison",
+      ),
+    ).toBe(true);
   });
 });

@@ -237,6 +237,7 @@ export {
   type HardenArtifactSummary,
   type DiscoveredArtifact,
   type HardenDiscoveryResult,
+  type AgentWeaveAssessment,
 } from "./engine/harden.js";
 export {
   computeHardenRunId,
@@ -367,6 +368,8 @@ export {
   type WeaveAgentPlaybookPhase,
   type WeaveBranchCandidate,
   type WeaveCheckResult,
+  type WeaveCrownJewelCandidate,
+  type WeaveDataFlowEntanglementPlan,
   type WeaveFileVerification,
   type WeaveFunctionCandidate,
   type WeaveMaturity,
