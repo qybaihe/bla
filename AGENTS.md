@@ -8,7 +8,7 @@ This repository contains **BLA (`bla-agents` — Blind LLM Agents)**, an open-so
 - `src/core/`:
   - `types.ts`: Domain interfaces (`AuditReport`, `ProtectionResult`, `VerificationReport`, `BenchmarkReport`).
   - `detector.ts`: Magic-byte and file-extension format detection across 19 artifact types (including JS/TS, `.asar`, `.wasm`, `.py`/`.pyc`, ELF/Mach-O/PE, `.sqlite`, `.safetensors`, `.gguf`, `.dex`, and `Il2Cpp` metadata).
-  - `sqlite-runtime.ts`: Lazy `node:sqlite` `DatabaseSync` loader validating Node `^22.13.0 || >=24.0.0`.
+  - `sqlite-runtime.ts`: Lazy `node:sqlite` `DatabaseSync` loader validating Node `^22.23.4 || >=24.0.0`.
   - `output-path.ts`: Safe output path admission checks (`assertSafeOutputPath`).
   - `release-exposure.ts`: Bounded read-only source-map & symbol exposure scanner (`inspectReleaseExposure`).
   - `prng.ts`: Deterministic xorshift/mulberry32 PRNG (`SeededPrng`).

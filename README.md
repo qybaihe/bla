@@ -158,7 +158,7 @@ We do **not** claim those paths are empirically bankrupt until `redteam:rea` (or
 
 `npx bla-agents benchmark` runs a **local Counter-REA showcase**: exposure scores, **estimated** token/cost multipliers, and **measured** runtime equivalence. Token/$ columns are **internal estimates** derived from BLA's catalog of REA limits — they are **not** the same as the empirical REA process measurements above (those are byte-level analyzer failures with real error strings). `npm run verify:rea` is a **constant-drift harness only** and must never be cited as protection evidence; the only authoritative gate is `npm run redteam:rea`.
 
-Latest local run (bla-agents **v1.4.0**): aggregate **~612.5×** tokens · **~292.2×** cost · **14/14** runtime-exact.
+Latest local run (bla-agents **v2.1.0**): aggregate **~639.5×** tokens · **~304.4×** cost · **14/14** runtime-exact.
 
 | Target | Unprotected (est.) | Protected (est.) | Token mult (est.) | Runtime |
 | --- | --- | --- | ---: | :---: |
