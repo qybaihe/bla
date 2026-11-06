@@ -12,6 +12,11 @@ on:
       - "website/**"
   workflow_dispatch:
 
+# Read-only: this workflow only checks out the tree and runs shell assertions
+# over checked-in website files. It never writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   check-website:
     name: Verify website HTML, assets & links
