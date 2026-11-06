@@ -1,14 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import {
   bindSidecarEntanglement,
   computeSidecarBindingDigest,
   generateSidecarJsPreamble,
   SIDECAR_ENTANGLE_SCHEMA,
 } from "../src/shields/runtime/sidecar-entangle.js";
+
+/** macOS tmpdir is often /var → /private/var; require.cache keys use realpath. */
+function bustRequireCache(req: NodeRequire, target: string): string {
+  let abs: string;
+  try {
+    abs = realpathSync(target);
+  } catch {
+    abs = target;
+  }
+  for (const k of Object.keys(req.cache)) {
+    let rk = k;
+    try {
+      rk = realpathSync(k);
+    } catch {
+      /* keep raw key */
+    }
+    if (rk === abs || k === target || k === abs) delete req.cache[k];
+  }
+  return abs;
+}
+
+function runFresh(entryAbs: string): {
+  status: number | null;
+  out: string;
+} {
+  const r = spawnSync(process.execPath, [entryAbs], { encoding: "utf8" });
+  return {
+    status: r.status,
+    out: `${r.stderr || ""}${r.stdout || ""}`,
+  };
+}
 
 describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
   it("generateSidecarJsPreamble rejects non-hex expected digests", () => {
@@ -61,22 +98,19 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
         softFold: false,
       });
 
-      // Write entry WITH preamble prepended — sidecars-mode digest still matches.
       const protectedEntry = `${inject.preamble}\n${entrySrc}`;
       writeFileSync(join(dir, entryPath), protectedEntry, "utf8");
 
       const req = createRequire(join(dir, "pkg.json"));
-      const loaded = req(join(dir, entryPath)) as { value: number };
+      const entryAbs = bustRequireCache(req, join(dir, entryPath));
+      const loaded = req(entryAbs) as { value: number };
       expect(loaded.value).toBe(42);
 
-      // Strip sidecar → next load must throw.
+      // Strip sidecar → fresh process must hard-fail (avoid require.cache realpath traps).
       rmSync(join(dir, sibName));
-      expect(() => {
-        // Bust require cache
-        const abs = join(dir, entryPath);
-        delete req.cache[abs];
-        req(abs);
-      }).toThrow(/integrity binding mismatch/);
+      const stripped = runFresh(entryAbs);
+      expect(stripped.status, stripped.out).not.toBe(0);
+      expect(stripped.out).toMatch(/integrity binding mismatch/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -105,12 +139,13 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
       writeFileSync(join(dir, entryPath), `${inject.preamble}\n${entrySrc}`, "utf8");
 
       const req = createRequire(join(dir, "pkg.json"));
-      expect((req(join(dir, entryPath)) as { value: number }).value).toBe(7);
+      const entryAbs = bustRequireCache(req, join(dir, entryPath));
+      expect((req(entryAbs) as { value: number }).value).toBe(7);
 
       writeFileSync(join(dir, sibName), "TAMPERED\n", "utf8");
-      const abs = join(dir, entryPath);
-      delete req.cache[abs];
-      expect(() => req(abs)).toThrow(/integrity binding mismatch/);
+      const altered = runFresh(entryAbs);
+      expect(altered.status, altered.out).not.toBe(0);
+      expect(altered.out).toMatch(/integrity binding mismatch/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -121,9 +156,6 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
     try {
       const entryPath = "main.js";
       const sibName = "sib.js";
-      const entrySrc =
-        "module.exports = { d: (typeof __blaSidecarDigest === 'number' ? __blaSidecarDigest : 0) };\n";
-      // softFold preamble assigns binding as IIFE return — capture via rewrite:
       const digest = computeSidecarBindingDigest(
         { pathLabel: entryPath, bytes: new TextEncoder().encode("x") },
         [{ pathLabel: sibName, bytes: new TextEncoder().encode("y") }],
@@ -137,16 +169,15 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
         softFold: true,
         bindingName: "__blaSidecarDigest",
       });
-      // Capture IIFE return into the binding name for the module scope.
       const preambleAssign = `var __blaSidecarDigest = ${inject.preamble}\n`;
       writeFileSync(
         join(dir, entryPath),
         `${preambleAssign}module.exports = { d: __blaSidecarDigest };\n`,
         "utf8",
       );
-      // No sidecar written → softFold should set flipped/zero digest, not throw.
       const req = createRequire(join(dir, "pkg.json"));
-      const out = req(join(dir, entryPath)) as { d: number };
+      const entryAbs = bustRequireCache(req, join(dir, entryPath));
+      const out = req(entryAbs) as { d: number };
       expect(typeof out.d).toBe("number");
       expect(out.d).not.toBe(digest.u32);
     } finally {

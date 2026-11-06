@@ -4,10 +4,11 @@ import {
   writeFileSync,
   rmSync,
   readFileSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import { protectTarget } from "../src/engine/protector.js";
 import { computeSidecarBindingDigest } from "../src/shields/runtime/sidecar-entangle.js";
 
@@ -43,11 +44,9 @@ describe("sidecar entangle protectTarget wiring", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-on-"));
     try {
       const entry = join(dir, "main.js");
-      const sib = join(dir, "sib.js");
       const entrySrc = "module.exports = { v: 99 };\n";
       const sibSrc = "sidecar-bytes-v1\n";
       writeFileSync(entry, entrySrc, "utf8");
-      writeFileSync(sib, sibSrc, "utf8");
       const out = join(dir, "main.out.js");
       // protect writes next to output; sidecar path resolved from output dir
       writeFileSync(join(dir, "sib-for-out.js"), sibSrc, "utf8");
@@ -65,13 +64,18 @@ describe("sidecar entangle protectTarget wiring", () => {
       expect(code).toContain("node:crypto");
       expect(code).toContain("integrity binding mismatch");
 
-      const req = createRequire(join(dir, "pkg.json"));
-      const loaded = req(out) as { v: number };
-      expect(loaded.v).toBe(99);
+      const outAbs = realpathSync(out);
+      const intact = spawnSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(outAbs)}).v)`], {
+        encoding: "utf8",
+      });
+      expect(intact.status, intact.stderr).toBe(0);
+      expect((intact.stdout || "").trim()).toBe("99");
 
       rmSync(join(dir, "sib-for-out.js"));
-      delete req.cache[out];
-      expect(() => req(out)).toThrow(/integrity binding mismatch/);
+      const stripped = spawnSync(process.execPath, [outAbs], { encoding: "utf8" });
+      const strippedOut = `${stripped.stderr || ""}${stripped.stdout || ""}`;
+      expect(stripped.status, strippedOut).not.toBe(0);
+      expect(strippedOut).toMatch(/integrity binding mismatch/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
