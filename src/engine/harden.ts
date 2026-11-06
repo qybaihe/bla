@@ -606,26 +606,31 @@ export function hardenProject(
     if (blockingJsHydrateDump.length > 0) blockParts.push("JS WASM hydrate param-dump");
     if (blockingWasmXorMask.length > 0) blockParts.push("WASM XOR-mask sidecar");
     if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
-    const blockReason = `skipped: ${blockParts.join(" / ")} blocked bankrupt harden`;
     const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts, ...wasmXorMaskArtifacts, ...wasmSealXorArtifacts];
+    // Attribute the specific refusal to the artifact that triggered the gate;
+    // every other planned artifact is skipped because the run was blocked.
+    const refusalByPath = new Map(
+      blockedExtras.map((artifact) => [resolve(artifact.inputPath), artifact.error]),
+    );
+    const planned = plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
+      inputPath: artifact.path,
+      relativePath: artifact.relativePath,
+      format: artifact.format,
+      outputPath,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted,
+      error: refusalByPath.get(resolve(artifact.path)) ?? `skipped: run blocked by ${blockParts.join(" / ")}`,
+    }));
     return {
       ...reportBase,
       overallSuccess: false,
       hardenedCount: 0,
-      failedCount: blockedExtras.length,
+      failedCount: planned.length + blockedExtras.length,
       artifacts: [
-        ...plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
-          inputPath: artifact.path,
-          relativePath: artifact.relativePath,
-          format: artifact.format,
-          outputPath,
-          success: false,
-          defenseScore: 0,
-          tokenAmplificationFactor: 0,
-          costAmplificationFactor: 0,
-          outputExisted,
-          error: blockReason,
-        })),
+        ...planned,
         ...blockedExtras,
       ],
     };
