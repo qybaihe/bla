@@ -92,6 +92,7 @@ Options:
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
+  --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
@@ -124,6 +125,7 @@ interface ParsedCliArgs {
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  readonly sidecarEntangle: boolean;
   readonly wasmPreserveExports: readonly string[];
   readonly allowLaneIndependentGates: boolean;
   readonly allowPlaintextSeal: boolean;
@@ -161,6 +163,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
+  let sidecarEntangle = false;
   let wasmPreserveExports: string[] = [];
   let allowLaneIndependentGates = false;
   let allowPlaintextSeal = false;
@@ -215,6 +218,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg === "--sidecar-entangle") {
+      sidecarEntangle = true;
     } else if (arg === "--allow-lane-independent") {
       allowLaneIndependentGates = true;
     } else if (arg === "--allow-plaintext-seal") {
@@ -289,6 +294,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     llmDirectives,
     weaveDecoys,
     selfSeal,
+    sidecarEntangle,
     wasmPreserveExports,
     allowLaneIndependentGates,
     allowPlaintextSeal,
@@ -427,6 +433,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...((() => {
             const fromCli = parsed.wasmPreserveExports;
             const fromCfg = loaded.config.wasmPreserveExports ?? [];
@@ -497,6 +504,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...((() => {
             const fromCli = parsed.wasmPreserveExports;
             const fromCfg = loaded.config.wasmPreserveExports ?? [];
@@ -825,6 +833,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...((() => {
             const fromCli = parsed.wasmPreserveExports;
             const fromCfg = loaded.config.wasmPreserveExports ?? [];

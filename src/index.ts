@@ -463,9 +463,19 @@ export {
 
 export {
   planSidecarEntanglement,
+  computeSidecarBindingDigest,
+  generateSidecarJsPreamble,
+  bindSidecarEntanglement,
+  entangleJsEntryWithSidecars,
   SIDECAR_ENTANGLE_SCHEMA,
   type SidecarEntanglePlan,
   type SidecarEntanglePlanOptions,
+  type SidecarBindingPart,
+  type SidecarBindingDigest,
+  type SidecarBindingMode,
+  type SidecarJsInjectOptions,
+  type SidecarJsInjectResult,
+  type SidecarJsBindResult,
 } from "./shields/runtime/sidecar-entangle.js";
 
 export {

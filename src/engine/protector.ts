@@ -90,6 +90,7 @@ import {
   lintJsWasmHydrateDumpSource,
 } from "./js-wasm-hydrate-dump-lint.js";
 import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
+import { entangleJsEntryWithSidecars } from "../shields/runtime/sidecar-entangle.js";
 
 /**
  * Crash-safe output write: write to a temp file in the same directory, then
@@ -135,6 +136,42 @@ function selfSealTransformOption(
         }
       : {}),
   };
+}
+
+
+function applySidecarEntangleToJs(
+  source: string,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { code: string; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { code: source, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { code: source, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { code: source, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleJsEntryWithSidecars({
+    entryPath: entryLabel,
+    entrySource: source,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { code: source, applied: false };
+  return { code: bound.code, applied: true };
 }
 
 function applyPanelDeriveRewrite(
@@ -316,6 +353,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let wasmExportDecoysInjected = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
+  let sidecarEntangleApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -390,6 +428,12 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalCode = `${finalCode}\n${honey.inlineDirective}\n`;
       honeySourceMapsGenerated = 1;
       counteredVectors.add("sourcemap-recovery");
+    }
+
+    {
+      const entangled = applySidecarEntangleToJs(finalCode, options, absOutput, seed);
+      finalCode = entangled.code;
+      if (entangled.applied) sidecarEntangleApplied = true;
     }
 
     writeFileAtomicSync(absOutput, finalCode, "utf8");
@@ -936,6 +980,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     intensity,
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+    ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),
     ...(wasmExportDecoysInjected > 0

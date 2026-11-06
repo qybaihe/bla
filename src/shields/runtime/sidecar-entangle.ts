@@ -2,10 +2,10 @@
  * Sidecar / entry entanglement planner (issue #40 / Direction-3).
  *
  * Elevates the former planned-stub into a coverage-matrix planner that assigns
- * interleaved SHA-256 check edges across entry + sidecar paths. Full binary
- * rewriting of non-JS sidecars remains out of scope (see
- * `docs/design/sidecar-entry-entanglement.md`); JS checker hosts receive
- * `generateSelfSealSnippet` payloads via protect/harden.
+ * interleaved SHA-256 check edges across entry + sidecar paths. JS strip⇒fail rewrite is available via `bindSidecarEntanglement` /
+ * `generateSidecarJsPreamble` when `sidecarEntangle` is set (see
+ * `docs/design/sidecar-entry-entanglement.md`). Non-JS / Python preamble
+ * rewrite remains a follow-up; WASM custom-section notes TBD.
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
@@ -50,7 +50,7 @@ export interface SidecarEntanglePlan {
   readonly planId: string;
   readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
-  readonly status: "ready" | "incomplete";
+  readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
   readonly coverageMatrix: CoverageMatrix;
   readonly coverageEvaluation: CoverageEvaluation;
@@ -165,4 +165,249 @@ export function planSidecarEntanglement(
     coverageMatrix: matrix,
     coverageEvaluation,
   };
+}
+
+/** A labelled entry- or sidecar-file measurement for offline binding. */
+export interface SidecarBindingPart {
+  readonly pathLabel: string;
+  readonly bytes: Uint8Array;
+}
+
+export interface SidecarBindingDigest {
+  /** Full SHA-256 hex over entry‖sidecars‖seedTag (mode-dependent). */
+  readonly hex: string;
+  /** First 8 hex chars folded to an unsigned 32-bit int (matches self-seal fold shape). */
+  readonly u32: number;
+}
+
+/**
+ * Binding modes:
+ * - "sidecars" (default): hash entry path label + each sidecar path‖bytes + seedTag.
+ *   Safe to prepend a preamble to the entry without invalidating the digest
+ *   (strip⇒fail targets sidecar removal/tamper; entry body integrity is self-seal).
+ * - "full": also fold entry.bytes (protect-time snapshot). Use only when the
+ *   entry will not be rewritten after the digest is sealed.
+ */
+export type SidecarBindingMode = "sidecars" | "full";
+
+/**
+ * Compute the offline binding digest for an entry and its sidecars.
+ *
+ * DEFENSIVE ONLY — integrity binding, not an encryption primitive.
+ */
+export function computeSidecarBindingDigest(
+  entry: SidecarBindingPart,
+  sidecars: readonly SidecarBindingPart[],
+  seedTag = "bla-sidecar-v1",
+  mode: SidecarBindingMode = "sidecars",
+): SidecarBindingDigest {
+  const h = createHash("sha256");
+  h.update(entry.pathLabel);
+  h.update("\0");
+  if (mode === "full") {
+    h.update(entry.bytes);
+    h.update("\0");
+  }
+  for (const s of sidecars) {
+    h.update(s.pathLabel);
+    h.update("\0");
+    h.update(s.bytes);
+    h.update("\0");
+  }
+  h.update(seedTag);
+  const hex = h.digest("hex");
+  return { hex, u32: parseInt(hex.slice(0, 8), 16) >>> 0 };
+}
+
+export interface SidecarJsInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). Required for hard fail. */
+  readonly expectedHex: string;
+  /** Binding name for the measured digest (tests / soft-fold). */
+  readonly bindingName?: string;
+  /**
+   * When true, emit a soft fold that only flips the measured u32 on mismatch
+   * (caller entangles with opaque seed). When false (default), throw on mismatch.
+   */
+  readonly softFold?: boolean;
+}
+
+export interface SidecarJsInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+}
+
+/**
+ * Emit a Node JS preamble that re-measures sidecar siblings and compares
+ * against the protect-time SHA-256 hex. Strip / alter ⇒ throw (hard) or
+ * expose a flipped digest (softFold) for opaque-seed entanglement.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarJsPreamble(
+  options: SidecarJsInjectOptions,
+): SidecarJsInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const bindingName = options.bindingName ?? "__blaSidecarDigest";
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const sidecarsLiteral = JSON.stringify(sidecars);
+  const entryLiteral = JSON.stringify(options.entryPath);
+  const seedLiteral = JSON.stringify(seedTag);
+
+  const lines: string[] = [];
+  lines.push(`(function(){`);
+  lines.push(`  var __expected = ${JSON.stringify(expectedHex)};`);
+  lines.push(`  var ${bindingName} = 0;`);
+  lines.push(`  try {`);
+  lines.push(`    var _c = require("node:crypto");`);
+  lines.push(`    var _fs = require("node:fs");`);
+  lines.push(`    var _path = require("node:path");`);
+  lines.push(`    var h = _c.createHash("sha256");`);
+  lines.push(`    var entryLabel = ${entryLiteral};`);
+  lines.push(`    h.update(entryLabel);`);
+  lines.push(`    h.update(String.fromCharCode(0));`);
+  lines.push(`    var sidecars = ${sidecarsLiteral};`);
+  lines.push(`    for (var i = 0; i < sidecars.length; i++) {`);
+  lines.push(`      var sp = sidecars[i];`);
+  lines.push(`      var spAbs = sp;`);
+  lines.push(
+    `      if (!_path.isAbsolute(spAbs) && typeof __dirname === "string") spAbs = _path.join(__dirname, sp);`,
+  );
+  lines.push(`      h.update(sp);`);
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(
+    `      try { h.update(_fs.readFileSync(spAbs)); } catch (_e1) { h.update("missing:" + String(sp)); }`,
+  );
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(`    }`);
+  lines.push(`    h.update(${seedLiteral});`);
+  lines.push(`    var hex = h.digest("hex");`);
+  lines.push(`    ${bindingName} = parseInt(hex.slice(0, 8), 16) >>> 0;`);
+  if (softFold) {
+    lines.push(
+      `    if (hex !== __expected) { ${bindingName} = (${bindingName} ^ 0xffffffff) >>> 0; }`,
+    );
+  } else {
+    lines.push(
+      `    if (hex !== __expected) { throw new Error("integrity binding mismatch"); }`,
+    );
+  }
+  lines.push(`  } catch (_e2) {`);
+  if (softFold) {
+    lines.push(`    ${bindingName} = 0;`);
+  } else {
+    lines.push(
+      `    if (_e2 && _e2.message === "integrity binding mismatch") throw _e2;`,
+    );
+    lines.push(`    throw new Error("integrity binding mismatch");`);
+  }
+  lines.push(`  }`);
+  lines.push(`  return ${bindingName};`);
+  lines.push(`})();`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+  };
+}
+
+export interface SidecarJsBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarJsInjectResult;
+  /** Entry source with the strip⇒fail preamble prepended. */
+  readonly code: string;
+}
+
+/**
+ * Plan + bind for a JS entry: compute the offline digest from in-memory
+ * sidecar bytes and return a `bound` plan plus the rewritten entry source.
+ *
+ * Uses sidecars-mode digest so the prepended preamble does not invalidate H.
+ */
+export function bindSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+    /** Original entry source to prepend into. Defaults to utf8 of entryBytes. */
+    readonly entrySource?: string;
+  },
+): SidecarJsBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarJsPreamble({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const entrySource =
+    options.entrySource ?? new TextDecoder().decode(options.entryBytes);
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    status: "bound",
+    note: "Bound — JS preamble ready; prepend to entry and ship sidecars alongside. Strip/alter fails closed.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    code: `${inject.preamble}\n${entrySource}`,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + entry source, produce the
+ * strip⇒fail-bound entry. Returns null when there are no sidecars to bind.
+ */
+export function entangleJsEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entrySource: string;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarJsBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: new TextEncoder().encode(options.entrySource),
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    entrySource: options.entrySource,
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
 }
