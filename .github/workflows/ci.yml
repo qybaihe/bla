@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only: this workflow checks out, builds and tests. It never writes to the
+# repository, so it must not inherit a write-capable default GITHUB_TOKEN.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
