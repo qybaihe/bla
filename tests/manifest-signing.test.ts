@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createPrivateKey, sign as cryptoSign } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   generateManifestSigningKeyPair,
@@ -144,5 +145,52 @@ describe("manifest ed25519 signing", () => {
         manifestSigningKeyPath: path.join(dir, "no-such-key.pem"),
       }),
     ).toThrow(/not readable/);
+  });
+
+  it("pins verification to an expected public key", () => {
+    const trusted = generateManifestSigningKeyPair();
+    const attacker = generateManifestSigningKeyPair();
+    const payload = { schema: "https://bla.tools/schemas/defense-manifest-v1.json", items: [1, 2] };
+
+    const trustedManifest = signManifestPayload(payload, trusted.privateKeyPem);
+    expect(verifyManifestSignature({ ...trustedManifest }, trusted.publicKeyPem)).toBe(true);
+    expect(verifyManifestSignature({ ...trustedManifest }, attacker.publicKeyPem)).toBe(false);
+
+    // A full re-sign with an attacker keypair must not pass a pinned check,
+    // even though the embedded key verifies its own signature.
+    const forged = signManifestPayload({ ...payload, items: [9, 9] }, attacker.privateKeyPem);
+    expect(verifyManifestSignature({ ...forged })).toBe(true);
+    expect(verifyManifestSignature({ ...forged }, trusted.publicKeyPem)).toBe(false);
+  });
+
+  it("verifies after object key reordering (sorted-key canonicalization)", () => {
+    const pair = generateManifestSigningKeyPair();
+    const signed = signManifestPayload(
+      { schema: "s", blaVersion: "2.1.0", nested: { z: 1, a: 2 } },
+      pair.privateKeyPem,
+    ) as Record<string, unknown>;
+    const reordered = {
+      nested: { a: 2, z: 1 },
+      blaVersion: "2.1.0",
+      schema: "s",
+      signature: signed.signature,
+    };
+    expect(verifyManifestSignature(reordered)).toBe(true);
+  });
+
+  it("still verifies legacy insertion-order signatures", () => {
+    const pair = generateManifestSigningKeyPair();
+    const privateKey = createPrivateKey(pair.privateKeyPem);
+    const payload = { a: 1, b: { c: 2 } };
+    const value = cryptoSign(
+      null,
+      Buffer.from(JSON.stringify(payload), "utf8"),
+      privateKey,
+    ).toString("base64");
+    const legacy = {
+      ...payload,
+      signature: { algorithm: "ed25519", publicKey: pair.publicKeyPem, value },
+    };
+    expect(verifyManifestSignature(legacy)).toBe(true);
   });
 });
