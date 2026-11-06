@@ -15,6 +15,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { walkBounded } from "../core/walk.js";
 
 export const SEAL_COMMITMENT_SCHEMA = "bla-seal-commitment-lint/v1" as const;
 
@@ -345,29 +346,14 @@ export function lintSealCommitmentFile(filePath: string): SealCommitmentReport {
   return lintSealCommitmentSource(source, { path: abs });
 }
 
-function walkSealCandidates(
-  dir: string,
-  depth: number,
-  out: string[],
-): void {
-  if (out.length >= MAX_SEAL_FILES || depth > MAX_WALK_DEPTH) return;
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (out.length >= MAX_SEAL_FILES) return;
-    if (entry.isDirectory()) {
-      if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
-      walkSealCandidates(join(dir, entry.name), depth + 1, out);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    if (!looksLikeSealFileName(entry.name)) continue;
-    out.push(join(dir, entry.name));
-  }
+function walkSealCandidates(dir: string): string[] {
+  return walkBounded(dir, {
+    maxDepth: MAX_WALK_DEPTH,
+    maxFiles: MAX_SEAL_FILES,
+    skipDirs: SKIP_DIR_NAMES,
+    skipHiddenDirs: true,
+    accept: (_full, name) => looksLikeSealFileName(name),
+  });
 }
 
 /**
@@ -384,8 +370,7 @@ export function discoverAndLintSealSidecars(
   if (st.isFile()) {
     return [lintSealCommitmentFile(abs)];
   }
-  const candidates: string[] = [];
-  walkSealCandidates(abs, 0, candidates);
+  const candidates = walkSealCandidates(abs);
   // Also check common build output folder names one level down even if skipped
   // as deep roots — seal.json often sits next to dist artifacts at project root.
   return candidates.map((p) => lintSealCommitmentFile(p));

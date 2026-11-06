@@ -16,8 +16,9 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { walkBounded } from "../core/walk.js";
 
 export const WASM_XOR_MASK_SIDECAR_SCHEMA = "bla-wasm-xor-mask-sidecar-lint/v1" as const;
 
@@ -346,34 +347,21 @@ export function wasmXorMaskSidecarRefuseMessage(
   return `BLA refused bankrupt/maximum protect of ${p}: WASM XOR-mask sidecar entitlement pack (${ids || "exposed"}). Pass allowWasmXorMaskSidecar / --allow-wasm-xor-mask-sidecar / allow_wasm_xor_mask_sidecar to override. Prefer key-dependent unmask and one-way commitments (red/blue round-6).`;
 }
 
-function walkWasmFiles(root: string, out: string[], depth: number): void {
-  if (out.length >= MAX_WASM_FILES || depth > MAX_WALK_DEPTH) return;
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(root);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (out.length >= MAX_WASM_FILES) break;
-    if (SKIP_DIR_NAMES.has(name)) continue;
-    const full = join(root, name);
-    let st;
-    try {
-      st = statSync(full);
-    } catch {
-      continue;
-    }
-    if (st.isDirectory()) walkWasmFiles(full, out, depth + 1);
-    else if (st.isFile() && /\.wasm$/i.test(name) && st.size <= MAX_SCAN_BYTES) out.push(full);
-  }
+function walkWasmFiles(root: string): string[] {
+  return walkBounded(root, {
+    maxDepth: MAX_WALK_DEPTH,
+    maxFiles: MAX_WASM_FILES,
+    skipDirs: SKIP_DIR_NAMES,
+    maxFileBytes: MAX_SCAN_BYTES,
+    accept: (_full, name) => /\.wasm$/i.test(name),
+  });
 }
 
 export function discoverAndLintWasmXorMaskSidecars(directory: string): WasmXorMaskSidecarReport[] {
   const abs = resolve(directory);
   const files: string[] = [];
   if (existsSync(abs) && statSync(abs).isFile() && /\.wasm$/i.test(abs)) files.push(abs);
-  else if (existsSync(abs) && statSync(abs).isDirectory()) walkWasmFiles(abs, files, 0);
+  else if (existsSync(abs) && statSync(abs).isDirectory()) files.push(...walkWasmFiles(abs));
   return files.map((f) => lintWasmXorMaskSidecarFile(f));
 }
 

@@ -12,8 +12,9 @@
  */
 
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
+import { walkBounded } from "../core/walk.js";
 
 export const LANE_INDEPENDENCE_SCHEMA = "bla-lane-independence-lint/v1" as const;
 
@@ -184,25 +185,14 @@ const JS_EXT = /\.(?:[cm]?[jt]s|tsx?)$/i;
 const MAX_JS_FILES = 64;
 const MAX_WALK_DEPTH = 8;
 
-function walkJsGateCandidates(dir: string, depth: number, out: string[]): void {
-  if (out.length >= MAX_JS_FILES || depth > MAX_WALK_DEPTH) return;
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (out.length >= MAX_JS_FILES) return;
-    if (entry.isDirectory()) {
-      if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
-      walkJsGateCandidates(join(dir, entry.name), depth + 1, out);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    if (!JS_EXT.test(entry.name)) continue;
-    out.push(join(dir, entry.name));
-  }
+function walkJsGateCandidates(dir: string): string[] {
+  return walkBounded(dir, {
+    maxDepth: MAX_WALK_DEPTH,
+    maxFiles: MAX_JS_FILES,
+    skipDirs: SKIP_DIR_NAMES,
+    skipHiddenDirs: true,
+    accept: (_full, name) => JS_EXT.test(name),
+  });
 }
 
 /** File wrapper matching other packaging lints. */
@@ -232,7 +222,6 @@ export function discoverAndLintLaneIndependence(
   if (st.isFile()) {
     return [lintLaneIndependenceFile(abs)];
   }
-  const candidates: string[] = [];
-  walkJsGateCandidates(abs, 0, candidates);
+  const candidates = walkJsGateCandidates(abs);
   return candidates.map((p) => lintLaneIndependenceFile(p));
 }

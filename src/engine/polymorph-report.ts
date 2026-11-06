@@ -10,11 +10,11 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { extname, relative, resolve, sep } from "node:path";
+import { walkBounded } from "../core/walk.js";
 import { inspectWasmBinary } from "../shields/formats/wasm.js";
 
 export const POLYMORPH_REPORT_SCHEMA = "bla-polymorph-report/v1" as const;
@@ -95,35 +95,17 @@ export interface PolymorphReport {
 }
 
 function walkFiles(root: string, maxDepth = 8): string[] {
-  const abs = resolve(root);
-  const out: string[] = [];
-  const stack: Array<{ dir: string; depth: number }> = [{ dir: abs, depth: 0 }];
-  while (stack.length > 0) {
-    const { dir, depth } = stack.pop()!;
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const ent of entries) {
-      if (ent.name.startsWith(".") && ent.name !== ".blarc") {
-        // keep walking into non-dot; skip hidden dirs except we already filter
-      }
-      const full = join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (SKIP_DIR_NAMES.has(ent.name) || depth >= maxDepth) continue;
-        if (ent.name.startsWith(".")) continue;
-        stack.push({ dir: full, depth: depth + 1 });
-      } else if (ent.isFile()) {
-        if (SKIP_BASENAMES.has(ent.name)) continue;
-        const ext = extname(ent.name).toLowerCase();
-        if (!COMPARE_EXTS.has(ext)) continue;
-        out.push(full);
-      }
-    }
-  }
-  return out.sort();
+  return walkBounded(resolve(root), {
+    maxDepth,
+    maxFiles: Number.MAX_SAFE_INTEGER,
+    skipDirs: SKIP_DIR_NAMES,
+    skipHiddenDirs: true,
+    descendAtMaxDepth: false,
+    accept: (_full, name) => {
+      if (SKIP_BASENAMES.has(name)) return false;
+      return COMPARE_EXTS.has(extname(name).toLowerCase());
+    },
+  }).sort();
 }
 
 function relKey(root: string, absFile: string): string {
