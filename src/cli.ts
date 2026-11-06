@@ -2,7 +2,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
-import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "./core/config.js";
+import {
+  initBlaConfig,
+  loadBlaConfig,
+  resolveProjectSeed,
+  type BlaProjectConfig,
+} from "./core/config.js";
 import { inspectReleaseExposure } from "./core/release-exposure.js";
 import { buildSarifReport } from "./core/sarif.js";
 import { verifyManifestFile } from "./core/manifest-verify.js";
@@ -350,6 +355,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   };
 }
 
+/** Merge CLI and .blarc WASM export preservation lists without duplicates. */
+function mergeWasmPreserveExports(
+  parsed: ParsedCliArgs,
+  config: BlaProjectConfig,
+): { wasmPreserveExports?: readonly string[] } {
+  const merged = [
+    ...new Set([...(config.wasmPreserveExports ?? []), ...parsed.wasmPreserveExports]),
+  ];
+  return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+}
+
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const parsed = parseCliArgs(argv);
 
@@ -470,12 +486,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
-          ...((() => {
-            const fromCli = parsed.wasmPreserveExports;
-            const fromCfg = loaded.config.wasmPreserveExports ?? [];
-            const merged = [...new Set([...fromCfg, ...fromCli])];
-            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
-          })()),
+          ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
@@ -541,12 +552,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
-          ...((() => {
-            const fromCli = parsed.wasmPreserveExports;
-            const fromCfg = loaded.config.wasmPreserveExports ?? [];
-            const merged = [...new Set([...fromCfg, ...fromCli])];
-            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
-          })()),
+          ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
@@ -870,12 +876,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
-          ...((() => {
-            const fromCli = parsed.wasmPreserveExports;
-            const fromCfg = loaded.config.wasmPreserveExports ?? [];
-            const merged = [...new Set([...fromCfg, ...fromCli])];
-            return merged.length > 0 ? { wasmPreserveExports: merged } : {};
-          })()),
+          ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
             loaded.config.allowLaneIndependentGates === true,
