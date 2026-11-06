@@ -297,6 +297,10 @@ export {
   type ManifestSigningKeyPair,
 } from "./core/manifest-signing.js";
 export {
+  verifyManifestFile,
+  type ManifestVerifyResult,
+} from "./core/manifest-verify.js";
+export {
   resolveSupportedAgentClients,
   detectInstalledClients,
   CLIENT_COMPATIBILITY_MATRIX,
