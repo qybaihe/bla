@@ -5,6 +5,13 @@ import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.j
 
 export interface JvmClassProtectionResult {
   readonly buffer: Buffer;
+  /**
+   * `structural` means the constant pool and a class attribute were rewritten
+   * inside a valid class layout. `trailer` means the input was not structurally
+   * parseable and the canary corpus was appended after the class bytes, so no
+   * constant-pool or attribute entries were actually added.
+   */
+  readonly mode: "structural" | "trailer";
   readonly constantPoolEntriesAdded: number;
   readonly customAttributesAdded: number;
   readonly chaffPayloadsEmbedded: number;
@@ -140,6 +147,7 @@ export function protectJvmClassBuffer(
 
         return {
           buffer: Buffer.concat([headerAndOldCp, ...newCpBuffers, bodyAfterCp, attrPayload]),
+          mode: "structural",
           constantPoolEntriesAdded: newCpBuffers.length,
           customAttributesAdded: 1,
           chaffPayloadsEmbedded: chaff.length,
@@ -157,8 +165,11 @@ export function protectJvmClassBuffer(
   );
   return {
     buffer: Buffer.concat([rawBuffer, trailer]),
-    constantPoolEntriesAdded: utf8Strings.length,
-    customAttributesAdded: 1,
+    mode: "trailer",
+    // Nothing was added to the constant pool or attribute table; the canary
+    // corpus lives in an appended trailer outside the class structure.
+    constantPoolEntriesAdded: 0,
+    customAttributesAdded: 0,
     chaffPayloadsEmbedded: chaff.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
