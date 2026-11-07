@@ -20,17 +20,18 @@ import {
 import { generateCounterReaExhaustionSuite } from "../exhaustion/index.js";
 import { generateCounterReaDeceptionSuite } from "../deception/index.js";
 
-// Handle ESM/CJS default export interop in NodeNext
-type TraverseFn = (typeof _traverse)["default"];
-type GenerateFn = (typeof _generate)["default"];
+// Handle ESM/CJS default export interop in NodeNext (Babel 7 & Babel 8)
+type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
+type TraverseFn = UnwrapDefault<typeof _traverse>;
+type GenerateFn = UnwrapDefault<typeof _generate>;
 const traverse: TraverseFn =
   typeof _traverse === "function"
     ? (_traverse as unknown as TraverseFn)
-    : _traverse.default;
+    : (_traverse as unknown as { readonly default: TraverseFn }).default;
 const generate: GenerateFn =
   typeof _generate === "function"
     ? (_generate as unknown as GenerateFn)
-    : _generate.default;
+    : (_generate as unknown as { readonly default: GenerateFn }).default;
 
 export class InvalidJavaScriptCarrierError extends Error {
   constructor(message: string) {
@@ -223,7 +224,11 @@ export function collectEsmExportedSymbols(program: t.Program): string[] {
               : spec.exported.value,
           );
         } else if (t.isExportNamespaceSpecifier(spec)) {
-          exported.push(spec.exported.name);
+          exported.push(
+            t.isIdentifier(spec.exported)
+              ? spec.exported.name
+              : spec.exported.value,
+          );
         }
       }
       const decl = stmt.declaration;
@@ -387,6 +392,12 @@ function buildOpaqueTrueAst(
  * survive as a NumericLiteral, closing the bankrupt cleartext-constant probe
  * tracked in issue #40 while keeping runtime equivalence.
  */
+function toNumericExpr(n: number): t.Expression {
+  return n < 0
+    ? t.unaryExpression("-", t.numericLiteral(Math.abs(n)))
+    : t.numericLiteral(n);
+}
+
 function buildOpaqueIntegerAst(
   value: number,
   prng: SeededPrng,
@@ -399,20 +410,20 @@ function buildOpaqueIntegerAst(
   const right = value > 0 ? split : -split;
   const sum = t.binaryExpression(
     "+",
-    t.numericLiteral(left),
-    t.numericLiteral(right),
+    toNumericExpr(left),
+    toNumericExpr(right),
   );
   const decoy = value ^ (prng.nextInt(1, 0x7fff) | 1);
   if (prng.nextInt(0, 1) === 0) {
     return t.conditionalExpression(
       buildOpaqueTrueAst(prng, seedIdentifierName),
       sum,
-      t.numericLiteral(decoy),
+      toNumericExpr(decoy),
     );
   }
   return t.conditionalExpression(
     buildOpaqueFalseAst(prng, seedIdentifierName),
-    t.numericLiteral(decoy),
+    toNumericExpr(decoy),
     sum,
   );
 }
@@ -435,10 +446,6 @@ function buildParserPlugins(
 ): ParserPlugin[] {
   const plugins: ParserPlugin[] = [
     "decorators-legacy",
-    "importAttributes",
-    "dynamicImport",
-    "classProperties",
-    "topLevelAwait",
   ];
   if (!hasExplicitLoaderOrFilename) {
     plugins.unshift("typescript", "jsx");
