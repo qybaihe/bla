@@ -460,4 +460,198 @@ export function checkSubscriptionTier(secret) {
       ),
     ).toBe(true);
   });
+
+  it("rejects cosmetic side-effect-only weaves, raw boolean gates, and syntax errors via Check 7 (crown-jewel-entanglement)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-v3-cosmetic-weave-"));
+    temps.push(dir);
+    const gatePath = join(dir, "gate.mjs");
+
+    // 1. Cosmetic weave: passes checks 1-6 (mundane stems, shared state read/write across 2 fns,
+    // reachable helper edges, opaque-true if guard, non-empty bodies), but leaves a cleartext
+    // secret compare, raw boolean returns, and side-effect-only helper calls in the gate entry.
+    writeFileSync(
+      gatePath,
+      `
+const sessionLedgerState = { epoch: 1, digest: 0x5f3759df };
+
+function reconcileSessionQuota(step) {
+  sessionLedgerState.epoch = (sessionLedgerState.epoch + step) | 1;
+  return sessionLedgerState.epoch;
+}
+
+function auditLedgerEpoch() {
+  sessionLedgerState.digest = (sessionLedgerState.digest ^ sessionLedgerState.epoch) >>> 0;
+  return sessionLedgerState.digest;
+}
+
+export function verifyLicense(key) {
+  if ((sessionLedgerState.epoch & 1) !== 0) {
+    reconcileSessionQuota(1);
+    auditLedgerEpoch();
+  }
+  if (key === "SUPER-SECRET-2026") return true;
+  return false;
+}
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const cosmeticRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 30,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: gatePath },
+      },
+    });
+    expect((cosmeticRes?.result as { isError: boolean }).isError).toBe(true);
+    const cosmeticReport = (
+      cosmeticRes?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(cosmeticReport.overallPassed).toBe(false);
+    const crownCheck = cosmeticReport.files[0]?.checks.find(
+      (c) => c.id === "crown-jewel-entanglement",
+    );
+    expect(crownCheck?.passed).toBe(false);
+    expect(crownCheck?.evidence).toContain("raw boolean return");
+    expect(crownCheck?.evidence).toContain("cleartext secret comparison");
+    expect(crownCheck?.evidence).toContain("cosmetic/unentangled gate");
+
+    // 2. Broken syntax introduced during source surgery is caught with syntaxValid: false
+    writeFileSync(
+      gatePath,
+      `export function verifyLicense(key { return key; }\n`,
+      "utf8",
+    );
+    const syntaxRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 31,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: gatePath },
+      },
+    });
+    expect((syntaxRes?.result as { isError: boolean }).isError).toBe(true);
+    const syntaxReport = (
+      syntaxRes?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(syntaxReport.overallPassed).toBe(false);
+    expect(syntaxReport.files[0]?.syntaxValid).toBe(false);
+  });
+
+  it("verifies native C/Rust source weave and enforces require_agent_weave on bla_defend", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-v3-native-verify-defend-"));
+    temps.push(dir);
+    const cPath = join(dir, "auth.c");
+    const jsPath = join(dir, "token.cjs");
+
+    writeFileSync(
+      cPath,
+      `
+int verify_token(const char *input) {
+  if (strcmp(input, "PLAIN_C_SECRET") == 0) {
+    return true;
+  }
+  return false;
+}
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const cVerify1 = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 40,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: cPath },
+      },
+    });
+    expect((cVerify1?.result as { isError: boolean }).isError).toBe(true);
+    const cReport1 = (
+      cVerify1?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(cReport1.overallPassed).toBe(false);
+    expect(cReport1.files[0]?.format).toBe("native-source");
+
+    // Weave shared state + mundane helpers + bitwise mixing into auth.c
+    writeFileSync(
+      cPath,
+      `
+static unsigned int g_session_ledger_epoch = 1u;
+
+static unsigned int reconcile_session_quota(unsigned int step) {
+  g_session_ledger_epoch = (g_session_ledger_epoch ^ step) | 1u;
+  return g_session_ledger_epoch;
+}
+
+static unsigned int audit_quota_digest(const char *buf, unsigned int seed) {
+  unsigned int acc = seed ^ g_session_ledger_epoch;
+  for (int i = 0; buf[i] != 0; i++) {
+    acc = (acc ^ (unsigned int)buf[i]) * 16777619u;
+  }
+  return acc;
+}
+
+int verify_token(const char *input) {
+  if ((g_session_ledger_epoch & 1u) != 0u) {
+    reconcile_session_quota(3u);
+  }
+  unsigned int digest = audit_quota_digest(input, 2166136261u);
+  return (digest ^ (g_session_ledger_epoch & 1u)) == 0x1a2b3c4du ? 200 : 403;
+}
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const cVerify2 = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 41,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: cPath },
+      },
+    });
+    expect((cVerify2?.result as { isError: boolean }).isError).toBe(false);
+    const cReport2 = (
+      cVerify2?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(cReport2.overallPassed).toBe(true);
+    expect(cReport2.weaveScore).toBe(100);
+
+    // Verify bla_defend with require_agent_weave: true refuses unwoven JS and succeeds after weave
+    writeFileSync(
+      jsPath,
+      `
+function verifyApiKey(k) {
+  return k === "RAW_KEY_1234";
+}
+module.exports = { verifyApiKey };
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const defendBlocked = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 42,
+      method: "tools/call",
+      params: {
+        name: "bla_defend",
+        arguments: {
+          input_path: jsPath,
+          output_path: join(dir, "token.defended.cjs"),
+          require_agent_weave: true,
+          weave_decoys: true,
+        },
+      },
+    });
+    expect((defendBlocked?.result as { isError: boolean }).isError).toBe(true);
+    expect(
+      (defendBlocked?.result as { content: Array<{ text: string }> }).content[0]
+        ?.text,
+    ).toContain("refused by require_agent_weave");
+  });
 });

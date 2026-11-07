@@ -545,7 +545,7 @@ export function hardenProject(
   ]);
   const weaveableDiscovered = discovered.filter((a) => weaveFormats.has(a.format));
   let agentWeaveAssessment: AgentWeaveAssessment | undefined;
-  if (weaveableDiscovered.length > 0) {
+  if (weaveableDiscovered.length > 0 || options.requireAgentWeave === true) {
     try {
       const weaveVerify = verifyWeaveTarget(absDir, { maxTargets: maxArtifacts });
       if (weaveVerify.files.length > 0) {
