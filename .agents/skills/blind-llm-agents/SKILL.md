@@ -42,28 +42,32 @@ When hardening a repository with source code, follow this 4-stage closed loop so
 2. **Gate Scan**: Call `bla_lint` `{ "directory": "." }` (`bla-packaging-gates/v1`).
    - If `shouldRefuseBankrupt: true`, inspect `remediationPlan`! Every blocking finding includes `owner`, `sourceRefactorRecipe`, and `recommendedMcpTool`.
 3. **Surgical Weave Plan**: Call `bla_weave_plan` `{ "path": "." }` (`bla-weave-plan/v1`) and read `bla://directives/weave-decoy`.
-   - Inspect each source target's `surgicalWorkorder`: `entryFunctions`, `sharedStateSlots`, `branchCandidates`, `suggestedIdentifierStems`, and `agentRewriteRecipe`.
+   - Inspect each source target's `surgicalWorkorder`: `entryFunctions`, `sharedStateSlots`, `branchCandidates`, **`crownJewelCandidates`**, **`dataFlowEntanglementPlan`**, `suggestedIdentifierStems`, and `agentRewriteRecipe`.
 
 ### Stage 2: Agent-Led Source Refactoring & Structural Decoy Weave (`agent-primary`)
-1. **Remediate Packaging Footguns (do NOT just pass `allow_*` in production)**:
+1. **Eliminate Single-Point Boolean Gates & Entangle Crown Jewels (`crownJewelCandidates`)**:
+   - Inspect `surgicalWorkorder.crownJewelCandidates` and `surgicalWorkorder.dataFlowEntanglementPlan` across JS/TS, Python, and Native (C/C++/Rust/Go) sources.
+   - Replace isolated `return true / false` or cleartext equality checks (`=== "..."`) with a whole-input chained accumulator (FNV-1a / ARX / SHA-256) mixed into the shared state carrier (`sessionLedgerState.digest`) so downstream business output depends on the derived state value rather than a 1-byte patchable branch.
+2. **Remediate Packaging Footguns (do NOT just pass `allow_*` in production)**:
    - Follow `bla_lint`'s `remediationPlan` to refactor source code:
      - Rewrite per-byte/per-segment lane checks (`lane-independence`) into a whole-key chained ARX/FNV/SHA-256 accumulator or move unlock into WASM.
      - Mask cleartext sensitive literals (`plaintext-secret`) via `bla_encrypt_strings`.
      - Replace reversible `seal.json` commitments with one-way `SHA-256` (`certificateSha256`) and remove JS AES wrap-key / `memory.buffer` hydrate dumps.
    - Re-run `bla_lint` until `blocking` is empty (`shouldRefuseBankrupt: false`).
-2. **Weave Domain-Plausible Shadow Business Logic**:
+3. **Weave Domain-Plausible Shadow Business Logic**:
    - Using `surgicalWorkorder` from `bla_weave_plan`:
      - Reuse or introduce the recommended `sharedStateSlots` carrier so real business paths and shadow helpers read/write the **same** runtime state.
      - Author 2–3 non-trivial helper functions using **2/3 mundane stems** (`session`, `ledger`, `quota`, `epoch`) and **1/3 security stems** (`attest`, `commitment`, `seal`) — never `_bla_*` or empty `pass` stubs.
      - Wire call edges from `entryFunctions` into the shadow helpers guarded by state-dependent opaque-true invariants at `branchCandidates`.
    - For C/C++, Rust, or Go targets, call `bla_emit_headers` and include the emitted header in native sources.
-3. **Verify Source Weave**:
+4. **Verify Source Weave**:
    - Call **`bla_verify_weave`** `{ "path": "." }` (`bla-weave-verify/v1`).
    - If `overallPassed: false`, execute each item in `agentActions` (fixing any unreferenced helpers, missing shared-state mutations, or stem ratios) and re-run `bla_verify_weave` until `overallPassed: true`.
 
 ### Stage 3: Build & Post-Build Counter-REA Exhaustion Harden (`mcp-primary`)
 1. If the project has a build step (`npm run build`, `cargo build`, etc.), run it so compiled artifacts reflect your Stage 2 source surgery.
-2. Call **`bla_harden`** `{ "directory": ".", "weave_decoys": true, "self_seal": true, "sidecar_entangle": true }` (pass `wasm_preserve_exports` when a public WASM ABI must keep specific export names).
+2. Call **`bla_harden`** `{ "directory": ".", "require_agent_weave": true, "weave_decoys": true, "self_seal": true, "sidecar_entangle": true }` (pass `wasm_preserve_exports` when a public WASM ABI must keep specific export names).
+   - Passing **`require_agent_weave: true`** enforces the Agent-First Closed-Loop gate: if any source file was not woven in Stage 2 (`weaveVerified: false`), `bla_harden` refuses mechanical hardening and returns `agentWeaveAssessment` (`surgicalWorkorders` + `agentActions`) so you complete source surgery first.
 
 ### Stage 4: Equivalence, Weave Acceptance & Bankruptcy Verification (`agent + mcp`)
 1. Run the project's own test suite (`npm test` / `pytest` / CrackMe harness) to verify 100% functional equivalence.

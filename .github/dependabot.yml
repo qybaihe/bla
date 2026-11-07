@@ -7,6 +7,11 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - dependencies
+    groups:
+      babel:
+        patterns:
+          - "@babel/*"
+          - "@types/babel__*"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

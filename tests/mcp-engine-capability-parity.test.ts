@@ -21,6 +21,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "llm_directives",
       "weave_decoys",
       "self_seal",
+      "require_agent_weave",
       "wasm_preserve_exports",
       "allow_lane_independent",
       "allow_plaintext_seal",

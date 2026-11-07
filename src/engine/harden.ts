@@ -50,6 +50,12 @@ import {
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
 } from "./run-evidence.js";
+import {
+  buildWeavePlan,
+  verifyWeaveTarget,
+  type WeaveAgentAction,
+  type WeaveSurgicalWorkorder,
+} from "../shields/weave/weave-decoy.js";
 
 /** Preferred build-output directory names, searched first under a project root. */
 export const BLA_BUILD_OUTPUT_DIR_NAMES = Object.freeze([
@@ -157,6 +163,13 @@ export interface HardenProjectOptions {
   readonly allowWasmSealXorKnownPlaintext?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
+  /**
+   * Enforce Agent-First Closed Loop: refuse mechanical hardening when source
+   * files have not yet passed Host-Agent structural weave verification
+   * (`bla_verify_weave`), returning surgicalWorkorders and agentActions so the
+   * Host Agent performs source surgery first.
+   */
+  readonly requireAgentWeave?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
   readonly maxArtifacts?: number;
@@ -172,6 +185,15 @@ export interface HardenProjectOptions {
   readonly signal?: AbortSignal;
   /** Optional progress hook (index is 0-based into the planned artifact list). */
   readonly onProgress?: (event: HardenProgressEvent) => void;
+}
+
+export interface AgentWeaveAssessment {
+  readonly weaveVerified: boolean;
+  readonly weaveScore: number;
+  readonly unwovenSourceFiles: readonly string[];
+  readonly agentActions: readonly WeaveAgentAction[];
+  readonly surgicalWorkorders: Readonly<Record<string, WeaveSurgicalWorkorder>>;
+  readonly agentPlaybookDirective: string;
 }
 
 export type HardenProgressPhase =
@@ -205,6 +227,16 @@ export interface HardenProjectReport {
   readonly selfSeal: boolean;
   /** True when caller opted into sidecar entry entanglement. */
   readonly sidecarEntangle: boolean;
+  /**
+   * True when `requireAgentWeave` blocked mechanical hardening because source
+   * files still need Host-Agent source surgery (`bla_verify_weave` failed).
+   */
+  readonly agentWeaveGateBlocked?: boolean;
+  /**
+   * Host-Agent source weave readiness assessment (`weaveScore`, `unwovenSourceFiles`,
+   * `agentActions`, and `surgicalWorkorders` per file).
+   */
+  readonly agentWeaveAssessment?: AgentWeaveAssessment;
   /**
    * True when bankrupt discovered a multi-artifact JS/WASM/HTML tree and
    * `selfSeal` was not enabled — agents should pass `self_seal: true`.
@@ -505,6 +537,45 @@ export function hardenProject(
     })),
   });
 
+  const weaveFormats = new Set([
+    "javascript",
+    "typescript",
+    "html-bundle",
+    "python-source",
+  ]);
+  const weaveableDiscovered = discovered.filter((a) => weaveFormats.has(a.format));
+  let agentWeaveAssessment: AgentWeaveAssessment | undefined;
+  if (weaveableDiscovered.length > 0) {
+    try {
+      const weaveVerify = verifyWeaveTarget(absDir, { maxTargets: maxArtifacts });
+      if (weaveVerify.files.length > 0) {
+        const weavePlan = buildWeavePlan(absDir, { maxTargets: maxArtifacts });
+        const workorderMap: Record<string, WeaveSurgicalWorkorder> = {};
+        for (const target of weavePlan.targets) {
+          if (target.surgicalWorkorder) {
+            workorderMap[target.relativePath] = target.surgicalWorkorder;
+          }
+        }
+        const unwovenSourceFiles = weaveVerify.files
+          .filter((f) => !f.passed)
+          .map((f) => f.relativePath);
+        const weaveVerified = weaveVerify.overallPassed;
+        agentWeaveAssessment = {
+          weaveVerified,
+          weaveScore: weaveVerify.weaveScore,
+          unwovenSourceFiles,
+          agentActions: weaveVerify.agentActions,
+          surgicalWorkorders: workorderMap,
+          agentPlaybookDirective: weaveVerified
+            ? `All ${weaveVerify.files.length} source file(s) passed Host-Agent structural weave verification (weaveScore=${weaveVerify.weaveScore}/100).`
+            : `Host-Agent source surgery pending on [${unwovenSourceFiles.join(", ")}] (weaveScore=${weaveVerify.weaveScore}/100). Follow surgicalWorkorders + agentActions using your file-editing tools, verify with bla_verify_weave, then run bla_harden with weave_decoys:true and require_agent_weave:true.`,
+        };
+      }
+    } catch {
+      /* best-effort weave assessment */
+    }
+  }
+
   const reportBase = {
     blaVersion: BLA_IDENTITY.version,
     directory: absDir,
@@ -520,12 +591,58 @@ export function hardenProject(
     ...(selfSealRecommendation !== undefined
       ? { selfSealRecommendation }
       : {}),
+    ...(agentWeaveAssessment !== undefined
+      ? { agentWeaveAssessment }
+      : {}),
     dryRun,
     truncated: discovery.truncated,
     maxArtifacts: discovery.maxArtifacts,
     wouldOverwrite,
     runId,
   } as const;
+
+  if (
+    options.requireAgentWeave === true &&
+    agentWeaveAssessment !== undefined &&
+    !agentWeaveAssessment.weaveVerified
+  ) {
+    const unwovenSet = new Set(agentWeaveAssessment.unwovenSourceFiles);
+    const actionsByFile = new Map<string, string[]>();
+    for (const act of agentWeaveAssessment.agentActions) {
+      const list = actionsByFile.get(act.file) ?? [];
+      list.push(`[${act.checkId}] ${act.instruction}`);
+      actionsByFile.set(act.file, list);
+    }
+    const planned = plannedOutputs.map(({ artifact, outputPath, outputExisted }) => {
+      const rel = artifact.relativePath;
+      const isUnwoven =
+        unwovenSet.has(rel) || unwovenSet.has(basename(artifact.path));
+      const fileActions =
+        actionsByFile.get(rel) ?? actionsByFile.get(basename(artifact.path)) ?? [];
+      return {
+        inputPath: artifact.path,
+        relativePath: rel,
+        format: artifact.format,
+        outputPath,
+        success: false,
+        defenseScore: 0,
+        tokenAmplificationFactor: 0,
+        costAmplificationFactor: 0,
+        outputExisted,
+        error: isUnwoven
+          ? `refused by require_agent_weave (weaveScore=${agentWeaveAssessment.weaveScore}/100): Host Agent must perform Stage 2 source surgery on ${rel} first (${fileActions.join("; ") || "run bla_weave_plan and bla_verify_weave"})`
+          : `skipped: run blocked by require_agent_weave on [${agentWeaveAssessment.unwovenSourceFiles.join(", ")}]`,
+      };
+    });
+    return {
+      ...reportBase,
+      overallSuccess: false,
+      agentWeaveGateBlocked: true,
+      hardenedCount: 0,
+      failedCount: planned.length,
+      artifacts: planned,
+    };
+  }
 
   if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0 || blockingWasmXorMask.length > 0 || blockingWasmSealXor.length > 0) {
     const sealArtifacts = blockingSeals.map((r) => ({

@@ -14,9 +14,9 @@ export interface ManifestVerifyResult {
 }
 
 function normalizePublicKeyPem(pem: string): string {
-  return createPublicKey(pem)
-    .export({ type: "spki", format: "pem" })
-    .toString("utf8");
+  return String(
+    createPublicKey(pem).export({ type: "spki", format: "pem" }),
+  );
 }
 
 /**

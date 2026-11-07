@@ -138,6 +138,7 @@ interface ParsedCliArgs {
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
   readonly sidecarEntangle: boolean;
+  readonly requireAgentWeave: boolean;
   readonly wasmPreserveExports: readonly string[];
   readonly allowLaneIndependentGates: boolean;
   readonly allowPlaintextSeal: boolean;
@@ -178,6 +179,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let weaveDecoys = false;
   let selfSeal = false;
   let sidecarEntangle = false;
+  let requireAgentWeave = false;
   let wasmPreserveExports: string[] = [];
   let allowLaneIndependentGates = false;
   let allowPlaintextSeal = false;
@@ -237,6 +239,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       selfSeal = true;
     } else if (arg === "--sidecar-entangle") {
       sidecarEntangle = true;
+    } else if (arg === "--require-agent-weave") {
+      requireAgentWeave = true;
     } else if (arg === "--allow-lane-independent") {
       allowLaneIndependentGates = true;
     } else if (arg === "--allow-plaintext-seal") {
@@ -333,6 +337,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     weaveDecoys,
     selfSeal,
     sidecarEntangle,
+    requireAgentWeave,
     wasmPreserveExports,
     allowLaneIndependentGates,
     allowPlaintextSeal,
@@ -489,6 +494,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
+          ...(parsed.requireAgentWeave ? { requireAgentWeave: true } : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||

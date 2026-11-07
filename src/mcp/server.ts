@@ -201,7 +201,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_harden",
     description:
-      "DEFAULT one-sentence Counter-REA hardening. Auto-discovers build outputs (dist/, build/, out/, release/, .asar, native binaries, .wasm, .py/.pyc, .sqlite, .safetensors/.gguf, .dex, .class, etc.), detects each artifact's format, and runs the full audit→defend→verify pipeline with the bankrupt profile. Pass just a project or build directory (default: cwd). Prefer this over bla_defend when the user says 'harden my software' without naming a specific file.",
+      "Counter-REA project hardening engine (Stage 3 of the 4-Stage Agent-First Closed Loop). IMPORTANT FOR HOST AGENTS: When source code is present, YOU (the Host Agent) are the primary hardening engine — before calling bla_harden, run (1) bla_lint + bla_weave_plan to obtain surgicalWorkorder & crownJewelCandidates, (2) edit source files to eliminate single-point boolean gates and weave shared-state shadow business logic, and (3) verify with bla_verify_weave. Pass require_agent_weave:true (plus weave_decoys:true, self_seal:true, sidecar_entangle:true) to enforce the pre-flight Agent weave gate. Also supports one-sentence fast-path hardening on pre-built directories (dist/, build/, out/, release/, .asar, .wasm, .py/.pyc, native binaries).",
     inputSchema: {
       type: "object",
       properties: {
@@ -244,6 +244,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Opt-in sidecar/entry entanglement for JS/Python (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+        },
+        require_agent_weave: {
+          type: "boolean",
+          description:
+            "Agent-First Closed-Loop gate: when true, refuses mechanical hardening if any JS/TS/Python source file has not yet passed Host-Agent structural weave verification (bla_verify_weave), returning agentWeaveAssessment (surgicalWorkorders + agentActions) so the Host Agent edits the source code first. Default false.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -2060,6 +2065,9 @@ export async function handleMcpRequest(
                 weaveDecoys: Boolean(args.weave_decoys),
                 selfSeal: Boolean(args.self_seal),
                 sidecarEntangle: Boolean(args.sidecar_entangle),
+                ...(args.require_agent_weave === true
+                  ? { requireAgentWeave: true }
+                  : {}),
                 ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
                 ...(args.allow_lane_independent === true
                   ? { allowLaneIndependentGates: true }
@@ -2117,8 +2125,11 @@ export async function handleMcpRequest(
                 activeHardenAborts.delete(req.id);
               }
             }
-            // Dry-run / confirmation_required leave no write receipt; real writes do.
-            if (!dryRun) {
+            // Dry-run / confirmation_required / agentWeaveGateBlocked leave no write receipt; real writes do.
+            if (report.agentWeaveGateBlocked === true) {
+              refused = true;
+              payload = report;
+            } else if (!dryRun) {
               const wrote = (report.written ?? report.artifacts
                 .filter((a) => a.success)
                 .map((a) => a.outputPath)).slice();
