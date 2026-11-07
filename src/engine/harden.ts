@@ -38,6 +38,7 @@ import {
 import {
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
+  entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
 } from "../shields/runtime/sidecar-entangle.js";
 import {
@@ -968,10 +969,11 @@ export function hardenProject(
   }
 
   // Sidecar entanglement post-pass: rewrite the primary entry (JS preferred,
-  // else Python) with a strip⇒fail preamble measured against FINAL sibling
-  // bytes (after all protects wrote). Per-artifact protect skips inject when
-  // harden did not pass explicit sidecarEntanglePaths (avoids partial/double
-  // prepend). Only one entry is rewritten so sibling digests stay stable.
+  // else Python, else WASM-only) with a strip⇒fail preamble / custom-section
+  // note measured against FINAL sibling bytes (after all protects wrote).
+  // Per-artifact protect skips inject when harden did not pass explicit
+  // sidecarEntanglePaths (avoids partial/double prepend). Only one entry is
+  // rewritten so sibling digests stay stable.
   if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
     try {
       const jsLike = summaries.filter(
@@ -1042,6 +1044,43 @@ export function hardenProject(
             });
             if (bound) {
               writeFileSync(entryAbs, bound.code, "utf8");
+            }
+          }
+        }
+      }
+
+      // WASM entry entanglement only when no JS/Python entry was bound —
+      // custom-section note measured against FINAL sibling bytes.
+      const wasmLike = summaries.filter(
+        (s) =>
+          s.success && /\.wasm$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const wasmEntry =
+        !jsEntry && !pyEntry
+          ? wasmLike.find((s) => /core\.wasm$/i.test(s.relativePath)) ?? wasmLike[0]
+          : undefined;
+      if (wasmEntry) {
+        const entryAbs = join(outputRoot, wasmEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === wasmEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entangleWasmEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileSync(entryAbs, bound.bytes);
             }
           }
         }

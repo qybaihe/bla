@@ -5,8 +5,9 @@
  * interleaved SHA-256 check edges across entry + sidecar paths. JS + Python
  * strip⇒fail rewrite is available via `bindSidecarEntanglement` /
  * `generateSidecarJsPreamble` / `generateSidecarPythonPreamble` when
- * `sidecarEntangle` is set (see `docs/design/sidecar-entry-entanglement.md`).
- * WASM custom-section notes remain TBD.
+ * `sidecarEntangle` is set; WASM uses a `bla.sidecar.v1` custom-section note
+ * plus host-side `verifyWasmSidecarCustomSection` (see
+ * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
@@ -23,6 +24,13 @@ import {
   type CoverageMatrix,
 } from "../../engine/integrity-coverage.js";
 import { findPythonPrologueInsertionOffset } from "../formats/python.js";
+import {
+  appendWasmCustomSection,
+  createWasmCustomSection,
+  inspectWasmBinary,
+  readWasmCustomSectionContent,
+  stripWasmCustomSectionByName,
+} from "../formats/wasm.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -634,4 +642,330 @@ export function entanglePythonEntryWithSidecars(options: {
       options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
     ),
   });
+}
+
+/** Stable WASM custom-section name for sidecar binding notes (bla.* convention). */
+export const WASM_SIDECAR_SECTION_NAME = "bla.sidecar.v1" as const;
+
+export interface WasmSidecarNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly section: typeof WASM_SIDECAR_SECTION_NAME;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarWasmInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). */
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarWasmInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly sectionName: typeof WASM_SIDECAR_SECTION_NAME;
+  /** UTF-8 JSON note embedded as the custom-section content. */
+  readonly noteJson: string;
+  readonly note: WasmSidecarNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Raw custom-section bytes ready to append (id 0 + LEB size + name + content). */
+  readonly sectionBytes: Buffer;
+}
+
+/**
+ * Build a `bla.sidecar.v1` custom-section note that embeds the protect-time
+ * sidecar binding digest + path labels. Does not alter WASM exports or
+ * function bodies — strip/alter detection is via host-side
+ * `verifyWasmSidecarCustomSection` (WASM cannot re-read the host FS alone).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarWasmCustomSection(
+  options: SidecarWasmInjectOptions,
+): SidecarWasmInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: WasmSidecarNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    section: WASM_SIDECAR_SECTION_NAME,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = JSON.stringify(note);
+  const sectionBytes = createWasmCustomSection(
+    WASM_SIDECAR_SECTION_NAME,
+    Buffer.from(noteJson, "utf8"),
+  );
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    sectionName: WASM_SIDECAR_SECTION_NAME,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    sectionBytes,
+  };
+}
+
+export interface SidecarWasmBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarWasmInjectResult;
+  /** WASM binary with the bla.sidecar.v1 custom section appended/replaced. */
+  readonly bytes: Buffer;
+}
+
+/**
+ * Plan + bind for a WASM entry: compute the offline digest from in-memory
+ * sidecar bytes and return a `bound` plan plus the rewritten WASM binary
+ * with a `bla.sidecar.v1` custom-section note. Uses sidecars-mode digest so
+ * appending the note does not invalidate H. Export surface unchanged.
+ */
+export function bindWasmSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarWasmBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarWasmCustomSection({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const entryBuf = Buffer.from(options.entryBytes);
+  const inspection = inspectWasmBinary(entryBuf);
+  if (!inspection.validMagic) {
+    throw new Error("entryBytes is not a valid WASM binary (bad magic)");
+  }
+  const bytes = appendWasmCustomSection(
+    entryBuf,
+    WASM_SIDECAR_SECTION_NAME,
+    Buffer.from(inject.noteJson, "utf8"),
+  );
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "wasm-custom-section",
+    status: "bound",
+    note: "Bound — WASM bla.sidecar.v1 custom-section note planted; ship sidecars alongside and verify via verifyWasmSidecarCustomSection. Strip/alter fails closed.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + WASM entry bytes, produce
+ * the strip⇒fail-bound entry. Returns null when there are no sidecars to bind.
+ */
+export function entangleWasmEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarWasmBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindWasmSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface WasmSidecarVerifyOptions {
+  /** WASM bytes that should carry bla.sidecar.v1. */
+  readonly wasmBytes: Uint8Array;
+  /**
+   * Absolute directory used to resolve relative sidecar paths from the note.
+   * Required when note.sidecarPaths are relative.
+   */
+  readonly baseDir?: string;
+  /**
+   * Optional in-memory sidecar bytes keyed by pathLabel (overrides disk read).
+   */
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface WasmSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: WasmSidecarNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+/**
+ * Host-side strip⇒fail check: parse `bla.sidecar.v1`, re-hash sibling sidecar
+ * bytes with the same layout as `computeSidecarBindingDigest` (sidecars mode),
+ * and compare to the embedded digest. Missing section / missing sibling /
+ * altered sibling ⇒ ok:false (or soft-fold flipped u32 when note.softFold).
+ *
+ * DEFENSIVE ONLY — for tests, JS loaders, and future self-seal hooks.
+ */
+export function verifyWasmSidecarCustomSection(
+  options: WasmSidecarVerifyOptions,
+): WasmSidecarVerifyResult {
+  const wasmBuf = Buffer.from(options.wasmBytes);
+  const content = readWasmCustomSectionContent(wasmBuf, WASM_SIDECAR_SECTION_NAME);
+  if (!content) {
+    return {
+      ok: false,
+      reason: "bla.sidecar.v1 custom section missing or unreadable",
+    };
+  }
+  let note: WasmSidecarNote;
+  try {
+    const parsed = JSON.parse(content.toString("utf8")) as WasmSidecarNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.section !== WASM_SIDECAR_SECTION_NAME ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return { ok: false, reason: "bla.sidecar.v1 note malformed" };
+    }
+    note = {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      section: WASM_SIDECAR_SECTION_NAME,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return { ok: false, reason: "bla.sidecar.v1 note is not valid JSON" };
+  }
+
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = options.sidecarBytes?.[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      return {
+        ok: false,
+        reason: `sidecar ${label} not supplied and no baseDir to read`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        sidecarParts.push({
+          pathLabel: label,
+          bytes: new TextEncoder().encode(`missing:${label}`),
+        });
+        continue;
+      }
+      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      sidecarParts.push({
+        pathLabel: label,
+        bytes: new TextEncoder().encode(`missing:${label}`),
+      });
+    }
+  }
+
+  const measured = computeSidecarBindingDigest(
+    {
+      pathLabel: note.entryPath,
+      bytes: new Uint8Array(0),
+    },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+
+  if (measured.hex === note.digest) {
+    return {
+      ok: true,
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+
+  if (note.softFold) {
+    return {
+      ok: false,
+      reason: "integrity binding mismatch (soft-fold)",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: (measured.u32 ^ 0xffffffff) >>> 0,
+      softFold: true,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "integrity binding mismatch",
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: false,
+  };
+}
+
+/** Test/helper: strip the sidecar note section from a WASM binary. */
+export function stripWasmSidecarCustomSection(bytes: Uint8Array): Buffer {
+  return stripWasmCustomSectionByName(Buffer.from(bytes), WASM_SIDECAR_SECTION_NAME);
 }

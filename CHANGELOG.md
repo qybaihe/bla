@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`collectEsmExportedSymbols` Babel types:** `ExportNamespaceSpecifier.exported` is always `Identifier` — drop the unreachable StringLiteral branch that broke `tsc` after the @babel/* v8 align.
+
+### Added
+- **Sidecar WASM custom-section strip⇒fail:** `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection` plant a `bla.sidecar.v1` note (digest + path labels + seedTag) without changing export surface; host-side verify re-hashes sibling bytes. `protectTarget` (wasm) + `hardenProject` post-pass (WASM-only trees when no JS/Python entry) wire when `sidecarEntangle` is on. Default still OFF.
+
 ## [3.1.0] — 2026-11-07
 
 Minor release upgrading BLA 3.0 into a strict **Agent-First Closed-Loop Hardening Engine**: crown-jewel anti-patch entanglement check (`crown-jewel-entanglement`), native C/C++/Rust/Go source weave verification, pre-flight Agent weave gate (`require_agent_weave`) across `bla_harden` and `bla_defend`, and 6-round Red-Blue adversarial weave validation.

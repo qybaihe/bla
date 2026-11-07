@@ -1,6 +1,6 @@
 # DESIGN: Sidecar / entry entanglement (issue #40 / STATE)
 
-Status: **JS + Python strip⇒fail** — binding digest + JS/Python preambles + protect/harden opt-in landed; WASM custom-section still TBD.
+Status: **JS + Python + WASM strip⇒fail** — binding digest + JS/Python preambles + WASM `bla.sidecar.v1` custom-section note + protect/harden opt-in landed; ASAR/Bun companions + defenseScore gap when off still TBD.
 
 ## Goal
 
@@ -39,5 +39,6 @@ checks beat orphan honeypot files.
 
 - ~~Entry self-coverage~~ — landed 2026-11-05: self-seal embeds a canonical entry self-digest finalized at write time; harden reports `integrityCoverageSelfVerified` and drops paper self edges when it does not verify.
 - ~~Wire planner into `protectTarget` for JS + Python when `sidecarEntangle` is set.~~ — JS 2026-11-05; Python 2026-11-06 nightly.
+- ~~WASM custom-section note + host-side verify.~~ — 2026-11-07 nightly: `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection`; protect + harden WASM-only post-pass.
 - Extend to ASAR / Bun snapshot / native companion files.
 - Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).

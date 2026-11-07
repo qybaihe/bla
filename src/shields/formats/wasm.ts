@@ -369,7 +369,7 @@ function planWasmExportNameDecoys(
   return out;
 }
 
-function createWasmCustomSection(name: string, content: Buffer): Buffer {
+export function createWasmCustomSection(name: string, content: Buffer): Buffer {
   const nameEncoded = encodeWasmName(name);
   const sectionPayload = Buffer.concat([nameEncoded, content]);
   return Buffer.concat([
@@ -485,6 +485,106 @@ export function inspectWasmBinary(bytes: Buffer): WasmInspectionSummary {
     exportNames,
     importCount,
   };
+}
+
+/**
+ * Read the raw content bytes of the first custom section with the given name
+ * (payload after the name encoding). Returns null when absent / malformed.
+ */
+export function readWasmCustomSectionContent(
+  bytes: Buffer,
+  sectionName: string,
+): Buffer | null {
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x00 ||
+    bytes[1] !== 0x61 ||
+    bytes[2] !== 0x73 ||
+    bytes[3] !== 0x6d
+  ) {
+    return null;
+  }
+  let offset = 8;
+  while (offset < bytes.length) {
+    const sectionId = bytes[offset++]!;
+    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) break;
+    if (sectionId === 0) {
+      const payload = bytes.subarray(nextOffset, sectionEnd);
+      try {
+        const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
+        const customName = payload.subarray(nameStart, nameStart + nameLen).toString("utf8");
+        if (customName === sectionName) {
+          return Buffer.from(payload.subarray(nameStart + nameLen));
+        }
+      } catch {
+        /* skip malformed */
+      }
+    }
+    offset = sectionEnd;
+  }
+  return null;
+}
+
+/**
+ * Drop every custom section whose name matches `sectionName`. Preserves all
+ * other sections (including other custom sections) in order.
+ */
+export function stripWasmCustomSectionByName(
+  bytes: Buffer,
+  sectionName: string,
+): Buffer {
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x00 ||
+    bytes[1] !== 0x61 ||
+    bytes[2] !== 0x73 ||
+    bytes[3] !== 0x6d
+  ) {
+    return Buffer.from(bytes);
+  }
+  const out: Buffer[] = [Buffer.from(bytes.subarray(0, 8))];
+  let offset = 8;
+  while (offset < bytes.length) {
+    const sectionStart = offset;
+    const sectionId = bytes[offset++]!;
+    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) {
+      out.push(Buffer.from(bytes.subarray(sectionStart)));
+      break;
+    }
+    let drop = false;
+    if (sectionId === 0) {
+      const payload = bytes.subarray(nextOffset, sectionEnd);
+      try {
+        const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
+        const customName = payload.subarray(nameStart, nameStart + nameLen).toString("utf8");
+        if (customName === sectionName) drop = true;
+      } catch {
+        /* keep malformed */
+      }
+    }
+    if (!drop) {
+      out.push(Buffer.from(bytes.subarray(sectionStart, sectionEnd)));
+    }
+    offset = sectionEnd;
+  }
+  return Buffer.concat(out);
+}
+
+/**
+ * Append a custom section, replacing any prior section(s) with the same name
+ * so re-binds stay idempotent. Does not alter export surface or function bodies.
+ */
+export function appendWasmCustomSection(
+  bytes: Buffer,
+  sectionName: string,
+  content: Buffer,
+): Buffer {
+  const cleaned = stripWasmCustomSectionByName(bytes, sectionName);
+  return Buffer.concat([cleaned, createWasmCustomSection(sectionName, content)]);
 }
 
 /**

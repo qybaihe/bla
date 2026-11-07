@@ -93,6 +93,7 @@ import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import {
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
+  entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -210,6 +211,41 @@ function applySidecarEntangleToPython(
   });
   if (!bound) return { code: source, applied: false };
   return { code: bound.code, applied: true };
+}
+
+function applySidecarEntangleToWasm(
+  wasmBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: wasmBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: wasmBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: wasmBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleWasmEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: wasmBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: wasmBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
 }
 
 function applyPanelDeriveRewrite(
@@ -724,7 +760,13 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         ? { preserveExports: options.wasmPreserveExports }
         : {}),
     });
-    writeFileAtomicSync(absOutput, res.buffer);
+    let finalWasm = res.buffer;
+    {
+      const entangled = applySidecarEntangleToWasm(finalWasm, options, absOutput, seed);
+      finalWasm = entangled.buffer;
+      if (entangled.applied) sidecarEntangleApplied = true;
+    }
+    writeFileAtomicSync(absOutput, finalWasm);
     decoyFunctionsInjected = 16;
     fakeCrossReferencesCreated = 24;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
