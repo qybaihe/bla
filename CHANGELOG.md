@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-07
+
+Minor release upgrading BLA 3.0 into a strict **Agent-First Closed-Loop Hardening Engine**: crown-jewel anti-patch entanglement check (`crown-jewel-entanglement`), native C/C++/Rust/Go source weave verification, pre-flight Agent weave gate (`require_agent_weave`) across `bla_harden` and `bla_defend`, and 6-round Red-Blue adversarial weave validation.
+
+### Added
+- **Check 7: `crown-jewel-entanglement` (`皇冠逻辑消解与抗Patch耦合`) in `bla_verify_weave` (`verifyWeaveTarget`):** eliminates cosmetic weave false positives by rejecting side-effect-only helper calls in `gate-or-auth` entry functions, raw boolean literal returns (`return true`/`return false`), cleartext secret equality comparisons (`=== "SECRET"` / `strcmp`), hardcoded `FLAG{...}` literals, lane-independent per-byte/per-index oracles, and broken syntax (`syntaxValid: false`).
+- **Native C/C++/Rust/Go Source Weave Verification (`verifyNativeWeaveFile`):** `bla_verify_weave` / CLI `bla verify-weave` now validates `.c`, `.cpp`, `.cc`, `.rs`, and `.go` files against all 7 `WEAVE_ACCEPTANCE_TESTS` checks, closing the verification loop with `buildNativeSurgicalWorkorder`.
+- **Pre-Flight Agent Weave Gate (`require_agent_weave` / `--require-agent-weave`):** `bla_harden` (`hardenProject`) and `bla_defend` (`defendTarget`) now enforce Host-Agent Stage 2 source surgery when `require_agent_weave: true` is passed, returning `agentWeaveAssessment` (`weaveVerified`, `weaveScore`, `unwovenSourceFiles`, `surgicalWorkorders`, `agentActions`) and `agentWeaveGateBlocked: true` if source files have not yet passed `bla_verify_weave`.
+- **Crown-Jewel Vulnerability Extraction & Data-Flow Entanglement Plan (`bla_weave_plan`):** `surgicalWorkorder` now extracts `crownJewelCandidates` (`single-point-boolean-gate`, `cleartext-comparison`, `isolated-verify-oracle`, `unentangled-export`) and `dataFlowEntanglementPlan` across JS/TS, Python, and C/C++/Rust/Go sources.
+- **Red-Blue Adversarial Weave Suite (`tests/red-blue-v3-adversarial.test.ts`):** 6-round adversarial regression suite (Rounds A–F) covering write-only state stores, dead `if (false)` call branches, local shadowed variables, no-op stubs, lane-independent byte loops, and multi-artifact `selfSeal` + `sidecarEntangle` tamper resistance.
+
+### Fixed
+- **AST-scoped `verifyWeaveTarget` precision:** tracks both genuine reads and writes on module-scoped shared state bindings and ignores calls inside statically dead branches.
+- **`@types/node` v26 compatibility & Dependabot Babel grouping (#113):** normalized `KeyObject.export({ format: "pem" })` string conversion in `manifest-signing.ts` / `manifest-verify.ts` and grouped `@babel/*` + `@types/babel__*` in `.github/dependabot.yml`.
+
 ## [3.0.1] — 2026-11-06
 
 Patch completing the JS+Python sidecar/entry entanglement strip⇒fail vertical slice (issue #40). Default still OFF.
