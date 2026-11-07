@@ -221,7 +221,7 @@ export interface ProtectionOptions {
   readonly selfSealSiblingPaths?: readonly string[];
   /**
    * Opt-in sidecar/entry entanglement (issue #40 / Direction-3). When true and
-   * `sidecarEntanglePaths` is non-empty, JS protect prepends a strip⇒fail
+   * `sidecarEntanglePaths` is non-empty, JS/Python protect inserts a strip⇒fail
    * preamble that re-measures sibling sidecar bytes. OFF by default.
    */
   readonly sidecarEntangle?: boolean;

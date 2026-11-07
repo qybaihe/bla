@@ -243,7 +243,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
         },
         require_agent_weave: {
           type: "boolean",
@@ -400,7 +400,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -521,7 +521,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
         },
         wasm_preserve_exports: {
           type: "array",

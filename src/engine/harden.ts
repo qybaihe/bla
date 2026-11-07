@@ -37,6 +37,7 @@ import {
 } from "./packaging-gates.js";
 import {
   entangleJsEntryWithSidecars,
+  entanglePythonEntryWithSidecars,
   planSidecarEntanglement,
 } from "../shields/runtime/sidecar-entangle.js";
 import {
@@ -142,7 +143,7 @@ export interface HardenProjectOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
-  /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). */
+  /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). */
   readonly sidecarEntangle?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
@@ -966,9 +967,11 @@ export function hardenProject(
     }
   }
 
-  // Sidecar entanglement post-pass: rewrite the JS entry with a strip⇒fail
-  // preamble measured against FINAL sibling bytes (after all protects wrote).
-  // Per-artifact protect deliberately skips inject to avoid partial/double prepend.
+  // Sidecar entanglement post-pass: rewrite the primary entry (JS preferred,
+  // else Python) with a strip⇒fail preamble measured against FINAL sibling
+  // bytes (after all protects wrote). Per-artifact protect skips inject when
+  // harden did not pass explicit sidecarEntanglePaths (avoids partial/double
+  // prepend). Only one entry is rewritten so sibling digests stay stable.
   if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
     try {
       const jsLike = summaries.filter(
@@ -976,16 +979,16 @@ export function hardenProject(
           s.success &&
           /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
-      const entry =
+      const jsEntry =
         jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
         jsLike[0];
-      if (entry) {
-        const entryAbs = join(outputRoot, entry.relativePath);
+      if (jsEntry) {
+        const entryAbs = join(outputRoot, jsEntry.relativePath);
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
           for (const s of summaries) {
-            if (!s.success || s.relativePath === entry.relativePath) continue;
+            if (!s.success || s.relativePath === jsEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
             if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
@@ -1002,6 +1005,43 @@ export function hardenProject(
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);
               writeFileSync(entryAbs, finalized.content, "utf8");
+            }
+          }
+        }
+      }
+
+      // Python entry entanglement only when no JS entry was bound — rewriting
+      // a Python sibling after the JS digest sealed would invalidate strip⇒fail.
+      const pyLike = summaries.filter(
+        (s) =>
+          s.success && /\.py$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const pyEntry =
+        !jsEntry
+          ? pyLike.find((s) => /policy\.py$/i.test(s.relativePath)) ?? pyLike[0]
+          : undefined;
+      if (pyEntry) {
+        const entryAbs = join(outputRoot, pyEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === pyEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entrySource = readFileSync(entryAbs, "utf8");
+            const bound = entanglePythonEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entrySource,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileSync(entryAbs, bound.code, "utf8");
             }
           }
         }

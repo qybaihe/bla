@@ -103,7 +103,7 @@ Options:
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
-  --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40); OFF by default
+  --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
