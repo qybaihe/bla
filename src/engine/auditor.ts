@@ -28,11 +28,12 @@ import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { inspectModelBuffer } from "../shields/formats/model.js";
 import { inspectAndroidDex } from "../shields/formats/mobile-game.js";
 
-type TraverseFn = (typeof _traverse)["default"];
+type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
+type TraverseFn = UnwrapDefault<typeof _traverse>;
 const traverse: TraverseFn =
   typeof _traverse === "function"
     ? (_traverse as unknown as TraverseFn)
-    : _traverse.default;
+    : (_traverse as unknown as { readonly default: TraverseFn }).default;
 
 function isExecutableHtmlScriptAttrs(attrs: string): boolean {
   if (/\bsrc\s*=/i.test(attrs)) return false;
@@ -124,10 +125,6 @@ function analyzeJsSourceForAudit(
         "typescript",
         "jsx",
         "decorators-legacy",
-        "importAttributes",
-        "dynamicImport",
-        "classProperties",
-        "topLevelAwait",
       ],
       errorRecovery: true,
     });

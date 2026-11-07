@@ -85,14 +85,12 @@
     "crackme:v9": "node challenge/v9/run.mjs"
   },
   "dependencies": {
-    "@babel/generator": "^7.26.0",
-    "@babel/parser": "^7.26.0",
-    "@babel/traverse": "^7.26.0",
-    "@babel/types": "^7.26.0"
+    "@babel/generator": "^8.1.0",
+    "@babel/parser": "^8.1.0",
+    "@babel/traverse": "^8.1.0",
+    "@babel/types": "^8.1.0"
   },
   "devDependencies": {
-    "@types/babel__generator": "^7.6.8",
-    "@types/babel__traverse": "^7.20.6",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

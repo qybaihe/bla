@@ -28,11 +28,12 @@ import {
 } from "../src/shields/formats/native.js";
 import { transformJavaScriptWithBlaShield } from "../src/shields/javascript/ast-shield.js";
 
-type TraverseFn = (typeof _traverse)["default"];
+type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
+type TraverseFn = UnwrapDefault<typeof _traverse>;
 const traverse: TraverseFn =
   typeof _traverse === "function"
     ? (_traverse as unknown as TraverseFn)
-    : _traverse.default;
+    : (_traverse as unknown as { readonly default: TraverseFn }).default;
 
 const tempDirs: string[] = [];
 

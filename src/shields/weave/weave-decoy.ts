@@ -17,11 +17,12 @@ import { detectArtifactFormat } from "../../core/detector.js";
 import type { ArtifactFormat } from "../../core/types.js";
 import { lintLaneIndependence } from "../../engine/lane-independence-lint.js";
 
-type TraverseFn = (typeof _traverse)["default"];
+type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
+type TraverseFn = UnwrapDefault<typeof _traverse>;
 const traverse: TraverseFn =
   typeof _traverse === "function"
     ? (_traverse as unknown as TraverseFn)
-    : _traverse.default;
+    : (_traverse as unknown as { readonly default: TraverseFn }).default;
 
 export const WEAVE_DECOY_DOC_PATH = "docs/weave-decoy-mcp.md" as const;
 export const WEAVE_DECOY_SCHEMA = "bla-weave-plan/v1" as const;
