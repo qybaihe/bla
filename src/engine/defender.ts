@@ -19,6 +19,7 @@ import {
   signManifestPayload,
   readManifestSigningKeyOrThrow,
 } from "../core/manifest-signing.js";
+import { verifyWeaveTarget } from "../shields/weave/weave-decoy.js";
 
 export interface OneClickDefenseOptions {
   readonly inputPath: string;
@@ -33,6 +34,12 @@ export interface OneClickDefenseOptions {
   readonly manifestSigningKeyPath?: string;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
+  /**
+   * Enforce Agent-First Closed Loop: refuse mechanical defense when source
+   * files have not yet passed Host-Agent structural weave verification
+   * (`bla_verify_weave`).
+   */
+  readonly requireAgentWeave?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). */
@@ -135,6 +142,20 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       );
     }
     manifestSigningKeyPem = readManifestSigningKeyOrThrow(options.manifestSigningKeyPath ?? "");
+  }
+
+  // Enforce Agent-First Closed Loop when requireAgentWeave is set
+  if (options.requireAgentWeave === true) {
+    const weaveVerify = verifyWeaveTarget(absInput);
+    if (weaveVerify.files.length > 0 && !weaveVerify.overallPassed) {
+      const actionDetails = weaveVerify.agentActions
+        .slice(0, 5)
+        .map((a) => `[${a.checkId}] ${a.instruction}`)
+        .join("; ");
+      throw new Error(
+        `refused by require_agent_weave (weaveScore=${weaveVerify.weaveScore}/100): Host Agent must perform Stage 2 source surgery before bla_defend (${actionDetails || weaveVerify.summary})`,
+      );
+    }
   }
 
   // Stage 1: Release Exposure Scan (best-effort for local files/directories)

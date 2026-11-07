@@ -402,6 +402,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Opt-in sidecar/entry entanglement for JS/Python (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble — removing or altering a sidecar fails closed. OFF by default.",
         },
+        require_agent_weave: {
+          type: "boolean",
+          description:
+            "Agent-First Closed-Loop gate: when true, refuses mechanical defense if the target source file has not yet passed Host-Agent structural weave verification (bla_verify_weave). Default false.",
+        },
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
@@ -1388,6 +1393,7 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
     sidecarEntangle: Boolean(args.sidecar_entangle),
+    ...(args.require_agent_weave === true ? { requireAgentWeave: true } : {}),
     ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
     ...(args.allow_lane_independent === true
       ? { allowLaneIndependentGates: true }

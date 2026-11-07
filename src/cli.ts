@@ -561,6 +561,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
+          ...(parsed.requireAgentWeave ? { requireAgentWeave: true } : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||

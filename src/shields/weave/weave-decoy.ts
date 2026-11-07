@@ -15,6 +15,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, join, relative, resolve } from "node:path";
 import { detectArtifactFormat } from "../../core/detector.js";
 import type { ArtifactFormat } from "../../core/types.js";
+import { lintLaneIndependence } from "../../engine/lane-independence-lint.js";
 
 type TraverseFn = (typeof _traverse)["default"];
 const traverse: TraverseFn =
@@ -193,7 +194,7 @@ export interface WeaveAgentAction {
 export interface WeaveFileVerification {
   readonly path: string;
   readonly relativePath: string;
-  readonly format: ArtifactFormat;
+  readonly format: ArtifactFormat | "native-source";
   readonly passed: boolean;
   readonly score: number;
   readonly checks: readonly WeaveCheckResult[];
@@ -201,6 +202,7 @@ export interface WeaveFileVerification {
   readonly reachableFunctions: readonly string[];
   readonly unreferencedFunctions: readonly string[];
   readonly sharedStateVars: readonly string[];
+  readonly syntaxValid?: boolean;
 }
 
 export interface WeaveVerificationReport {
@@ -366,6 +368,12 @@ export const WEAVE_ACCEPTANCE_TESTS: readonly WeaveAcceptanceTest[] =
       titleZh: "抗「独立层」过滤",
       checkEn:
         "An agent cannot classify the decoy set as a separate dismissible layer using empty-body / homogeneous-scare / unreferenced heuristics alone.",
+    },
+    {
+      id: "crown-jewel-entanglement",
+      titleZh: "皇冠逻辑消解与抗Patch耦合",
+      checkEn:
+        "Gate/auth functions eliminate single-point boolean literal returns, cleartext secret equality, and lane-independent byte checks, and entangle verification decisions with shared state or whole-input digest derivation (no side-effect-only cosmetic weave).",
     },
   ]);
 
@@ -1534,6 +1542,26 @@ function isPureAssignmentTarget(idPath: any): boolean {
   return false;
 }
 
+function isInsideIfGuardTestOnly(idPath: any): boolean {
+  let curr: any = idPath;
+  while (curr && curr.parentPath) {
+    const parent = curr.parentPath;
+    if (t.isIfStatement(parent.node) && parent.node.test === curr.node) {
+      return true;
+    }
+    if (t.isFunction(parent.node)) {
+      return false;
+    }
+    curr = parent;
+  }
+  return false;
+}
+
+const BENIGN_COMPARE_STRING_REGEX =
+  /^(?:string|number|object|function|boolean|undefined|symbol|bigint|sha256|sha512|utf8|utf-8|hex|base64|ascii|binary|latin1|ucs2|DENIED|UNLOCKED|ERROR|OK)$/i;
+const HEX_SHA256_LITERAL_REGEX = /^[0-9a-f]{64}$/i;
+const PLAINTEXT_FLAG_LITERAL_REGEX = /^FLAG\{[^}]{4,}\}$/i;
+
 /**
  * Structural weave verifier (`bla_verify_weave` / CLI `bla verify-weave`).
  * Evaluates JS/TS/Python files against WEAVE_ACCEPTANCE_TESTS and returns
@@ -1559,8 +1587,15 @@ function verifyJsWeaveFile(
   const moduleStateVars = new Set<string>();
   const functionsMutatingState = new Set<string>();
   const functionsReadingState = new Set<string>();
+  const functionsReadingStateOutsideIfTest = new Set<string>();
+  const functionsUsingHelperValueOrMixing = new Set<string>();
+  const rawBooleanReturnFunctions = new Set<string>();
+  const cleartextCompareLiterals: string[] = [];
+  const plaintextFlagLiterals: string[] = [];
   let conditionalCount = 0;
   let literalFalseBranchCount = 0;
+  let syntaxValid = true;
+  let syntaxErrorMessage = "";
 
   try {
     const ast = parse(source, {
@@ -1568,6 +1603,10 @@ function verifyJsWeaveFile(
       plugins: ["typescript", "jsx", "decorators-legacy"],
       errorRecovery: true,
     });
+    if (Array.isArray((ast as any).errors) && (ast as any).errors.length > 0) {
+      syntaxValid = false;
+      syntaxErrorMessage = String((ast as any).errors[0]?.message ?? "SyntaxError");
+    }
 
     traverse(ast, {
       Program(progPath) {
@@ -1701,12 +1740,82 @@ function verifyJsWeaveFile(
           }
         }
 
+        const fnRole = classifyFunctionRole(fnName, entryFunctions.has(fnName));
+
         path.traverse({
           CallExpression(callPath) {
             if (isInsideDeadBranch(callPath)) return;
             fnHasAnyCall.add(fnName);
             if (t.isIdentifier(callPath.node.callee)) {
-              callEdges.get(fnName)!.add(callPath.node.callee.name);
+              const calleeName = callPath.node.callee.name;
+              callEdges.get(fnName)!.add(calleeName);
+              if (
+                discoveredSet.has(calleeName) &&
+                !t.isExpressionStatement(callPath.parent)
+              ) {
+                functionsUsingHelperValueOrMixing.add(fnName);
+              }
+              if (/^(?:createHash|pbkdf2Sync|scryptSync|createHmac)$/.test(calleeName)) {
+                functionsUsingHelperValueOrMixing.add(fnName);
+              }
+            } else if (
+              t.isMemberExpression(callPath.node.callee) &&
+              t.isIdentifier(callPath.node.callee.property) &&
+              /^(?:imul|createHash|pbkdf2Sync|scryptSync|digest|instantiate)$/.test(
+                callPath.node.callee.property.name,
+              )
+            ) {
+              functionsUsingHelperValueOrMixing.add(fnName);
+            }
+          },
+          ReturnStatement(retPath) {
+            if (isInsideDeadBranch(retPath)) return;
+            if (
+              fnRole === "gate-or-auth" &&
+              retPath.node.argument &&
+              t.isBooleanLiteral(retPath.node.argument)
+            ) {
+              rawBooleanReturnFunctions.add(fnName);
+            }
+          },
+          BinaryExpression(binPath) {
+            if (isInsideDeadBranch(binPath)) return;
+            if (binPath.node.operator === "^") {
+              functionsUsingHelperValueOrMixing.add(fnName);
+            }
+            if (
+              fnRole === "gate-or-auth" &&
+              (binPath.node.operator === "===" ||
+                binPath.node.operator === "==" ||
+                binPath.node.operator === "!==" ||
+                binPath.node.operator === "!=")
+            ) {
+              const isTypeof =
+                (t.isUnaryExpression(binPath.node.left) &&
+                  binPath.node.left.operator === "typeof") ||
+                (t.isUnaryExpression(binPath.node.right) &&
+                  binPath.node.right.operator === "typeof");
+              if (!isTypeof) {
+                const strLit = t.isStringLiteral(binPath.node.right)
+                  ? binPath.node.right.value
+                  : t.isStringLiteral(binPath.node.left)
+                    ? binPath.node.left.value
+                    : null;
+                if (
+                  strLit !== null &&
+                  strLit.length >= 4 &&
+                  !HEX_SHA256_LITERAL_REGEX.test(strLit) &&
+                  !BENIGN_COMPARE_STRING_REGEX.test(strLit)
+                ) {
+                  cleartextCompareLiterals.push(`${fnName}:${strLit}`);
+                }
+              }
+            }
+          },
+          StringLiteral(strPath) {
+            if (isInsideDeadBranch(strPath)) return;
+            if (PLAINTEXT_FLAG_LITERAL_REGEX.test(strPath.node.value)) {
+              plaintextFlagLiterals.push(`${fnName}:${strPath.node.value}`);
             }
           },
           Identifier(idPath) {
@@ -1726,6 +1835,9 @@ function verifyJsWeaveFile(
               !isPureAssignmentTarget(idPath)
             ) {
               functionsReadingState.add(fnName);
+              if (!isInsideIfGuardTestOnly(idPath)) {
+                functionsReadingStateOutsideIfTest.add(fnName);
+              }
             }
           },
           IfStatement(ifPath) {
@@ -1746,6 +1858,12 @@ function verifyJsWeaveFile(
           },
           AssignmentExpression(assignPath) {
             if (isInsideDeadBranch(assignPath)) return;
+            if (
+              assignPath.node.operator === "^=" ||
+              assignPath.node.operator === "|="
+            ) {
+              functionsUsingHelperValueOrMixing.add(fnName);
+            }
             const l = assignPath.node.left;
             if (
               t.isIdentifier(l) &&
@@ -1820,8 +1938,9 @@ function verifyJsWeaveFile(
         }
       },
     });
-  } catch {
-    // Fallback if parse fails
+  } catch (err) {
+    syntaxValid = false;
+    syntaxErrorMessage = err instanceof Error ? err.message : String(err);
   }
 
   // If no explicit exports, treat first discovered function as entry
@@ -2060,6 +2179,91 @@ function verifyJsWeaveFile(
     });
   }
 
+  // Check 7: crown-jewel-entanglement (dissolve raw boolean gates, cleartext compares,
+  // lane-independent byte loops, plaintext FLAG literals, and cosmetic side-effect-only weaves)
+  const isPostHardenLabyrinth = discoveredFunctions.length > 15;
+  const laneLint = isPostHardenLabyrinth
+    ? { looksLaneIndependent: false, findings: [] as const }
+    : lintLaneIndependence(source);
+  const cosmeticOnlyGateEntries: string[] = [];
+  if (!isPostHardenLabyrinth) {
+    for (const fn of entryFunctions) {
+      const role = classifyFunctionRole(fn, true);
+      if (role !== "gate-or-auth") continue;
+      const callees = [...(callEdges.get(fn) ?? [])].filter(
+        (c) => c !== fn && discoveredFunctions.includes(c),
+      );
+      if (
+        callees.length === 0 ||
+        (!functionsReadingStateOutsideIfTest.has(fn) &&
+          !functionsUsingHelperValueOrMixing.has(fn))
+      ) {
+        cosmeticOnlyGateEntries.push(fn);
+      }
+    }
+  }
+
+  const crownJewelDefects: string[] = [];
+  if (!syntaxValid) {
+    crownJewelDefects.push(`syntax error (${syntaxErrorMessage})`);
+  }
+  if (!isPostHardenLabyrinth && rawBooleanReturnFunctions.size > 0) {
+    crownJewelDefects.push(
+      `raw boolean return in gate function(s) [${[...rawBooleanReturnFunctions].join(", ")}]`,
+    );
+  }
+  if (!isPostHardenLabyrinth && cleartextCompareLiterals.length > 0) {
+    crownJewelDefects.push(
+      `cleartext secret comparison [${cleartextCompareLiterals.slice(0, 3).join(", ")}]`,
+    );
+  }
+  if (plaintextFlagLiterals.length > 0) {
+    crownJewelDefects.push(
+      `hardcoded plaintext FLAG literal [${plaintextFlagLiterals.slice(0, 2).join(", ")}]`,
+    );
+  }
+  if (!isPostHardenLabyrinth && laneLint.looksLaneIndependent) {
+    crownJewelDefects.push(
+      `lane-independent per-byte/per-index oracle (${laneLint.findings.map((f) => f.id).join(", ")})`,
+    );
+  }
+  if (!isPostHardenLabyrinth && cosmeticOnlyGateEntries.length > 0) {
+    crownJewelDefects.push(
+      `cosmetic/unentangled gate function(s) [${cosmeticOnlyGateEntries.join(", ")}] do not couple helper return values or shared-state digests into the decision/output`,
+    );
+  }
+
+  const checkCrownJewel: WeaveCheckResult = {
+    id: "crown-jewel-entanglement",
+    titleZh: "皇冠逻辑消解与抗Patch耦合",
+    passed: crownJewelDefects.length === 0,
+    evidence:
+      crownJewelDefects.length === 0
+        ? "0 raw boolean gates, 0 cleartext secret compares, 0 lane-independent byte oracles, and gate outputs are data-coupled to shared state/helpers"
+        : `Crown-jewel weaknesses remaining: ${crownJewelDefects.join("; ")}`,
+    ...(crownJewelDefects.length > 0
+      ? {
+          remediation:
+            "Replace raw `return true/false` and cleartext `===` checks in gate/auth functions with whole-input key derivation (SHA-256/PBKDF2/rolling accumulator) where helper return values and shared-state slots directly feed the derived digest or decrypted payload.",
+        }
+      : {}),
+  };
+  if (!checkCrownJewel.passed) {
+    actions.push({
+      priority: "high",
+      file: relPath,
+      checkId: "crown-jewel-entanglement",
+      ...(cosmeticOnlyGateEntries[0] || [...rawBooleanReturnFunctions][0]
+        ? {
+            targetSymbol:
+              cosmeticOnlyGateEntries[0] ?? [...rawBooleanReturnFunctions][0],
+          }
+        : {}),
+      instruction: `Resolve crown-jewel entanglement defects in ${relPath}: ${crownJewelDefects.join("; ")}. Ensure helper return values and shared-state slots feed directly into the verification digest or payload derivation rather than side-effect-only calls.`,
+      verifyTool: "bla_verify_weave",
+    });
+  }
+
   const checks = [
     checkNoMarkers,
     checkMixedStems,
@@ -2067,6 +2271,7 @@ function verifyJsWeaveFile(
     checkEntryEdges,
     checkOpaque,
     checkFilterResistance,
+    checkCrownJewel,
   ];
   const passedCount = checks.filter((c) => c.passed).length;
   const score = Math.round((passedCount / checks.length) * 100);
@@ -2076,8 +2281,9 @@ function verifyJsWeaveFile(
       path: absPath,
       relativePath: relPath,
       format,
-      passed: passedCount === checks.length,
+      passed: syntaxValid && passedCount === checks.length,
       score,
+      syntaxValid,
       checks,
       discoveredFunctions,
       reachableFunctions: [...reachable],
@@ -2202,6 +2408,32 @@ function verifyPythonWeaveFile(
     (stateVars.length > 0 && fnsTouchingState.size >= 2) ||
     (isPostProtectWeave && fnsTouchingState.size >= 1);
 
+  const pyCrownJewelDefects: string[] = [];
+  if (!isPostProtectWeave && fnNames.length <= 15) {
+    for (const fn of fnNames) {
+      if (classifyFunctionRole(fn, !fn.startsWith("_")) !== "gate-or-auth") {
+        continue;
+      }
+      const strippedBody = fnBodies.get(fn) ?? "";
+      if (/\breturn\s+(?:True|False)\b/.test(strippedBody)) {
+        pyCrownJewelDefects.push(`raw boolean return in def '${fn}'`);
+      }
+    }
+    const eqMatch = source.match(/[!=]=\s*["']([^"'\r\n]{4,})["']/);
+    if (
+      eqMatch &&
+      eqMatch[1] &&
+      !HEX_SHA256_LITERAL_REGEX.test(eqMatch[1]) &&
+      !BENIGN_COMPARE_STRING_REGEX.test(eqMatch[1]) &&
+      eqMatch[1] !== "__main__"
+    ) {
+      pyCrownJewelDefects.push(`cleartext string comparison '${eqMatch[1]}'`);
+    }
+  }
+  if (/\bFLAG\{[^}]{4,}\}/i.test(source)) {
+    pyCrownJewelDefects.push("hardcoded plaintext FLAG literal");
+  }
+
   const checks: WeaveCheckResult[] = [
     {
       id: "no-forbidden-markers",
@@ -2253,6 +2485,15 @@ function verifyPythonWeaveFile(
           ? "0 pass-only stubs"
           : `pass-only stubs: ${passOnlyFns.join(", ")}`,
     },
+    {
+      id: "crown-jewel-entanglement",
+      titleZh: "皇冠逻辑消解与抗Patch耦合",
+      passed: pyCrownJewelDefects.length === 0,
+      evidence:
+        pyCrownJewelDefects.length === 0
+          ? "0 raw boolean gates, 0 cleartext secret compares, 0 plaintext FLAG literals"
+          : `Crown-jewel weaknesses remaining: ${pyCrownJewelDefects.join("; ")}`,
+    },
   ];
 
   for (const c of checks) {
@@ -2275,6 +2516,248 @@ function verifyPythonWeaveFile(
       format: "python-source",
       passed: passedCount === checks.length,
       score: Math.round((passedCount / checks.length) * 100),
+      syntaxValid: true,
+      checks,
+      discoveredFunctions: fnNames,
+      reachableFunctions: [...reachable],
+      unreferencedFunctions: unreferenced,
+      sharedStateVars: stateVars,
+    },
+    actions,
+  };
+}
+
+function verifyNativeWeaveFile(
+  absPath: string,
+  relPath: string,
+  source: string,
+  ext: string,
+): {
+  readonly fileReport: WeaveFileVerification;
+  readonly actions: readonly WeaveAgentAction[];
+} {
+  const actions: WeaveAgentAction[] = [];
+  const fnNames: string[] = [];
+  const fnBodies = new Map<string, string>();
+  const emptyFns: string[] = [];
+  const stateVars: string[] = [];
+
+  const noComments = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  // Extract top-level state declarations (static/global/mut/var)
+  const stateLines = noComments.split(/\r?\n/);
+  let braceDepth = 0;
+  for (const rawLine of stateLines) {
+    if (braceDepth === 0) {
+      const cState = rawLine.match(
+        /^\s*(?:(?:static|volatile|mut|pub|const)\s+)*(?:uint(?:32|64|8)_t|int(?:32|64)?_t|unsigned(?:\s+int|\s+long|\s+char)?|int|long|size_t|struct\s+\w+|u32|u64|usize|i32|i64|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=;]+)?=/,
+      );
+      const rsState = rawLine.match(
+        /^\s*(?:pub\s+)?static\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:/,
+      );
+      const goState = rawLine.match(/^\s*var\s+([A-Za-z_][A-Za-z0-9_]*)\s+/);
+      const candidate = cState?.[1] ?? rsState?.[1] ?? goState?.[1];
+      if (candidate && !stateVars.includes(candidate)) {
+        stateVars.push(candidate);
+      }
+    }
+    for (const ch of rawLine) {
+      if (ch === "{") braceDepth += 1;
+      else if (ch === "}") braceDepth = Math.max(0, braceDepth - 1);
+    }
+  }
+
+  // Extract function definitions and brace-delimited bodies
+  const fnHeaderRegex =
+    ext === ".rs"
+      ? /(?:^|\n)[ \t]*(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)[^{;]*\{/g
+      : ext === ".go"
+        ? /(?:^|\n)[ \t]*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)[^{;]*\{/g
+        : /(?:^|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_* \t]*)[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{/g;
+
+  let fm: RegExpExecArray | null;
+  while ((fm = fnHeaderRegex.exec(noComments)) !== null) {
+    const fnName = fm[1]!;
+    if (/^(?:if|for|while|switch|return|sizeof|catch)$/.test(fnName)) continue;
+    const openBraceIdx = fm.index + fm[0].lastIndexOf("{");
+    let depth = 1;
+    let idx = openBraceIdx + 1;
+    while (idx < noComments.length && depth > 0) {
+      const ch = noComments[idx];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      idx += 1;
+    }
+    const body = noComments.slice(openBraceIdx + 1, Math.max(openBraceIdx + 1, idx - 1));
+    if (!fnNames.includes(fnName)) {
+      fnNames.push(fnName);
+      fnBodies.set(fnName, body);
+      const trimmedBody = body.replace(/\s+/g, "");
+      if (
+        trimmedBody.length === 0 ||
+        /^return(?:0|1|true|false)?;$/.test(trimmedBody)
+      ) {
+        emptyFns.push(fnName);
+      }
+    }
+  }
+
+  const calledFns = new Set<string>();
+  const callingFns = new Set<string>();
+  for (const [caller, body] of fnBodies.entries()) {
+    for (const callee of fnNames) {
+      if (callee === caller) continue;
+      if (new RegExp(`\\b${callee}\\s*\\(`).test(body)) {
+        calledFns.add(callee);
+        callingFns.add(caller);
+      }
+    }
+  }
+
+  const reachable = new Set<string>();
+  for (const fn of fnNames) {
+    if (callingFns.has(fn) || calledFns.has(fn)) {
+      reachable.add(fn);
+    }
+  }
+  const unreferenced = fnNames.filter((f) => !reachable.has(f));
+  const bannerMatch = source.match(FORBIDDEN_BANNER_REGEX);
+  const scareFns = fnNames.filter((f) => hasScareStem(f));
+  const scareRatio = fnNames.length > 0 ? scareFns.length / fnNames.length : 0;
+  const hasConditional = /\bif\s*[\s(]/.test(noComments);
+  const hasLiteralFalse = /\bif\s*\(\s*(?:false|0)\s*\)|\bif\s+false\b/.test(
+    noComments,
+  );
+
+  const fnsTouchingState = new Set<string>();
+  for (const [fn, body] of fnBodies.entries()) {
+    for (const sv of stateVars) {
+      if (new RegExp(`\\b${sv}\\b`).test(body)) {
+        fnsTouchingState.add(fn);
+      }
+    }
+  }
+
+  const nativeCrownJewelDefects: string[] = [];
+  for (const [fn, body] of fnBodies.entries()) {
+    if (classifyFunctionRole(fn, true) !== "gate-or-auth") continue;
+    if (/\breturn\s+(?:true|false)\s*;?/.test(body)) {
+      nativeCrownJewelDefects.push(`raw boolean return in '${fn}'`);
+    }
+    const strcmpMatch = body.match(
+      /\bstrcmp\s*\([^,]+,\s*"([^"]{4,})"\s*\)|==\s*"([^"]{4,})"/,
+    );
+    const literalSecret = strcmpMatch?.[1] ?? strcmpMatch?.[2];
+    if (
+      literalSecret &&
+      !HEX_SHA256_LITERAL_REGEX.test(literalSecret) &&
+      !BENIGN_COMPARE_STRING_REGEX.test(literalSecret)
+    ) {
+      nativeCrownJewelDefects.push(
+        `cleartext secret comparison '${literalSecret}' in '${fn}'`,
+      );
+    }
+    const callsHelper = fnNames.some(
+      (other) => other !== fn && new RegExp(`\\b${other}\\s*\\(`).test(body),
+    );
+    const usesMixingOrState =
+      fnsTouchingState.has(fn) ||
+      /\^|\^=|\|=|wrapping_mul|rotate_left/.test(body);
+    if (!callsHelper || !usesMixingOrState) {
+      nativeCrownJewelDefects.push(
+        `gate function '${fn}' is not entangled with shared state and helper computations`,
+      );
+    }
+  }
+  if (/\bFLAG\{[^}]{4,}\}/i.test(source)) {
+    nativeCrownJewelDefects.push("hardcoded plaintext FLAG literal");
+  }
+
+  const checks: WeaveCheckResult[] = [
+    {
+      id: "no-forbidden-markers",
+      titleZh: "无禁止标记",
+      passed: bannerMatch === null,
+      evidence:
+        bannerMatch === null
+          ? "0 forbidden markers"
+          : `Found '${bannerMatch[0]}'`,
+    },
+    {
+      id: "mixed-stems",
+      titleZh: "词干混用",
+      passed: fnNames.length > 0 && scareRatio <= 0.5,
+      evidence: `${fnNames.length - scareFns.length}/${fnNames.length} mundane native functions`,
+    },
+    {
+      id: "shared-state-mutation",
+      titleZh: "共享状态变异",
+      passed: stateVars.length > 0 && fnsTouchingState.size >= 2,
+      evidence:
+        stateVars.length > 0 && fnsTouchingState.size >= 2
+          ? `Shared state [${stateVars.join(", ")}] touched across ${fnsTouchingState.size} function(s)`
+          : `Shared state [${stateVars.join(", ") || "none"}] touched in ${fnsTouchingState.size} function(s) (requires >= 2)`,
+    },
+    {
+      id: "customer-entry-edges",
+      titleZh: "客户入口边",
+      passed: reachable.size >= 2 && unreferenced.length === 0,
+      evidence: `Reachable native functions: ${reachable.size}/${fnNames.length}`,
+    },
+    {
+      id: "opaque-true-entanglement",
+      titleZh: "不透明真缠绕",
+      passed: hasConditional && !hasLiteralFalse,
+      evidence: hasConditional
+        ? "Conditional invariant present"
+        : "No conditional guard found",
+    },
+    {
+      id: "filter-resistance",
+      titleZh: "抗「独立层」过滤",
+      passed:
+        emptyFns.length === 0 &&
+        unreferenced.length === 0 &&
+        bannerMatch === null,
+      evidence:
+        emptyFns.length === 0
+          ? "0 trivial/empty native stubs"
+          : `Trivial/empty native stubs: ${emptyFns.join(", ")}`,
+    },
+    {
+      id: "crown-jewel-entanglement",
+      titleZh: "皇冠逻辑消解与抗Patch耦合",
+      passed: nativeCrownJewelDefects.length === 0,
+      evidence:
+        nativeCrownJewelDefects.length === 0
+          ? "Native gate functions are coupled with shared state and bitwise/helper mixing with 0 cleartext compares"
+          : `Native crown-jewel weaknesses: ${nativeCrownJewelDefects.join("; ")}`,
+    },
+  ];
+
+  for (const c of checks) {
+    if (!c.passed) {
+      actions.push({
+        priority: "high",
+        file: relPath,
+        checkId: c.id,
+        instruction: `Fix failed native weave check '${c.id}' (${c.evidence}) in ${relPath}. Emit shield headers via bla_emit_headers or weave shared state + mundane helpers into the native entry function.`,
+        verifyTool: "bla_verify_weave",
+      });
+    }
+  }
+
+  const passedCount = checks.filter((c) => c.passed).length;
+  return {
+    fileReport: {
+      path: absPath,
+      relativePath: relPath,
+      format: "native-source",
+      passed: passedCount === checks.length,
+      score: Math.round((passedCount / checks.length) * 100),
+      syntaxValid: true,
       checks,
       discoveredFunctions: fnNames,
       reachableFunctions: [...reachable],
@@ -2305,6 +2788,7 @@ export function verifyWeaveTarget(
 
   for (const file of candidateFiles) {
     const format = detectArtifactFormat(file);
+    const ext = extname(file).toLowerCase();
     const relPath = relative(rootAbs, file) || basename(file);
     if (
       format === "javascript" ||
@@ -2323,6 +2807,22 @@ export function verifyWeaveTarget(
     } else if (format === "python-source") {
       const src = readFileSync(file, "utf8");
       const { fileReport, actions } = verifyPythonWeaveFile(file, relPath, src);
+      fileReports.push(fileReport);
+      allActions.push(...actions);
+    } else if (
+      ext === ".c" ||
+      ext === ".cpp" ||
+      ext === ".cc" ||
+      ext === ".rs" ||
+      ext === ".go"
+    ) {
+      const src = readFileSync(file, "utf8");
+      const { fileReport, actions } = verifyNativeWeaveFile(
+        file,
+        relPath,
+        src,
+        ext,
+      );
       fileReports.push(fileReport);
       allActions.push(...actions);
     }
