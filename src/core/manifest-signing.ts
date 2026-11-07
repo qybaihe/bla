@@ -53,8 +53,8 @@ export interface ManifestSigningKeyPair {
 export function generateManifestSigningKeyPair(): ManifestSigningKeyPair {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   return {
-    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString("utf8"),
-    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString("utf8"),
+    privateKeyPem: String(privateKey.export({ type: "pkcs8", format: "pem" })),
+    publicKeyPem: String(publicKey.export({ type: "spki", format: "pem" })),
   };
 }
 
@@ -70,9 +70,9 @@ export function signManifestPayload<T extends object>(
   const privateKey = createPrivateKey(privateKeyPem);
   const canonical = canonicalManifestJson(payload);
   const value = cryptoSign(null, Buffer.from(canonical, "utf8"), privateKey).toString("base64");
-  const publicKeyPem = createPublicKey(privateKey)
-    .export({ type: "spki", format: "pem" })
-    .toString("utf8");
+  const publicKeyPem = String(
+    createPublicKey(privateKey).export({ type: "spki", format: "pem" }),
+  );
   return {
     ...payload,
     signature: { algorithm: "ed25519", publicKey: publicKeyPem, value, canonicalization: "sorted-keys-v1" },
@@ -110,8 +110,8 @@ export function verifyManifestSignature(
       const publicKey = createPublicKey(signature.publicKey);
       if (expectedPublicKeyPem !== undefined) {
         const pinned = createPublicKey(expectedPublicKeyPem);
-        const embeddedSpki = publicKey.export({ type: "spki", format: "pem" }).toString("utf8");
-        const pinnedSpki = pinned.export({ type: "spki", format: "pem" }).toString("utf8");
+        const embeddedSpki = String(publicKey.export({ type: "spki", format: "pem" }));
+        const pinnedSpki = String(pinned.export({ type: "spki", format: "pem" }));
         if (embeddedSpki !== pinnedSpki) return false;
       }
       const { signature: _ignored, ...rest } = manifest;
