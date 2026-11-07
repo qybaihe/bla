@@ -86,7 +86,7 @@
   },
   "dependencies": {
     "@babel/generator": "^7.26.0",
-    "@babel/parser": "^7.26.0",
+    "@babel/parser": "^8.1.0",
     "@babel/traverse": "^7.26.0",
     "@babel/types": "^7.26.0"
   },
