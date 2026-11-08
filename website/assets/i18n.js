@@ -4,7 +4,10 @@
  */
 window.BLA_I18N = {
   en: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "Menu",
+    "nav.menuClose": "Close menu",
+    "nav.primary": "Primary",
+    "nav.lang": "Select language",
     "nav.overview": "Overview",
     "nav.getStarted": "Get Started",
     "nav.showcase": "Benchmarks",
@@ -160,7 +163,10 @@ window.BLA_I18N = {
     "faq.a4": "Yes. <code>protectGgufBuffer</code> preserves all original GGUF v2/v3 KV entries and trailing tensor slices while appending metadata entries, and Android DEX protection recomputes both the 20-byte SHA-1 signature and Adler32 checksum."
   },
   "zh-CN": {
-    "nav.badge": "蓝军防护 v1.1",
+    "nav.menu": "菜单",
+    "nav.menuClose": "关闭菜单",
+    "nav.primary": "主导航",
+    "nav.lang": "选择语言",
     "nav.overview": "总览",
     "nav.getStarted": "快速开始",
     "nav.showcase": "基准测试",
@@ -315,7 +321,10 @@ window.BLA_I18N = {
     "faq.a5": "BLA 提高自动化分析成本并投放诱饵，并非万能反逆向封印。传统交互式逆向（Ghidra / Frida / LLDB / JADX 人工会话）不在现有 REA 红队数字范围内。欢迎挑战公开 <a href=\"https://github.com/qybaihe/bla/tree/main/challenge/v6\">CrackMe v7 (Meridian)</a>，观察代理在 BLA 加固样本上的表现。",
   },
   "zh-TW": {
-    "nav.badge": "藍軍防護 v1.1",
+    "nav.menu": "選單",
+    "nav.menuClose": "關閉選單",
+    "nav.primary": "主選單",
+    "nav.lang": "選擇語言",
     "nav.overview": "總覽",
     "nav.getStarted": "快速開始",
     "nav.showcase": "基準測試",
@@ -369,7 +378,10 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · 防禦性軟體保護工具 · MIT 開源協議"
   },
   ja: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "メニュー",
+    "nav.menuClose": "メニューを閉じる",
+    "nav.primary": "メインメニュー",
+    "nav.lang": "言語を選択",
     "nav.overview": "概要",
     "nav.getStarted": "クイックスタート",
     "nav.showcase": "ベンチマーク",
@@ -423,7 +435,10 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · MIT License"
   },
   ko: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "메뉴",
+    "nav.menuClose": "메뉴 닫기",
+    "nav.primary": "기본 메뉴",
+    "nav.lang": "언어 선택",
     "nav.overview": "개요",
     "nav.getStarted": "시작하기",
     "nav.showcase": "벤치마크",
@@ -475,7 +490,10 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · MIT License"
   },
   es: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "Menú",
+    "nav.menuClose": "Cerrar menú",
+    "nav.primary": "Navegación principal",
+    "nav.lang": "Elegir idioma",
     "nav.overview": "Resumen",
     "nav.getStarted": "Empezar",
     "nav.showcase": "Benchmarks",
@@ -520,7 +538,10 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · Licencia MIT"
   },
   fr: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "Menu",
+    "nav.menuClose": "Fermer le menu",
+    "nav.primary": "Navigation principale",
+    "nav.lang": "Choisir la langue",
     "nav.overview": "Aperçu",
     "nav.getStarted": "Démarrer",
     "nav.showcase": "Benchmarks",
@@ -565,7 +586,10 @@ window.BLA_I18N = {
     "footer.tagline": "<strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP & CLI · Licence MIT"
   },
   de: {
-    "nav.badge": "BLUE SHIELD v1.5",
+    "nav.menu": "Menü",
+    "nav.menuClose": "Menü schließen",
+    "nav.primary": "Hauptnavigation",
+    "nav.lang": "Sprache wählen",
     "nav.overview": "Übersicht",
     "nav.getStarted": "Schnellstart",
     "nav.showcase": "Benchmarks",

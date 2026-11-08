@@ -123,6 +123,25 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
       if (/'unsafe-eval'/i.test(csp)) {
         errors.push(`${rel}: CSP must not allow 'unsafe-eval'`);
       }
+      if (/script-src\s+[^;]*'unsafe-inline'/i.test(csp)) {
+        errors.push(`${rel}: CSP must not allow script-src 'unsafe-inline'`);
+      }
+    }
+
+    if (/brand-badge|data-i18n=["']nav\.badge["']|蓝军防护|藍軍防護|BLUE SHIELD v1\./.test(html)) {
+      errors.push(`${rel}: navigation shield badge must be removed`);
+    }
+    if (/\bonclick\s*=/i.test(html)) {
+      errors.push(`${rel}: inline onclick is not allowed`);
+    }
+    if (!html.includes('class="nav-toggle"') || !html.includes('id="site-nav"')) {
+      errors.push(`${rel}: accessible nav collapse control is missing`);
+    }
+    if (!html.includes('aria-controls="site-nav"') || !html.includes('aria-expanded="false"')) {
+      errors.push(`${rel}: nav toggle missing aria-expanded or aria-controls`);
+    }
+    if (!html.includes('class="nav-links"') || !html.includes('id="bla-lang-select"') || !html.includes('class="nav-cta"')) {
+      errors.push(`${rel}: language switch, primary nav, or Star control is missing`);
     }
 
     const pageDir = dirname(full);
@@ -157,6 +176,42 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
           errors.push(`${rel}: broken anchor '#${rawHash}' in '${ref}'`);
         }
       }
+    }
+  }
+
+  const i18nPath = resolve(absRoot, "assets/i18n.js");
+  if (existsSync(i18nPath)) {
+    const i18n = readFileSync(i18nPath, "utf8");
+    if (/nav\.badge/.test(i18n)) {
+      errors.push("assets/i18n.js: nav.badge must be removed");
+    }
+    for (const key of ["nav.menu", "nav.menuClose", "nav.primary", "nav.lang"]) {
+      const count = i18n.split(`"${key}"`).length - 1;
+      if (count < 8) {
+        errors.push(`assets/i18n.js: ${key} must exist in all 8 languages (found ${count})`);
+      }
+    }
+  }
+
+  const cssPath = resolve(absRoot, "assets/styles.css");
+  if (existsSync(cssPath)) {
+    const css = readFileSync(cssPath, "utf8");
+    if (/\.brand-badge\b/.test(css)) {
+      errors.push("assets/styles.css: .brand-badge must be removed");
+    }
+    if (!/\.nav-link\s*\{[^}]*white-space:\s*nowrap/.test(css)) {
+      errors.push("assets/styles.css: .nav-link must stay on one line (white-space: nowrap)");
+    }
+    if (!/@media\s*\(\s*max-width:\s*1023px\s*\)/.test(css)) {
+      errors.push("assets/styles.css: missing max-width 1023px nav collapse breakpoint");
+    }
+  }
+
+  const mainPath = resolve(absRoot, "assets/main.js");
+  if (existsSync(mainPath)) {
+    const main = readFileSync(mainPath, "utf8");
+    if (!main.includes("initNavMenu") || !main.includes('addEventListener("click"')) {
+      errors.push("assets/main.js: nav toggle must be wired without inline handlers");
     }
   }
 
