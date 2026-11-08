@@ -6,7 +6,9 @@
  * strip⇒fail rewrite is available via `bindSidecarEntanglement` /
  * `generateSidecarJsPreamble` / `generateSidecarPythonPreamble` when
  * `sidecarEntangle` is set; WASM uses a `bla.sidecar.v1` custom-section note
- * plus host-side `verifyWasmSidecarCustomSection` (see
+ * plus host-side `verifyWasmSidecarCustomSection`; Bun standalone plants a
+ * sibling `.bla-sidecar.v1.json` companion note (byte-exact binary preserved)
+ * verified by `verifyBunSidecarCompanionNote` (see
  * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
@@ -58,7 +60,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -885,6 +887,312 @@ export function verifyWasmSidecarCustomSection(
     };
   } catch {
     return { ok: false, reason: "bla.sidecar.v1 note is not valid JSON" };
+  }
+
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = options.sidecarBytes?.[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      return {
+        ok: false,
+        reason: `sidecar ${label} not supplied and no baseDir to read`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        sidecarParts.push({
+          pathLabel: label,
+          bytes: new TextEncoder().encode(`missing:${label}`),
+        });
+        continue;
+      }
+      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      sidecarParts.push({
+        pathLabel: label,
+        bytes: new TextEncoder().encode(`missing:${label}`),
+      });
+    }
+  }
+
+  const measured = computeSidecarBindingDigest(
+    {
+      pathLabel: note.entryPath,
+      bytes: new Uint8Array(0),
+    },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+
+  if (measured.hex === note.digest) {
+    return {
+      ok: true,
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+
+  if (note.softFold) {
+    return {
+      ok: false,
+      reason: "integrity binding mismatch (soft-fold)",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: (measured.u32 ^ 0xffffffff) >>> 0,
+      softFold: true,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "integrity binding mismatch",
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: false,
+  };
+}
+
+
+/** Sibling companion note next to a Bun standalone / native EOF-preserved binary. */
+export const BUN_SIDECAR_COMPANION_SUFFIX = ".bla-sidecar.v1.json" as const;
+export const BUN_SIDECAR_COMPANION_KIND = "bun-companion-note" as const;
+
+export interface BunSidecarCompanionNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof BUN_SIDECAR_COMPANION_KIND;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarBunInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). */
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarBunInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof BUN_SIDECAR_COMPANION_KIND;
+  /** UTF-8 JSON companion note (written next to the binary; binary stays byte-exact). */
+  readonly noteJson: string;
+  readonly note: BunSidecarCompanionNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Suggested filename suffix relative to the entry basename (`<entry>.bla-sidecar.v1.json`). */
+  readonly companionSuffix: typeof BUN_SIDECAR_COMPANION_SUFFIX;
+}
+
+/**
+ * Build a Bun companion note that embeds the protect-time sidecar binding
+ * digest + path labels. The Bun / EOF-preserved binary itself is NEVER
+ * rewritten (runtime red line — Bun locates the appended graph relative to
+ * EOF). Strip/alter detection is via host-side `verifyBunSidecarCompanionNote`.
+ *
+ * Typical sidecar is `<binary>.bunfs-snapshot` planted by protectNativeBinary.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarBunCompanionNote(
+  options: SidecarBunInjectOptions,
+): SidecarBunInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: BunSidecarCompanionNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: BUN_SIDECAR_COMPANION_KIND,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = `${JSON.stringify(note, null, 2)}\n`;
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: BUN_SIDECAR_COMPANION_KIND,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    companionSuffix: BUN_SIDECAR_COMPANION_SUFFIX,
+  };
+}
+
+export interface SidecarBunBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarBunInjectResult;
+  /** Companion note JSON bytes to write next to the entry (entry bytes untouched). */
+  readonly noteBytes: Buffer;
+}
+
+/**
+ * Plan + bind for a Bun / EOF-preserved native entry: compute the offline
+ * digest from in-memory sidecar bytes (typically `.bunfs-snapshot`) and return
+ * a `bound` plan plus companion-note bytes. Uses sidecars-mode digest; the
+ * entry binary is never mutated.
+ */
+export function bindBunSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarBunBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarBunCompanionNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "bun-companion-note",
+    status: "bound",
+    note: "Bound — Bun companion `.bla-sidecar.v1.json` ready; ship next to the byte-exact binary with `.bunfs-snapshot` sidecars. Strip/alter fails closed via verifyBunSidecarCompanionNote.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    noteBytes: Buffer.from(inject.noteJson, "utf8"),
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + Bun entry bytes, produce
+ * the companion note. Returns null when there are no sidecars to bind.
+ * Does NOT rewrite entry bytes.
+ */
+export function entangleBunEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarBunBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindBunSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface BunSidecarVerifyOptions {
+  /** Companion note JSON bytes (or parsed UTF-8 string). */
+  readonly noteBytes: Uint8Array | string;
+  /**
+   * Absolute directory used to resolve relative sidecar paths from the note.
+   * Required when note.sidecarPaths are relative and not supplied in-memory.
+   */
+  readonly baseDir?: string;
+  /** Optional in-memory sidecar bytes keyed by pathLabel (overrides disk read). */
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface BunSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: BunSidecarCompanionNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+/**
+ * Host-side strip⇒fail check for Bun companions: parse `.bla-sidecar.v1.json`,
+ * re-hash sibling sidecar bytes with the same layout as
+ * `computeSidecarBindingDigest` (sidecars mode), and compare to the embedded
+ * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY — for tests, loaders, and harden post-pass verification.
+ */
+export function verifyBunSidecarCompanionNote(
+  options: BunSidecarVerifyOptions,
+): BunSidecarVerifyResult {
+  let note: BunSidecarCompanionNote;
+  try {
+    const raw =
+      typeof options.noteBytes === "string"
+        ? options.noteBytes
+        : Buffer.from(options.noteBytes).toString("utf8");
+    const parsed = JSON.parse(raw) as BunSidecarCompanionNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== BUN_SIDECAR_COMPANION_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return { ok: false, reason: "bun companion note malformed" };
+    }
+    note = {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: BUN_SIDECAR_COMPANION_KIND,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return { ok: false, reason: "bun companion note is not valid JSON" };
   }
 
   const sidecarParts: SidecarBindingPart[] = [];

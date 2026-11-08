@@ -230,6 +230,8 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
   // Stage 4: Verify Counter-REA Invariants
   const verification = verifyTarget(protection.outputPath, absInput, {
     selfSealEnabled: options.selfSeal === true || protection.selfSeal === true,
+    sidecarEntangleEnabled:
+      options.sidecarEntangle === true || protection.sidecarEntangle === true,
     wasmExportRenameApplied: protection.wasmExportRenameApplied === true,
   });
 

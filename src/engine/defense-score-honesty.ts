@@ -17,6 +17,7 @@ export const DEFENSE_SCORE_DISCLAIMER =
 export type DefenseScoreGapId =
   | "wasm-export-rename-pending"
   | "self-seal-not-enabled"
+  | "sidecar-entangle-not-enabled"
   | "numeric-template-hygiene-partial";
 
 export interface DefenseScoreGap {
@@ -30,6 +31,8 @@ export interface DefenseScoreHonestyInput {
   readonly detectedFormat: ArtifactFormat;
   /** True when protect/harden ran with selfSeal / self_seal opt-in. */
   readonly selfSealEnabled?: boolean;
+  /** True when protect/harden ran with sidecarEntangle / sidecar_entangle opt-in. */
+  readonly sidecarEntangleEnabled?: boolean;
   /** True when WASM public-ABI rename pass actually rewrote non-ABI exports. */
   readonly wasmExportRenameApplied?: boolean;
   /** True when remaining BLA-injected templates still hardcode classic golden constants. */
@@ -50,6 +53,19 @@ const JS_LIKE: ReadonlySet<ArtifactFormat> = new Set([
   "typescript",
   "html-bundle",
   "electron-asar",
+]);
+
+/** Formats that already ship an opt-in sidecarEntangle strip⇒fail hook. */
+const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
+  "javascript",
+  "typescript",
+  "html-bundle",
+  "electron-asar",
+  "wasm",
+  "python-source",
+  "native-elf",
+  "native-macho",
+  "native-pe",
 ]);
 
 /**
@@ -77,6 +93,18 @@ export function collectDefenseScoreGaps(
       summary:
         "Opt-in self-seal / sibling-module integrity binding was not enabled for this JS/Node target (issue #40.5).",
       scoreCap: 92,
+    });
+  }
+
+  if (
+    SIDECAR_ENTANGLE_FORMATS.has(input.detectedFormat) &&
+    input.sidecarEntangleEnabled !== true
+  ) {
+    gaps.push({
+      id: "sidecar-entangle-not-enabled",
+      summary:
+        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, or Bun .bla-sidecar.v1.json companion); default remains OFF (issue #40 / DESIGN).",
+      scoreCap: 93,
     });
   }
 

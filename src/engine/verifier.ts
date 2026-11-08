@@ -13,6 +13,7 @@ import {
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
+  readonly sidecarEntangleEnabled?: boolean;
   readonly wasmExportRenameApplied?: boolean;
   readonly numericTemplateLeakKnown?: boolean;
 }
@@ -119,6 +120,7 @@ export function verifyTarget(
   const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
     detectedFormat: afterAudit.detectedFormat,
     selfSealEnabled: options.selfSealEnabled === true,
+    sidecarEntangleEnabled: options.sidecarEntangleEnabled === true,
     wasmExportRenameApplied: options.wasmExportRenameApplied === true,
     numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,
   });

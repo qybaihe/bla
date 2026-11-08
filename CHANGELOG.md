@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-11-08
+
+Minor release extending opt-in `sidecarEntangle` to **Bun / EOF-preserved native companions** and closing the defenseScore honesty gap when entanglement is left OFF.
+
+### Added
+- **Sidecar Bun companion strip⇒fail (`.bla-sidecar.v1.json`):** `generateSidecarBunCompanionNote` / `bindBunSidecarEntanglement` / `entangleBunEntryWithSidecars` / `verifyBunSidecarCompanionNote`. When `sidecarEntangle` is on, `protectTarget` auto-binds the planted `<binary>.bunfs-snapshot` via a sibling companion note without rewriting the Bun/EOF-preserved binary (runtime red line). `hardenProject` Bun-only post-pass covers native trees with no JS/Python/WASM entry. Default still OFF.
+- **defenseScore honesty gap `sidecar-entangle-not-enabled`:** soft-cap 93 when formats that support sidecarEntangle (JS/TS/HTML/ASAR/WASM/Python/native) were verified without the opt-in. Plumbed as `sidecarEntangleEnabled` / MCP `sidecar_entangle_enabled` (mirrors self-seal honesty).
+
+### Fixed
+- **`hardenProject` sidecar post-pass TypeScript:** replaced invalid `options.inPlace` references (introduced by #148) with `allowLinkWriteThrough: false` so `tsc` passes; harden always writes under the output directory.
+
+## [3.1.1]
 ## [3.1.1] — 2026-11-08
 
 Patch release shipping `@babel/*` v8.1.0 compatibility, WASM custom-section sidecar strip⇒fail entanglement, multi-language (`JS/TS`, `Python`, `C/C++/Rust/Go`) planner & verifier hardening from subagent dogfooding, and recursive `bla_encrypt_strings` discovery.

@@ -34,9 +34,34 @@ describe("Issue #40.6: defenseScore honesty", () => {
     const honesty = applyDefenseScoreHonesty(99, {
       detectedFormat: "javascript",
       selfSealEnabled: false,
+      sidecarEntangleEnabled: true,
     });
     expect(honesty.gaps.map((g) => g.id)).toContain("self-seal-not-enabled");
     expect(honesty.cappedScore).toBe(92);
+  });
+
+  it("annotates formats without sidecarEntangle and soft-caps above 93", () => {
+    const honesty = applyDefenseScoreHonesty(99, {
+      detectedFormat: "javascript",
+      selfSealEnabled: true,
+      sidecarEntangleEnabled: false,
+    });
+    expect(honesty.gaps.map((g) => g.id)).toContain("sidecar-entangle-not-enabled");
+    expect(honesty.cappedScore).toBe(93);
+    const wasm = applyDefenseScoreHonesty(99, {
+      detectedFormat: "wasm",
+      wasmExportRenameApplied: true,
+      sidecarEntangleEnabled: false,
+    });
+    expect(wasm.gaps.map((g) => g.id)).toContain("sidecar-entangle-not-enabled");
+    expect(wasm.cappedScore).toBe(93);
+    const on = applyDefenseScoreHonesty(99, {
+      detectedFormat: "javascript",
+      selfSealEnabled: true,
+      sidecarEntangleEnabled: true,
+    });
+    expect(on.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
+    expect(on.cappedScore).toBe(99);
   });
 
   it("does not raise a low raw score when gaps apply", () => {
@@ -108,6 +133,7 @@ describe("Issue #40.6: defenseScore honesty", () => {
       const report = verifyTarget(protectedRes.outputPath, undefined, {
         wasmExportRenameApplied: true,
         selfSealEnabled: true,
+        sidecarEntangleEnabled: true,
       });
       expect(
         report.defenseScoreGaps?.some((g) => g.id === "wasm-export-rename-pending"),
