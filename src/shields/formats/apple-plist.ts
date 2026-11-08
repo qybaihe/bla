@@ -158,7 +158,13 @@ export function protectApplePlistBuffer(
       exceedsBinaryPlistNestingDepth: true,
     };
   }
-  const xmlRes = protectAppleXmlPlist(rawBuffer.toString("utf8"), options);
+  const xmlSource = rawBuffer.toString("utf8");
+  if (!xmlSource.includes("<plist")) {
+    throw new Error(
+      "Invalid Apple property list: expected a binary 'bplist00' header or an XML <plist> document; refusing to synthesize a replacement plist.",
+    );
+  }
+  const xmlRes = protectAppleXmlPlist(xmlSource, options);
   return {
     buffer: Buffer.from(xmlRes.xmlPlist, "utf8"),
     triggersBudgetAbort: xmlRes.triggersInternalSubsetBudgetAbort,

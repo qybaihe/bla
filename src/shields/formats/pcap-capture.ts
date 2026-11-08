@@ -17,18 +17,6 @@ export interface PcapInspection {
   readonly blaProtected: boolean;
 }
 
-function buildGlobalHeader(): Buffer {
-  const hdr = Buffer.alloc(24);
-  hdr.writeUInt32LE(PCAP_MAGIC_LE, 0);
-  hdr.writeUInt16LE(2, 4);
-  hdr.writeUInt16LE(4, 6);
-  hdr.writeInt32LE(0, 8);
-  hdr.writeUInt32LE(0, 12);
-  hdr.writeUInt32LE(65535, 16);
-  hdr.writeUInt32LE(1, 20); // Ethernet
-  return hdr;
-}
-
 function ipv4Checksum(ipHeader: Buffer): number {
   let sum = 0;
   for (let i = 0; i < 20; i += 2) {
@@ -198,13 +186,17 @@ export function protectPcapCaptureBuffer(
   const prng = new SeededPrng(options.seed ?? "bla-pcap-shield");
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
-  const base =
+  const hasGlobalHeader =
     input.length >= 24 &&
     (input.readUInt32LE(0) === PCAP_MAGIC_LE ||
       input.readUInt32BE(0) === PCAP_MAGIC_LE ||
-      input.readUInt32LE(0) === 0xa1b23c4d)
-      ? input
-      : buildGlobalHeader();
+      input.readUInt32LE(0) === 0xa1b23c4d);
+  if (!hasGlobalHeader) {
+    throw new Error(
+      "Invalid or truncated libpcap capture: expected a 24-byte global header with the pcap magic; refusing to synthesize a replacement capture.",
+    );
+  }
+  const base = input;
 
   const httpPackets =
     intensity === "bankrupt" ? 96 : intensity === "maximum" ? 24 : 4;

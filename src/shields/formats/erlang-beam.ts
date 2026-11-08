@@ -250,38 +250,15 @@ export function protectErlangBeamBuffer(
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
   const parsed = parseBeamChunks(input);
-  const baseChunks: BeamChunkView[] = parsed.valid
-    ? parsed.chunks.map((c) => ({ name: c.name, payload: Buffer.from(c.payload) }))
-    : [
-        {
-          name: "AtU8",
-          payload: (() => {
-            // Minimal valid module atoms so ExpT can reference indices.
-            const names = ["bla_beam_module", "module_info", "start"];
-            const parts: Buffer[] = [u32be(names.length)];
-            for (const name of names) {
-              const enc = Buffer.from(name, "utf8");
-              parts.push(Buffer.from([enc.length]), enc);
-            }
-            return Buffer.concat(parts);
-          })(),
-        },
-        {
-          name: "Code",
-          payload: Buffer.concat([
-            u32be(16),
-            u32be(0),
-            u32be(169),
-            u32be(4),
-            u32be(2),
-            Buffer.from("code"),
-          ]),
-        },
-        {
-          name: "ExpT",
-          payload: Buffer.concat([u32be(1), u32be(2), u32be(0), u32be(1)]),
-        },
-      ];
+  if (!parsed.valid) {
+    throw new Error(
+      "Invalid or truncated BEAM module: expected an IFF FOR1/BEAM container; refusing to synthesize a replacement module.",
+    );
+  }
+  const baseChunks: BeamChunkView[] = parsed.chunks.map((c) => ({
+    name: c.name,
+    payload: Buffer.from(c.payload),
+  }));
 
   // Expand non-compact AtU8 in place (keep original atom indices).
   let atomsInjected = 0;
