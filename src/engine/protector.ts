@@ -270,10 +270,21 @@ function applyPanelDeriveRewrite(
   return rw.code;
 }
 
+interface AtomicWriteOptions {
+  /**
+   * Allow following an existing symlink/hardlink at `targetPath`. Only set this
+   * for explicit in-place protection, where the user asked to overwrite an
+   * aliased path. Without it, a link planted at the output path could redirect
+   * the protected bytes onto an unrelated file.
+   */
+  readonly allowLinkWriteThrough?: boolean;
+}
+
 function writeFileAtomicSync(
   targetPath: string,
   content: string | Buffer,
   encoding?: BufferEncoding,
+  writeOptions?: AtomicWriteOptions,
 ): void {
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
@@ -282,15 +293,22 @@ function writeFileAtomicSync(
   const finalizeable =
     typeof content !== "string" || encoding === undefined || encoding === "utf8";
   if (finalizeable) content = finalizeSelfSealSelfDigest(content).content;
+  let linkState: ReturnType<typeof lstatSync> | undefined;
   try {
-    const st = lstatSync(targetPath);
-    if (st.isSymbolicLink() || st.nlink > 1) {
-      if (encoding) writeFileSync(targetPath, content, encoding);
-      else writeFileSync(targetPath, content);
-      return;
-    }
+    linkState = lstatSync(targetPath);
   } catch {
     /* target does not exist yet — proceed with the atomic path */
+  }
+  if (linkState && (linkState.isSymbolicLink() || linkState.nlink > 1)) {
+    if (writeOptions?.allowLinkWriteThrough !== true) {
+      throw new Error(
+        `Refusing to write through a symlink or hardlinked output: ${targetPath}. ` +
+          "Pass inPlace to overwrite an aliased path explicitly.",
+      );
+    }
+    if (encoding) writeFileSync(targetPath, content, encoding);
+    else writeFileSync(targetPath, content);
+    return;
   }
   const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
   try {
@@ -389,6 +407,17 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     options.outputPath ?? deriveDefaultOutputPath(absInput, options.inPlace),
   );
   assertSafeOutputPath(absInput, absOutput, format === "directory", options.inPlace);
+  // Link targets are only written through when the caller explicitly asked for
+  // in-place protection. Otherwise a symlink/hardlink pre-planted at an output
+  // path would receive the protected bytes instead of the intended file.
+  const writeProtectedOutput = (
+    targetPath: string,
+    content: string | Buffer,
+    encoding?: BufferEncoding,
+  ): void =>
+    writeFileAtomicSync(targetPath, content, encoding, {
+      allowLinkWriteThrough: options.inPlace === true,
+    });
   if (format === "archive-zip") validateZipProtectionInput(readFileSync(absInput));
   if (format === "android-apk") {
     validateZipProtectionInput(readFileSync(absInput), { allowUnsignedApk: true });
@@ -513,7 +542,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       if (entangled.applied) sidecarEntangleApplied = true;
     }
 
-    writeFileAtomicSync(absOutput, finalCode, "utf8");
+    writeProtectedOutput(absOutput, finalCode, "utf8");
     decoyFunctionsInjected = transformed.decoyFunctionsInjected;
     fakeCrossReferencesCreated = transformed.fakeCrossReferencesCreated;
     primitiveCandidateBranchesCreated = transformed.primitiveCandidateBranchesCreated;
@@ -623,7 +652,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         transformedHtml = `${transformedHtml}\n${bootstrapTag}\n`;
       }
     }
-    writeFileAtomicSync(absOutput, transformedHtml, "utf8");
+    writeProtectedOutput(absOutput, transformedHtml, "utf8");
     counteredVectors.add("js-static-semantics");
     counteredVectors.add("call-graph-tracing");
     counteredVectors.add("obligation-ledger-cloning");
@@ -634,7 +663,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       prng,
       chaffPayloads,
     );
-    writeFileAtomicSync(absOutput, honey.jsonString, "utf8");
+    writeProtectedOutput(absOutput, honey.jsonString, "utf8");
     honeySourceMapsGenerated = 1;
     decoyFunctionsInjected = 10;
     chaffPayloadsEmbedded = chaffPayloads.length;
@@ -714,7 +743,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     }
 
     const repacked = packAsarBuffer(protectedFiles);
-    writeFileAtomicSync(absOutput, repacked);
+    writeProtectedOutput(absOutput, repacked);
     binarySectionsPatched = 1 + asarAmplification.files.length;
     counteredVectors.add("electron-ipc-bridge");
     counteredVectors.add("js-static-semantics");
@@ -767,7 +796,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalWasm = entangled.buffer;
       if (entangled.applied) sidecarEntangleApplied = true;
     }
-    writeFileAtomicSync(absOutput, finalWasm);
+    writeProtectedOutput(absOutput, finalWasm);
     decoyFunctionsInjected = 16;
     fakeCrossReferencesCreated = 24;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
@@ -790,7 +819,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalPy = entangled.code;
       if (entangled.applied) sidecarEntangleApplied = true;
     }
-    writeFileAtomicSync(absOutput, finalPy, "utf8");
+    writeProtectedOutput(absOutput, finalPy, "utf8");
     decoyFunctionsInjected = res.decoyFunctionsInjected;
     fakeCrossReferencesCreated = res.crossReferenceEdges;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
@@ -803,7 +832,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       seed,
       weaveDecoys: options.weaveDecoys === true,
     });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected =
       res.decoyCodeObjectsInjected > 0 ? res.decoyCodeObjectsInjected : 14;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
@@ -819,7 +848,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   ) {
     const rawBin = readFileSync(absInput);
     const res = protectNativeBinary(rawBin, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     const passthrough = res.binarySectionsPatched === 0;
     decoyFunctionsInjected = passthrough ? 0 : 24;
     fakeCrossReferencesCreated = passthrough ? 0 : 48;
@@ -841,7 +870,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         new SeededPrng(`${seed}:bun-standalone`),
         intensity,
       );
-      writeFileAtomicSync(`${absOutput}.bunfs-snapshot`, decoy.buffer);
+      writeProtectedOutput(`${absOutput}.bunfs-snapshot`, decoy.buffer);
       decoyFunctionsInjected += decoy.moduleCount;
       chaffPayloadsEmbedded += decoy.chaffPayloadsEmbedded;
       counteredVectors.add("bun-standalone-module-graph");
@@ -849,21 +878,21 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "sqlite") {
     const rawDb = readFileSync(absInput);
     const res = protectSqliteBuffer(rawDb, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.honeyTablesInjected * 5;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.honeyTablesInjected + res.generatedTrapColumnsAdded;
     counteredVectors.add("sqlite-database-inspection");
   } else if (format === "model-safetensors") {
     const res = safetensorsResult!;
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.triggeredJsonNestingBreaker ? 2 : 1;
     counteredVectors.add("model-artifact-inspection");
   } else if (format === "model-gguf") {
     const rawModel = readFileSync(absInput);
     const res = protectGgufBuffer(rawModel, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 16;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.triggeredMetadataNestingBreaker ? 2 : 1;
@@ -871,7 +900,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "android-dex") {
     const rawDex = readFileSync(absInput);
     const res = protectAndroidDexBuffer(rawDex, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.decoyClassesInjected;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = 3; // file_size + SHA1 signature + Adler32 checksum
@@ -879,7 +908,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "il2cpp-metadata") {
     const rawMeta = readFileSync(absInput);
     const res = protectIl2cppMetadataBuffer(rawMeta, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 28;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = 1;
@@ -891,7 +920,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       seed,
       isApk: format === "android-apk",
     });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 12 + res.membersHardened;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.decoyEntriesInjected;
@@ -902,7 +931,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "apple-plist") {
     const rawPlist = readFileSync(absInput);
     const res = protectApplePlistBuffer(rawPlist, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 12;
     chaffPayloadsEmbedded = res.decoyEnclaveEntitlementsAdded;
     binarySectionsPatched = res.triggersBudgetAbort ? 2 : 1;
@@ -910,7 +939,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "dotnet-managed") {
     const rawDll = readFileSync(absInput);
     const res = protectDotnetManagedBuffer(rawDll, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 20;
     chaffPayloadsEmbedded = res.plan.decoyPInvokeImports.length;
     binarySectionsPatched = 1;
@@ -918,7 +947,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "jvm-class") {
     const rawClass = readFileSync(absInput);
     const res = protectJvmClassBuffer(rawClass, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = 18;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customAttributesAdded;
@@ -926,7 +955,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "erlang-beam") {
     const rawBeam = readFileSync(absInput);
     const res = protectErlangBeamBuffer(rawBeam, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.atomsInjected;
     chaffPayloadsEmbedded = res.chunksInjected;
     binarySectionsPatched = res.exceedsDefaultChunkBudget ? 2 : 1;
@@ -934,7 +963,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "evm-bytecode") {
     const rawEvm = readFileSync(absInput);
     const res = protectEvmBytecodeBuffer(rawEvm, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.canaryTokensEmbedded;
     chaffPayloadsEmbedded = res.diagnosticsEmbedded;
     binarySectionsPatched = 1;
@@ -942,7 +971,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "pcap-capture") {
     const rawPcap = readFileSync(absInput);
     const res = protectPcapCaptureBuffer(rawPcap, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.packetsInjected;
     chaffPayloadsEmbedded = res.canaryTokensEmbedded;
     binarySectionsPatched = 1;
@@ -950,7 +979,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "gpu-ptx") {
     const rawPtx = readFileSync(absInput, "utf8");
     const res = protectGpuPtxText(rawPtx, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.text, "utf8");
+    writeProtectedOutput(absOutput, res.text, "utf8");
     decoyFunctionsInjected = res.entriesInjected;
     chaffPayloadsEmbedded = res.canaryTokensEmbedded;
     binarySectionsPatched = 1;
@@ -958,7 +987,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "firmware-uf2") {
     const rawUf2 = readFileSync(absInput);
     const res = protectUf2FirmwareBuffer(rawUf2, { intensity, seed });
-    writeFileAtomicSync(absOutput, res.buffer);
+    writeProtectedOutput(absOutput, res.buffer);
     decoyFunctionsInjected = res.blocksInjected;
     chaffPayloadsEmbedded = res.canaryTokensEmbedded;
     binarySectionsPatched = res.blocksInjected;
@@ -1001,7 +1030,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               prng,
               chaffPayloads,
             );
-            writeFileAtomicSync(dstFull, `${res.code}\n${honey.inlineDirective}\n`, "utf8");
+            writeProtectedOutput(dstFull, `${res.code}\n${honey.inlineDirective}\n`, "utf8");
             decoyFunctionsInjected += res.decoyFunctionsInjected;
             fakeCrossReferencesCreated += res.fakeCrossReferencesCreated;
             primitiveCandidateBranchesCreated += res.primitiveCandidateBranchesCreated;

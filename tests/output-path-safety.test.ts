@@ -111,6 +111,43 @@ describe("protectTarget output path safety", () => {
     expect(readFileSync(inputFile, "utf8")).not.toBe(original);
   });
 
+  it("refuses to write through a symlinked output that points at an unrelated file", () => {
+    const root = makeTempDir();
+    const inputFile = join(root, "bundle.js");
+    const victimFile = join(root, "victim.conf");
+    const outputLink = join(root, "bundle.shielded.js");
+    writeFileSync(inputFile, "export const answer = 42;\n", "utf8");
+    writeFileSync(victimFile, "do not touch\n", "utf8");
+    try {
+      symlinkSync(victimFile, outputLink);
+    } catch (err) {
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
+        return; // symlink creation needs Developer Mode / admin on Windows
+      }
+      throw err;
+    }
+
+    expect(() =>
+      protectTarget({ inputPath: inputFile, outputPath: outputLink }),
+    ).toThrow(/symlink or hardlinked output/);
+    expect(readFileSync(victimFile, "utf8")).toBe("do not touch\n");
+  });
+
+  it("refuses to write through a hardlinked output that points at an unrelated file", () => {
+    const root = makeTempDir();
+    const inputFile = join(root, "bundle.js");
+    const victimFile = join(root, "victim.conf");
+    const outputLink = join(root, "bundle.shielded.js");
+    writeFileSync(inputFile, "export const answer = 42;\n", "utf8");
+    writeFileSync(victimFile, "do not touch\n", "utf8");
+    linkSync(victimFile, outputLink);
+
+    expect(() =>
+      protectTarget({ inputPath: inputFile, outputPath: outputLink }),
+    ).toThrow(/symlink or hardlinked output/);
+    expect(readFileSync(victimFile, "utf8")).toBe("do not touch\n");
+  });
+
   it("excludes custom outputDirectory from hardenProject discovery and rejects project root or .git/.node_modules outputDirectory", () => {
     const root = makeTempDir();
     mkdirSync(join(root, "dist"), { recursive: true });
