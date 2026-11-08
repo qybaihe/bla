@@ -2,129 +2,99 @@
 
 [English](../../README.md) · **简体中文** · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
-# <img src="../assets/logo.png" alt="BLA Shield" width="42" align="absmiddle" /> BLA: Blind LLM Agents
+<br />
 
-### 用于保护二进制文件、应用程序与运行时行为免受 AI 自动化逆向分析的 MCP 与 CLI 工具。
+<img src="../assets/logo.png" alt="BLA Shield" width="88" />
 
-**指向你准备发布的构建产物，从源码、字节码到二进制层面保护核心逻辑与运行时行为。**
+# BLA: Blind LLM Agents
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
-[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=flat-square&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
-[![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#你可以保护哪些目标)
-[![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#基准测试与案例)
-[![MIT license](https://img.shields.io/badge/license-MIT-38bdf8?style=flat-square)](../../LICENSE)
+### **Poison → Exhaust → Hallucinate. 让自动化逆向分析再次“破产”。**
 
-**[官方网站 (bla.tools)](https://bla.tools/) · [技术指南](https://bla.tools/guides/) · [测试案例](https://bla.tools/showcase/)**
+**开源的 Counter-REA 蓝队防御 MCP 服务与 CLI 工具 —— 专为保护软件发布产物免受 AI 逆向分析代理（`morluto/rea`、自动化反编译与大模型逆向流水线）还原而设计，同时保持 100% 运行时等价。**
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [你可以保护哪些目标](#你可以保护哪些目标) · [基准测试与案例](#基准测试与案例) · [常见问题 (FAQ)](#常见问题-faq) · [文档](#文档)
-
-<code>npx bla-agents setup</code> · <code>npx bla-agents defend ./dist --manifest</code>
-
-</div>
-
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.1.2-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
+[![MCP Server](https://img.shields.io/badge/MCP-25_项防御工具-0ea5e9?style=for-the-badge)](../cli-and-mcp.md)
+[![Formats](https://img.shields.io/badge/支持格式-19%2B_种构建产物-0284c7?style=for-the-badge)](#支持的产物格式与覆盖矩阵)
+[![Counter-REA](https://img.shields.io/badge/Counter--REA-真机实测验证-1d4ed8?style=for-the-badge)](#真机对抗实测结果vs-真实-rea)
+[![MIT License](https://img.shields.io/badge/License-MIT-38bdf8?style=for-the-badge)](../../LICENSE)
 
 <p align="center">
   <a href="https://trendshift.io/repositories/323569" target="_blank" rel="noopener noreferrer">
-    <img src="../assets/bla-github-trending-badge.png" alt="GitHub Trending — 当日仓库第 15 名" width="280" height="56"/>
+    <img src="../assets/bla-github-trending-badge.png" alt="GitHub Trending — 当日趋势榜第 15 名" width="270" height="54"/>
   </a>
 </p>
 
-> [!IMPORTANT]
-> 请从官方仓库 [qybaihe/bla](https://github.com/qybaihe/bla) 或 npm 包 [bla-agents](https://www.npmjs.com/package/bla-agents) 获取 BLA。
+**[🌐 官方网站 (bla.tools)](https://bla.tools/) · [📖 防御指南](https://bla.tools/guides/) · [📊 基准测试大盘](https://bla.tools/showcase/) · [🎯 CrackMe 竞技场](https://bla.tools/crackme/) · [🏢 企业级定制](https://bla.tools/enterprise/) · [⚖️ 免责声明](../../DISCLAIMER.md)**
 
-<div align="center">
-
-<br />
-
-<img src="../assets/bla-vs-rea-showcase.svg" alt="未受保护产物与 BLA 加固产物的逆向分析对比" width="1200" />
-
-<br />
+[30 秒快速开始](#-30-秒快速开始) · [工作原理（Agent 闭环）](#-工作原理agent-主导的四阶段闭环加固) · [真机实测结果](#真机对抗实测结果vs-真实-rea) · [格式覆盖矩阵](#支持的产物格式与覆盖矩阵) · [14 项基准测试](#基准测试14-个目标产物) · [CrackMe 竞技场](#-红蓝对抗-crackme-竞技场) · [常见问题 (FAQ)](#常见问题-faq)
 
 </div>
 
 ---
 
-BLA 是一个面向软件发布产物的防御性 MCP 服务与 CLI 工具，用于评估、加固并验证软件对 AI 自动化逆向工具（如 REA）的抗分析能力。它可以在不修改业务源码的前提下，扫描发布产物中的符号与 SourceMap 暴露面、注入特定格式的静态与运行时保护层，并验证加固后产物的运行时行为与原版完全一致。
+> [!IMPORTANT]
+> **仅限防御性使用：** BLA 严格面向软件开发者与安全团队保护**自有软件知识产权与发布产物**。详见 [DISCLAIMER.md](../../DISCLAIMER.md)。
+> 请从官方仓库 [qybaihe/bla](https://github.com/qybaihe/bla) 或 npm 包 [`bla-agents`](https://www.npmjs.com/package/bla-agents) 获取。
 
-BLA 支持将你的编程代理连接到原生二进制、JavaScript 与 Electron 应用、WebAssembly 模块、Python 字节码、SQLite 数据库、AI 模型权重与移动端包体的保护工作流中。你也可以直接在终端或打包工具（Vite / Webpack / Rollup / esbuild）中调用相同能力。
+<div align="center">
+<img src="../assets/bla-vs-rea-showcase.svg" alt="未受保护产物与 BLA 加固产物的逆向分析对比" width="1200" />
+</div>
 
-`setup` 会向你的编程代理注册 BLA 的 MCP 服务并安装配套技能说明。所有静态、字节码与二进制保护模块均已内置，无需额外安装外部编译器或第三方加壳工具。
+<br />
 
-## 快速开始
+<table>
+<tr>
+<td width="33%" valign="top">
 
-### 配置你的 Agent
+### 🔴 未接入 BLA 时
+AI 逆向代理（`REA` + 编程 Agent）可在单条命令内解包 `.asar`、还原 SourceMap、配对 IPC 通道、提取 `.wasm` / `.sqlite` / `.safetensors`，在**数十秒、约 $0.20 成本内**完整克隆核心业务逻辑。
 
-安装 Node.js 与 npm 后，运行：
+</td>
+<td width="33%" valign="top">
+
+### 🛡️ 接入 BLA（`bla harden .`）后
+静态与语义分析器直接撞上确定性资源配额上限（`primitive-candidates > 256`、`ASAR > 16 MiB`、`WASM > Wabt 上限`、`SQLite 虚拟生成列陷阱`），陷入高拟真影子状态机，Token 消耗放大 **300×–2,800×**。
+
+</td>
+<td width="33%" valign="top">
+
+### ⚡ 100% 运行时等价
+所有预算爆破图与诱饵载荷均位于 $O(1)$ 数论不透明谓词（$7x^2 - 1 \neq y^2 \pmod 7$）保护的不可达分支或惰性元数据段中。**14/14** 个基准测试目标 **100% 通过输入/输出等价校验**。
+
+</td>
+</tr>
+</table>
+
+---
+
+## ⚡ 30 秒快速开始
+
+### 方式一：单条命令一键加固（CLI）
+指向任意项目或构建目录，BLA 会自动发现可保护产物（`dist/`、`build/`、`.asar`、`.wasm`、`.sqlite`、`.safetensors`、原生二进制、Python/C/Rust/Go）并依次执行 **暴露审计 → 护盾注入 → 等价验证**：
+
+```bash
+# 推荐 Node.js ^22.23.4 或 >=24.0.0
+npx bla-agents harden .
+```
+
+### 方式二：Agent 主导的闭环源码织入与产物加固（MCP + Skill）
+一键将 BLA 注册到你的编程 Agent（支持 **Claude Code、Cursor、Codex、Windsurf、Gemini CLI、GitHub Copilot CLI、VS Code、OpenCode、Antigravity**）：
 
 ```bash
 npx bla-agents setup
 ```
 
-选择你使用的编程代理（或加上 `--all-detected --yes`），预览变更并确认。`setup` 会注册 BLA 的 MCP 服务器并安装 `blind-llm-agents` 技能，同时自动备份原有配置文件。完成后重启你的 Agent 即可。
+随后只需在你的 Agent 中发送一句话：
 
-支持 Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Google Antigravity、OpenCode、VS Code 与 GitHub Copilot CLI。手动配置方式参见[安装与配置指南](../installation.md)。
-
-### 在 Agent 中使用
-
-连接完成后，可以直接通过自然语言调用完整的 5 阶段加固流程，或按步骤单独执行：
-
-- **一键执行完整保护流程（`bla_defend` —— 暴露巡检 → 风险审计 → 护盾注入 → 等价性验证 → 签名清单）：**
-  ```text
-  对 ./dist 目录执行 bla_defend（使用 bankrupt 级别并输出验证清单）。
-  ```
-- **1. 发布前暴露面审计（`Audit`）：**
-  ```text
-  使用 BLA 审计 ./dist 目录，列出暴露的模块、符号和 Electron IPC 通道，并评估自动化逆向还原的风险。
-  ```
-- **2. 保护目标产物（`Protect`）：**
-  ```text
-  使用 BLA 保护 ./dist/app.asar，将加固后的产物输出到 ./dist/app.shielded.asar。
-  ```
-- **3. 验证保护效果与运行一致性（`Verify`）：**
-  ```text
-  对比验证 ./dist/app.shielded.asar 与原文件 ./dist/app.asar，确认静态分析状态已降级为 limited 且功能保持一致。
-  ```
-
-### 使用终端命令
-
-所有工作流均可通过 `npx bla-agents`（或全局安装后的 `bla`）在终端直接运行：
-
-- **一键完整保护流程（`defend`）** —— 单条命令依次执行 `inspect-release`、`audit`、`protect`、`verify` 并生成 `.bla-manifest.json`：
-  ```bash
-  npx -y bla-agents@latest defend /absolute/path/to/app --manifest
-  ```
-- **1. 审计目标暴露度（`audit`）** —— 查看暴露评分（`0–100`）、可见符号与预估分析开销：
-  ```bash
-  npx -y bla-agents@latest audit /absolute/path/to/app --json
-  ```
-- **2. 保护目标产物（`protect`）** —— 应用静态预算阈值保护、调用图扩展、诱饵元数据与运行时检测：
-  ```bash
-  npx -y bla-agents@latest protect /absolute/path/to/app -o /absolute/path/to/app.shielded --intensity bankrupt
-  ```
-- **3. 验证保护结果（`verify`）** —— 检查静态/语义分析器是否触发资源上限并保持运行等价：
-  ```bash
-  npx -y bla-agents@latest verify /absolute/path/to/app.shielded /absolute/path/to/app
-  ```
-- **4. 运行 8 项基准测试（`benchmark`）**：
-  ```bash
-  npx -y bla-agents@latest benchmark
-  ```
-- **5. 生成 C/C++、Rust 或 Go 编译期保护头文件（`emit-headers`）**：
-  ```bash
-  npx -y bla-agents@latest emit-headers --lang c -o ./include/bla_shield.h
-  ```
-
-如需全局安装 `bla` 命令：
-
-```bash
-npm install --global bla-agents
-bla --help
+```text
+使用 BLA 对当前项目进行防逆向闭环加固
 ```
 
-### 在构建打包工具中使用（Vite / Rollup / Webpack / esbuild）
+宿主 Agent 将自动编排 BLA 的 25 个 MCP 工具（`bla_weave_plan` → 源码级状态缠绕与字符串加密 → `bla_verify_weave` → `bla_harden` → `bla_verify`），从源码结构到最终产物完成全链路防护。
 
-导入 `bla-agents/bundler`，在构建阶段自动保护输出的 JS 分包、SourceMap 与 `.wasm` 模块：
+### 方式三：构建打包插件（Vite / Rollup / Webpack / esbuild）
+在前端或全栈构建阶段自动保护 JS 分包、注入 VLQ v3 诱饵 SourceMap 并加固 `.wasm` 模块：
 
 ```typescript
 import { defineConfig } from "vite";
@@ -135,168 +105,162 @@ export default defineConfig({
 });
 ```
 
-### 更新 BLA
+---
 
-如果通过 `npm install --global` 或 `bun add --global` 安装：
+## 🧠 工作原理：Agent 主导的四阶段闭环加固
 
-```bash
-bla update
+传统混淆器仅做标识符重命名（如 `_0x1a2b`），在大语言模型的控制流归纳能力面前形同虚设；而重型商业虚拟化壳则容易破坏跨平台构建并带来高昂的性能损耗。
+
+**BLA 3.x 将宿主 Agent 的源码级手术织入与 19+ 种格式原生护盾深度结合：**
+
+```mermaid
+flowchart LR
+  subgraph S1["阶段 1 · 侦察与规划"]
+    A["bla_audit / bla_lint"] --> B["bla_weave_plan"]
+  end
+  subgraph S2["阶段 2 · Agent 源码级手术"]
+    B --> C["bla_encrypt_strings\n(AST 区间 XOR + 密钥流)"]
+    C --> D["bla_bind_scope\n(多点调用栈与状态缠绕)"]
+    D --> E["bla_verify_weave"]
+  end
+  subgraph S3["阶段 3 · 多格式产物护盾"]
+    E --> F["bla_harden / bla_defend\n(19+ 格式护盾 + Self-Seal 自封印)"]
+  end
+  subgraph S4["阶段 4 · 对抗与等价门禁"]
+    F --> G["bla_verify\n(预算触发验证 + 100% 运行等价)"]
+  end
 ```
 
-如果使用 `npx`，可通过以下命令更新 Agent 注册配置与技能文件：
+| 四大防御支柱 | 核心技术机制 | 对 AI 逆向代理的实际打击效果 |
+| :--- | :--- | :--- |
+| **1. Poison（认知投毒）** | 植入符合格式规范的蜜罐凭据、SGX/TPM2/Secure Enclave 硬件飞地清单、VLQ v3 诱饵 SourceMap 与高拟真影子状态机。 | 迫使大模型在相互冲突的证据假说间分裂注意力，沿合成诊断线索陷入死胡同。 |
+| **2. Exhaust（预算爆破）** | 精确触发分析器内部硬编码配额上限（`primitive-candidates`、ASAR 16 MiB 头部、WASM Wabt 表达上限、SQLite 虚拟生成列求值、AI 模型 32 层嵌套、PCAP 8 MiB JSON、Electron 32 个 Fuse 哨兵）。 | 在触及真实业务前将 REA 分析状态从 `COMPLETE` 强制降级为 `LIMITED` 或直接抛出容量异常。 |
+| **3. Entangle（反剥离缠绕）** | 通过运行时 SHA-256 摘要（`--self-seal`、`--sidecar-entangle`）与多点调用域折叠（`bla_bind_scope`）将 JS ↔ WASM ↔ 原生二进制深度绑定。 | 阻止红队直接裁剪诱饵分支、NOP 单点校验或将导出函数当作离线解密 Oracle 调用。 |
+| **4. Runtime（楚门世界）** | 原地加固 Electron V1 Fuse 位（`RunAsNode=0`、`Inspect=0`），并检测 CDP、Inspector、Frida 与 WebDriver 挂载（`runtime-shield.ts`）。 | 在动态调试会话中返回可信的合成遥测数据，同时保证正常用户运行零感知。 |
 
-```bash
-npx bla-agents@latest setup
-```
+---
 
-## 工作原理
+## 🔬 真机对抗实测结果（vs. 真实 REA）
 
-你的 Agent 通过 MCP 调用 BLA 来审计构建产物、应用特定格式的保护层并验证输出结果。当自动化逆向分析工具检查受保护的产物时，会遇到三层防御机制：
+以下数据来自在标准硬件上直接运行**真实 `morluto/rea`** 分析 BLA 加固产物的实测记录（`npm run redteam:rea`）。完整机器可读报告见 [`docs/redteam/empirical-rea-validation.md`](../redteam/empirical-rea-validation.md) / [`.json`](../redteam/empirical-rea-validation.json)。
 
-1. **静态与语义分析预算限流（`Exhaustion`）：** 利用 $O(1)$ 数论不透明谓词与不可达分支中的强连通调用图（SCC），触发 `REA` 等分析器内部的静态资源上限（如 `primitive-candidates > 256`、`alias-selections > 512`、`getter-expansion > 512`、`primitive-bytes > 1 MiB`、`maximum_rustc_hashes > 64`、`maximumSentinelsPerSlice > 32`）。
-2. **证据优先级与控制流干扰（`Deception`）：** 在静态分析视图下将真实业务逻辑标记为 `status: "unknown"`，同时提供结构清晰的影子状态机、硬件飞地接口声明（`SGX` / `TPM2` / `Secure Enclave`）以及 VLQ v3 诱饵 SourceMap，干扰模型的语义归因。
-3. **运行时探针检测与 Fuse 加固（`Runtime Guard`）：** 原地加固 Electron V1 Fuse 配置位（`RunAsNode=0`、`EnableNodeCliInspectArguments=0`），并在检测到 CDP、Node Inspector、Frida 或 WebDriver 动态挂载时返回合成遥测数据。
+| 产物格式 | 加固前 → 加固后体积 | REA 实测分析结果 | 实际触发的 REA 内部预算阈值 / 异常信息 |
+| :--- | ---: | :--- | :--- |
+| **Go buildinfo** | 50 KiB → 1.16 MiB | ❌ 容量溢出拒绝 | `MAX_BUILD_INFO_BYTES` (1 MiB) — *Go build-info string length exceeds the 1 MiB limit* |
+| **Erlang BEAM** | 84 B → 262 KiB | ❌ 容量溢出拒绝 | `max_chunks` — *BEAM form exceeds the 64-chunk budget* |
+| **EVM 字节码** | 16 B → **4.00 MiB** | ⚠️ 逼近输入上限 | `EVM_INTERFACE_LIMITS.inputBytes` (4 MiB) |
+| **PCAP 抓包** | 24 B → 1.29 MiB | ❌ 预算超限拒绝 | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` |
+| **Electron ASAR** | 607 B → **16.9 MiB** | ❌ 容量溢出拒绝 | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) |
+| **WASM + Wabt** | 54 B → **6.56 MiB** · 251 导出 | ⚠️ `ifaceState=partial` | `WASM_INTERFACE_REPRESENTATION_BYTES` — *Typed WASM interface decoding exceeds WABT budget* |
+| **SQLite** (Node 24) | 12 KiB → 56 KiB | ❌ 求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()` |
+| **JavaScript** | 761 B → 116 KiB | ❌ 语义预算拒绝 | 同时触发 `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` |
+| **Safetensors** | 128 B → 10.1 KiB | ❌ 容量溢出拒绝 | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels*（HF 正常加载，权重不变） |
+| **GGUF 模型** | 24 B → 7.7 KiB | ❌ 容量溢出拒绝 | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* |
+| **Electron Fuses** | 50 KiB → 1.16 MiB | ❌ 预算超限拒绝 | `ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice` (>32) |
+| **Flutter 常量池** | 50 KiB → 1.16 MiB | ⚠️ 触发截断上限 | `MAX_POOL_URIS` / `MAX_POOL_TOKENS`（REA 输出被截断） |
 
-## 你可以保护哪些目标
+---
 
-BLA 要求 Node.js `^22.13.0 || >=24.0.0` 与 npm，所有格式保护模块均在本地运行，无外部二进制依赖：
+## 🛡️ 支持的产物格式与覆盖矩阵
 
-| 保护目标                | 应用的保护机制与分析器影响                                                                        | 对应命令与说明                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| JavaScript / TypeScript | 触发 `primitive-candidates > 256`、`alias-selections > 512`、`getter-expansion > 512` 与状态机扩展 | `bla protect app.js` · 内置 Babel AST 引擎；参见[技术矩阵](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md) |
-| Electron `.asar` 应用   | IPC 通道去字面量化（`channel: null`）、注册同名诱饵 IPC 处理器与影子模块                          | `bla protect app.asar` · 内置 Chromium Pickle `.asar` 解包与 SHA-256 完整性重打包器                   |
-| Electron 二进制 Fuses   | 原地加固 V1 Fuse 位（关闭 `RunAsNode` 与 `Inspect`）+ 追加 `34 > 32` 个诱饵 Fuse 哨兵             | `bla protect ElectronApp` · 触发 `ElectronFuseResourceFailure (maximumSentinelsPerSlice = 32)`        |
-| 动态运行时 CDP / Frida  | 检测 `inspector.url()`、`--inspect`、`__frida` 并向动态探针返回合成遥测数据                       | 自动注入到受保护的 JS/TS/Electron 产物中（[`runtime-shield.ts`](../../src/shields/runtime/runtime-shield.ts)） |
-| SourceMap 与 HTML       | 移除真实映射，生成合法的 VLQ v3 诱饵 SourceMap（指向 `enclave://tee-runtime/...`）                | `bla protect index.html` · 干扰 `recover_javascript_sources` 与 `trace_web_source_location`           |
-| 原生二进制文件          | 追加 `.bla.rodata` 元数据、诱饵符号表项与扫描器阈值守卫                                           | `bla protect daemon.elf` · 内置 ELF64、Mach-O（Thin & Universal）与 Windows PE/COFF 支持              |
-| Rust 二进制             | 注入 `68 > 64` 个不同的 `/rustc/<40-hex>/` 路径 + 诱饵 zlib `.dep-v0` 依赖描述                    | `bla protect rust-bin` · 触发 `RustBinaryProvider`（`MAX_RUSTC_HASHES = 64` 阈值限制）                |
-| Go 二进制               | 注入诱饵 Go `go1.23.4` 构建信息与 `dep\tgithub.com/enclave-tees/sgx-bridge` 模块记录              | `bla protect go-bin` · 混淆 `inspect_go_binary` 模块清单                                              |
-| Flutter / Dart AOT      | 注入 `66 > 64` 个 Dart 快照魔数头（`0xf5f5dcdc`）+ `6 > 4` 行 LLVM 工具链标识                     | `bla protect libapp.so` · 触发 `SnapshotHashScanner (capped: true)` 与版本冲突检查                    |
-| WASM 模块               | 剥离调试段，添加诱饵 `"name"` 自定义段（`tee_hardware_enclave_stub`）与扩展元数据段               | `bla protect core.wasm` · 内置 LEB128 解析器，保持 `WebAssembly.validate` 校验通过                    |
-| Python 与 `.pyc` 字节码 | 向 `.py` 注入调用图状态机，向 `.pyc` 常量池追加 `TYPE_ASCII` 元数据项                             | `bla protect module.pyc` · 支持 CPython 3.7–3.14 `.pyc` 头部与 marshal 结构                           |
-| SQLite 数据库           | 添加 3 张辅助表与 `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` 虚拟生成列守卫          | `bla protect data.sqlite` · 真实业务表正常查询；只读快照扫描触发 `SqliteColumnEvaluationFailure`      |
-| AI 模型权重文件         | 向 `.safetensors` 与 `.gguf` 头部添加 `35 > 32` 层嵌套的 JSON / ARRAY 元数据                      | `bla protect weights.safetensors` · 触发 `ModelFormatFailure (json-nesting / metadata-nesting > 32)`  |
-| Android DEX 与 APK      | 向 `classes.dex` 追加 `Lcom/enclave/sgx/...` 诱饵类描述符并重算 SHA-1 与 Adler32 校验和           | `bla protect classes.dex` 或 `app.apk` · 符合 Dalvik/ART 校验规范                                     |
-| Unity IL2CPP 元数据     | 向 `global-metadata.dat`（`0xFAB11BAF`）追加桥接元数据与方法拓扑项                                | `bla protect global-metadata.dat` · 增加 `inspect_il2cpp_metadata` 符号还原复杂度                     |
-| C / C++ / Rust / Go 源码| 生成带 `used, noinline` 状态机的编译期头文件 `bla_shield.h` / `.rs` / `.go`                       | `bla emit-headers --lang c\|rust\|go` · 编译进二进制符号表与控制流图                                  |
+全部 19+ 种格式护盾均内置于 `bla-agents`，无需安装任何外部加壳器或编译器：
 
-## 基准测试与案例
+| 产物格式 | 蜜罐凭据 + 诊断诱饵 | 资源预算爆破 | 真机 REA 验证 | 说明 |
+| :--- | :---: | :---: | :---: | :--- |
+| **JavaScript / TypeScript** | ✓ | ✓ 语义预算爆破 | **已验证** | 内置 Babel AST；AST 安全字符串加密；自封印校验 |
+| **Electron `.asar`** | ✓ | ✓ 16 MiB 头部爆破 | **已验证** | IPC 通道去字面量化 + Chromium Pickle 重打包 |
+| **Electron Fuses** | ✓ | ✓ >32 哨兵填充 | **已验证** | V1 Fuse 位加固 + 哨兵预算爆破 |
+| **WebAssembly (`.wasm`)** | ✓ 自定义段 | ✓ 导出符号诱饵 | **已验证** (Wabt) | 内置 LEB128 解析器，保持 `WebAssembly.validate` 通过 |
+| **SQLite (`.sqlite` / `.db`)** | ✓ 蜜罐表 + 虚拟列 | ✓ 生成列求值阻断 | **已验证** (Node 24) | 魔数精准校验；支持 `WITHOUT ROWID` 业务表 |
+| **Safetensors (`.safetensors`)** | ✓ 元数据诱饵 | ✓ JSON 嵌套 >32 层 | **已验证** | 兼容 HuggingFace 加载，张量数据零改动 |
+| **GGUF (`.gguf`)** | ✓ | ✓ 数组嵌套 >32 层 | **已验证** | 保持模型权重与 KV 张量完整 |
+| **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB 构建信息 | **已验证** | 映射 ELF 节区注入 |
+| **Flutter / Dart Pool** | ✓ | ✓ URI/Token 阈值填充 | **已验证** | 快照魔数与工具链标识填充 |
+| **Erlang BEAM (`.beam`)** | ✓ | ✓ Chunk / Atom 填充 | **已验证** | 突破 64-chunk 预算上限 |
+| **EVM + Solidity 元数据** | ✓ | ✓ 逼近 4 MiB 上限 | **已验证** | CBOR 元数据与字节码致密化 |
+| **PCAP (`.pcap`)** | ✓ | ✓ tshark JSON >8 MiB | **已验证** | 合成流量包与金丝雀凭据注入 |
+| **Python (`.py` / `.pyc`)** | ✓ | ✓ | 设计支持 | 支持 CPython 3.7–3.14 字节码与源码保护 |
+| **NVIDIA PTX (`.ptx`)** | ✓ | 入口洪泛 | 基准测试验证 | GPU PTX 文本核函数洪泛 |
+| **DEX / IL2CPP / bplist / .NET / JVM / ZIP** | ✓ | 格式专属护盾 | 设计支持 | 自动重算 DEX SHA-1 与 Adler32 校验和 |
 
-运行 `npx bla-agents benchmark` 可在本地执行全部 8 个基准测试案例，验证分析器降级效果与运行时等价性：
+---
 
-| 基准测试目标 | 未保护基线 | 加固后（`npx bla-agents protect`） | Token 放大倍率 | 运行时等价校验 |
-| :--- | :--- | :--- | :---: | :---: |
-| **1. DX-Ball 声道平移计算** (`.js`) | `84/100` · `4,800` tok · **`$0.20`** (`COMPLETE`) | `2/100` · `10,182,068` tok · **`$160.64`** (`LIMITED`) | **2,121.3x** | ✅ 100% 一致 |
-| **2. Notion Electron 剪贴板桥** (`.asar`) | `98/100` · `9,132` tok · **`$0.34`** (`COMPLETE`) | `2/100` · `23,125,000` tok · **`$358.28`** (`LIMITED`) | **2,532.3x** | ✅ 100% 一致 |
-| **3. 企业级离线授权校验模块** (`.ts`) | `84/100` · `4,800` tok · **`$0.20`** (`COMPLETE`) | `2/100` · `10,182,169` tok · **`$160.64`** (`LIMITED`) | **2,121.3x** | ✅ 100% 一致 |
-| **4. WebAssembly 密码学模块** (`.wasm`) | `81/100` · `4,800` tok · **`$0.20`** (`COMPLETE`) | `6/100` · `1,807,067` tok · **`$29.88`** (`LIMITED`) | **376.5x** | ✅ 100% 一致 |
-| **5. Native ELF64 二进制** (Rust / Go / Fuse / Dart) | `81/100` · `9,278` tok · **`$0.35`** (`COMPLETE`) | `2/100` · `3,698,135` tok · **`$59.72`** (`LIMITED`) | **398.6x** | ✅ 100% 一致 |
-| **6. 本地 SQLite 授权数据库** (`.sqlite`) | `81/100` · `10,568` tok · **`$0.29`** (`COMPLETE`) | `7/100` · `1,711,235` tok · **`$28.36`** (`LIMITED`) | **161.9x** | ✅ 100% 一致 |
-| **7. 端侧 AI 权重文件** (`.safetensors`) | `81/100` · `4,800` tok · **`$0.20`** (`COMPLETE`) | `6/100` · `1,807,073` tok · **`$29.88`** (`LIMITED`) | **376.5x** | ✅ 100% 一致 |
-| **8. Android Dalvik 字节码** (`classes.dex`) | `81/100` · `8,900` tok · **`$0.34`** (`COMPLETE`) | `7/100` · `2,786,285` tok · **`$45.09`** (`LIMITED`) | **313.1x** | ✅ 100% 一致 |
+## 📊 基准测试（14 个目标产物）
 
-### DX-Ball：声道计算模块的抗还原加固
+在本地运行 `npx bla-agents benchmark` 即可复现全部 14 个代表性产物的加固效果与 100% 运行时等价校验：
 
-在未保护状态下，静态分析可在数次工具调用内还原 `clampPan` 与 `calculateSoundPanFromX`。运行 `npx bla-agents protect examples/dx-ball-sound-pan/sound-pan.js --intensity bankrupt` 后，分析器的 `parse_status` 变为 `"partial"`，`examination.status` 降级为 `"limited"`（触发 `alias-selections`、`primitive-bytes`、`primitive-candidates` 阈值限制），同时所有输入坐标的计算返回值与原版完全一致。
+**汇总结果：** 平均 Token 消耗放大 **~639.5×** · 逆向成本放大 **~304.4×** · **14/14 (100%)** 运行时行为完全一致。
 
-### Notion：隐藏 Electron 剪贴板 IPC 桥接拓扑
+| 基准测试目标 | 未保护基线（估算） | BLA 加固后（估算） | Token 放大倍率 | 运行时等价 |
+| :--- | :--- | :--- | ---: | :---: |
+| **1. DX-Ball 声道平移计算 (`.js`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 13.5M tok · $212.82 · `LIMITED` | **2,822.7×** | ✅ 100% |
+| **2. Notion Electron 剪贴板桥 (`.asar`)** | 98/100 · 9,132 tok · $0.34 | 2/100 · 23.1M tok · $358.28 · `LIMITED` | **2,532.3×** | ✅ 100% |
+| **3. 企业级离线授权校验模块 (`.ts`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 13.5M tok · $212.82 · `LIMITED` | **2,822.7×** | ✅ 100% |
+| **4. NVIDIA PTX 计算核 (`.ptx`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 2.40M tok · $39.29 · `LIMITED` | **500.2×** | ✅ 100% |
+| **5. Erlang BEAM 模块 (`.beam`)** | 81/100 · 8,900 tok · $0.34 | 5/100 · 3.86M tok · $62.08 · `LIMITED` | **433.2×** | ✅ 100% |
+| **6. WebAssembly 密码学核 (`.wasm`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 1.83M tok · $30.23 · `LIMITED` | **381.5×** | ✅ 100% |
+| **7. 端侧 AI 权重文件 (`.safetensors`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 1.81M tok · $29.90 · `LIMITED` | **376.8×** | ✅ 100% |
+| **8. libpcap 网络抓包 (`.pcap`)** | 81/100 · 4,800 tok · $0.20 | 8/100 · 1.60M tok · $26.58 · `LIMITED` | **333.2×** | ✅ 100% |
+| **9. Android Dalvik 字节码 (`.dex`)** | 81/100 · 8,900 tok · $0.34 | 7/100 · 2.79M tok · $45.11 · `LIMITED` | **313.2×** | ✅ 100% |
+| **10. EVM Solidity 元数据 (`.bin`)** | 81/100 · 6,440 tok · $0.26 | 6/100 · 1.78M tok · $29.40 · `LIMITED` | **276.3×** | ✅ 100% |
+| **11. .NET 托管程序集 (`.dll`)** | 81/100 · 8,900 tok · $0.34 | 6/100 · 2.45M tok · $39.96 · `LIMITED` | **274.8×** | ✅ 100% |
+| **12. Apple 二进制属性表 (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 9/100 · 1.36M tok · $22.96 · `LIMITED` | **211.8×** | ✅ 100% |
+| **13. SQLite 授权数据库 (`.sqlite`)** | 81/100 · 10,568 tok · $0.29 | 7/100 · 1.71M tok · $28.39 · `LIMITED` | **162.1×** | ✅ 100% |
+| **14. Native ELF64 二进制 (Rust/Go/Fuse/Dart)** | 81/100 · 35,222 tok · $0.73 | 2/100 · 3.72M tok · $60.03 · `LIMITED` | **105.6×** | ✅ 100% |
 
-静态分析器通常通过匹配 `ipcRenderer.invoke` 与 `ipcMain.handle` 的字面量字符串来还原 Electron IPC 调用链。BLA 将真实 IPC 通道改写为 $\ge 9$ 段数论不透明条件表达式（使静态提取结果为 `channel: null`），并在相同字面量通道上注册诱饵处理器，从而触发 `electron_call_paths_limited: true`。
+---
 
-### 原生二进制、SQLite 与 AI 模型：触发解析器容量限制
+## 🎯 红蓝对抗 CrackMe 竞技场
 
-当对受保护的产物执行 `inspect_rust_binary`、`inspect_electron_fuses`、`inspect_sqlite_database` 或 `inspect_model_artifact` 时，解析器会触发预设的资源阈值限制（`Read-only data contains more than 64 distinct rustc commit paths`、`Slice 0 contains more than 32 Electron fuse sentinels`、`SqliteColumnEvaluationFailure`、`ModelFormatFailure: json-nesting`）。
+仓库内置了公开的 BLA 加固挑战靶场（`SEAL.json` 仅包含 SHA-256 哈希，仓库中不存任何明文密钥或 Flag），欢迎用你的逆向 Agent 实测挑战：
 
-## 常见问题 (FAQ)
+| 挑战关卡 | 架构形态 | 核心加固特性 | 本地运行验证 |
+| :--- | :--- | :--- | :--- |
+| **[CrackMe v6](../../challenge/v6/README.md)** | Node Vault + HTML 面板 + WASM 核 | `bankrupt` 级别加固、跨文件哈希自封印、WASM 导出符号混淆 | `npm run crackme:v6 -- '<key>'` |
+| **[CrackMe v7](../../challenge/v7/README.md)** | 多语言混合靶场 (JS + WASM + Rust + Go + C) | 跨语言状态纠缠与多二进制完整性门禁 | `npm run crackme:v7 -- '<key>'` |
+| **[CrackMe v8](../../challenge/v8/README.md)** | Aegis 分片密钥金库 | AST 字符串加密（`bla_encrypt_strings`）+ 调用域状态绑定（`bla_bind_scope`） | `npm run crackme:v8 -- '<key>'` |
+| **[CrackMe v9](../../challenge/v9/README.md)** | Agent 闭环织入深度缠绕金库 | 完整 BLA 3.x 闭环织入（`weaveScore >= 70`）+ 分布式防篡改自校验 | `npm run crackme:v9 -- '<key>'` |
+
+---
+
+## ❓ 常见问题 (FAQ)
 
 <details>
 <summary><strong>哪些编程代理（Agents）可以使用 BLA？</strong></summary>
 
-任何支持本地 MCP 服务器或 `SKILL.md` 的 AI 编程代理均可使用。`npx bla-agents setup` 支持自动配置 Claude Code、Cursor、Codex、Gemini CLI、Windsurf、Google Antigravity、OpenCode、VS Code 与 GitHub Copilot CLI。详见[安装指南](../installation.md)。
-
+任何支持本地 MCP 服务器或 `SKILL.md` 的 AI 编程代理均可使用。`npx bla-agents setup` 支持自动配置 **Claude Code、Cursor、Codex、Gemini CLI、Windsurf、Google Antigravity、OpenCode、VS Code 与 GitHub Copilot CLI**。详见[安装指南](../installation.md)。
 </details>
 
 <details>
 <summary><strong>BLA 会影响软件运行速度或改变原有的运行结果吗？</strong></summary>
 
-不会。BLA 注入的静态分析预算守卫与扩展调用图均位于 $O(1)$ 数论不透明谓词（$7x^2 - 1 \neq y^2 \pmod 7$）保护的不可达分支内，不会在正常热路径上执行。所有 8 个基准测试目标均通过了 100% 输入/输出一致性校验。
-
-</details>
-
-<details>
-<summary><strong>BLA 与传统混淆器（如 javascript-obfuscator 或 O-LLVM）有什么区别？</strong></summary>
-
-传统混淆器主要依赖标识符重命名（如将 `calculatePrice` 改为 `_0x1a2b`），大语言模型仍可通过控制流语义进行推断；重度虚拟化壳则会带来运行时开销。BLA 针对 AI 逆向工具的静态分析器、资源配额与证据提取规则进行设计——破坏 IPC 字面量配对、触发解析器配额上限，并通过结构化影子逻辑干扰语义还原。
-
+不会。BLA 注入的静态分析预算守卫与扩展调用图均位于 $O(1)$ 数论不透明谓词（$7x^2 - 1 \neq y^2 \pmod 7$）保护的不可达分支或惰性节区内，不会在正常热路径上执行。全部 14 个基准测试目标均通过了 100% 输入/输出一致性校验。
 </details>
 
 <details>
 <summary><strong>保护文件时需要安装 Hopper、Ghidra、IDA 或 WABT 吗？</strong></summary>
 
-不需要。BLA 的全部 19 种格式处理模块（Babel AST、Chromium `.asar`、LEB128 `.wasm`、CPython `.pyc`、ELF/Mach-O/PE、SQLite3、`.safetensors`/`.gguf`、`.dex`/`Il2Cpp`）均内置在 `bla-agents` 中，无外部工具依赖。
-
-</details>
-
-<details>
-<summary><strong>当使用 REA 分析受 BLA 保护的软件时会发生什么？</strong></summary>
-
-1. JavaScript/Electron 分析器状态从 `complete` 降级为 `partial` / `limited`，无法静态配对 IPC 通道（`channel: null`）。
-2. Rust 二进制、Electron Fuse、SQLite 和 AI 模型检查器触发资源配额限制。
-3. 特征追踪流程（`trace_application_feature`）会进入扩展的交叉引用状态机与诱饵 SourceMap（`enclave://tee-runtime/`）。
-
-</details>
-
-<details>
-<summary><strong>安装 Skill 有什么作用？</strong></summary>
-
-[`blind-llm-agents` 技能](../../.agents/skills/blind-llm-agents/SKILL.md)为你的编程代理提供了标准的保护工作流说明，指导 Agent 完成发布前暴露面审计、选择保护级别（`stealth`、`balanced`、`maximum`、`bankrupt`）、接入打包插件以及验证输出产物。
-
+不需要。BLA 的全部 19+ 种格式处理模块均内置在 `bla-agents` 中，无外部工具依赖。
 </details>
 
 <details>
 <summary><strong>BLA 会上传源码或二进制文件吗？</strong></summary>
 
-不会。BLA 的所有审计、加固与验证均在本地离线完成，支持确定性随机种子（`--seed`），不发起任何网络请求。
-
+不会。BLA 的所有审计、源码手术、加固与验证均在本地离线完成，自动为每个项目在 `.blarc` 生成独立随机种子，不发起任何网络请求。
 </details>
 
-<details>
-<summary><strong>遇到问题或 Bug 怎么办？</strong></summary>
+---
 
-请先更新至最新版本并运行 `bla doctor` 检查环境状态：
+## 📚 文档与社区
 
-```bash
-npx bla-agents@latest doctor
-npx bla-agents@latest setup
-```
+- [⚖️ 免责声明 (DISCLAIMER.md)](../../DISCLAIMER.md)
+- [🚀 安装与 Agent 配置指南](../installation.md)
+- [🛠️ CLI 与 25 项 MCP 工具完整手册](../cli-and-mcp.md)
+- [🤖 一键式 Agent 闭环防御指南](../one-click-agent-defense.md)
+- [🧬 Weave-Decoy 源码织入说明](../weave-decoy-mcp.md)
+- [🔬 真机 REA 对抗验证报告](../redteam/empirical-rea-validation.md)
+- 💬 **[LINUX DO (`linux.do`)](https://linux.do/)** — 新的理想型社区
 
-若问题仍存在，请在 [GitHub Issues](https://github.com/qybaihe/bla/issues) 提交你的 BLA 版本号（`bla --version`）、目标格式与复现步骤。
-
-</details>
-
-## 文档
-
-- [安装与 Agent 配置](../installation.md)：Agent 自动注册、Bundler 插件集成、更新与卸载。
-- [CLI 与 MCP 契约说明](../cli-and-mcp.md)：命令行参数、退出码与 JSON-RPC 2.0 MCP 工具定义。
-- [反制 REA 技术矩阵](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)：`REA` 内部资源阈值与对应的保护机制说明。
-
-安全问题请通过 [SECURITY.md](../../SECURITY.md) 反馈。
-
-## 免责声明
-
-详见 [DISCLAIMER.md](../../DISCLAIMER.md)。
-
-BLA 是一款防御性软件保护工具，仅用于加固你拥有合法权利或获授权保护的软件、前端产物、模型与二进制文件。所有注入的元数据与辅助函数均保持原程序的正常运行时行为。
-
-## 贡献指南
-
-欢迎在 [qybaihe/bla](https://github.com/qybaihe/bla) 提交 Issue 或 Pull Request。提交代码前请运行 `npm run build && npm test && node dist/cli.js benchmark`。
-
-## 友情社区与公开挑战赛
-
-- 🎯 **[BLA 公开逆向挑战赛 (`challenge/`)](../../challenge/README.md)** — 欢迎挂上 REA、Claude Opus、Codex 挑战经 BLA 加固的靶机程序，看看能否避开蜜罐假 Flag 拿到真 Flag！
-- [LINUX DO (`linux.do`)](https://linux.do/) — 新的理想型社区
-
-## 开源协议
+## 📄 开源协议
 
 [MIT](../../LICENSE)
