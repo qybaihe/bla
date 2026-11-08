@@ -11,7 +11,7 @@ function exists(path: string): boolean {
   }
 }
 
-function physicalPath(path: string): string {
+export function physicalPath(path: string): string {
   const suffix: string[] = [];
   let ancestor = path;
   while (!exists(ancestor)) {

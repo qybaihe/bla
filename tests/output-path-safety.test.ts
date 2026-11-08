@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { protectTarget } from "../src/engine/protector.js";
+import { hardenProject } from "../src/engine/harden.js";
 
 const tempDirs: string[] = [];
 
@@ -108,5 +109,27 @@ describe("protectTarget output path safety", () => {
       inPlace: true,
     });
     expect(readFileSync(inputFile, "utf8")).not.toBe(original);
+  });
+
+  it("excludes custom outputDirectory from hardenProject discovery and rejects project root or .git/.node_modules outputDirectory", () => {
+    const root = makeTempDir();
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(join(root, "dist", "app.js"), "export const x = 1;\n", "utf8");
+
+    expect(() =>
+      hardenProject({ directory: root, outputDirectory: root }),
+    ).toThrow(/Output directory must not be the input directory/);
+
+    expect(() =>
+      hardenProject({ directory: root, outputDirectory: join(root, ".git", "out") }),
+    ).toThrow(/Refusing to use protected directory as output/);
+
+    const customOut = join(root, "custom-hardened");
+    const first = hardenProject({ directory: root, outputDirectory: customOut });
+    expect(first.hardenedCount).toBe(1);
+
+    // Re-running with the same custom outputDirectory must not re-discover custom-hardened/*
+    const second = hardenProject({ directory: root, outputDirectory: customOut });
+    expect(second.hardenedCount).toBe(1);
   });
 });

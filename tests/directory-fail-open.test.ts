@@ -1,8 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { protectTarget } from "../src/engine/protector.js";
+import { buildWeavePlan } from "../src/shields/weave/weave-decoy.js";
+import { isNodeSqliteAvailable, getDatabaseSyncClass } from "../src/core/sqlite-runtime.js";
+import { protectSqliteBuffer } from "../src/shields/formats/sqlite.js";
 
 const tempDirs: string[] = [];
 function createTempDir(): string {
@@ -18,9 +21,10 @@ afterEach(() => {
 });
 
 describe("directory protection reports child failures instead of copying unprotected bytes", () => {
-  it("fails loudly when a detected child artifact cannot be protected", () => {
+  it("fails loudly when a detected child artifact cannot be protected and cleans up partial output directory", () => {
     const dir = createTempDir();
     const input = join(dir, "in");
+    const output = join(dir, "out");
     mkdirSync(input, { recursive: true });
     writeFileSync(join(input, "app.js"), "const x = 1;\n", "utf8");
     // Invalid WASM magic bytes: format detection routes this to the WASM shield,
@@ -31,10 +35,11 @@ describe("directory protection reports child failures instead of copying unprote
     expect(() =>
       protectTarget({
         inputPath: input,
-        outputPath: join(dir, "out"),
+        outputPath: output,
         intensity: "balanced",
       }),
     ).toThrow(/Directory protection failed for 'broken\.wasm'/);
+    expect(existsSync(output)).toBe(false);
   });
 
   it("still copies non-protectable file types as a documented pass-through", () => {
@@ -53,5 +58,50 @@ describe("directory protection reports child failures instead of copying unprote
 
     expect(result.detectedFormat).toBe("directory");
     expect(readFileSync(join(output, "notes.txt"), "utf8")).toBe("plain text asset");
+  });
+
+  it("copies .db files without the SQLite magic instead of aborting the directory", () => {
+    const dir = createTempDir();
+    const input = join(dir, "in");
+    const output = join(dir, "out");
+    mkdirSync(input, { recursive: true });
+    writeFileSync(join(input, "app.js"), "const x = 1;\n", "utf8");
+    writeFileSync(join(input, "runtime-output.db"), "hex-encoded json\n", "utf8");
+
+    const result = protectTarget({
+      inputPath: input,
+      outputPath: output,
+      intensity: "balanced",
+    });
+
+    expect(result.detectedFormat).toBe("directory");
+    expect(readFileSync(join(output, "runtime-output.db"), "utf8")).toBe("hex-encoded json\n");
+
+    // Weave planner also ignores non-SQLite .db files so overallStatus is not downgraded
+    const plan = buildWeavePlan(input);
+    expect(plan.targets.map((t) => t.relativePath)).toEqual(["app.js"]);
+    expect(plan.overallStatus).toBe("ready");
+  });
+
+  it("protects SQLite databases containing WITHOUT ROWID tables", () => {
+    if (!isNodeSqliteAvailable()) return;
+    const dir = createTempDir();
+    const dbPath = join(dir, "without-rowid.db");
+    const DatabaseSync = getDatabaseSyncClass();
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      PRAGMA journal_mode = DELETE;
+      CREATE TABLE kv_store (
+        k TEXT PRIMARY KEY,
+        v TEXT NOT NULL
+      ) WITHOUT ROWID;
+      INSERT INTO kv_store (k, v) VALUES ('tier', 'pro');
+    `);
+    db.close();
+
+    const raw = readFileSync(dbPath);
+    const res = protectSqliteBuffer(raw, { intensity: "balanced", seed: "without-rowid-seed" });
+    expect(res.honeyTablesInjected).toBeGreaterThanOrEqual(5);
+    expect(res.businessDataState).toBe("business-data-preserved");
   });
 });

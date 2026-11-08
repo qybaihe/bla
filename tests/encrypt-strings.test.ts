@@ -115,4 +115,43 @@ module.exports = { unlock };
     expect(report.status).toBe("noop");
     expect(report.totalEncrypted).toBe(0);
   });
+
+  it("uses AST spans so comments and object keys are preserved while backtick templates are encrypted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-enc-ast-"));
+    const secret = "FLAG{ast_span_safe_secret_value_012345}";
+    const tmplSecret = "FLAG{template_literal_secret_67890}";
+    const src = [
+      `// Comment mentioning "${secret}" must not be rewritten into invalid JS`,
+      `const map = { "${secret}": "preserve-key-only" };`,
+      `const val = "${secret}";`,
+      `const tmpl = \`${tmplSecret}\`;`,
+      `module.exports = { map, val, tmpl };`,
+    ].join("\n");
+    writeFileSync(join(dir, "license.cjs"), src, "utf8");
+
+    const report = encryptStrings({
+      path: dir,
+      seed: "ast-seed",
+      outDir: join(dir, "out"),
+    });
+    expect(report.status).toBe("ok");
+    expect(report.totalEncrypted).toBe(2);
+
+    const out = readFileSync(join(dir, "out", "license.cjs"), "utf8");
+    expect(out).toContain(`// Comment mentioning "${secret}"`);
+    expect(out).toContain(`"${secret}": "preserve-key-only"`);
+    expect(out).not.toContain(`\`${tmplSecret}\``);
+
+    const mod = require(join(dir, "out", "license.cjs"));
+    expect(mod.val).toBe(secret);
+    expect(mod.tmpl).toBe(tmplSecret);
+
+    // Re-running on an already encrypted output is idempotent (noop)
+    const second = encryptStrings({
+      path: join(dir, "out"),
+      seed: "ast-seed",
+      outDir: join(dir, "out2"),
+    });
+    expect(second.status).toBe("noop");
+  });
 });

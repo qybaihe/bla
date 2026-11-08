@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadBlaConfig } from "../src/core/config.js";
+import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "../src/core/config.js";
 
 const tempDirs: string[] = [];
 function createTempDir(): string {
@@ -43,10 +43,25 @@ describe(".blarc/config validation", () => {
     expect(() => loadBlaConfig(dir)).toThrow(/intensity.*stealth, balanced, maximum, bankrupt/);
   });
 
-  it("fails loudly on a non-boolean boolean field", () => {
+  it("fails loudly on a non-boolean boolean field including sidecarEntangle and requireAgentWeave", () => {
     const dir = createTempDir();
     writeFileSync(join(dir, ".blarc"), JSON.stringify({ selfSeal: "yes" }), "utf8");
     expect(() => loadBlaConfig(dir)).toThrow(/selfSeal.*boolean/);
+
+    writeFileSync(join(dir, ".blarc"), JSON.stringify({ sidecarEntangle: 1 }), "utf8");
+    expect(() => loadBlaConfig(dir)).toThrow(/sidecarEntangle.*boolean/);
+
+    writeFileSync(join(dir, ".blarc"), JSON.stringify({ requireAgentWeave: "true" }), "utf8");
+    expect(() => loadBlaConfig(dir)).toThrow(/requireAgentWeave.*boolean/);
+  });
+
+  it("validates existing config when resolveProjectSeed or initBlaConfig runs", () => {
+    const dir = createTempDir();
+    writeFileSync(join(dir, ".blarc"), "{ malformed", "utf8");
+    expect(() => resolveProjectSeed(dir)).toThrow(/Invalid BLA config at .*\.blarc/);
+
+    writeFileSync(join(dir, "bla.config.json"), "{ malformed", "utf8");
+    expect(() => initBlaConfig(dir)).toThrow(/Invalid BLA config at .*bla\.config\.json/);
   });
 
   it("rejects config files above the size cap", () => {

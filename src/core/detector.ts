@@ -216,7 +216,10 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   if ([".html", ".htm"].includes(ext)) return "html-bundle";
   if ([".py", ".pyw"].includes(ext)) return "python-source";
   if (ext === ".wasm") return "wasm";
-  if ([".sqlite", ".sqlite3", ".db"].includes(ext)) return "sqlite";
+  // Only unambiguous `.sqlite`/`.sqlite3` extensions fall back without magic so
+  // corrupt SQLite files still fail closed; generic `.db` files (JSON/hex state,
+  // LevelDB, etc.) require the `SQLite format 3\0` magic check at step 5 (#130).
+  if ([".sqlite", ".sqlite3"].includes(ext)) return "sqlite";
   if (ext === ".gguf") return "model-gguf";
   if (ext === ".dex") return "android-dex";
   if ([".plist", ".entitlements", ".mobileprovision"].includes(ext)) return "apple-plist";

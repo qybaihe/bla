@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -963,16 +964,27 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     binarySectionsPatched = res.blocksInjected;
     counteredVectors.add("uf2-firmware-inspection");
   } else if (format === "directory") {
+    const outputExistedBefore = existsSync(absOutput);
     mkdirSync(absOutput, { recursive: true });
     const walkAndProtect = (srcDir: string, dstDir: string): void => {
       mkdirSync(dstDir, { recursive: true });
       for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
-        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        if (
+          entry.name === "node_modules" ||
+          entry.name === ".git" ||
+          entry.name === ".hg" ||
+          entry.name === ".svn" ||
+          entry.name === ".bla-hardened" ||
+          entry.name === "__pycache__"
+        ) {
+          continue;
+        }
+        if (entry.isSymbolicLink()) continue;
         const srcFull = join(srcDir, entry.name);
         const dstFull = join(dstDir, entry.name);
         if (entry.isDirectory()) {
           walkAndProtect(srcFull, dstFull);
-        } else {
+        } else if (entry.isFile()) {
           const ext = extname(entry.name).toLowerCase();
           if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(ext)) {
             const raw = readFileSync(srcFull, "utf8");
@@ -980,6 +992,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
               intensity,
               seed: `${seed}:${entry.name}`,
               filename: entry.name,
+              llmDirectives: options.llmDirectives,
               ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
             });
             const honey = generateHoneySourceMap(
@@ -1007,6 +1020,21 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
                   intensity,
                   seed: `${seed}:${entry.name}`,
                   honeySourceMaps: options.honeySourceMaps,
+                  llmDirectives: options.llmDirectives,
+                  weaveDecoys: options.weaveDecoys,
+                  selfSeal: options.selfSeal,
+                  sidecarEntangle: options.sidecarEntangle,
+                  wasmPreserveExports: options.wasmPreserveExports,
+                  allowLaneIndependentGates: options.allowLaneIndependentGates,
+                  allowPlaintextSeal: options.allowPlaintextSeal,
+                  allowWasmClearParamCarriers: options.allowWasmClearParamCarriers,
+                  allowStablePanelDeriveAbi: options.allowStablePanelDeriveAbi,
+                  allowJsAesUnwrap: options.allowJsAesUnwrap,
+                  allowPanelOfflineOracle: options.allowPanelOfflineOracle,
+                  allowJsWasmHydrateDump: options.allowJsWasmHydrateDump,
+                  allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
+                  allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
+                  selfSealSiblingPaths: options.selfSealSiblingPaths,
                 });
                 decoyFunctionsInjected += subRes.metrics.decoyFunctionsInjected;
                 fakeCrossReferencesCreated += subRes.metrics.fakeCrossReferencesCreated;
@@ -1030,7 +1058,18 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         }
       }
     };
-    walkAndProtect(absInput, absOutput);
+    try {
+      walkAndProtect(absInput, absOutput);
+    } catch (err) {
+      if (!outputExistedBefore) {
+        try {
+          rmSync(absOutput, { recursive: true, force: true });
+        } catch {
+          // Preserve the original child protection failure if cleanup fails.
+        }
+      }
+      throw err;
+    }
     counteredVectors.add("js-static-semantics");
     counteredVectors.add("electron-ipc-bridge");
     counteredVectors.add("js-route-rpc-inventory");

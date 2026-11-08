@@ -134,6 +134,7 @@ interface ParsedCliArgs {
   readonly signManifest: boolean;
   readonly manifestKey?: string;
   readonly publicKey?: string;
+  readonly artifactPath?: string;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
@@ -149,6 +150,9 @@ interface ParsedCliArgs {
   readonly allowJsWasmHydrateDump: boolean;
   readonly allowWasmXorMaskSidecar: boolean;
   readonly allowWasmSealXorKnownPlaintext: boolean;
+  readonly allowPlaintextString: boolean;
+  readonly allowSinglePointIntegrity: boolean;
+  readonly allowMissingBindRuntime: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -175,6 +179,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let signManifest = false;
   let manifestKey: string | undefined;
   let publicKey: string | undefined;
+  let artifactPath: string | undefined;
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
@@ -189,6 +194,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowJsWasmHydrateDump = false;
   let allowWasmXorMaskSidecar = false;
   let allowWasmSealXorKnownPlaintext = false;
+  let allowPlaintextString = false;
+  let allowSinglePointIntegrity = false;
+  let allowMissingBindRuntime = false;
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
@@ -231,6 +239,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       manifestKey = argv[++i]!;
     } else if (arg === "--public-key" && i + 1 < argv.length) {
       publicKey = argv[++i]!;
+    } else if (arg === "--artifact" && i + 1 < argv.length) {
+      artifactPath = argv[++i]!;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -259,6 +269,12 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowWasmXorMaskSidecar = true;
     } else if (arg === "--allow-wasm-seal-xor-known-plaintext") {
       allowWasmSealXorKnownPlaintext = true;
+    } else if (arg === "--allow-plaintext-string") {
+      allowPlaintextString = true;
+    } else if (arg === "--allow-single-point-integrity") {
+      allowSinglePointIntegrity = true;
+    } else if (arg === "--allow-missing-bind-runtime") {
+      allowMissingBindRuntime = true;
     } else if (arg.startsWith("--wasm-preserve-exports=")) {
       wasmPreserveExports = arg
         .slice("--wasm-preserve-exports=".length)
@@ -333,6 +349,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     signManifest,
     ...(manifestKey !== undefined ? { manifestKey } : {}),
     ...(publicKey !== undefined ? { publicKey } : {}),
+    ...(artifactPath !== undefined ? { artifactPath } : {}),
     llmDirectives,
     weaveDecoys,
     selfSeal,
@@ -348,6 +365,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allowJsWasmHydrateDump,
     allowWasmXorMaskSidecar,
     allowWasmSealXorKnownPlaintext,
+    allowPlaintextString,
+    allowSinglePointIntegrity,
+    allowMissingBindRuntime,
     lang,
     clients,
     allDetected,
@@ -618,6 +638,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowJsWasmHydrateDump: parsed.allowJsWasmHydrateDump,
           allowWasmXorMaskSidecar: parsed.allowWasmXorMaskSidecar,
           allowWasmSealXorKnownPlaintext: parsed.allowWasmSealXorKnownPlaintext,
+          allowPlaintextString: parsed.allowPlaintextString,
+          allowSinglePointIntegrity: parsed.allowSinglePointIntegrity,
+          allowMissingBindRuntime: parsed.allowMissingBindRuntime,
           allowLaneIndependentGates: parsed.allowLaneIndependentGates,
           allowPanelOfflineOracle: parsed.allowPanelOfflineOracle,
           allowStablePanelDeriveAbi: parsed.allowStablePanelDeriveAbi,
@@ -635,6 +658,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             wasmSealXor: report.details.wasmSealXor.length,
             lanes: report.details.lanes.length,
             panelDerive: report.details.panelDerive.length,
+            plaintextSecrets: report.details.plaintextSecrets.length,
+            integrityCoverage: report.details.integrityCoverage.length,
+            bindScope: report.details.bindScope.length,
           } }, null, 2));
         } else {
           console.log(formatPackagingGatesReport(report));
@@ -966,10 +992,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       case "verify-manifest": {
         const target = parsed.positionals[0];
         if (!target) {
-          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>]`.");
+          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>] [--artifact <path>]`.");
           return 1;
         }
-        const result = verifyManifestFile(target, parsed.publicKey);
+        const result = verifyManifestFile(target, parsed.publicKey, parsed.artifactPath);
         if (parsed.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
