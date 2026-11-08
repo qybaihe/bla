@@ -216,7 +216,7 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   if ([".html", ".htm"].includes(ext)) return "html-bundle";
   if ([".py", ".pyw"].includes(ext)) return "python-source";
   if (ext === ".wasm") return "wasm";
-  if ([".sqlite", ".sqlite3", ".db"].includes(ext)) return "sqlite";
+  if ([".sqlite", ".sqlite3"].includes(ext)) return "sqlite";
   if (ext === ".gguf") return "model-gguf";
   if (ext === ".dex") return "android-dex";
   if ([".plist", ".entitlements", ".mobileprovision"].includes(ext)) return "apple-plist";

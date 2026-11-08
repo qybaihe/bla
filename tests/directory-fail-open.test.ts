@@ -54,4 +54,22 @@ describe("directory protection reports child failures instead of copying unprote
     expect(result.detectedFormat).toBe("directory");
     expect(readFileSync(join(output, "notes.txt"), "utf8")).toBe("plain text asset");
   });
+
+  it("copies .db files without the SQLite magic instead of aborting the directory", () => {
+    const dir = createTempDir();
+    const input = join(dir, "in");
+    const output = join(dir, "out");
+    mkdirSync(input, { recursive: true });
+    writeFileSync(join(input, "app.js"), "const x = 1;\n", "utf8");
+    writeFileSync(join(input, "runtime-output.db"), "hex-encoded json\n", "utf8");
+
+    const result = protectTarget({
+      inputPath: input,
+      outputPath: output,
+      intensity: "balanced",
+    });
+
+    expect(result.detectedFormat).toBe("directory");
+    expect(readFileSync(join(output, "runtime-output.db"), "utf8")).toBe("hex-encoded json\n");
+  });
 });
