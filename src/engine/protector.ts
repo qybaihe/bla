@@ -270,7 +270,7 @@ function applyPanelDeriveRewrite(
   return rw.code;
 }
 
-interface AtomicWriteOptions {
+export interface AtomicWriteOptions {
   /**
    * Allow following an existing symlink/hardlink at `targetPath`. Only set this
    * for explicit in-place protection, where the user asked to overwrite an
@@ -280,7 +280,7 @@ interface AtomicWriteOptions {
   readonly allowLinkWriteThrough?: boolean;
 }
 
-function writeFileAtomicSync(
+export function writeFileAtomicSync(
   targetPath: string,
   content: string | Buffer,
   encoding?: BufferEncoding,
