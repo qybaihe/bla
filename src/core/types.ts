@@ -222,7 +222,8 @@ export interface ProtectionOptions {
   /**
    * Opt-in sidecar/entry entanglement (issue #40 / Direction-3). When true and
    * `sidecarEntanglePaths` is non-empty, JS/Python protect inserts a strip⇒fail
-   * preamble that re-measures sibling sidecar bytes. OFF by default.
+   * preamble and WASM protect plants a `bla.sidecar.v1` custom-section note
+   * that re-measures sibling sidecar bytes. OFF by default.
    */
   readonly sidecarEntangle?: boolean;
   /**
