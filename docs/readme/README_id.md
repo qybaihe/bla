@@ -186,3 +186,15 @@ Tidak pernah. Seluruh operasi berjalan 100% secara lokal di perangkat Anda. Tida
 - [Referensi CLI dan MCP](../cli-and-mcp.md)
 - [Matriks Pertahanan Teknis Counter-REA](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Pernyataan Penyangkalan (Disclaimer)](../../DISCLAIMER.md) · [Lisensi MIT](../../LICENSE)
+
+## Riwayat star
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) menggambar pertumbuhan star GitHub untuk [`qybaihe/bla`](https://github.com/qybaihe/bla). Gambar di-cache sekitar satu hari dan bukan hitungan per detik. Pilih gambar untuk membuka riwayat lengkap.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="Grafik riwayat star repositori qybaihe/bla" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

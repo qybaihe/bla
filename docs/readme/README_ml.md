@@ -185,3 +185,15 @@ Never. All operations run 100% locally on your machine.
 - [CLI and MCP contracts](../cli-and-mcp.md)
 - [Counter-REA technical defense matrix](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Disclaimer](../../DISCLAIMER.md) · [MIT License](../../LICENSE)
+
+## സ്റ്റാർ ചരിത്രം
+
+[`qybaihe/bla`](https://github.com/qybaihe/bla) യുടെ GitHub സ്റ്റാർ വളർച്ച [Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) വരയ്ക്കുന്നു. ചിത്രം ഏകദേശം ഒരു ദിവസം കാഷ് ചെയ്യപ്പെടുന്നു; സെക്കൻഡ് തോറുമുള്ള എണ്ണമല്ല. മുഴുവൻ ചരിത്രത്തിന് ചിത്രം തുറക്കുക.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="qybaihe/bla റെപ്പോസിറ്ററിയുടെ സ്റ്റാർ ചരിത്ര ഗ്രാഫ്" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

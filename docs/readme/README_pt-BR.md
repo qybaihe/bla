@@ -185,3 +185,15 @@ Never. All operations run 100% locally on your machine.
 - [CLI and MCP contracts](../cli-and-mcp.md)
 - [Counter-REA technical defense matrix](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Disclaimer](../../DISCLAIMER.md) · [MIT License](../../LICENSE)
+
+## Histórico de estrelas
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) desenha o crescimento de estrelas do GitHub de [`qybaihe/bla`](https://github.com/qybaihe/bla). A imagem fica em cache por cerca de um dia e não é uma contagem por segundo. Clique para abrir o histórico completo.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="Gráfico do histórico de estrelas do repositório qybaihe/bla" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

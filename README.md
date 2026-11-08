@@ -256,3 +256,15 @@ npm run redteam:rea                        # authoritative (real REA)
 ## License
 
 [MIT](LICENSE)
+
+## Star history
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) draws the GitHub star growth for [`qybaihe/bla`](https://github.com/qybaihe/bla). The chart image is cached for about a day and is not a per-second count. Select it to open the full history.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="Star history chart for the qybaihe/bla GitHub repository" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

@@ -185,3 +185,15 @@ Never. All operations run 100% locally on your machine.
 - [CLI and MCP contracts](../cli-and-mcp.md)
 - [Counter-REA technical defense matrix](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Disclaimer](../../DISCLAIMER.md) · [MIT License](../../LICENSE)
+
+## Star 기록
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left)가 [`qybaihe/bla`](https://github.com/qybaihe/bla)의 GitHub Star 증가를 그립니다. 이미지는 약 하루 캐시되며 초 단위 수치가 아닙니다. 이미지를 누르면 전체 기록이 열립니다.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="qybaihe/bla 저장소의 Star 기록 차트" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

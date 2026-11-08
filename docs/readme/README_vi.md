@@ -185,3 +185,15 @@ Never. All operations run 100% locally on your machine.
 - [CLI and MCP contracts](../cli-and-mcp.md)
 - [Counter-REA technical defense matrix](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Disclaimer](../../DISCLAIMER.md) · [MIT License](../../LICENSE)
+
+## Lịch sử sao
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) vẽ mức tăng sao GitHub của [`qybaihe/bla`](https://github.com/qybaihe/bla). Ảnh được lưu cache khoảng một ngày và không phải bộ đếm theo giây. Chọn ảnh để mở toàn bộ lịch sử.
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="Biểu đồ lịch sử sao của kho qybaihe/bla" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

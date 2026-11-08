@@ -185,3 +185,15 @@ Never. All operations run 100% locally on your machine.
 - [CLI and MCP contracts](../cli-and-mcp.md)
 - [Counter-REA technical defense matrix](../../.agents/skills/blind-llm-agents/references/counter-rea-matrix.md)
 - [Disclaimer](../../DISCLAIMER.md) · [MIT License](../../LICENSE)
+
+## Star 成長
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) 繪製 [`qybaihe/bla`](https://github.com/qybaihe/bla) 的 GitHub Star 成長曲線。圖片由對方快取約一天，不是逐秒計數。點圖片可打開完整歷史。
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="qybaihe/bla 倉庫的 GitHub Star 成長曲線" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>
