@@ -654,4 +654,212 @@ module.exports = { verifyApiKey };
         ?.text,
     ).toContain("refused by require_agent_weave");
   });
+
+  it("handles class methods, parameter-passed/Map shared state, early fail-closed guards, multi-line async Python, native headers, and recursive encrypt_strings", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-v3-dogfood-regressions-"));
+    temps.push(dir);
+
+    // 1. JS class method + parameter-passed state mutation + early fail-closed `return false`
+    const tsClassPath = join(dir, "validator.ts");
+    writeFileSync(
+      tsClassPath,
+      `
+const ledgerMap = new Map<string, number>([["epoch", 1], ["digest", 0x811c9dc5]]);
+
+function reconcileLedgerCursor(state: Map<string, number>, delta: number): number {
+  const next = ((state.get("digest") ?? 0) ^ delta) >>> 0;
+  state.set("digest", next);
+  return next;
+}
+
+export default class LicenseService {
+  verifyToken(token: string): boolean | number {
+    if (!token || token.length !== 8) return false;
+    let fold = 0x811c9dc5;
+    if ((ledgerMap.get("epoch") ?? 1) !== 0) {
+      fold ^= reconcileLedgerCursor(ledgerMap, token.length);
+    }
+    for (let i = 0; i < token.length; i++) {
+      fold = Math.imul(fold ^ token.charCodeAt(i), 0x01000193) >>> 0;
+    }
+    return (fold ^ (ledgerMap.get("digest") ?? 0)) === 0x12345678 ? 1 : 0;
+  }
+}
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const tsVerifyRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 50,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: tsClassPath },
+      },
+    });
+    expect((tsVerifyRes?.result as { isError: boolean }).isError).toBe(false);
+    const tsVerify = (
+      tsVerifyRes?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(tsVerify.overallPassed).toBe(true);
+    expect(tsVerify.weaveScore).toBe(100);
+
+    // 2. Rejects unused helper return binding + `!0` boolean disguise + dummy `1 ^ 1` XOR
+    const bypassAttemptPath = join(dir, "bypass.js");
+    writeFileSync(
+      bypassAttemptPath,
+      `
+const sessionState = { epoch: 1, cursor: 0 };
+function reconcileQuota(step) {
+  sessionState.cursor = (sessionState.cursor + step) | 1;
+  return sessionState.cursor;
+}
+export function verifyGate(key) {
+  if ((sessionState.epoch & 1) !== 0) {
+    const _unused = reconcileQuota(1);
+  }
+  const dummy = 1 ^ 1;
+  return key.length === 8 ? !0 : !1;
+}
+`.trim() + "\n",
+      "utf8",
+    );
+    const bypassVerifyRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 51,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: bypassAttemptPath },
+      },
+    });
+    expect((bypassVerifyRes?.result as { isError: boolean }).isError).toBe(true);
+    const bypassVerify = (
+      bypassVerifyRes?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(bypassVerify.overallPassed).toBe(false);
+    const bypassCrown = bypassVerify.files[0]?.checks.find(
+      (c) => c.id === "crown-jewel-entanglement",
+    );
+    expect(bypassCrown?.passed).toBe(false);
+    expect(bypassCrown?.evidence).toContain("raw boolean return");
+    expect(bypassCrown?.evidence).toContain("cosmetic/unentangled gate");
+
+    // Remove bypass.js before directory-level checks
+    rmSync(bypassAttemptPath, { force: true });
+
+    // 3. Multi-line async Python function with blank lines in body
+    const pyAsyncPath = join(dir, "async_policy.py");
+    writeFileSync(
+      pyAsyncPath,
+      `
+_policy_ledger = {"epoch": 1, "digest": 0x811C9DC5}
+
+async def reconcile_session_quota(
+    step: int,
+    weight: int = 1,
+) -> int:
+    _policy_ledger["digest"] = (_policy_ledger["digest"] ^ (step * weight)) & 0xFFFFFFFF
+
+    return _policy_ledger["digest"]
+
+async def verify_access_policy(
+    token: str,
+    tenant_id: str,
+) -> int:
+    if not token:
+        return 0
+
+    acc = 0x811C9DC5
+    if (_policy_ledger["epoch"] & 1) != 0:
+        acc ^= await reconcile_session_quota(len(token), len(tenant_id))
+
+    for ch in token:
+        acc = ((acc ^ ord(ch)) * 0x01000193) & 0xFFFFFFFF
+    return 200 if acc == 0xdeadbeef else 403
+`.trim() + "\n",
+      "utf8",
+    );
+
+    const pyVerifyRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 52,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: pyAsyncPath },
+      },
+    });
+    expect((pyVerifyRes?.result as { isError: boolean }).isError).toBe(false);
+
+    // 4. Emit C header into directory and verify it does not trip bla_verify_weave
+    const headerPath = join(dir, "bla_shield.h");
+    const emitRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 53,
+      method: "tools/call",
+      params: {
+        name: "bla_emit_headers",
+        arguments: {
+          language: "c",
+        },
+      },
+    });
+    expect((emitRes?.result as { isError: boolean }).isError).toBe(false);
+    const emittedHeaderContent = (
+      emitRes?.result as { content: Array<{ text: string }> }
+    ).content[0]!.text;
+    writeFileSync(headerPath, emittedHeaderContent, "utf8");
+    expect(readFileSync(headerPath, "utf8")).not.toMatch(/BLA-SHIELD/);
+
+    const dirVerifyRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 54,
+      method: "tools/call",
+      params: {
+        name: "bla_verify_weave",
+        arguments: { path: dir },
+      },
+    });
+    expect((dirVerifyRes?.result as { isError: boolean }).isError).toBe(false);
+    const dirVerify = (
+      dirVerifyRes?.result as { structuredContent: WeaveVerificationReport }
+    ).structuredContent;
+    expect(dirVerify.overallPassed).toBe(true);
+    expect(
+      dirVerify.files.some((f) => f.relativePath.endsWith("bla_shield.h")),
+    ).toBe(false);
+
+    // 5. Recursive bla_encrypt_strings on arbitrary nested JS file
+    const nestedSecretPath = join(dir, "nested.js");
+    writeFileSync(
+      nestedSecretPath,
+      `const ENDPOINT = "https://license.internal.example.com/v1/verify";\nmodule.exports = { ENDPOINT };\n`,
+      "utf8",
+    );
+    const encRes = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 55,
+      method: "tools/call",
+      params: {
+        name: "bla_encrypt_strings",
+        arguments: {
+          path: dir,
+          seed: "dogfood-seed-2026",
+        },
+      },
+    });
+    expect((encRes?.result as { isError: boolean }).isError).toBe(false);
+    const encReport = (
+      encRes?.result as {
+        structuredContent: { status: string; totalEncrypted: number };
+      }
+    ).structuredContent;
+    expect(encReport.status).toBe("ok");
+    expect(encReport.totalEncrypted).toBeGreaterThanOrEqual(1);
+    expect(readFileSync(nestedSecretPath, "utf8")).not.toContain(
+      "https://license.internal.example.com/v1/verify",
+    );
+  });
 });

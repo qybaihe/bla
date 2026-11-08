@@ -542,6 +542,9 @@ export function hardenProject(
     "typescript",
     "html-bundle",
     "python-source",
+    "elf",
+    "macho",
+    "pe",
   ]);
   const weaveableDiscovered = discovered.filter((a) => weaveFormats.has(a.format));
   let agentWeaveAssessment: AgentWeaveAssessment | undefined;

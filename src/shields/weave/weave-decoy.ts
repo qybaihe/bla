@@ -551,13 +551,103 @@ function classifyFunctionRole(
   name: string,
   exported: boolean,
 ): WeaveFunctionCandidate["role"] {
-  if (/auth|verify|license|unlock|token|check|gate|seal|validate|sign/i.test(name)) {
+  const cleaned = name.replace(/checkpoint/gi, "");
+  if (/auth|verify|license|unlock|token|check|gate|seal|validate|sign/i.test(cleaned)) {
     return "gate-or-auth";
   }
-  if (/route|handle|controller|dispatch|request|endpoint|api|main|init/i.test(name)) {
+  if (/route|handle|controller|dispatch|request|endpoint|api|main|init/i.test(cleaned)) {
     return "route-handler";
   }
   return exported ? "exported-api" : "internal-helper";
+}
+
+function extractJsFunctionName(path: any): string {
+  if (path.getFunctionParent && path.getFunctionParent() !== null) {
+    return "";
+  }
+  const node = path.node;
+  const parent = path.parent;
+  if (t.isFunctionDeclaration(node) && node.id) {
+    return node.id.name;
+  }
+  if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+    return parent.id.name;
+  }
+  if (t.isClassMethod(node) && t.isIdentifier(node.key)) {
+    return node.key.name === "constructor" ? "" : node.key.name;
+  }
+  if (t.isClassPrivateMethod(node) && t.isPrivateName(node.key)) {
+    return node.key.id.name;
+  }
+  if (
+    t.isAssignmentExpression(parent) &&
+    t.isMemberExpression(parent.left) &&
+    t.isIdentifier(parent.left.property)
+  ) {
+    return parent.left.property.name;
+  }
+  if (
+    (t.isObjectProperty(parent) && t.isIdentifier(parent.key)) ||
+    (t.isObjectMethod(node) && t.isIdentifier(node.key))
+  ) {
+    const objExprPath = t.isObjectMethod(node)
+      ? path.parentPath
+      : path.parentPath?.parentPath;
+    const objParent = objExprPath?.parent;
+    const isExportedObj =
+      t.isExportDefaultDeclaration(objParent) ||
+      (t.isAssignmentExpression(objParent) &&
+        t.isMemberExpression(objParent.left) &&
+        t.isIdentifier(objParent.left.object) &&
+        (objParent.left.object.name === "module" ||
+          objParent.left.object.name === "exports"));
+    if (isExportedObj) {
+      const keyNode = t.isObjectMethod(node) ? node.key : parent.key;
+      return t.isIdentifier(keyNode) ? keyNode.name : "";
+    }
+  }
+  return "";
+}
+
+function extractStaticStringOrTemplate(node: t.Node | null | undefined): string | null {
+  if (!node) return null;
+  if (t.isStringLiteral(node)) return node.value;
+  if (
+    t.isTemplateLiteral(node) &&
+    node.expressions.length === 0 &&
+    node.quasis.length === 1
+  ) {
+    return node.quasis[0]?.value.cooked ?? node.quasis[0]?.value.raw ?? null;
+  }
+  return null;
+}
+
+function inspectRawBooleanReturnValue(
+  node: t.Node | null | undefined,
+): { readonly isRawBool: boolean; readonly isTrueBranch: boolean } {
+  if (!node) return { isRawBool: false, isTrueBranch: false };
+  if (t.isBooleanLiteral(node)) {
+    return { isRawBool: true, isTrueBranch: node.value === true };
+  }
+  if (
+    t.isUnaryExpression(node) &&
+    node.operator === "!" &&
+    t.isNumericLiteral(node.argument) &&
+    (node.argument.value === 0 || node.argument.value === 1)
+  ) {
+    return { isRawBool: true, isTrueBranch: node.argument.value === 0 };
+  }
+  if (t.isConditionalExpression(node)) {
+    const c = inspectRawBooleanReturnValue(node.consequent);
+    const a = inspectRawBooleanReturnValue(node.alternate);
+    if (c.isRawBool && a.isRawBool) {
+      return {
+        isRawBool: true,
+        isTrueBranch: c.isTrueBranch || a.isTrueBranch,
+      };
+    }
+  }
+  return { isRawBool: false, isTrueBranch: false };
 }
 
 function buildJsSurgicalWorkorder(
@@ -584,6 +674,17 @@ function buildJsSurgicalWorkorder(
         const decl = path.node.declaration;
         if (t.isFunctionDeclaration(decl) && decl.id) {
           exportedNames.add(decl.id.name);
+        } else if (t.isClassDeclaration(decl)) {
+          if (decl.id) exportedNames.add(decl.id.name);
+          for (const item of decl.body.body) {
+            if (
+              t.isClassMethod(item) &&
+              t.isIdentifier(item.key) &&
+              item.key.name !== "constructor"
+            ) {
+              exportedNames.add(item.key.name);
+            }
+          }
         } else if (t.isVariableDeclaration(decl)) {
           for (const d of decl.declarations) {
             if (t.isIdentifier(d.id)) exportedNames.add(d.id.name);
@@ -592,6 +693,24 @@ function buildJsSurgicalWorkorder(
         for (const spec of path.node.specifiers) {
           if (t.isExportSpecifier(spec) && t.isIdentifier(spec.local)) {
             exportedNames.add(spec.local.name);
+          }
+        }
+      },
+      ExportDefaultDeclaration(path) {
+        const decl = path.node.declaration;
+        if (t.isFunctionDeclaration(decl) && decl.id) {
+          exportedNames.add(decl.id.name);
+        } else if (t.isIdentifier(decl)) {
+          exportedNames.add(decl.name);
+        } else if (t.isClassDeclaration(decl)) {
+          for (const item of decl.body.body) {
+            if (
+              t.isClassMethod(item) &&
+              t.isIdentifier(item.key) &&
+              item.key.name !== "constructor"
+            ) {
+              exportedNames.add(item.key.name);
+            }
           }
         }
       },
@@ -605,11 +724,14 @@ function buildJsSurgicalWorkorder(
             if (t.isIdentifier(left.property)) {
               exportedNames.add(left.property.name);
             }
-            if (t.isIdentifier( path.node.right)) {
+            if (t.isIdentifier(path.node.right)) {
               exportedNames.add(path.node.right.name);
             } else if (t.isObjectExpression(path.node.right)) {
               for (const prop of path.node.right.properties) {
-                if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+                if (
+                  (t.isObjectProperty(prop) || t.isObjectMethod(prop)) &&
+                  t.isIdentifier(prop.key)
+                ) {
                   exportedNames.add(prop.key.name);
                 }
               }
@@ -657,27 +779,8 @@ function buildJsSurgicalWorkorder(
         }
       },
       Function(path) {
-        let fnName = "anonymous";
-        if (t.isFunctionDeclaration(path.node) && path.node.id) {
-          fnName = path.node.id.name;
-        } else if (
-          t.isVariableDeclarator(path.parent) &&
-          t.isIdentifier(path.parent.id)
-        ) {
-          fnName = path.parent.id.name;
-        } else if (
-          t.isObjectProperty(path.parent) &&
-          t.isIdentifier(path.parent.key)
-        ) {
-          fnName = path.parent.key.name;
-        } else if (
-          t.isAssignmentExpression(path.parent) &&
-          t.isMemberExpression(path.parent.left) &&
-          t.isIdentifier(path.parent.left.property)
-        ) {
-          fnName = path.parent.left.property.name;
-        }
-        if (fnName === "anonymous") return;
+        const fnName = extractJsFunctionName(path);
+        if (!fnName) return;
 
         const words = fnName
           .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
@@ -704,17 +807,36 @@ function buildJsSurgicalWorkorder(
           });
         }
 
-        let hasBooleanLiteralReturn = false;
+        let hasTrueLiteralReturn = false;
+        let hasFalseLiteralReturn = false;
+        let hasComputedReturn = false;
         let hasCleartextComparison = false;
         let boolReturnLine = line;
         let cleartextLine = line;
 
+        if (!t.isBlockStatement(path.node.body)) {
+          const b = inspectRawBooleanReturnValue(path.node.body);
+          if (b.isRawBool) {
+            if (b.isTrueBranch) hasTrueLiteralReturn = true;
+            else hasFalseLiteralReturn = true;
+          } else {
+            hasComputedReturn = true;
+          }
+        }
+
         path.traverse({
+          Function(innerPath) {
+            innerPath.skip();
+          },
           ReturnStatement(retPath) {
             const arg = retPath.node.argument;
-            if (t.isBooleanLiteral(arg)) {
-              hasBooleanLiteralReturn = true;
+            const b = inspectRawBooleanReturnValue(arg);
+            if (b.isRawBool) {
+              if (b.isTrueBranch) hasTrueLiteralReturn = true;
+              else hasFalseLiteralReturn = true;
               boolReturnLine = retPath.node.loc?.start.line ?? line;
+            } else if (arg) {
+              hasComputedReturn = true;
             }
           },
           BinaryExpression(binPath) {
@@ -726,17 +848,14 @@ function buildJsSurgicalWorkorder(
             ) {
               const left = binPath.node.left;
               const right = binPath.node.right;
-              const strLit = t.isStringLiteral(left)
-                ? left
-                : t.isStringLiteral(right)
-                  ? right
-                  : null;
+              const strVal =
+                extractStaticStringOrTemplate(left) ??
+                extractStaticStringOrTemplate(right);
               if (
-                strLit &&
-                strLit.value.length >= 4 &&
-                !/^(?:string|number|object|function|boolean|undefined)$/.test(
-                  strLit.value,
-                )
+                strVal &&
+                strVal.length >= 4 &&
+                !BENIGN_COMPARE_STRING_REGEX.test(strVal) &&
+                !HEX_SHA256_LITERAL_REGEX.test(strVal)
               ) {
                 hasCleartextComparison = true;
                 cleartextLine = binPath.node.loc?.start.line ?? line;
@@ -744,6 +863,9 @@ function buildJsSurgicalWorkorder(
             }
           },
         });
+
+        const hasBooleanLiteralReturn =
+          hasTrueLiteralReturn || (hasFalseLiteralReturn && !hasComputedReturn);
 
         if (crownJewelCandidates.length < 10) {
           if (hasBooleanLiteralReturn && (role === "gate-or-auth" || exported)) {
@@ -872,6 +994,109 @@ function buildJsSurgicalWorkorder(
   };
 }
 
+interface ParsedPythonFunction {
+  readonly name: string;
+  readonly startLine: number;
+  readonly indent: number;
+  readonly paramCount: number;
+  readonly body: string;
+}
+
+function measureIndentWidth(line: string): number {
+  let width = 0;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === " ") width += 1;
+    else if (ch === "\t") width += 4;
+    else break;
+  }
+  return width;
+}
+
+function extractPythonFunctions(source: string): ParsedPythonFunction[] {
+  const lines = source.split(/\r?\n/);
+  const results: ParsedPythonFunction[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineText = lines[i]!;
+    const headerStart = lineText.match(
+      /^([ \t]*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/,
+    );
+    if (!headerStart) continue;
+
+    const indent = measureIndentWidth(headerStart[1]!);
+    const fnName = headerStart[2]!;
+    const startLine = i + 1;
+
+    // Advance through multi-line signature until parentheses balance and ':' is reached
+    let sigLines = lineText;
+    let sigEndLineIdx = i;
+    let parenDepth = 0;
+    let openFound = false;
+    let colonAfterClose = false;
+
+    for (let j = i; j < lines.length && j <= i + 20; j++) {
+      const l = lines[j]!.replace(/#.*$/, "");
+      if (j > i) sigLines += " " + l.trim();
+      for (let k = 0; k < l.length; k++) {
+        const ch = l[k];
+        if (ch === "(") {
+          parenDepth += 1;
+          openFound = true;
+        } else if (ch === ")") {
+          parenDepth = Math.max(0, parenDepth - 1);
+        } else if (ch === ":" && openFound && parenDepth === 0) {
+          colonAfterClose = true;
+        }
+      }
+      sigEndLineIdx = j;
+      if (openFound && parenDepth === 0 && colonAfterClose) break;
+    }
+
+    const paramsMatch = sigLines.match(/\bdef\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([\s\S]*?)\)/);
+    const paramsRaw = paramsMatch?.[1]?.trim() ?? "";
+    const paramCount =
+      paramsRaw.length === 0
+        ? 0
+        : paramsRaw
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0 && p !== "self" && p !== "cls" && p !== "*" && p !== "/")
+            .length;
+
+    // Collect single-line body (e.g. `def f(): pass`) or indented block body
+    const singleLineAfterColon = lines[sigEndLineIdx]!
+      .replace(/#.*$/, "")
+      .match(/\)\s*(?:->[^:]+)?:\s*(.+)$/);
+    const bodyLines: string[] = [];
+    if (singleLineAfterColon && singleLineAfterColon[1]!.trim().length > 0) {
+      bodyLines.push("    " + singleLineAfterColon[1]!.trim());
+    } else {
+      for (let b = sigEndLineIdx + 1; b < lines.length; b++) {
+        const bLine = lines[b]!;
+        const trimmed = bLine.trim();
+        if (trimmed.length === 0 || trimmed.startsWith("#")) {
+          bodyLines.push(bLine);
+          continue;
+        }
+        const bIndent = measureIndentWidth(bLine);
+        if (bIndent <= indent) break;
+        bodyLines.push(bLine);
+      }
+    }
+
+    results.push({
+      name: fnName,
+      startLine,
+      indent,
+      paramCount,
+      body: bodyLines.join("\n"),
+    });
+  }
+
+  return results;
+}
+
 function buildPythonSurgicalWorkorder(
   source: string,
   relPath: string,
@@ -881,40 +1106,36 @@ function buildPythonSurgicalWorkorder(
   const branchCandidates: WeaveBranchCandidate[] = [];
   const crownJewelCandidates: WeaveCrownJewelCandidate[] = [];
   const lines = source.split(/\r?\n/);
+  const parsedFns = extractPythonFunctions(source);
+
+  for (const fn of parsedFns) {
+    const exported = !fn.name.startsWith("_");
+    const role = classifyFunctionRole(fn.name, exported);
+    if (entryFunctions.length < 12) {
+      entryFunctions.push({
+        name: fn.name,
+        line: fn.startLine,
+        exported,
+        paramCount: fn.paramCount,
+        role,
+      });
+    }
+    if (role === "gate-or-auth" && crownJewelCandidates.length < 8) {
+      crownJewelCandidates.push({
+        functionName: fn.name,
+        line: fn.startLine,
+        vulnerabilityKind: "isolated-verify-oracle",
+        riskSummary: `Python auth/policy def \`${fn.name}\` (line ${fn.startLine}) is a high-value verification boundary.`,
+        agentRefactorDirective: `Couple \`${fn.name}\` with module state dict and weave 2 domain-plausible helper defs so static slicing cannot isolate the policy check.`,
+      });
+    }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i]!;
-    const defMatch = lineText.match(/^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/);
-    if (defMatch) {
-      const fnName = defMatch[1]!;
-      const paramsRaw = defMatch[2]!.trim();
-      const paramCount =
-        paramsRaw.length === 0
-          ? 0
-          : paramsRaw.split(",").filter((p) => p.trim() !== "self").length;
-      const exported = !fnName.startsWith("_");
-      const role = classifyFunctionRole(fnName, exported);
-      if (entryFunctions.length < 12) {
-        entryFunctions.push({
-          name: fnName,
-          line: i + 1,
-          exported,
-          paramCount,
-          role,
-        });
-      }
-      if (role === "gate-or-auth" && crownJewelCandidates.length < 8) {
-        crownJewelCandidates.push({
-          functionName: fnName,
-          line: i + 1,
-          vulnerabilityKind: "isolated-verify-oracle",
-          riskSummary: `Python auth/policy def \`${fnName}\` (line ${i + 1}) is a high-value verification boundary.`,
-          agentRefactorDirective: `Couple \`${fnName}\` with module state dict and weave 2 domain-plausible helper defs so static slicing cannot isolate the policy check.`,
-        });
-      }
-      continue;
-    }
-    const stateMatch = lineText.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\{|\[|dict\()/);
+    const stateMatch = lineText.match(
+      /^([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(\{|\[|dict\(|set\(|bytearray\()/,
+    );
     if (stateMatch && sharedStateSlots.length < 6) {
       const slotName = stateMatch[1]!;
       sharedStateSlots.push({
@@ -926,7 +1147,9 @@ function buildPythonSurgicalWorkorder(
     }
     const boolReturnMatch = lineText.match(/^\s+return\s+(True|False)\b/);
     if (boolReturnMatch && entryFunctions.length > 0 && crownJewelCandidates.length < 8) {
-      const currentFn = entryFunctions[entryFunctions.length - 1]!.name;
+      const currentFn =
+        [...entryFunctions].reverse().find((f) => f.line <= i + 1)?.name ??
+        entryFunctions[entryFunctions.length - 1]!.name;
       crownJewelCandidates.push({
         functionName: currentFn,
         line: i + 1,
@@ -937,7 +1160,9 @@ function buildPythonSurgicalWorkorder(
     }
     const returnMatch = lineText.match(/^\s+return\s+\S+/);
     if (returnMatch && entryFunctions.length > 0 && branchCandidates.length < 10) {
-      const currentFn = entryFunctions[entryFunctions.length - 1]!.name;
+      const currentFn =
+        [...entryFunctions].reverse().find((f) => f.line <= i + 1)?.name ??
+        entryFunctions[entryFunctions.length - 1]!.name;
       branchCandidates.push({
         functionName: currentFn,
         line: i + 1,
@@ -1013,20 +1238,26 @@ function buildNativeSurgicalWorkorder(
 
   const fnRegex =
     ext === ".rs"
-      ? /^\s*(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/
+      ? /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(([^)]*)/
       : ext === ".go"
-        ? /^\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/
-        : /^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^;{}]*)\)\s*\{?$/;
+        ? /^\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*\(([^)]*)/
+        : /^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]*?)(?:\s+|\*\s*)([A-Za-z_][A-Za-z0-9_]*)\s*\(([^;{}]*)/;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i]!;
+    if (/^\s*(?:#|\/\/|\/\*|\*)/.test(lineText)) continue;
     const m = lineText.match(fnRegex);
     if (m) {
       const fnName = m[1]!;
-      if (/^(?:if|for|while|switch|return|sizeof)$/.test(fnName)) continue;
+      if (/^(?:if|for|while|switch|return|sizeof|else|catch)$/.test(fnName)) continue;
+      // Ensure it is a definition (has '{' on this line or next few lines, not a ';' prototype)
+      const windowText = lines.slice(i, i + 6).join(" ");
+      const bracePos = windowText.indexOf("{");
+      const semiPos = windowText.indexOf(";");
+      if (bracePos === -1 || (semiPos !== -1 && semiPos < bracePos)) continue;
       const exported =
         ext === ".rs"
-          ? /\bpub\s+fn\b/.test(lineText)
+          ? /\bpub(?:\s*\([^)]*\))?\s+/.test(lineText)
           : ext === ".go"
             ? /^[A-Z]/.test(fnName)
             : !/\bstatic\b/.test(lineText);
@@ -1119,15 +1350,37 @@ function buildSurgicalWorkorderForFile(
   return undefined;
 }
 
-const SCAN_SKIP = new Set([
+const SCAN_SKIP_ALWAYS = new Set([
   ".git",
+  ".hg",
+  ".svn",
   "node_modules",
   ".bla-hardened",
-  "dist",
   "coverage",
   ".venv",
   "venv",
   "__pycache__",
+  ".next",
+  ".turbo",
+  "test",
+  "tests",
+  "__tests__",
+]);
+
+const SCAN_SKIP_BUILD_DIRS = new Set([
+  "dist",
+  "build",
+  "out",
+  "target",
+  "release",
+  "Release",
+  "Debug",
+]);
+
+const EMITTED_SHIELD_HEADER_FILES = new Set([
+  "bla_shield.h",
+  "bla_shield.rs",
+  "bla_shield.go",
 ]);
 
 const INTERESTING_EXT = new Set([
@@ -1156,7 +1409,11 @@ const INTERESTING_EXT = new Set([
   ".db",
 ]);
 
-function listCandidateFiles(root: string, limit: number): string[] {
+function walkWeaveCandidateFiles(
+  root: string,
+  limit: number,
+  skipBuildDirs: boolean,
+): string[] {
   const out: string[] = [];
   const stack = [root];
   while (stack.length > 0 && out.length < limit) {
@@ -1169,16 +1426,19 @@ function listCandidateFiles(root: string, limit: number): string[] {
     }
     for (const ent of entries) {
       if (out.length >= limit) break;
-      if (ent.name.startsWith(".") && ent.name !== ".blarc") {
-        if (SCAN_SKIP.has(ent.name)) continue;
-      }
-      if (SCAN_SKIP.has(ent.name)) continue;
+      if (SCAN_SKIP_ALWAYS.has(ent.name)) continue;
+      if (skipBuildDirs && SCAN_SKIP_BUILD_DIRS.has(ent.name)) continue;
+      if (ent.name.startsWith(".") && ent.name !== ".blarc") continue;
       const full = join(dir, ent.name);
       if (ent.isDirectory()) {
         stack.push(full);
         continue;
       }
       if (!ent.isFile()) continue;
+      if (EMITTED_SHIELD_HEADER_FILES.has(ent.name.toLowerCase())) continue;
+      if (/\.d\.ts$/i.test(ent.name)) continue;
+      if (/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name)) continue;
+      if (/\.shielded(\.|$)/i.test(ent.name)) continue;
       const ext = extname(ent.name).toLowerCase();
       if (INTERESTING_EXT.has(ext) || ent.name === "global-metadata.dat") {
         out.push(full);
@@ -1188,18 +1448,28 @@ function listCandidateFiles(root: string, limit: number): string[] {
   return out;
 }
 
+function listCandidateFiles(root: string, limit: number): string[] {
+  const primary = walkWeaveCandidateFiles(root, limit, true);
+  if (primary.length > 0) return primary;
+  return walkWeaveCandidateFiles(root, limit, false);
+}
+
 function buildTargetEntry(
   absPath: string,
   rootAbs: string,
 ): WeaveTargetEntry {
   const format = detectArtifactFormat(absPath);
-  const maturity = maturityForFormat(format);
+  const rawMaturity = maturityForFormat(format);
   const relPath = relative(rootAbs, absPath) || basename(absPath) || ".";
   const surgicalWorkorder = buildSurgicalWorkorderForFile(
     absPath,
     relPath,
     format,
   );
+  const maturity: WeaveMaturity =
+    surgicalWorkorder !== undefined && rawMaturity === "not-applicable"
+      ? "woven"
+      : rawMaturity;
   return {
     path: absPath,
     relativePath: relPath,
@@ -1558,6 +1828,17 @@ function isInsideIfGuardTestOnly(idPath: any): boolean {
   return false;
 }
 
+function getRootMemberIdentifier(node: t.Node | null | undefined): t.Identifier | null {
+  let curr: t.Node | null | undefined = node;
+  while (curr && (t.isMemberExpression(curr) || t.isOptionalMemberExpression(curr))) {
+    curr = curr.object;
+  }
+  return curr && t.isIdentifier(curr) ? curr : null;
+}
+
+const CONTAINER_MUTATOR_METHODS =
+  /^(?:set|add|delete|clear|push|pop|shift|unshift|splice|fill|writeUInt32LE|writeInt32LE)$/;
+
 const BENIGN_COMPARE_STRING_REGEX =
   /^(?:string|number|object|function|boolean|undefined|symbol|bigint|sha256|sha512|utf8|utf-8|hex|base64|ascii|binary|latin1|ucs2|DENIED|UNLOCKED|ERROR|OK)$/i;
 const HEX_SHA256_LITERAL_REGEX = /^[0-9a-f]{64}$/i;
@@ -1590,6 +1871,13 @@ function verifyJsWeaveFile(
   const functionsReadingState = new Set<string>();
   const functionsReadingStateOutsideIfTest = new Set<string>();
   const functionsUsingHelperValueOrMixing = new Set<string>();
+  const fnMutatesParamIndices = new Map<string, Set<number>>();
+  const fnReadsParamIndices = new Map<string, Set<number>>();
+  const stateArgCallRecords: Array<{
+    readonly caller: string;
+    readonly callee: string;
+    readonly argIndex: number;
+  }> = [];
   const rawBooleanReturnFunctions = new Set<string>();
   const cleartextCompareLiterals: string[] = [];
   const plaintextFlagLiterals: string[] = [];
@@ -1638,6 +1926,16 @@ function verifyJsWeaveFile(
         const decl = path.node.declaration;
         if (t.isFunctionDeclaration(decl) && decl.id) {
           entryFunctions.add(decl.id.name);
+        } else if (t.isClassDeclaration(decl)) {
+          for (const item of decl.body.body) {
+            if (
+              t.isClassMethod(item) &&
+              t.isIdentifier(item.key) &&
+              item.key.name !== "constructor"
+            ) {
+              entryFunctions.add(item.key.name);
+            }
+          }
         } else if (t.isVariableDeclaration(decl)) {
           for (const d of decl.declarations) {
             if (t.isIdentifier(d.id)) entryFunctions.add(d.id.name);
@@ -1646,6 +1944,24 @@ function verifyJsWeaveFile(
         for (const spec of path.node.specifiers) {
           if (t.isExportSpecifier(spec) && t.isIdentifier(spec.local)) {
             entryFunctions.add(spec.local.name);
+          }
+        }
+      },
+      ExportDefaultDeclaration(path) {
+        const decl = path.node.declaration;
+        if (t.isFunctionDeclaration(decl) && decl.id) {
+          entryFunctions.add(decl.id.name);
+        } else if (t.isIdentifier(decl)) {
+          entryFunctions.add(decl.name);
+        } else if (t.isClassDeclaration(decl)) {
+          for (const item of decl.body.body) {
+            if (
+              t.isClassMethod(item) &&
+              t.isIdentifier(item.key) &&
+              item.key.name !== "constructor"
+            ) {
+              entryFunctions.add(item.key.name);
+            }
           }
         }
       },
@@ -1663,7 +1979,10 @@ function verifyJsWeaveFile(
             entryFunctions.add(path.node.right.name);
           } else if (t.isObjectExpression(path.node.right)) {
             for (const prop of path.node.right.properties) {
-              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+              if (
+                (t.isObjectProperty(prop) || t.isObjectMethod(prop)) &&
+                t.isIdentifier(prop.key)
+              ) {
                 entryFunctions.add(prop.key.name);
               }
               if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
@@ -1675,24 +1994,10 @@ function verifyJsWeaveFile(
       },
     });
 
-    // First pass: collect all named top-level / assigned functions
+    // First pass: collect all named top-level / assigned / method functions
     traverse(ast, {
       Function(path) {
-        let fnName = "";
-        if (t.isFunctionDeclaration(path.node) && path.node.id) {
-          fnName = path.node.id.name;
-        } else if (
-          t.isVariableDeclarator(path.parent) &&
-          t.isIdentifier(path.parent.id)
-        ) {
-          fnName = path.parent.id.name;
-        } else if (
-          t.isAssignmentExpression(path.parent) &&
-          t.isMemberExpression(path.parent.left) &&
-          t.isIdentifier(path.parent.left.property)
-        ) {
-          fnName = path.parent.left.property.name;
-        }
+        const fnName = extractJsFunctionName(path);
         if (!fnName) return;
         if (!discoveredFunctions.includes(fnName)) {
           discoveredFunctions.push(fnName);
@@ -1709,22 +2014,26 @@ function verifyJsWeaveFile(
     // Second pass: inspect function bodies and top-level warm-init references
     traverse(ast, {
       Function(path) {
-        let fnName = "";
-        if (t.isFunctionDeclaration(path.node) && path.node.id) {
-          fnName = path.node.id.name;
-        } else if (
-          t.isVariableDeclarator(path.parent) &&
-          t.isIdentifier(path.parent.id)
-        ) {
-          fnName = path.parent.id.name;
-        } else if (
-          t.isAssignmentExpression(path.parent) &&
-          t.isMemberExpression(path.parent.left) &&
-          t.isIdentifier(path.parent.left.property)
-        ) {
-          fnName = path.parent.left.property.name;
-        }
+        const fnName = extractJsFunctionName(path);
         if (!fnName) return;
+
+        const paramIndexByName = new Map<string, number>();
+        path.node.params.forEach((paramNode: t.Node, idx: number) => {
+          if (t.isIdentifier(paramNode)) {
+            paramIndexByName.set(paramNode.name, idx);
+          } else if (
+            t.isAssignmentPattern(paramNode) &&
+            t.isIdentifier(paramNode.left)
+          ) {
+            paramIndexByName.set(paramNode.left.name, idx);
+          }
+        });
+        if (!fnMutatesParamIndices.has(fnName)) {
+          fnMutatesParamIndices.set(fnName, new Set());
+        }
+        if (!fnReadsParamIndices.has(fnName)) {
+          fnReadsParamIndices.set(fnName, new Set());
+        }
 
         if (t.isBlockStatement(path.node.body)) {
           const stmts = path.node.body.body.filter(
@@ -1735,53 +2044,139 @@ function verifyJsWeaveFile(
           } else if (
             stmts.length === 1 &&
             t.isReturnStatement(stmts[0]) &&
-            (!stmts[0].argument || t.isLiteral(stmts[0].argument))
+            (!stmts[0].argument ||
+              t.isLiteral(stmts[0].argument) ||
+              inspectRawBooleanReturnValue(stmts[0].argument).isRawBool)
           ) {
             emptyOrStubFunctions.push(fnName);
           }
+        } else if (
+          t.isLiteral(path.node.body) ||
+          inspectRawBooleanReturnValue(path.node.body).isRawBool
+        ) {
+          emptyOrStubFunctions.push(fnName);
         }
 
-        const fnRole = classifyFunctionRole(fnName, entryFunctions.has(fnName));
+        const isEntryFn = entryFunctions.has(fnName);
+        const fnRole = classifyFunctionRole(fnName, isEntryFn);
+        let fnHasTrueLiteralReturn = false;
+        let fnHasFalseLiteralReturn = false;
+        let fnHasComputedReturn = false;
+
+        if (!t.isBlockStatement(path.node.body)) {
+          const b = inspectRawBooleanReturnValue(path.node.body);
+          if (b.isRawBool) {
+            if (b.isTrueBranch) fnHasTrueLiteralReturn = true;
+            else fnHasFalseLiteralReturn = true;
+          } else {
+            fnHasComputedReturn = true;
+          }
+        }
 
         path.traverse({
+          Function(innerPath) {
+            innerPath.skip();
+          },
           CallExpression(callPath) {
             if (isInsideDeadBranch(callPath)) return;
             fnHasAnyCall.add(fnName);
+            let calleeName = "";
             if (t.isIdentifier(callPath.node.callee)) {
-              const calleeName = callPath.node.callee.name;
+              calleeName = callPath.node.callee.name;
+            } else if (
+              t.isMemberExpression(callPath.node.callee) &&
+              t.isThisExpression(callPath.node.callee.object) &&
+              t.isIdentifier(callPath.node.callee.property)
+            ) {
+              calleeName = callPath.node.callee.property.name;
+            }
+
+            if (calleeName) {
               callEdges.get(fnName)!.add(calleeName);
-              if (
-                discoveredSet.has(calleeName) &&
-                !t.isExpressionStatement(callPath.parent)
-              ) {
-                functionsUsingHelperValueOrMixing.add(fnName);
+              callPath.node.arguments.forEach((argNode, argIdx) => {
+                if (
+                  t.isIdentifier(argNode) &&
+                  moduleStateVars.has(argNode.name) &&
+                  isModuleScopedStateBinding(callPath, argNode.name)
+                ) {
+                  stateArgCallRecords.push({
+                    caller: fnName,
+                    callee: calleeName,
+                    argIndex: argIdx,
+                  });
+                }
+              });
+
+              if (discoveredSet.has(calleeName) && !t.isExpressionStatement(callPath.parent)) {
+                let valueActuallyUsed = true;
+                if (
+                  t.isVariableDeclarator(callPath.parent) &&
+                  t.isIdentifier(callPath.parent.id)
+                ) {
+                  const binding = callPath.scope?.getBinding?.(callPath.parent.id.name);
+                  if (
+                    binding &&
+                    !binding.referenced &&
+                    binding.constantViolations.length === 0
+                  ) {
+                    valueActuallyUsed = false;
+                  }
+                }
+                if (valueActuallyUsed) {
+                  functionsUsingHelperValueOrMixing.add(fnName);
+                }
               }
               if (/^(?:createHash|pbkdf2Sync|scryptSync|createHmac)$/.test(calleeName)) {
                 functionsUsingHelperValueOrMixing.add(fnName);
               }
-            } else if (
+            }
+
+            if (
               t.isMemberExpression(callPath.node.callee) &&
-              t.isIdentifier(callPath.node.callee.property) &&
-              /^(?:imul|createHash|pbkdf2Sync|scryptSync|digest|instantiate)$/.test(
-                callPath.node.callee.property.name,
-              )
+              t.isIdentifier(callPath.node.callee.property)
             ) {
-              functionsUsingHelperValueOrMixing.add(fnName);
+              const methodName = callPath.node.callee.property.name;
+              if (
+                /^(?:imul|createHash|pbkdf2Sync|scryptSync|digest|instantiate)$/.test(
+                  methodName,
+                )
+              ) {
+                functionsUsingHelperValueOrMixing.add(fnName);
+              }
+              if (CONTAINER_MUTATOR_METHODS.test(methodName)) {
+                const rootObj = getRootMemberIdentifier(callPath.node.callee.object);
+                if (rootObj) {
+                  if (
+                    moduleStateVars.has(rootObj.name) &&
+                    isModuleScopedStateBinding(callPath, rootObj.name)
+                  ) {
+                    functionsMutatingState.add(fnName);
+                  }
+                  const pIdx = paramIndexByName.get(rootObj.name);
+                  if (pIdx !== undefined) {
+                    fnMutatesParamIndices.get(fnName)!.add(pIdx);
+                  }
+                }
+              }
             }
           },
           ReturnStatement(retPath) {
             if (isInsideDeadBranch(retPath)) return;
-            if (
-              fnRole === "gate-or-auth" &&
-              retPath.node.argument &&
-              t.isBooleanLiteral(retPath.node.argument)
-            ) {
-              rawBooleanReturnFunctions.add(fnName);
+            const arg = retPath.node.argument;
+            const b = inspectRawBooleanReturnValue(arg);
+            if (b.isRawBool) {
+              if (b.isTrueBranch) fnHasTrueLiteralReturn = true;
+              else fnHasFalseLiteralReturn = true;
+            } else if (arg) {
+              fnHasComputedReturn = true;
             }
           },
           BinaryExpression(binPath) {
             if (isInsideDeadBranch(binPath)) return;
-            if (binPath.node.operator === "^") {
+            if (
+              binPath.node.operator === "^" &&
+              !(t.isNumericLiteral(binPath.node.left) && t.isNumericLiteral(binPath.node.right))
+            ) {
               functionsUsingHelperValueOrMixing.add(fnName);
             }
             if (
@@ -1797,11 +2192,9 @@ function verifyJsWeaveFile(
                 (t.isUnaryExpression(binPath.node.right) &&
                   binPath.node.right.operator === "typeof");
               if (!isTypeof) {
-                const strLit = t.isStringLiteral(binPath.node.right)
-                  ? binPath.node.right.value
-                  : t.isStringLiteral(binPath.node.left)
-                    ? binPath.node.left.value
-                    : null;
+                const strLit =
+                  extractStaticStringOrTemplate(binPath.node.right) ??
+                  extractStaticStringOrTemplate(binPath.node.left);
                 if (
                   strLit !== null &&
                   strLit.length >= 4 &&
@@ -1819,10 +2212,16 @@ function verifyJsWeaveFile(
               plaintextFlagLiterals.push(`${fnName}:${strPath.node.value}`);
             }
           },
+          TemplateLiteral(tplPath) {
+            if (isInsideDeadBranch(tplPath)) return;
+            const raw = extractStaticStringOrTemplate(tplPath.node);
+            if (raw && PLAINTEXT_FLAG_LITERAL_REGEX.test(raw)) {
+              plaintextFlagLiterals.push(`${fnName}:${raw}`);
+            }
+          },
           Identifier(idPath) {
             const name = idPath.node.name;
             if (isInsideDeadBranch(idPath)) return;
-            // Track function table/callback references (e.g. [fn1, fn2] or register(fn))
             if (
               discoveredSet.has(name) &&
               name !== fnName &&
@@ -1839,6 +2238,15 @@ function verifyJsWeaveFile(
               if (!isInsideIfGuardTestOnly(idPath)) {
                 functionsReadingStateOutsideIfTest.add(fnName);
               }
+            }
+            const pIdx = paramIndexByName.get(name);
+            if (
+              pIdx !== undefined &&
+              t.isMemberExpression(idPath.parent) &&
+              idPath.parent.object === idPath.node &&
+              !isPureAssignmentTarget(idPath)
+            ) {
+              fnReadsParamIndices.get(fnName)!.add(pIdx);
             }
           },
           IfStatement(ifPath) {
@@ -1865,70 +2273,74 @@ function verifyJsWeaveFile(
             ) {
               functionsUsingHelperValueOrMixing.add(fnName);
             }
-            const l = assignPath.node.left;
-            if (
-              t.isIdentifier(l) &&
-              moduleStateVars.has(l.name) &&
-              isModuleScopedStateBinding(assignPath, l.name)
-            ) {
-              functionsMutatingState.add(fnName);
-            } else if (
-              t.isMemberExpression(l) &&
-              t.isIdentifier(l.object) &&
-              moduleStateVars.has(l.object.name) &&
-              isModuleScopedStateBinding(assignPath, l.object.name)
-            ) {
-              functionsMutatingState.add(fnName);
+            const rootId = getRootMemberIdentifier(assignPath.node.left);
+            if (rootId) {
+              if (
+                moduleStateVars.has(rootId.name) &&
+                isModuleScopedStateBinding(assignPath, rootId.name)
+              ) {
+                functionsMutatingState.add(fnName);
+              }
+              const pIdx = paramIndexByName.get(rootId.name);
+              if (pIdx !== undefined && t.isMemberExpression(assignPath.node.left)) {
+                fnMutatesParamIndices.get(fnName)!.add(pIdx);
+              }
             }
           },
           UpdateExpression(upPath) {
             if (isInsideDeadBranch(upPath)) return;
-            const arg = upPath.node.argument;
-            if (
-              t.isIdentifier(arg) &&
-              moduleStateVars.has(arg.name) &&
-              isModuleScopedStateBinding(upPath, arg.name)
-            ) {
-              functionsMutatingState.add(fnName);
-              functionsReadingState.add(fnName);
-            } else if (
-              t.isMemberExpression(arg) &&
-              t.isIdentifier(arg.object) &&
-              moduleStateVars.has(arg.object.name) &&
-              isModuleScopedStateBinding(upPath, arg.object.name)
-            ) {
-              functionsMutatingState.add(fnName);
-              functionsReadingState.add(fnName);
+            const rootId = getRootMemberIdentifier(upPath.node.argument);
+            if (rootId) {
+              if (
+                moduleStateVars.has(rootId.name) &&
+                isModuleScopedStateBinding(upPath, rootId.name)
+              ) {
+                functionsMutatingState.add(fnName);
+                functionsReadingState.add(fnName);
+              }
+              const pIdx = paramIndexByName.get(rootId.name);
+              if (pIdx !== undefined && t.isMemberExpression(upPath.node.argument)) {
+                fnMutatesParamIndices.get(fnName)!.add(pIdx);
+                fnReadsParamIndices.get(fnName)!.add(pIdx);
+              }
             }
           },
         });
+
+        const checkGateBool =
+          fnRole === "gate-or-auth" &&
+          (isEntryFn ||
+            ![...entryFunctions].some(
+              (ef) => classifyFunctionRole(ef, true) === "gate-or-auth",
+            ));
+        if (
+          checkGateBool &&
+          (fnHasTrueLiteralReturn ||
+            (fnHasFalseLiteralReturn && !fnHasComputedReturn))
+        ) {
+          rawBooleanReturnFunctions.add(fnName);
+        }
       },
       // Also track top-level module warm-init / IIFE / dispatch table references
       Identifier(idPath) {
         const name = idPath.node.name;
         if (!discoveredSet.has(name)) return;
         if (isInsideDeadBranch(idPath)) return;
-        // Skip the function's own declaration site
         if (
           (t.isFunctionDeclaration(idPath.parent) && idPath.parent.id === idPath.node) ||
-          (t.isVariableDeclarator(idPath.parent) && idPath.parent.id === idPath.node)
+          (t.isVariableDeclarator(idPath.parent) && idPath.parent.id === idPath.node) ||
+          ((t.isObjectProperty(idPath.parent) || t.isObjectMethod(idPath.parent)) &&
+            idPath.parent.key === idPath.node)
         ) {
           return;
         }
-        // Check if this reference is at Program level or inside an anonymous IIFE
         let enclosingNamedFn = "";
         let p: any = idPath.parentPath;
         while (p) {
           if (t.isFunction(p.node)) {
-            if (t.isFunctionDeclaration(p.node) && p.node.id) {
-              enclosingNamedFn = p.node.id.name;
-              break;
-            }
-            if (
-              t.isVariableDeclarator(p.parent) &&
-              t.isIdentifier(p.parent.id)
-            ) {
-              enclosingNamedFn = p.parent.id.name;
+            const candidate = extractJsFunctionName(p);
+            if (candidate) {
+              enclosingNamedFn = candidate;
               break;
             }
           }
@@ -1939,6 +2351,16 @@ function verifyJsWeaveFile(
         }
       },
     });
+
+    // Propagate parameter-passed module state mutations and reads
+    for (const rec of stateArgCallRecords) {
+      if (fnMutatesParamIndices.get(rec.callee)?.has(rec.argIndex)) {
+        functionsMutatingState.add(rec.callee);
+      }
+      if (fnReadsParamIndices.get(rec.callee)?.has(rec.argIndex)) {
+        functionsReadingState.add(rec.callee);
+      }
+    }
   } catch (err) {
     syntaxValid = false;
     syntaxErrorMessage = err instanceof Error ? err.message : String(err);
@@ -2152,30 +2574,45 @@ function verifyJsWeaveFile(
   }
 
   // Check 6: filter-resistance
+  const filterDefects: string[] = [];
+  if (emptyOrStubFunctions.length > 0) {
+    filterDefects.push(`trivial/empty stub functions: ${emptyOrStubFunctions.join(", ")}`);
+  }
+  if (unreferencedFunctions.length > 0) {
+    filterDefects.push(`unreferenced dead functions: ${unreferencedFunctions.join(", ")}`);
+  }
+  if (!checkNoMarkers.passed) {
+    filterDefects.push(`forbidden marker '${bannerMatch?.[0]}'`);
+  }
   const checkFilterResistance: WeaveCheckResult = {
     id: "filter-resistance",
     titleZh: "抗「独立层」过滤",
-    passed:
-      emptyOrStubFunctions.length === 0 &&
-      unreferencedFunctions.length === 0 &&
-      checkNoMarkers.passed,
+    passed: filterDefects.length === 0,
     evidence:
-      emptyOrStubFunctions.length === 0
+      filterDefects.length === 0
         ? "0 empty/constant-stub decoy functions detected"
-        : `Trivial/empty stub functions detected: ${emptyOrStubFunctions.join(", ")}`,
-    ...(emptyOrStubFunctions.length > 0
+        : `Filter-resistance defects: ${filterDefects.join("; ")}`,
+    ...(filterDefects.length > 0
       ? {
-          remediation: `Give [${emptyOrStubFunctions.join(", ")}] non-trivial bodies that read and update the shared state carrier.`,
+          remediation:
+            emptyOrStubFunctions.length > 0
+              ? `Give [${emptyOrStubFunctions.join(", ")}] non-trivial bodies that read and update the shared state carrier.`
+              : `Wire unreferenced functions [${unreferencedFunctions.join(", ")}] into live entry paths and remove any forbidden markers.`,
         }
       : {}),
   };
-  if (!checkFilterResistance.passed && emptyOrStubFunctions.length > 0) {
+  if (!checkFilterResistance.passed) {
     actions.push({
       priority: "high",
       file: relPath,
       checkId: "filter-resistance",
-      targetSymbol: emptyOrStubFunctions[0],
-      instruction: `Replace trivial/empty body in function(s) [${emptyOrStubFunctions.join(", ")}] in ${relPath} with non-trivial state computations over the shared state slot.`,
+      ...(emptyOrStubFunctions[0] || unreferencedFunctions[0]
+        ? { targetSymbol: emptyOrStubFunctions[0] ?? unreferencedFunctions[0] }
+        : {}),
+      instruction:
+        emptyOrStubFunctions.length > 0
+          ? `Replace trivial/empty body in function(s) [${emptyOrStubFunctions.join(", ")}] in ${relPath} with non-trivial state computations over the shared state slot.`
+          : `Resolve filter-resistance defects (${filterDefects.join("; ")}) in ${relPath}.`,
       verifyTool: "bla_verify_weave",
     });
   }
@@ -2317,28 +2754,42 @@ function verifyPythonWeaveFile(
   const stateVars: string[] = [];
 
   const strippedSource = stripPythonCommentsAndStrings(source);
+  const parsedPyFns = extractPythonFunctions(source);
 
-  const defRegex = /^[ \t]*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->[^:]+)?:\s*\n((?:[ \t]+.*\n?)*)/gm;
-  let m: RegExpExecArray | null;
-  while ((m = defRegex.exec(source)) !== null) {
-    const name = m[1]!;
-    const body = m[2] ?? "";
-    fnNames.push(name);
-    fnBodies.set(name, stripPythonCommentsAndStrings(body));
-    const bodyLines = body
+  for (const fn of parsedPyFns) {
+    const name = fn.name;
+    const strippedBody = stripPythonCommentsAndStrings(fn.body);
+    if (!fnNames.includes(name)) {
+      fnNames.push(name);
+    }
+    fnBodies.set(name, strippedBody);
+    const bodyLines = strippedBody
       .split(/\r?\n/)
       .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("#"));
-    if (bodyLines.length === 0 || (bodyLines.length === 1 && bodyLines[0] === "pass")) {
-      passOnlyFns.push(name);
+      .filter((l) => l.length > 0 && l !== '""' && l !== "''");
+    if (
+      bodyLines.length === 0 ||
+      (bodyLines.length === 1 &&
+        /^(?:pass|\.\.\.|return(?:\s+(?:None|True|False|0|1|""|''))?)$/.test(bodyLines[0]!))
+    ) {
+      if (!passOnlyFns.includes(name)) passOnlyFns.push(name);
     }
   }
 
-  const stateRegex = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(?:\{|\[|dict\()/gm;
+  const stateRegex =
+    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(?:\{|\[|dict\(|set\(|bytearray\(|[A-Z][A-Za-z0-9_]*\()/gm;
   let sm: RegExpExecArray | null;
   while ((sm = stateRegex.exec(strippedSource)) !== null) {
     const varName = sm[1]!;
     if (!stateVars.includes(varName)) stateVars.push(varName);
+  }
+  const globalMatchRegex = /\bglobal\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)/g;
+  let gm: RegExpExecArray | null;
+  while ((gm = globalMatchRegex.exec(strippedSource)) !== null) {
+    for (const part of gm[1]!.split(",")) {
+      const v = part.trim();
+      if (v && !stateVars.includes(v)) stateVars.push(v);
+    }
   }
 
   // Strip dead `if False:` / `if 0:` lines before checking call reachability
@@ -2347,7 +2798,7 @@ function verifyPythonWeaveFile(
     "",
   );
 
-  // Build intra-file call graph across defs in liveCode
+  // Build intra-file call graph across defs in liveCode (including self.method(...))
   const calledFns = new Set<string>();
   const callingFns = new Set<string>();
   for (const [caller, body] of fnBodies.entries()) {
@@ -2357,7 +2808,7 @@ function verifyPythonWeaveFile(
     );
     for (const callee of fnNames) {
       if (callee === caller) continue;
-      if (new RegExp(`\\b${callee}\\s*\\(`).test(liveBody)) {
+      if (new RegExp(`(?:\\b|self\\.)${callee}\\s*\\(`).test(liveBody)) {
         calledFns.add(callee);
         callingFns.add(caller);
       }
@@ -2365,16 +2816,12 @@ function verifyPythonWeaveFile(
   }
   // Also check module top-level calls (outside def headers)
   for (const fn of fnNames) {
-    const matches = liveCode.match(new RegExp(`\\b${fn}\\s*\\(`, "g"));
+    const matches = liveCode.match(new RegExp(`(?:\\b|\\.)${fn}\\s*\\(`, "g"));
     if (matches && matches.length >= 2) {
       calledFns.add(fn);
     }
   }
 
-  // Entry defs are public defs that call helpers (or the last public def if none call yet)
-  const entryFns = fnNames.filter(
-    (n) => !n.startsWith("_") && (callingFns.has(n) || !calledFns.has(n)),
-  );
   const reachable = new Set<string>();
   for (const fn of fnNames) {
     if (callingFns.has(fn) || calledFns.has(fn)) {
@@ -2411,13 +2858,43 @@ function verifyPythonWeaveFile(
 
   const pyCrownJewelDefects: string[] = [];
   if (!isPostProtectWeave && fnNames.length <= 15) {
+    const publicGateFns = fnNames.filter(
+      (f) => !f.startsWith("_") && classifyFunctionRole(f, true) === "gate-or-auth",
+    );
     for (const fn of fnNames) {
-      if (classifyFunctionRole(fn, !fn.startsWith("_")) !== "gate-or-auth") {
+      const isPublic = !fn.startsWith("_");
+      if (classifyFunctionRole(fn, isPublic) !== "gate-or-auth") {
+        continue;
+      }
+      if (!isPublic && publicGateFns.length > 0) {
         continue;
       }
       const strippedBody = fnBodies.get(fn) ?? "";
-      if (/\breturn\s+(?:True|False)\b/.test(strippedBody)) {
+      const returnMatches = [...strippedBody.matchAll(/\breturn\s+([^\r\n#]+)/g)].map(
+        (rm) => rm[1]!.trim(),
+      );
+      const hasTrueLit = returnMatches.some((r) => /^True\b/.test(r));
+      const hasFalseLit = returnMatches.some((r) => /^False\b/.test(r));
+      const hasComputedRet = returnMatches.some(
+        (r) => !/^(?:True|False|None)\b/.test(r),
+      );
+      if (hasTrueLit || (hasFalseLit && !hasComputedRet)) {
         pyCrownJewelDefects.push(`raw boolean return in def '${fn}'`);
+      }
+      if (isPublic && (!calledFns.has(fn) || callingFns.has(fn))) {
+        const callsHelper = fnNames.some(
+          (other) =>
+            other !== fn &&
+            new RegExp(`(?:\\b|self\\.)${other}\\s*\\(`).test(strippedBody),
+        );
+        const touchesStateOrHash =
+          fnsTouchingState.has(fn) ||
+          /\^|\^=|\|=|sha256|pbkdf2|hmac|digest/.test(strippedBody);
+        if (!callsHelper || !touchesStateOrHash) {
+          pyCrownJewelDefects.push(
+            `gate def '${fn}' is not data-coupled to shared state and helper defs`,
+          );
+        }
       }
     }
     const eqMatch = source.match(/[!=]=\s*["']([^"'\r\n]{4,})["']/);
@@ -2430,9 +2907,26 @@ function verifyPythonWeaveFile(
     ) {
       pyCrownJewelDefects.push(`cleartext string comparison '${eqMatch[1]}'`);
     }
+    const pyLaneLint = lintLaneIndependence(source);
+    if (pyLaneLint.looksLaneIndependent) {
+      pyCrownJewelDefects.push(
+        `lane-independent per-byte/per-index oracle (${pyLaneLint.findings.map((f) => f.id).join(", ")})`,
+      );
+    }
   }
   if (/\bFLAG\{[^}]{4,}\}/i.test(source)) {
     pyCrownJewelDefects.push("hardcoded plaintext FLAG literal");
+  }
+
+  const pyFilterDefects: string[] = [];
+  if (passOnlyFns.length > 0) {
+    pyFilterDefects.push(`pass-only stubs: ${passOnlyFns.join(", ")}`);
+  }
+  if (unreferenced.length > 0) {
+    pyFilterDefects.push(`unreferenced defs: ${unreferenced.join(", ")}`);
+  }
+  if (bannerMatch !== null) {
+    pyFilterDefects.push(`forbidden marker '${bannerMatch[0]}'`);
   }
 
   const checks: WeaveCheckResult[] = [
@@ -2477,14 +2971,11 @@ function verifyPythonWeaveFile(
     {
       id: "filter-resistance",
       titleZh: "抗「独立层」过滤",
-      passed:
-        passOnlyFns.length === 0 &&
-        unreferenced.length === 0 &&
-        bannerMatch === null,
+      passed: pyFilterDefects.length === 0,
       evidence:
-        passOnlyFns.length === 0
+        pyFilterDefects.length === 0
           ? "0 pass-only stubs"
-          : `pass-only stubs: ${passOnlyFns.join(", ")}`,
+          : pyFilterDefects.join("; "),
     },
     {
       id: "crown-jewel-entanglement",
@@ -2547,16 +3038,27 @@ function verifyNativeWeaveFile(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  // Extract top-level state declarations (static/global/mut/var)
+  // Extract top-level state declarations (static/global/mut/var, including Go var (...) blocks)
   const stateLines = noComments.split(/\r?\n/);
   let braceDepth = 0;
+  let inGoVarBlock = false;
   for (const rawLine of stateLines) {
     if (braceDepth === 0) {
+      if (ext === ".go" && /^\s*var\s*\(\s*$/.test(rawLine)) {
+        inGoVarBlock = true;
+      } else if (inGoVarBlock && /^\s*\)\s*$/.test(rawLine)) {
+        inGoVarBlock = false;
+      } else if (inGoVarBlock) {
+        const goBlockVar = rawLine.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s+/);
+        if (goBlockVar?.[1] && !stateVars.includes(goBlockVar[1])) {
+          stateVars.push(goBlockVar[1]);
+        }
+      }
       const cState = rawLine.match(
-        /^\s*(?:(?:static|volatile|mut|pub|const)\s+)*(?:uint(?:32|64|8)_t|int(?:32|64)?_t|unsigned(?:\s+int|\s+long|\s+char)?|int|long|size_t|struct\s+\w+|u32|u64|usize|i32|i64|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=;]+)?=/,
+        /^\s*(?:(?:static|volatile|mut|pub|const)\s+)*(?:uint(?:32|64|16|8)_t|int(?:32|64|16|8)?_t|unsigned(?:\s+int|\s+long|\s+char|\s+short)?|int|long|short|char|bool|_Bool|size_t|uintptr_t|struct\s+\w+|u32|u64|u16|u8|usize|i32|i64|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])*\s*(?::[^=;]+)?(?:=|;)/,
       );
       const rsState = rawLine.match(
-        /^\s*(?:pub\s+)?static\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:/,
+        /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:static|const)\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:/,
       );
       const goState = rawLine.match(/^\s*var\s+([A-Za-z_][A-Za-z0-9_]*)\s+/);
       const candidate = cState?.[1] ?? rsState?.[1] ?? goState?.[1];
@@ -2573,10 +3075,10 @@ function verifyNativeWeaveFile(
   // Extract function definitions and brace-delimited bodies
   const fnHeaderRegex =
     ext === ".rs"
-      ? /(?:^|\n)[ \t]*(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)[^{;]*\{/g
+      ? /(?:^|\n)[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{;]*\{/g
       : ext === ".go"
-        ? /(?:^|\n)[ \t]*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)[^{;]*\{/g
-        : /(?:^|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_* \t]*)[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{/g;
+        ? /(?:^|\n)[ \t]*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*\([^)]*\)[^{;]*\{/g
+        : /(?:^|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_* \t]*?)(?:[ \t]+|\*[ \t]*)([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{/g;
 
   let fm: RegExpExecArray | null;
   while ((fm = fnHeaderRegex.exec(noComments)) !== null) {
@@ -2644,11 +3146,17 @@ function verifyNativeWeaveFile(
   const nativeCrownJewelDefects: string[] = [];
   for (const [fn, body] of fnBodies.entries()) {
     if (classifyFunctionRole(fn, true) !== "gate-or-auth") continue;
-    if (/\breturn\s+(?:true|false)\s*;?/.test(body)) {
+    const retMatches = [...body.matchAll(/\breturn\s+([^;\r\n]+)/g)].map((rm) =>
+      rm[1]!.trim(),
+    );
+    const hasTrueLit = retMatches.some((r) => /^true\b/.test(r));
+    const hasFalseLit = retMatches.some((r) => /^false\b/.test(r));
+    const hasComputedRet = retMatches.some((r) => !/^(?:true|false)\b/.test(r));
+    if (hasTrueLit || (hasFalseLit && !hasComputedRet)) {
       nativeCrownJewelDefects.push(`raw boolean return in '${fn}'`);
     }
     const strcmpMatch = body.match(
-      /\bstrcmp\s*\([^,]+,\s*"([^"]{4,})"\s*\)|==\s*"([^"]{4,})"/,
+      /\b(?:strcmp|strncmp|memcmp)\s*\([^,]+,\s*"([^"]{4,})"|==\s*"([^"]{4,})"/,
     );
     const literalSecret = strcmpMatch?.[1] ?? strcmpMatch?.[2];
     if (
@@ -2660,20 +3168,33 @@ function verifyNativeWeaveFile(
         `cleartext secret comparison '${literalSecret}' in '${fn}'`,
       );
     }
-    const callsHelper = fnNames.some(
-      (other) => other !== fn && new RegExp(`\\b${other}\\s*\\(`).test(body),
-    );
-    const usesMixingOrState =
-      fnsTouchingState.has(fn) ||
-      /\^|\^=|\|=|wrapping_mul|rotate_left/.test(body);
-    if (!callsHelper || !usesMixingOrState) {
-      nativeCrownJewelDefects.push(
-        `gate function '${fn}' is not entangled with shared state and helper computations`,
+    if (!calledFns.has(fn) || callingFns.has(fn)) {
+      const callsHelper = fnNames.some(
+        (other) => other !== fn && new RegExp(`\\b${other}\\s*\\(`).test(body),
       );
+      const usesMixingOrState =
+        fnsTouchingState.has(fn) ||
+        /\^|\^=|\|=|wrapping_mul|rotate_left/.test(body);
+      if (!callsHelper || !usesMixingOrState) {
+        nativeCrownJewelDefects.push(
+          `gate function '${fn}' is not entangled with shared state and helper computations`,
+        );
+      }
     }
   }
   if (/\bFLAG\{[^}]{4,}\}/i.test(source)) {
     nativeCrownJewelDefects.push("hardcoded plaintext FLAG literal");
+  }
+
+  const nativeFilterDefects: string[] = [];
+  if (emptyFns.length > 0) {
+    nativeFilterDefects.push(`trivial/empty native stubs: ${emptyFns.join(", ")}`);
+  }
+  if (unreferenced.length > 0) {
+    nativeFilterDefects.push(`unreferenced native functions: ${unreferenced.join(", ")}`);
+  }
+  if (bannerMatch !== null) {
+    nativeFilterDefects.push(`forbidden marker '${bannerMatch[0]}'`);
   }
 
   const checks: WeaveCheckResult[] = [
@@ -2718,14 +3239,11 @@ function verifyNativeWeaveFile(
     {
       id: "filter-resistance",
       titleZh: "抗「独立层」过滤",
-      passed:
-        emptyFns.length === 0 &&
-        unreferenced.length === 0 &&
-        bannerMatch === null,
+      passed: nativeFilterDefects.length === 0,
       evidence:
-        emptyFns.length === 0
+        nativeFilterDefects.length === 0
           ? "0 trivial/empty native stubs"
-          : `Trivial/empty native stubs: ${emptyFns.join(", ")}`,
+          : nativeFilterDefects.join("; "),
     },
     {
       id: "crown-jewel-entanglement",

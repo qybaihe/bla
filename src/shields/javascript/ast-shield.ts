@@ -224,10 +224,9 @@ export function collectEsmExportedSymbols(program: t.Program): string[] {
               : spec.exported.value,
           );
         } else if (t.isExportNamespaceSpecifier(spec)) {
+          const nsExported = spec.exported as t.Identifier | t.StringLiteral;
           exported.push(
-            t.isIdentifier(spec.exported)
-              ? spec.exported.name
-              : spec.exported.value,
+            t.isIdentifier(nsExported) ? nsExported.name : nsExported.value,
           );
         }
       }
