@@ -987,6 +987,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         },
       },
       required: ["path"],
+      additionalProperties: false,
     },
   },
   {
@@ -1363,6 +1364,12 @@ function optionalCount(value: unknown): number | undefined {
     : undefined;
 }
 
+function optionalOffset(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 function stringListArg(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const list = value.filter((x): x is string => typeof x === "string" && x.length > 0);
@@ -1711,12 +1718,33 @@ export function validateMcpToolCall(
         };
       }
     } else if (propSchema.type === "number") {
-      if (typeof val !== "number" || !Number.isFinite(val) || val <= 0) {
+      const allowZero =
+        key === "offset" || key.endsWith("_threshold") || key === "fail_under";
+      if (typeof val !== "number" || !Number.isFinite(val) || (allowZero ? val < 0 : val <= 0)) {
         return {
           ok: false,
           code: -32602,
-          message: `Invalid params for '${tool.name}': argument '${key}' must be a positive finite number`,
+          message: `Invalid params for '${tool.name}': argument '${key}' must be a ${allowZero ? "non-negative" : "positive"} finite number`,
         };
+      }
+    } else if (propSchema.type === "array") {
+      if (!Array.isArray(val)) {
+        return {
+          ok: false,
+          code: -32602,
+          message: `Invalid params for '${tool.name}': argument '${key}' must be an array, received ${val === null ? "null" : typeof val}`,
+        };
+      }
+      if (propSchema.items?.type === "string") {
+        for (let i = 0; i < val.length; i++) {
+          if (typeof val[i] !== "string" || (val[i] as string).trim().length === 0) {
+            return {
+              ok: false,
+              code: -32602,
+              message: `Invalid params for '${tool.name}': item ${i} in '${key}' must be a non-empty string`,
+            };
+          }
+        }
       }
     }
   }
@@ -2004,7 +2032,7 @@ export async function handleMcpRequest(
         let refused = false;
         const confirmed = args.confirm_overwrite === true;
         if (name === "bla_discover") {
-          const offset = optionalCount(args.offset);
+          const offset = optionalOffset(args.offset);
           payload = discoverHardenTargets(
             typeof args.directory === "string" && args.directory.trim().length > 0
               ? args.directory

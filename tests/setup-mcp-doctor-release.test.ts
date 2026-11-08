@@ -473,6 +473,10 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
       { name: "bla_init", arguments: { directory: "" } },
       { name: "bla_doctor", arguments: { home_dir: "" } },
       { name: "bla_benchmark", arguments: { unexpected: true } },
+      { name: "bla_lint_integrity_coverage", arguments: { path: "x", unexpected: true } },
+      { name: "bla_harden", arguments: { wasm_preserve_exports: "not-an-array" } },
+      { name: "bla_harden", arguments: { wasm_preserve_exports: [""] } },
+      { name: "bla_discover", arguments: { offset: -1 } },
     ];
 
     for (const [idx, call] of invalidCalls.entries()) {
@@ -507,6 +511,21 @@ describe("Issue #10: MCP Runtime Argument Validation, Prompts Contract & Subproc
       spyHandlers,
     );
     expect(spyHandlers.auditTarget).toHaveBeenCalledWith(".");
+
+    // Prove explicit `offset: 0` in bla_discover is accepted without -32602
+    const validOffsetRes = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 1000,
+        method: "tools/call",
+        params: {
+          name: "bla_discover",
+          arguments: { directory: ".", offset: 0 },
+        },
+      },
+      spyHandlers,
+    );
+    expect(validOffsetRes?.error).toBeUndefined();
   });
 
   it("implements prompts/get for all advertised prompts in prompts/list and validates required arguments", async () => {
