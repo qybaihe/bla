@@ -5,6 +5,7 @@ import type {
   VerificationReport,
 } from "../core/types.js";
 import { auditTarget } from "./auditor.js";
+import { buildDefenseCoverageContract } from "../core/coverage-contract.js";
 import {
   applyDefenseScoreHonesty,
   DEFENSE_SCORE_DISCLAIMER,
@@ -194,5 +195,8 @@ export function verifyTarget(
     costAmplificationFactor: costAmp,
     obligationGraphExpansionFactor: graphAmp,
     functionalIntegrityVerified: sim.parseStatus === "complete",
+    coverageContract: buildDefenseCoverageContract({
+      clientProtected: afterAudit.protectionStatus === "BLA_PROTECTED",
+    }),
   };
 }
