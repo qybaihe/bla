@@ -963,13 +963,16 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
       expect(existsSync(join(pkgRoot, bundlerEntry))).toBe(true);
       expect(existsSync(join(pkgRoot, pkgManifest.exports["./bundler"]!.types))).toBe(true);
 
-      // Verify read-only `doctor --json` and MCP `initialize` against unpacked dist/cli.js
+      // Verify read-only `doctor --json` and MCP `initialize` against unpacked dist/cli.js.
+      // A cold Node start from an unpacked tarball can exceed 5s on a loaded machine,
+      // which made this smoke test fail intermittently; use a realistic budget.
+      const packedCliTimeoutMs = 20_000;
       const docRun = spawnSync(
         process.execPath,
         [join(pkgRoot, "dist/cli.js"), "doctor", "--json"],
         {
           encoding: "utf8",
-          timeout: 5000,
+          timeout: packedCliTimeoutMs,
           env: {
             ...process.env,
             HOME: unpackDir,
@@ -983,17 +986,27 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
       expect(docJson.blaVersion).toBe(BLA_IDENTITY.version);
       expect(docJson.healthy).toBe(true);
 
-      // Verify MCP initialize against unpacked dist/cli.js
-      const mcpInit = spawnSync(
-        process.execPath,
-        [join(pkgRoot, "dist/cli.js"), "mcp"],
-        {
-          input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n",
+      // Verify MCP initialize against unpacked dist/cli.js. Retry once on a
+      // transient spawn timeout so a slow cold start does not fail the suite.
+      const mcpCli = join(pkgRoot, "dist/cli.js");
+      const mcpInput =
+        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n";
+      let mcpInit = spawnSync(process.execPath, [mcpCli, "mcp"], {
+        input: mcpInput,
+        encoding: "utf8",
+        timeout: packedCliTimeoutMs,
+      });
+      if (!mcpInit.stdout.includes('"protocolVersion"')) {
+        mcpInit = spawnSync(process.execPath, [mcpCli, "mcp"], {
+          input: mcpInput,
           encoding: "utf8",
-          timeout: 5000,
-        },
-      );
-      expect(mcpInit.stdout.trim()).toContain('"protocolVersion":"2024-11-05"');
+          timeout: packedCliTimeoutMs,
+        });
+      }
+      expect(
+        mcpInit.stdout.trim(),
+        `MCP initialize returned no response (status=${mcpInit.status}, signal=${mcpInit.signal}, stderr=${(mcpInit.stderr || "").slice(0, 500)})`,
+      ).toContain('"protocolVersion":"2024-11-05"');
     }
   });
 });
