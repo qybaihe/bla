@@ -18,6 +18,7 @@ const REQUIRED_HTML_PAGES = [
 const REQUIRED_ASSETS = [
   "assets/styles.css",
   "assets/main.js",
+  "assets/live-stats.mjs",
   "assets/i18n.js",
   "assets/home.js",
   "assets/logo.png",
@@ -126,6 +127,22 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
       if (/script-src\s+[^;]*'unsafe-inline'/i.test(csp)) {
         errors.push(`${rel}: CSP must not allow script-src 'unsafe-inline'`);
       }
+      if (!/connect-src[^;]*https:\/\/api\.github\.com/i.test(csp)) {
+        errors.push(`${rel}: CSP must allow https://api.github.com for live figures`);
+      }
+    }
+
+    if (/data-gh-stars[^>]*>\s*\d/.test(html) || /data-gh-stars[^>]*>\s*★/.test(html)) {
+      errors.push(`${rel}: star pill must not ship a hardcoded count`);
+    }
+    if (!html.includes('data-live-stamp="stars"')) {
+      errors.push(`${rel}: missing visible GitHub star source stamp`);
+    }
+    if (!/<script\s+type="module"\s+src="(?:\.\.\/)?assets\/main\.js"><\/script>/.test(html)) {
+      errors.push(`${rel}: main.js must load as a module`);
+    }
+    if (rel === "crackme/index.html" && !html.includes("data-crackme-live")) {
+      errors.push(`${rel}: missing repository challenge status panel`);
     }
 
     if (/brand-badge|data-i18n=["']nav\.badge["']|蓝军防护|藍軍防護|BLUE SHIELD v1\./.test(html)) {
@@ -185,11 +202,38 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     if (/nav\.badge/.test(i18n)) {
       errors.push("assets/i18n.js: nav.badge must be removed");
     }
-    for (const key of ["nav.menu", "nav.menuClose", "nav.primary", "nav.lang"]) {
+    for (const key of [
+      "nav.menu",
+      "nav.menuClose",
+      "nav.primary",
+      "nav.lang",
+      "live.stars.live",
+      "live.stars.stale",
+      "live.stars.unavailable",
+      "live.crackme.noSolve",
+      "live.crackme.commitment",
+    ]) {
       const count = i18n.split(`"${key}"`).length - 1;
       if (count < 8) {
         errors.push(`assets/i18n.js: ${key} must exist in all 8 languages (found ${count})`);
       }
+    }
+  }
+
+  const livePath = resolve(absRoot, "assets/live-stats.mjs");
+  if (existsSync(livePath)) {
+    const live = readFileSync(livePath, "utf8");
+    if (!live.includes("STAR_REFRESH_MS = 5 * 60 * 1000")) {
+      errors.push("assets/live-stats.mjs: star refresh must stay at 5 minutes");
+    }
+    if (!live.includes("CRACKME_REFRESH_MS = 10 * 60 * 1000")) {
+      errors.push("assets/live-stats.mjs: CrackMe refresh must stay at 10 minutes");
+    }
+    if (!live.includes("FETCH_TIMEOUT_MS = 8000")) {
+      errors.push("assets/live-stats.mjs: fetch timeout must stay at 8 seconds");
+    }
+    if (!live.includes("stargazers_count")) {
+      errors.push("assets/live-stats.mjs: stars must come from stargazers_count");
     }
   }
 
@@ -212,6 +256,12 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     const main = readFileSync(mainPath, "utf8");
     if (!main.includes("initNavMenu") || !main.includes('addEventListener("click"')) {
       errors.push("assets/main.js: nav toggle must be wired without inline handlers");
+    }
+    if (!main.includes('from "./live-stats.mjs"') || !main.includes("startLiveFigures")) {
+      errors.push("assets/main.js: live star and CrackMe figures must be wired");
+    }
+    if (main.includes("toFixed") || main.includes("bla_gh_stars")) {
+      errors.push("assets/main.js: do not abbreviate stars or reuse the untimed star cache");
     }
   }
 

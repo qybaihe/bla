@@ -65,7 +65,7 @@
           <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
             <span>★</span>
             <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars>★</span>
+            <span class="star-pill" data-gh-stars data-state="loading">—</span>
           </a>
         </div>
         </div>
@@ -107,7 +107,7 @@
             <a href="https://github.com/qybaihe/bla" target="_blank" rel="noopener" class="btn-star">
               <span>⭐</span>
               <span data-i18n="hero.starBtn">Star on GitHub</span>
-              <span class="star-pill" data-gh-stars>★</span>
+              <span class="star-pill" data-gh-stars data-state="loading">—</span>
             </a>
           </div>
 
@@ -286,11 +286,12 @@
           <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
           <a href="https://www.npmjs.com/package/bla-agents">npm (`bla-agents`)</a>
         </div>
+        <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>
 
     <script src="assets/i18n.js"></script>
-    <script src="assets/main.js"></script>
+    <script type="module" src="assets/main.js"></script>
     <script src="assets/home.js"></script>
   </body>
 </html>

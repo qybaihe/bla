@@ -59,7 +59,7 @@
           <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
             <span>★</span>
             <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars>★</span>
+            <span class="star-pill" data-gh-stars data-state="loading">—</span>
           </a>
         </div>
         </div>
@@ -138,9 +138,10 @@ export default {
           <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
           <a href="../" data-i18n="nav.overview">Overview</a>
         </div>
+        <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>
     <script src="../assets/i18n.js"></script>
-    <script src="../assets/main.js"></script>
+    <script type="module" src="../assets/main.js"></script>
   </body>
 </html>
