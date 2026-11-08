@@ -115,4 +115,121 @@ module.exports = { unlock };
     expect(report.status).toBe("noop");
     expect(report.totalEncrypted).toBe(0);
   });
+
+  it("encrypts backtick literals while preserving comments, object keys, and require() specifiers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-enc-ast-"));
+    const src = [
+      `// Comment mentioning "FLAG{bla_ast_safe_value_123456}" must stay intact`,
+      `const path = require("node:path");`,
+      `const obj = { "FLAG{bla_ast_safe_value_123456}": 42 };`,
+      `const secret = \`FLAG{bla_ast_safe_value_123456}\`;`,
+      `module.exports = { obj, secret, isAbs: Boolean(path) };`,
+      ``,
+    ].join("\n");
+    writeFileSync(join(dir, "license.cjs"), src);
+
+    const report = encryptStrings({
+      path: dir,
+      seed: "ast-safe-seed",
+      outDir: join(dir, "out"),
+    });
+    expect(report.status).toBe("ok");
+    expect(report.totalEncrypted).toBe(1);
+
+    const out = readFileSync(join(dir, "out", "license.cjs"), "utf8");
+    // Comment and object property key remain valid syntax; runtime evaluates cleanly.
+    expect(out).toContain(`// Comment mentioning "FLAG{bla_ast_safe_value_123456}" must stay intact`);
+    expect(out).toContain(`{ "FLAG{bla_ast_safe_value_123456}": 42 }`);
+    expect(out).not.toContain("`FLAG{bla_ast_safe_value_123456}`");
+
+    const mod = require(join(dir, "out", "license.cjs"));
+    expect(mod.secret).toBe("FLAG{bla_ast_safe_value_123456}");
+    expect(mod.obj["FLAG{bla_ast_safe_value_123456}"]).toBe(42);
+  });
+
+  it("rejects unsafe outDir pointing into .git or node_modules", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-enc-unsafe-out-"));
+    writeFileSync(
+      join(dir, "license.cjs"),
+      `module.exports.flag = "FLAG{unsafe_outdir_check_123456}";\n`,
+    );
+    const gitOut = encryptStrings({
+      path: dir,
+      seed: "seed-unsafe",
+      outDir: join(dir, ".git", "hooks"),
+    });
+    expect(gitOut.status).toBe("error");
+    expect(gitOut.error).toMatch(/protected directory segment "\.git"/);
+  });
+
+  it("enforces MCP confirm_overwrite when out_dir targets already exist or when re-encrypting", async () => {
+    const { handleMcpRequest } = await import("../src/mcp/server.js");
+    const dir = mkdtempSync(join(tmpdir(), "bla-enc-mcp-overwrite-"));
+    const outDir = join(dir, "out");
+    writeFileSync(
+      join(dir, "license.cjs"),
+      `module.exports.flag = "FLAG{mcp_confirm_overwrite_check}";\n`,
+    );
+
+    const first = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "bla_encrypt_strings",
+        arguments: { path: dir, seed: "s1", out_dir: outDir },
+      },
+    });
+    const firstRes = first!.result as {
+      isError: boolean;
+      structuredContent: { writeReceipt?: { status: string; wrote: string[] } };
+    };
+    expect(firstRes.isError).toBe(false);
+    expect(firstRes.structuredContent.writeReceipt?.status).toBe("written");
+
+    const secondRefused = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "bla_encrypt_strings",
+        arguments: { path: dir, seed: "s2", out_dir: outDir },
+      },
+    });
+    const refusedRes = secondRefused!.result as {
+      isError: boolean;
+      structuredContent: { status?: string; wouldOverwrite?: string[] };
+    };
+    expect(refusedRes.isError).toBe(true);
+    expect(refusedRes.structuredContent.status).toBe("confirmation_required");
+    expect(refusedRes.structuredContent.wouldOverwrite).toEqual([
+      join(outDir, "license.cjs"),
+    ]);
+
+    const secondConfirmed = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "bla_encrypt_strings",
+        arguments: {
+          path: dir,
+          seed: "s2",
+          out_dir: outDir,
+          confirm_overwrite: true,
+        },
+      },
+    });
+    const confirmedRes = secondConfirmed!.result as {
+      isError: boolean;
+      structuredContent: {
+        writeReceipt?: { confirmed: boolean; overwrote: string[] };
+      };
+    };
+    expect(confirmedRes.isError).toBe(false);
+    expect(confirmedRes.structuredContent.writeReceipt?.confirmed).toBe(true);
+    expect(confirmedRes.structuredContent.writeReceipt?.overwrote).toEqual([
+      join(outDir, "license.cjs"),
+    ]);
+  });
 });

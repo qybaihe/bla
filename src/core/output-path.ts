@@ -1,5 +1,16 @@
-import { lstatSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+const PROTECTED_PATH_SEGMENTS = new Set([".git", ".hg", ".svn", "node_modules"]);
 
 function exists(path: string): boolean {
   try {
@@ -11,7 +22,7 @@ function exists(path: string): boolean {
   }
 }
 
-function physicalPath(path: string): string {
+export function physicalPath(path: string): string {
   const suffix: string[] = [];
   let ancestor = path;
   while (!exists(ancestor)) {
@@ -21,6 +32,77 @@ function physicalPath(path: string): string {
     ancestor = parent;
   }
   return join(realpathSync(ancestor), ...suffix);
+}
+
+/**
+ * Validate an auxiliary output directory (`out_dir` / `outDir`) before creating
+ * or writing files inside it. Rejects filesystem roots, `.git`/`.hg`/`.svn`/`node_modules`
+ * segments, and existing non-directory targets.
+ */
+export function assertSafeOutDir(outDir: string): string {
+  if (typeof outDir !== "string" || outDir.trim().length === 0) {
+    throw new Error("Output directory must be a non-empty path.");
+  }
+  const abs = resolve(outDir);
+  const physical = physicalPath(abs);
+  if (dirname(physical) === physical) {
+    throw new Error(`Refusing to use filesystem root as output directory: ${outDir}`);
+  }
+  const segments = physical.split(/[\\/]+/).filter(Boolean);
+  for (const seg of segments) {
+    if (PROTECTED_PATH_SEGMENTS.has(seg)) {
+      throw new Error(
+        `Refusing to write into protected directory segment "${seg}": ${outDir}`,
+      );
+    }
+  }
+  if (exists(abs)) {
+    const st = statSync(abs);
+    if (!st.isDirectory()) {
+      throw new Error(`Output directory path exists and is not a directory: ${outDir}`);
+    }
+  }
+  return abs;
+}
+
+/**
+ * Crash-safe atomic file write via exclusive temp-file (`wx`) + `renameSync`.
+ * Preserves symlink/hardlink target semantics when explicitly overwriting an aliased file.
+ */
+export function writeFileAtomicSync(
+  targetPath: string,
+  content: string | Uint8Array,
+  encoding?: BufferEncoding,
+): void {
+  try {
+    const st = lstatSync(targetPath);
+    if (st.isSymbolicLink() || st.nlink > 1) {
+      if (encoding && typeof content === "string") {
+        writeFileSync(targetPath, content, encoding);
+      } else {
+        writeFileSync(targetPath, content);
+      }
+      return;
+    }
+  } catch {
+    /* target does not exist yet — proceed with the atomic path */
+  }
+  const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  try {
+    if (encoding && typeof content === "string") {
+      writeFileSync(tmpPath, content, { encoding, flag: "wx" });
+    } else {
+      writeFileSync(tmpPath, content, { flag: "wx" });
+    }
+    renameSync(tmpPath, targetPath);
+  } catch (err) {
+    try {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup failure
+    }
+    throw err;
+  }
 }
 
 /** Admission checks before any output is created. */

@@ -14,9 +14,9 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { assertSafeOutDir, writeFileAtomicSync } from "../core/output-path.js";
 
 export const BIND_SCOPE_SCHEMA = "bla-bind-scope/v1" as const;
 export const BIND_SCOPE_FILE_NAME = "bind-scope.json" as const;
@@ -80,6 +80,7 @@ export interface BindScopeApplyReport {
   readonly runtimeInjected: boolean;
   readonly lint: BindScopeLintReport;
   readonly honestyNote: string;
+  readonly wouldOverwrite?: readonly string[];
   readonly error?: string;
 }
 
@@ -561,7 +562,35 @@ export function applyBindScope(
     };
   }
 
-  const outRoot = options.outDir ? resolve(options.outDir) : absDir;
+  let outRoot: string;
+  try {
+    outRoot = options.outDir ? assertSafeOutDir(options.outDir) : absDir;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const fallbackPath = join(absDir, BIND_SCOPE_FILE_NAME);
+    const lint: BindScopeLintReport = {
+      schema: BIND_SCOPE_SCHEMA,
+      path: fallbackPath,
+      ok: false,
+      shouldRefuseBankrupt: true,
+      reasons: ["missing-runtime-check"],
+      contract: validated.contract,
+      runtimeCheckPresent: false,
+      oneLineAdvice: `ERROR: ${errMsg}`,
+      honestyNote: HONESTY,
+    };
+    return {
+      schema: BIND_SCOPE_SCHEMA,
+      status: "error",
+      contract: validated.contract,
+      contractPath: fallbackPath,
+      written: false,
+      runtimeInjected: false,
+      lint,
+      honestyNote: HONESTY,
+      error: errMsg,
+    };
+  }
   const contractPath = join(outRoot, BIND_SCOPE_FILE_NAME);
   const entrySrc =
     options.entryPath ??
@@ -602,15 +631,26 @@ export function applyBindScope(
   const original = readFileSync(entryAbs, "utf8");
   const rewritten = injectRuntimeIntoEntry(original, snippet);
 
+  const wouldOverwrite: string[] = [];
+  if (existsSync(contractPath)) {
+    wouldOverwrite.push(contractPath);
+  }
+  if (
+    (options.outDir && existsSync(entryOut)) ||
+    (!options.outDir && original.includes(BIND_SCOPE_RUNTIME_MARKER))
+  ) {
+    wouldOverwrite.push(entryOut);
+  }
+
   if (!options.dryRun) {
     mkdirSync(dirname(contractPath), { recursive: true });
-    writeFileSync(
+    writeFileAtomicSync(
       contractPath,
       JSON.stringify(validated.contract, null, 2) + "\n",
       "utf8",
     );
     mkdirSync(dirname(entryOut), { recursive: true });
-    writeFileSync(entryOut, rewritten, "utf8");
+    writeFileAtomicSync(entryOut, rewritten, "utf8");
   }
 
   // Dry-run synthesizes lint against the in-memory rewrite (no disk read).
@@ -640,6 +680,7 @@ export function applyBindScope(
     runtimeInjected: rewritten.includes(BIND_SCOPE_RUNTIME_MARKER),
     lint: finalLint,
     honestyNote: HONESTY,
+    wouldOverwrite,
   };
 }
 

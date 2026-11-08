@@ -171,7 +171,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_encrypt_strings",
-    params: ["path", "seed", "out_dir", "include_urls", "dry_run"],
+    params: ["path", "seed", "out_dir", "include_urls", "dry_run", "confirm_overwrite"],
   },
   {
     tool: "bla_lint_plaintext_secrets",
@@ -179,7 +179,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_bind_scope",
-    params: ["directory", "domains", "valid_from", "valid_until", "entry_path", "out_dir", "dry_run"],
+    params: ["directory", "domains", "valid_from", "valid_until", "entry_path", "out_dir", "dry_run", "confirm_overwrite"],
   },
   {
     tool: "bla_lint_bind_scope",

@@ -1087,6 +1087,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Report only; write nothing",
         },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Required true when out_dir targets already exist or when re-running on already-encrypted files",
+        },
       },
       required: ["path", "seed"],
       additionalProperties: false,
@@ -1147,6 +1152,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         dry_run: {
           type: "boolean",
           description: "Report only; write nothing",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Required true when bind-scope.json or out_dir entry already exists on disk",
         },
       },
       required: ["directory"],
@@ -2353,20 +2363,57 @@ export async function handleMcpRequest(
             refused = status === "fail" || status === "error";
           }
         } else if (name === "bla_encrypt_strings") {
-          payload = encryptStrings({
+          const dryRun = args.dry_run === true;
+          const outDir =
+            typeof args.out_dir === "string" && args.out_dir.trim().length > 0
+              ? (args.out_dir as string)
+              : undefined;
+          const encOpts = {
             path: args.path as string,
             seed: args.seed as string,
-            ...(typeof args.out_dir === "string" && args.out_dir.trim().length > 0
-              ? { outDir: args.out_dir as string }
-              : {}),
+            ...(outDir !== undefined ? { outDir } : {}),
             ...(typeof args.include_urls === "boolean"
               ? { includeUrls: args.include_urls as boolean }
               : {}),
-            dryRun: args.dry_run === true,
-          });
-          {
-            const status = (payload as { status: string }).status;
-            refused = status === "error";
+          };
+          if (dryRun) {
+            const report = encryptStrings({ ...encOpts, dryRun: true });
+            payload = report;
+            refused = report.status === "error";
+          } else {
+            const preview = encryptStrings({ ...encOpts, dryRun: true });
+            if (preview.status === "error") {
+              payload = preview;
+              refused = true;
+            } else {
+              const clobbered =
+                args.confirm_overwrite === false
+                  ? preview.files
+                      .filter((f) => f.encryptedCount > 0)
+                      .map((f) => f.outPath)
+                  : (preview.wouldOverwrite ?? []);
+              if (clobbered.length > 0 && !confirmed) {
+                refused = true;
+                payload = confirmationRequiredPayload(name, clobbered);
+              } else {
+                const report = encryptStrings({ ...encOpts, dryRun: false });
+                if (report.status === "error") {
+                  payload = report;
+                  refused = true;
+                } else {
+                  const wrote = report.files
+                    .filter((f) => f.written)
+                    .map((f) => f.outPath);
+                  payload =
+                    wrote.length > 0
+                      ? {
+                          ...report,
+                          writeReceipt: writeReceipt(wrote, clobbered, confirmed),
+                        }
+                      : report;
+                }
+              }
+            }
           }
         } else if (name === "bla_lint_plaintext_secrets") {
           const allow = args.allow_plaintext_string === true;
@@ -2388,10 +2435,11 @@ export async function handleMcpRequest(
           };
           refused = shouldRefuse;
         } else if (name === "bla_bind_scope") {
+          const dryRun = args.dry_run === true;
           const domains = Array.isArray(args.domains)
             ? args.domains.filter((d) => typeof d === "string")
             : undefined;
-          payload = applyBindScope({
+          const bindOpts = {
             directory: args.directory as string,
             ...(domains && domains.length > 0 ? { domains } : {}),
             ...(typeof args.valid_from === "string" && args.valid_from.trim()
@@ -2406,11 +2454,44 @@ export async function handleMcpRequest(
             ...(typeof args.out_dir === "string" && args.out_dir.trim()
               ? { outDir: args.out_dir as string }
               : {}),
-            dryRun: args.dry_run === true,
-          });
-          {
-            const status = (payload as { status: string }).status;
-            refused = status === "error";
+          };
+          if (dryRun) {
+            const report = applyBindScope({ ...bindOpts, dryRun: true });
+            payload = report;
+            refused = report.status === "error";
+          } else {
+            const preview = applyBindScope({ ...bindOpts, dryRun: true });
+            if (preview.status === "error") {
+              payload = preview;
+              refused = true;
+            } else {
+              const clobbered =
+                args.confirm_overwrite === false
+                  ? [
+                      preview.contractPath,
+                      ...(preview.entryPath ? [preview.entryPath] : []),
+                    ]
+                  : (preview.wouldOverwrite ?? []);
+              if (clobbered.length > 0 && !confirmed) {
+                refused = true;
+                payload = confirmationRequiredPayload(name, clobbered);
+              } else {
+                const report = applyBindScope({ ...bindOpts, dryRun: false });
+                if (report.status === "error") {
+                  payload = report;
+                  refused = true;
+                } else {
+                  const wrote = [
+                    report.contractPath,
+                    ...(report.entryPath ? [report.entryPath] : []),
+                  ];
+                  payload = {
+                    ...report,
+                    writeReceipt: writeReceipt(wrote, clobbered, confirmed),
+                  };
+                }
+              }
+            }
           }
         } else if (name === "bla_lint_bind_scope") {
           const allow = args.allow_missing_bind_runtime === true;

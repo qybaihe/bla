@@ -174,5 +174,61 @@ describe("bind-scope (Direction-4 honest code lock)", () => {
     const content = (lint!.result as { structuredContent: { shouldRefuseBankrupt: boolean } })
       .structuredContent;
     expect(content.shouldRefuseBankrupt).toBe(false);
+
+    // Re-running bla_bind_scope when bind-scope.json already exists requires confirm_overwrite
+    const refused = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "bla_bind_scope",
+        arguments: {
+          directory: dir,
+          domains: ["updated.example"],
+        },
+      },
+    });
+    const refusedRes = refused!.result as {
+      isError: boolean;
+      structuredContent: { status?: string; wouldOverwrite?: string[] };
+    };
+    expect(refusedRes.isError).toBe(true);
+    expect(refusedRes.structuredContent.status).toBe("confirmation_required");
+    expect(refusedRes.structuredContent.wouldOverwrite).toContain(
+      join(dir, "bind-scope.json"),
+    );
+
+    const confirmed = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: {
+        name: "bla_bind_scope",
+        arguments: {
+          directory: dir,
+          domains: ["updated.example"],
+          confirm_overwrite: true,
+        },
+      },
+    });
+    const confirmedRes = confirmed!.result as {
+      isError: boolean;
+      structuredContent: { writeReceipt?: { confirmed: boolean; status: string } };
+    };
+    expect(confirmedRes.isError).toBe(false);
+    expect(confirmedRes.structuredContent.writeReceipt?.confirmed).toBe(true);
+    expect(confirmedRes.structuredContent.writeReceipt?.status).toBe("written");
+  });
+
+  it("rejects unsafe outDir pointing into .git or node_modules", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-bind-unsafe-"));
+    writeFileSync(join(dir, "license.cjs"), ENTRY);
+    const report = applyBindScope({
+      directory: dir,
+      domains: ["allowed.example"],
+      outDir: join(dir, "node_modules", "pkg"),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toMatch(/protected directory segment "node_modules"/);
   });
 });
