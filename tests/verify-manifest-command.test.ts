@@ -84,4 +84,91 @@ describe("bla verify-manifest", () => {
     writeFileSync(manifestPath, JSON.stringify({ a: 1 }), "utf8");
     await expect(runCli(["verify-manifest", manifestPath, "--json"])).resolves.toBe(2);
   });
+
+  it("verifies adjacent artifact hash and detects tampering", async () => {
+    const dir = createTempDir();
+    const pair = generateManifestSigningKeyPair();
+    const artifactPath = join(dir, "bundle.js");
+    const manifestPath = join(dir, "bundle.js.bla-manifest.json");
+    const publicKeyPath = join(dir, "public.pem");
+
+    const originalContent = 'console.log("hello world");';
+    writeFileSync(artifactPath, originalContent, "utf8");
+    writeFileSync(publicKeyPath, pair.publicKeyPem, "utf8");
+
+    // Compute expected sha256
+    const { createHash } = await import("node:crypto");
+    const expectedSha = createHash("sha256").update(Buffer.from(originalContent)).digest("hex");
+
+    const signed = signManifestPayload(
+      {
+        schema: "https://bla.tools/schemas/defense-manifest-v1.json",
+        protectedSha256: expectedSha,
+      },
+      pair.privateKeyPem,
+    );
+    writeFileSync(manifestPath, JSON.stringify(signed, null, 2), "utf8");
+
+    // 1. Valid adjacent artifact
+    const validRes = verifyManifestFile(manifestPath, publicKeyPath);
+    expect(validRes.ok).toBe(true);
+    expect(validRes.artifactPresent).toBe(true);
+    expect(validRes.artifactSha256).toBe(expectedSha);
+    expect(validRes.artifactHashMatch).toBe(true);
+    expect(validRes.reason).toMatch(/artifact hash verified/);
+
+    await expect(
+      runCli(["verify-manifest", manifestPath, "--public-key", publicKeyPath, "--json"]),
+    ).resolves.toBe(0);
+
+    // 2. Tampered artifact (signature over manifest is untouched, but artifact binary was modified)
+    writeFileSync(artifactPath, 'console.log("tampered evil code");', "utf8");
+    const tamperedRes = verifyManifestFile(manifestPath, publicKeyPath);
+    expect(tamperedRes.ok).toBe(false);
+    expect(tamperedRes.signed).toBe(true);
+    expect(tamperedRes.pinned).toBe(true);
+    expect(tamperedRes.artifactPresent).toBe(true);
+    expect(tamperedRes.artifactHashMatch).toBe(false);
+    expect(tamperedRes.reason).toMatch(/protected artifact hash mismatch/);
+
+    await expect(
+      runCli(["verify-manifest", manifestPath, "--public-key", publicKeyPath, "--json"]),
+    ).resolves.toBe(2);
+  });
+
+  it("verifies explicitly provided artifact path via CLI", async () => {
+    const dir = createTempDir();
+    const pair = generateManifestSigningKeyPair();
+    const customArtifactPath = join(dir, "custom.bin");
+    const manifestPath = join(dir, "manifest.json"); // non-adjacent name
+    const content = Buffer.from([1, 2, 3, 4, 5]);
+    writeFileSync(customArtifactPath, content);
+
+    const { createHash } = await import("node:crypto");
+    const expectedSha = createHash("sha256").update(content).digest("hex");
+
+    const signed = signManifestPayload(
+      {
+        protectedSha256: expectedSha,
+      },
+      pair.privateKeyPem,
+    );
+    writeFileSync(manifestPath, JSON.stringify(signed, null, 2), "utf8");
+
+    // Valid explicit artifact path
+    await expect(
+      runCli(["verify-manifest", manifestPath, customArtifactPath, "--json"]),
+    ).resolves.toBe(0);
+
+    // Tampered explicit artifact
+    writeFileSync(customArtifactPath, Buffer.from([9, 9, 9]));
+    await expect(
+      runCli(["verify-manifest", manifestPath, customArtifactPath, "--json"]),
+    ).resolves.toBe(2);
+
+    // Non-existent explicit artifact
+    await expect(
+      runCli(["verify-manifest", manifestPath, join(dir, "missing.bin"), "--json"]),
+    ).resolves.toBe(2);
+  });
 });

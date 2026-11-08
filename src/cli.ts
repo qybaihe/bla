@@ -966,10 +966,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       case "verify-manifest": {
         const target = parsed.positionals[0];
         if (!target) {
-          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>]`.");
+          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [artifact] [--public-key <pem>]`.");
           return 1;
         }
-        const result = verifyManifestFile(target, parsed.publicKey);
+        const artifact = parsed.positionals[1];
+        const result = verifyManifestFile(target, parsed.publicKey, artifact);
         if (parsed.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
