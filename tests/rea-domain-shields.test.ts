@@ -30,6 +30,17 @@ import {
   FIRMWARE_HARDENING_SKIP_REASON,
   GPU_OBJECT_HARDENING_SKIP_REASON,
 } from "../src/shields/formats/gpu-ptx.js";
+
+/** A classic 24-byte libpcap global header with no packets. */
+function pcapGlobalHeader(): Buffer {
+  const hdr = Buffer.alloc(24);
+  hdr.writeUInt32LE(0xa1b2c3d4, 0);
+  hdr.writeUInt16LE(2, 4);
+  hdr.writeUInt16LE(4, 6);
+  hdr.writeUInt32LE(65535, 16);
+  hdr.writeUInt32LE(1, 20);
+  return hdr;
+}
 import {
   inspectUf2Firmware,
   protectUf2FirmwareBuffer,
@@ -232,7 +243,7 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
   });
 
   it("protects PCAP captures: magic preserved, decoy packets + canaries present", () => {
-    const res = protectPcapCaptureBuffer(Buffer.alloc(0), {
+    const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
       intensity: "balanced",
       seed: "pcap-test",
     });
@@ -454,7 +465,7 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
   });
 
   it("bankrupt PCAP decoys estimate past TSHARK_JSON_MAX_BYTES while staying valid libpcap", () => {
-    const res = protectPcapCaptureBuffer(Buffer.alloc(0), {
+    const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
       intensity: "bankrupt",
       seed: "pcap-bankrupt",
     });
