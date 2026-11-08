@@ -6,7 +6,9 @@
  */
 
 export const STAR_ENDPOINT = "https://api.github.com/repos/qybaihe/bla";
+export const STAR_FALLBACK_ENDPOINT = "https://ungh.cc/repos/qybaihe/bla";
 export const CONTENT_PREFIX = "https://api.github.com/repos/qybaihe/bla/contents/";
+export const RAW_CONTENT_PREFIX = "https://raw.githubusercontent.com/qybaihe/bla/main/";
 export const STAR_SOURCE_LABEL = "api.github.com/repos/qybaihe/bla · stargazers_count";
 export const README_PATH = "challenge/README.md";
 export const README_SOURCE_LABEL = "github.com/qybaihe/bla · challenge/README.md (default branch)";
@@ -18,9 +20,9 @@ export const FETCH_TIMEOUT_MS = 8000;
 export const POLL_CHECK_MS = 30 * 1000;
 export const MAX_STAR_COUNT = 100_000_000;
 
+// Use only CORS-safelisted Accept header so browsers send a direct GET without preflight OPTIONS.
 export const GH_HEADERS = {
   Accept: "application/vnd.github+json",
-  "X-GitHub-Api-Version": "2022-11-28",
 };
 
 export function formatExactCount(value) {

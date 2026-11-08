@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>BLA (bla-agents) — Blind LLM Agents · Blue Defense Shield</title>
     <meta
       name="description"
@@ -75,8 +75,13 @@
     <main>
       <!-- Hero Section -->
       <section class="hero">
+        <canvas class="hero-particles" id="bla-hero-canvas" aria-hidden="true"></canvas>
         <div class="container">
-          <img src="assets/logo.png" alt="BLA Blue Shield Logo" class="hero-logo" width="84" height="84" />
+          <div class="hero-logo-orbital">
+            <div class="orbital-ring ring-outer" aria-hidden="true"></div>
+            <div class="orbital-ring ring-inner" aria-hidden="true"></div>
+            <img src="assets/logo.png" alt="BLA Blue Shield Logo" class="hero-logo" width="78" height="78" />
+          </div>
           <div class="hero-pill">
             <span class="dot-red" data-i18n="hero.pill.red">RE = Reverse Engineering</span>
             <span>·</span>
@@ -116,6 +121,25 @@
               ⭐ Open-source under the MIT License — if BLA is helpful to your project, welcome to give us a Star on GitHub!
             </a>
           </p>
+
+          <div class="hero-metrics">
+            <div class="hero-metric-card">
+              <span class="hero-metric-num">19</span>
+              <span class="hero-metric-label" data-i18n="formats.eyebrow">19 Supported Artifact Formats</span>
+            </div>
+            <div class="hero-metric-card">
+              <span class="hero-metric-num">14 / 14</span>
+              <span class="hero-metric-label" data-i18n="nav.showcase">Benchmarks</span>
+            </div>
+            <div class="hero-metric-card">
+              <span class="hero-metric-num">41.3× – 49.2×</span>
+              <span class="hero-metric-label" data-i18n="sim.blue.tokensLabel">Estimated Token Usage</span>
+            </div>
+            <div class="hero-metric-card">
+              <span class="hero-metric-num">100%</span>
+              <span class="hero-metric-label" data-i18n="ent.c3.tag">03 · Verify &amp; deliver</span>
+            </div>
+          </div>
         </div>
       </section>
 

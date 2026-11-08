@@ -4,6 +4,8 @@ import { inspectPcapCapture, protectPcapCaptureBuffer } from "../src/shields/for
 import { protectApplePlistBuffer } from "../src/shields/formats/apple-plist.js";
 import { protectDotnetManagedBuffer } from "../src/shields/formats/dotnet-managed.js";
 import { protectGpuPtxText } from "../src/shields/formats/gpu-ptx.js";
+import { protectEvmBytecodeBuffer } from "../src/shields/formats/evm-bytecode.js";
+import { UF2_BLOCK_BYTES, protectUf2FirmwareBuffer } from "../src/shields/formats/firmware-uf2.js";
 
 const u32 = (n: number): Buffer => {
   const b = Buffer.alloc(4);
@@ -82,12 +84,37 @@ describe("parser shields fail closed on malformed input", () => {
     expect(out.buffer.subarray(0, raw.length).equals(raw)).toBe(true);
   });
 
-  it("never loses PTX or managed-assembly input bytes", () => {
-    const ptx = "hello world";
+  it("never loses PTX or managed-assembly input bytes and refuses empty PTX", () => {
+    expect(() => protectGpuPtxText("", { intensity: "balanced" })).toThrow(/GPU PTX/);
+    expect(() => protectGpuPtxText("   \n\t  ", { intensity: "balanced" })).toThrow(/GPU PTX/);
+
+    const ptx = "hello world   \n\n";
     expect(protectGpuPtxText(ptx, { intensity: "balanced" }).text.startsWith(ptx)).toBe(true);
 
     const managed = Buffer.from([0x4d, 0x5a]);
     const out = protectDotnetManagedBuffer(managed, { intensity: "balanced" });
     expect(out.buffer.subarray(0, managed.length).equals(managed)).toBe(true);
+  });
+
+  it("refuses to synthesize or truncate UF2 firmware containers", () => {
+    expect(() => protectUf2FirmwareBuffer(Buffer.alloc(0))).toThrow(/UF2 firmware/);
+    expect(() => protectUf2FirmwareBuffer(Buffer.from("not-uf2"))).toThrow(/UF2 firmware/);
+
+    const validBlock = Buffer.alloc(UF2_BLOCK_BYTES, 0);
+    validBlock.writeUInt32LE(0x0a324655, 0);
+    validBlock.writeUInt32LE(0x9e5d5157, 4);
+    validBlock.writeUInt32LE(0x0ab16f30, UF2_BLOCK_BYTES - 4);
+    const withPartial = Buffer.concat([validBlock, Buffer.from([1, 2, 3, 4])]);
+    expect(() => protectUf2FirmwareBuffer(withPartial)).toThrow(/UF2 firmware/);
+  });
+
+  it("refuses empty EVM bytecode and never strips non-BLA bytes matching CBOR map headers", () => {
+    expect(() => protectEvmBytecodeBuffer(Buffer.alloc(0))).toThrow(/EVM bytecode/);
+
+    // Byte 0xa1 (LOG1 / CBOR map of length 1) followed by 2 payload bytes and uint16 length 0x0003:
+    // Previously stripTerminalMetadata would strip this to 0 bytes!
+    const trickyBytecode = Buffer.from([0x60, 0x00, 0xa1, 0xaa, 0xbb, 0x00, 0x03]);
+    const out = protectEvmBytecodeBuffer(trickyBytecode, { intensity: "balanced", seed: "evm-contract" });
+    expect(out.buffer.subarray(0, trickyBytecode.length).equals(trickyBytecode)).toBe(true);
   });
 });

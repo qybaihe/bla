@@ -41,14 +41,16 @@ export function protectGpuPtxText(
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
 } {
+  if (input.trim().length === 0) {
+    throw new Error(
+      "Refusing to synthesize GPU PTX module: input text is empty.",
+    );
+  }
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-ptx-shield");
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
-  const base =
-    input.trim().length > 0
-      ? input.replace(/\s*$/, "\n")
-      : `.version 7.5\n.target sm_70\n.address_size 64\n\n`;
+  const base = input.endsWith("\n") ? input : `${input}\n`;
 
   const entryTarget =
     intensity === "bankrupt" ? 128 : intensity === "maximum" ? 48 : 16;

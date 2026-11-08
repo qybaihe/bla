@@ -3,7 +3,10 @@ import {
   FETCH_FRESH_MS,
   FETCH_TIMEOUT_MS,
   POLL_CHECK_MS,
+  RAW_CONTENT_PREFIX,
+  README_PATH,
   README_SOURCE_LABEL,
+  STAR_FALLBACK_ENDPOINT,
   STAR_REFRESH_MS,
   STAR_SOURCE_LABEL,
   fillTemplate,
@@ -11,7 +14,10 @@ import {
   formatUtcMinute,
   loadCrackmeStatus,
   loadStars,
+  parseChallengeReadme,
+  readSealCommitment,
   readStoredRecord,
+  sealPathFor,
   shouldFetch,
   versionTreeUrl,
 } from "./live-stats.mjs";
@@ -94,17 +100,93 @@ function liveDict() {
 
 function readCache(key) {
   try {
-    return readStoredRecord(sessionStorage.getItem(key));
+    const sessionHit = readStoredRecord(sessionStorage.getItem(key));
+    if (sessionHit) return sessionHit;
+  } catch {
+    // ignore
+  }
+  try {
+    return readStoredRecord(localStorage.getItem(key));
   } catch {
     return null;
   }
 }
 
 function writeCache(key, value) {
+  const raw = JSON.stringify(value);
   try {
-    sessionStorage.setItem(key, JSON.stringify(value));
+    sessionStorage.setItem(key, raw);
   } catch {
-    // ignore quota and private-mode failures
+    // ignore
+  }
+  try {
+    localStorage.setItem(key, raw);
+  } catch {
+    // ignore
+  }
+}
+
+async function loadFallbackStars(now) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(STAR_FALLBACK_ENDPOINT, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const stars = body && body.repo && body.repo.stars;
+    if (formatExactCount(stars) == null) return null;
+    return { ok: true, count: stars, fetchedAt: now };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadFallbackCrackme(now) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const readmeRes = await fetch(`${RAW_CONTENT_PREFIX}${README_PATH}`, {
+      signal: controller.signal,
+    });
+    if (!readmeRes.ok) return null;
+    const readmeText = await readmeRes.text();
+    const parsed = parseChallengeReadme(readmeText);
+    if (!parsed.ok) return null;
+    const sealPath = sealPathFor(parsed.current.path);
+    let seal = null;
+    let sealError = null;
+    if (sealPath) {
+      const sealRes = await fetch(`${RAW_CONTENT_PREFIX}${sealPath}`, {
+        signal: controller.signal,
+      });
+      if (sealRes.ok) {
+        try {
+          seal = readSealCommitment(await sealRes.json());
+        } catch {
+          sealError = "seal-json";
+        }
+      } else {
+        sealError = "http";
+      }
+    }
+    return {
+      ok: true,
+      fetchedAt: now,
+      current: parsed.current,
+      rows: parsed.rows,
+      seal,
+      sealError,
+      readmeUrl: "https://github.com/qybaihe/bla/blob/main/challenge/README.md",
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -221,7 +303,11 @@ async function refreshStars(reason) {
   }
   starFlight = true;
   try {
-    const result = await loadStars({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    let result = await loadStars({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    if (!result.ok) {
+      const fallback = await loadFallbackStars(now);
+      if (fallback) result = fallback;
+    }
     if (result.ok) {
       starState = { state: "live", count: result.count, fetchedAt: result.fetchedAt, failedAt: null, retryAt: null };
       writeCache(STAR_CACHE_KEY, { count: result.count, fetchedAt: result.fetchedAt });
@@ -252,7 +338,11 @@ async function refreshCrackme(reason) {
   }
   crackmeFlight = true;
   try {
-    const result = await loadCrackmeStatus({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    let result = await loadCrackmeStatus({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    if (!result.ok) {
+      const fallback = await loadFallbackCrackme(now);
+      if (fallback) result = fallback;
+    }
     if (result.ok) {
       crackmeState = { state: "live", record: result, fetchedAt: result.fetchedAt, failedAt: null, retryAt: null };
       writeCache(CRACKME_CACHE_KEY, {
@@ -387,7 +477,7 @@ function initNavMenu() {
   syncNavToggleLabel(toggle);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function initMain() {
   const initialLang = detectInitialLang();
   applyLanguage(initialLang);
   startLiveFigures();
@@ -417,4 +507,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initMain);
+} else {
+  initMain();
+}

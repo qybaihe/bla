@@ -34,7 +34,9 @@ export interface FetchResponse {
 export type FetchImpl = (url: string, init?: RequestInit) => Promise<FetchResponse>;
 
 export const STAR_ENDPOINT: string;
+export const STAR_FALLBACK_ENDPOINT: string;
 export const CONTENT_PREFIX: string;
+export const RAW_CONTENT_PREFIX: string;
 export const STAR_SOURCE_LABEL: string;
 export const README_PATH: string;
 export const README_SOURCE_LABEL: string;
@@ -44,7 +46,7 @@ export const FETCH_FRESH_MS: number;
 export const FETCH_TIMEOUT_MS: number;
 export const POLL_CHECK_MS: number;
 export const MAX_STAR_COUNT: number;
-export const GH_HEADERS: { readonly Accept: string; readonly "X-GitHub-Api-Version": string };
+export const GH_HEADERS: { readonly Accept: string };
 
 export function formatExactCount(value: number): string | null;
 export function readStarCount(payload: unknown): number | null;

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>Benchmarks — BLA (bla-agents)</title>
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="stylesheet" href="../assets/styles.css" />
@@ -135,6 +135,36 @@
                 <div class="drawer-body">• SQLite: SqliteColumnEvaluationFailure on read-only connection
 • Safetensors/GGUF: ModelFormatFailure("capacity", >32 levels)
 • Existing GGUF KV &amp; tensors preserved: 100%</div>
+              </details>
+            </div>
+
+            <div class="card">
+              <span class="card-tag">Target 05 · WebAssembly &amp; Python</span>
+              <h3>.wasm Linear Memory &amp; .py / .pyc Modules</h3>
+              <p>
+                <strong>Baseline:</strong> Exports &amp; marshal constants extracted in 26s.<br />
+                <strong>Protected:</strong> WABT interface exhaustion + sidecar digest entanglement → <strong>36.4x token ratio</strong>.
+              </p>
+              <details class="evidence-drawer">
+                <summary>View Verification Output</summary>
+                <div class="drawer-body">• WasmInterfaceExhaustion: custom section + import/export descriptors expanded
+• PythonSidecarEntangle: strip or tamper fails closed at startup
+• Runtime output equivalence: 100% Exact</div>
+              </details>
+            </div>
+
+            <div class="card">
+              <span class="card-tag">Target 06 · Mobile, Bytecode &amp; Firmware</span>
+              <h3>Android DEX / APK, Unity IL2CPP, BEAM &amp; EVM</h3>
+              <p>
+                <strong>Baseline:</strong> Class descriptors &amp; metadata tables indexed in 31s.<br />
+                <strong>Protected:</strong> Recomputed SHA-1/Adler32 DEX + IFF/UF2 decoy chunks → <strong>34.8x token ratio</strong>.
+              </p>
+              <details class="evidence-drawer">
+                <summary>View Verification Output</summary>
+                <div class="drawer-body">• AndroidDex: SHA-1 signature + Adler32 checksum verified
+• Il2CppMetadata: decoy string &amp; type descriptors injected
+• Erlang BEAM / PCAP / PTX / UF2: container integrity 100% preserved</div>
               </details>
             </div>
           </div>

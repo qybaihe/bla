@@ -189,16 +189,20 @@ export function protectUf2FirmwareBuffer(
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
   const plan = intensityPlan(intensity);
 
-  const base = isUf2Container(input) ? input : Buffer.alloc(0);
-  // Preserve only complete trailing blocks of a valid container; drop a
-  // trailing partial (REA already excludes partial finals) so we append on a
-  // block boundary without rewriting earlier bytes.
-  const preservedLength =
-    base.length === 0
-      ? 0
-      : Math.floor(base.length / UF2_BLOCK_BYTES) * UF2_BLOCK_BYTES;
-  const preserved = preservedLength === base.length ? base : base.subarray(0, preservedLength);
-  const originalBlocksPreserved = preservedLength / UF2_BLOCK_BYTES;
+  if (!isUf2Container(input) || input.length % UF2_BLOCK_BYTES !== 0) {
+    throw new Error(
+      "Refusing to synthesize UF2 firmware container: input does not consist of complete, valid 512-byte UF2 blocks.",
+    );
+  }
+  for (let off = 0; off < input.length; off += UF2_BLOCK_BYTES) {
+    if (!readBlockMagicsOk(input, off)) {
+      throw new Error(
+        `Refusing to rewrite malformed UF2 firmware container: invalid block magic at offset ${off}.`,
+      );
+    }
+  }
+  const preserved = input;
+  const originalBlocksPreserved = preserved.length / UF2_BLOCK_BYTES;
 
   const injected: Buffer[] = [];
   let notMainFlashBlocks = 0;

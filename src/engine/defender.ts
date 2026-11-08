@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "../identity.js";
 import {
@@ -13,7 +12,7 @@ import type {
 } from "../core/types.js";
 import { REA_BUDGET_BREAKER_MATRIX } from "../shields/exhaustion/index.js";
 import { auditTarget } from "./auditor.js";
-import { protectTarget } from "./protector.js";
+import { protectTarget, writeFileAtomicSync } from "./protector.js";
 import { verifyTarget } from "./verifier.js";
 import {
   signManifestPayload,
@@ -310,7 +309,11 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       payloadToWrite = signManifestPayload(manifestPayload, manifestSigningKeyPem!);
       manifestSigned = true;
     }
-    writeFileSync(manifestPath, JSON.stringify(payloadToWrite, null, 2) + "\n", "utf8");
+    writeFileAtomicSync(
+      manifestPath,
+      JSON.stringify(payloadToWrite, null, 2) + "\n",
+      "utf8",
+    );
     stages.push({
       stage: "5-defense-attestation-manifest",
       status: "passed",

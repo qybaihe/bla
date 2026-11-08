@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>CrackMe — BLA (bla-agents)</title>
     <meta
       name="description"
@@ -115,39 +115,54 @@
       </section>
 
       <section class="section">
-        <div class="container prose">
-          <h2 data-i18n="crackme.why.title">Where the status lives</h2>
-          <p data-i18n="crackme.why.body">
-            challenge/README.md in the repository is the maintained status table. This website does not keep a second copy of that table, and it does not turn GitHub issues or CI into a solved count.
-          </p>
+        <div class="container">
+          <div class="grid-2">
+            <div class="card prose">
+              <span class="card-tag">01 · Single Source of Truth</span>
+              <h2 data-i18n="crackme.why.title">Where the status lives</h2>
+              <p data-i18n="crackme.why.body">
+                challenge/README.md in the repository is the maintained status table. This website does not keep a second copy of that table, and it does not turn GitHub issues or CI into a solved count.
+              </p>
 
-          <h2 data-i18n="crackme.tiers.title">What a public solve must match</h2>
-          <ul>
-            <li data-i18n="crackme.tiers.l1">The current challenge directory is linked from the status panel after the repository file loads.</li>
-            <li data-i18n="crackme.tiers.l2">A solve is a FLAG whose SHA-256 equals flagSha256 in that version's SEAL.json.</li>
-            <li data-i18n="crackme.tiers.l3">Plaintext key and FLAG are not in git. Issue templates collect submissions; they are not a confirmed-solve tally.</li>
-          </ul>
+              <h2 data-i18n="crackme.run.title">Run</h2>
+              <pre><code>See the version directory linked above. The run command is in that directory's README.</code></pre>
+            </div>
 
-          <h2 data-i18n="crackme.run.title">Run</h2>
-          <pre><code>See the version directory linked above. The run command is in that directory's README.</code></pre>
+            <div class="card prose">
+              <span class="card-tag">02 · Verification Rules</span>
+              <h2 data-i18n="crackme.tiers.title">What a public solve must match</h2>
+              <ul>
+                <li data-i18n="crackme.tiers.l1">The current challenge directory is linked from the status panel after the repository file loads.</li>
+                <li data-i18n="crackme.tiers.l2">A solve is a FLAG whose SHA-256 equals flagSha256 in that version's SEAL.json.</li>
+                <li data-i18n="crackme.tiers.l3">Plaintext key and FLAG are not in git. Issue templates collect submissions; they are not a confirmed-solve tally.</li>
+              </ul>
+            </div>
+          </div>
 
-          <h2 data-i18n="crackme.submit.title">Submit a solve</h2>
-          <p data-i18n="crackme.submit.body">
-            Use the issue template for the version you solved. The status panel shows the flagSha256 published in the current SEAL.json.
-          </p>
+          <div class="grid-2" style="margin-top: 28px">
+            <div class="card prose">
+              <span class="card-tag">03 · Submission</span>
+              <h2 data-i18n="crackme.submit.title">Submit a solve</h2>
+              <p data-i18n="crackme.submit.body">
+                Use the issue template for the version you solved. The status panel shows the flagSha256 published in the current SEAL.json.
+              </p>
+              <p style="margin-top: 18px; margin-bottom: 0">
+                <a class="btn-primary" href="https://github.com/qybaihe/bla/tree/main/challenge" target="_blank" rel="noopener" data-i18n="crackme.cta">
+                  Open the challenge directory on GitHub
+                </a>
+              </p>
+            </div>
 
-          <p>
-            <a class="nav-cta" href="https://github.com/qybaihe/bla/tree/main/challenge" target="_blank" rel="noopener" data-i18n="crackme.cta">
-              Open the challenge directory on GitHub
-            </a>
-          </p>
-
-          <h2 data-i18n="crackme.honest.title">Honest scope</h2>
-          <p data-i18n="crackme.honest.body">
-            BLA raises cost for automated AI reverse-engineering agents and plants decoys.
-            It does not claim immunity to patient interactive human reverse engineering.
-            The panel does not report a live break count.
-          </p>
+            <div class="card note-card prose">
+              <span class="card-tag">04 · Threat Boundary</span>
+              <h2 data-i18n="crackme.honest.title">Honest scope</h2>
+              <p data-i18n="crackme.honest.body">
+                BLA raises cost for automated AI reverse-engineering agents and plants decoys.
+                It does not claim immunity to patient interactive human reverse engineering.
+                The panel does not report a live break count.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
     </main>

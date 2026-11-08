@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>FAQ — BLA (bla-agents)</title>
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="stylesheet" href="../assets/styles.css" />
@@ -74,37 +74,37 @@
             <h1 class="section-title" data-i18n="faq.title">Common Questions About BLA (`bla-agents`)</h1>
           </div>
 
-          <div style="max-width: 780px">
+          <div class="faq-list">
             <details class="evidence-drawer" open>
               <summary data-i18n="faq.q1">Why does BLA use a Blue theme?</summary>
-              <div class="drawer-body" style="white-space: normal" data-i18n-html="faq.a1">
+              <div class="drawer-body" data-i18n-html="faq.a1">
                 In security engineering, offensive and reverse-engineering tools are traditionally associated with Red Team workflows, while defensive protection tools represent Blue Team workflows. <strong>BLA</strong> (<code>bla-agents</code>) focuses on the defensive side: auditing exposure and protecting release artifacts.
               </div>
             </details>
 
             <details class="evidence-drawer">
               <summary data-i18n="faq.q2">Does BLA affect runtime performance or change program output?</summary>
-              <div class="drawer-body" style="white-space: normal" data-i18n-html="faq.a2">
+              <div class="drawer-body" data-i18n-html="faq.a2">
                 No. Static budget guards and call-graph state machines are placed behind O(1) bitwise invariants (such as <code>(Math.imul(x, x + 1) &amp; 1) === 0</code>) inside unreachable branches, so hot-path execution remains unchanged.
               </div>
             </details>
 
             <details class="evidence-drawer">
               <summary data-i18n="faq.q3">How do I run the full protection workflow in one step?</summary>
-              <div class="drawer-body" style="white-space: normal" data-i18n-html="faq.a3">
+              <div class="drawer-body" data-i18n-html="faq.a3">
                 Run <code>npx bla-agents@latest harden .</code> from your terminal, or ask your connected coding agent to call the <code>bla_harden</code> MCP tool. It executes release exposure checks, auditing, protection, and verification in sequence.
               </div>
             </details>
 
             <details class="evidence-drawer">
               <summary data-i18n="faq.q4">Does BLA preserve existing GGUF model tensors and binary checksums?</summary>
-              <div class="drawer-body" style="white-space: normal" data-i18n-html="faq.a4">
+              <div class="drawer-body" data-i18n-html="faq.a4">
                 Yes. <code>protectGgufBuffer</code> preserves all original GGUF v2/v3 KV entries and trailing tensor slices while appending metadata entries, and Android DEX protection recomputes both the 20-byte SHA-1 signature and Adler32 checksum.
               </div>
             </details>
-            <details class="drawer">
+            <details class="evidence-drawer">
               <summary data-i18n="faq.q5">What are BLA's honest limits?</summary>
-              <div class="drawer-body" style="white-space: normal" data-i18n-html="faq.a5">
+              <div class="drawer-body" data-i18n-html="faq.a5">
                 BLA raises analyzer cost and plants decoys; it is not a magic anti-RE seal. Traditional interactive reverse engineering is out of scope of the commodity REA red-team numbers. Try the public CrackMe v6 challenge on GitHub.
               </div>
             </details>

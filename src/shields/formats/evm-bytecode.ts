@@ -81,15 +81,22 @@ export function inspectEvmBytecode(bytes: Buffer): EvmBytecodeInspection {
 }
 
 /**
- * Strips a prior terminal Solidity metadata CBOR (if present) so a fresh
- * adversarial trailer can be appended without nesting length suffixes.
+ * Strips a prior BLA terminal Solidity metadata CBOR (if present) so a fresh
+ * adversarial trailer can be appended without nesting length suffixes, while
+ * never stripping original bytecode or non-BLA compiler metadata.
  */
 function stripTerminalMetadata(bytes: Buffer): Buffer {
   if (bytes.length < 3) return bytes;
   const length = bytes[bytes.length - 2]! * 256 + bytes[bytes.length - 1]!;
   const offset = bytes.length - 2 - length;
-  if (length > 0 && offset >= 0 && bytes[offset]! >> 5 === 5) {
-    return bytes.subarray(0, offset);
+  if (length > 0 && offset > 0 && bytes[offset]! >> 5 === 5) {
+    const trailerText = bytes.subarray(offset, bytes.length - 2).toString("utf8");
+    if (
+      trailerText.includes("[BLA-EVM-SHIELD]") ||
+      trailerText.includes("bla_evm_canary")
+    ) {
+      return bytes.subarray(0, offset);
+    }
   }
   return bytes;
 }
@@ -114,11 +121,16 @@ export function protectEvmBytecodeBuffer(
   readonly paddingBytes: number;
   readonly approachesInputBudget: boolean;
 } {
+  if (input.length === 0) {
+    throw new Error(
+      "Refusing to synthesize EVM bytecode: input buffer is empty.",
+    );
+  }
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-evm-shield");
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
-  const base = stripTerminalMetadata(input.length > 0 ? input : Buffer.from([0x00]));
+  const base = stripTerminalMetadata(input);
 
   const metaEntries: [string, string | Buffer][] = [
     ["solc", Buffer.from([0x00, 0x08, 0x1e])], // 0.8.30

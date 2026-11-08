@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>Technical Guides — BLA (bla-agents)</title>
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="stylesheet" href="../assets/styles.css" />
@@ -104,6 +104,35 @@
                 <div class="drawer-body">1. Demote real logic to status: "unknown" via static budget guards.
 2. Provide self-consistent Shadow Business Logic (Shamir-Ed25519 rings, tiered billing matrices, TPM2 PCR0 quotes).
 3. Include enclave delegation metadata (vsock CID 16) and decoy VLQ source maps.</div>
+              </details>
+            </div>
+
+            <div class="card">
+              <span class="card-tag" data-i18n="pillars.c3.tag">03 · One-Command Workflow</span>
+              <h3 data-i18n="pillars.c3.title">MCP Server, CLI &amp; Bundler Plugins</h3>
+              <p data-i18n-html="pillars.c3.desc">
+                Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the protection pipeline with <code>bla_harden</code>.
+              </p>
+              <details class="evidence-drawer">
+                <summary>View 4-Stage Agent Closed Loop</summary>
+                <div class="drawer-body">Stage 1 · Recon: bla_audit + inspectReleaseExposure
+Stage 2 · Plan: bla_weave_plan (identifies sensitive branches &amp; sidecar bindings)
+Stage 3 · Verify Weave: bla_verify_weave (validates source-level decoy surgery)
+Stage 4 · Seal &amp; Verify: bla_harden + bla_verify (atomic write + runtime equivalence)</div>
+              </details>
+            </div>
+
+            <div class="card">
+              <span class="card-tag">04 · Runtime &amp; Integrity Binding</span>
+              <h3>Self-Seal Digest &amp; Sidecar Entanglement</h3>
+              <p>
+                Binds entry points to sibling artifacts and runtime memory masks so stripping a decoy table or sidecar module fails closed at load time.
+              </p>
+              <details class="evidence-drawer">
+                <summary>View Integrity &amp; Memory-Diff Defenses</summary>
+                <div class="drawer-body">• Self-Seal: final-byte digest finalized at the atomic write chokepoint
+• Sidecar Entanglement: binds JS, Python, and WASM entries to sibling SHA-256 digests
+• Split-Share XOR Memory Shield: masks M0 -> M1 heap snapshot diffing</div>
               </details>
             </div>
           </div>

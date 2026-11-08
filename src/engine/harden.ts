@@ -3,7 +3,6 @@ import {
   mkdirSync,
   readFileSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
@@ -982,7 +981,7 @@ export function hardenProject(
   if (discovered.length > 0) {
     summaryPath = join(outputRoot, HARDEN_SUMMARY_FILE_NAME);
     try {
-      writeFileSync(
+      writeFileAtomicSync(
         summaryPath,
         JSON.stringify(
           {
@@ -1047,9 +1046,7 @@ export function hardenProject(
             });
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);
-              writeFileAtomicSync(entryAbs, finalized.content, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              writeFileAtomicSync(entryAbs, finalized.content, "utf8");
             }
           }
         }
@@ -1086,9 +1083,7 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileAtomicSync(entryAbs, bound.code, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              writeFileAtomicSync(entryAbs, bound.code, "utf8");
             }
           }
         }
@@ -1125,9 +1120,7 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              writeFileAtomicSync(entryAbs, bound.bytes);
             }
           }
         }
@@ -1170,7 +1163,7 @@ export function hardenProject(
           ? plan.coverageMatrix
           : withoutHostSelfCoverage(plan.coverageMatrix, entryRel);
         integrityCoveragePath = join(outputRoot, "integrity-coverage.json");
-        writeFileSync(
+        writeFileAtomicSync(
           integrityCoveragePath,
           `${JSON.stringify(matrix, null, 2)}\n`,
           "utf8",
