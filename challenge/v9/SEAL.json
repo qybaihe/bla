@@ -2,7 +2,7 @@
   "schema": "bla-crackme-v9-seal/v1",
   "mode": "release",
   "product": "Sovereign",
-  "blaVersion": "3.1.0",
+  "blaVersion": "3.1.1",
   "recipe": "npm run crackme:v9:build (4-Stage BLA 3.0 Playbook: bla_lint -> bla_weave_plan -> bla_verify_weave -> bla_harden --intensity bankrupt --weave-decoys --self-seal --sidecar-entangle); harden/schedule seed is private",
   "label": "bla-crackme-v9-sovereign-2026-11",
   "intensity": "bankrupt",

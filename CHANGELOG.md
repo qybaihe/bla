@@ -6,11 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **`collectEsmExportedSymbols` Babel types:** `ExportNamespaceSpecifier.exported` is always `Identifier` — drop the unreachable StringLiteral branch that broke `tsc` after the @babel/* v8 align.
+## [3.1.1] — 2026-11-08
+
+Patch release shipping `@babel/*` v8.1.0 compatibility, WASM custom-section sidecar strip⇒fail entanglement, multi-language (`JS/TS`, `Python`, `C/C++/Rust/Go`) planner & verifier hardening from subagent dogfooding, and recursive `bla_encrypt_strings` discovery.
 
 ### Added
-- **Sidecar WASM custom-section strip⇒fail:** `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection` plant a `bla.sidecar.v1` note (digest + path labels + seedTag) without changing export surface; host-side verify re-hashes sibling bytes. `protectTarget` (wasm) + `hardenProject` post-pass (WASM-only trees when no JS/Python entry) wire when `sidecarEntangle` is on. Default still OFF.
+- **Sidecar WASM custom-section strip⇒fail (`bla.sidecar.v1`):** `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection` plant a `bla.sidecar.v1` note (digest + path labels + seedTag) without changing the WASM export surface; host-side verify re-hashes sibling bytes. `protectTarget` (wasm) + `hardenProject` post-pass (WASM-only trees when no JS/Python entry) wire when `sidecarEntangle` is on. Default still OFF.
+- **Multi-language Planner & Verifier Hardening (`src/shields/weave/weave-decoy.ts`):**
+  - **JS/TS:** unified `extractJsFunctionName` covering ES6 class methods, `export default` declarations, and exported object methods; deep shared-state mutation/read tracking (`Map.set`, `Set.add`, array mutators, nested properties, and parameter-passed state propagation); refined Check 7 (`crown-jewel-entanglement`) allowing fail-closed early `return false` input validation while catching `!0`/`!1`, pure boolean ternaries, unused helper return bindings, dummy `1 ^ 1` XOR, and template literal secrets.
+  - **Python:** indentation-aware `extractPythonFunctions` supporting `async def`, multi-line parameter signatures, blank lines in function bodies, and `self.method()` call edges, plus Check 7 gate coupling and `lintLaneIndependence` checks.
+  - **Native (`C/C++/Rust/Go`):** support for pointer return types (`const char *fn(...)`), Rust `pub(crate)`/`async`/`unsafe`/`const fn` and `const` state declarations, Go `var (...)` blocks, and `strncmp`/`memcmp` secret comparisons.
+- **Recursive String Encryption (`bla_encrypt_strings`):** `walkEncryptTargets` recursively discovers `.js`, `.ts`, `.cjs`, `.mjs`, and `.html` targets across project subdirectories while preserving relative output paths.
+
+### Fixed
+- **Babel 8 (`@babel/*` v8.1.0) Upgrade & Type Compatibility (#128, #131):** upgraded `@babel/parser`, `@babel/traverse`, `@babel/generator`, and `@babel/types` to `^8.1.0` and narrowed `ExportNamespaceSpecifier.exported` across `Identifier | StringLiteral` so `tsc --noEmit` passes cleanly under both v7 and v8.
+- **`bla_emit_headers` & `bla_verify_weave` Coexistence (#131):** removed `BLA-SHIELD` banner text from generated `bla_shield.{h,rs,go}` headers, skipped machine-generated shield headers during directory weave scans, and added fallback build-directory scanning when no separate `src/` directory exists.
 
 ## [3.1.0] — 2026-11-07
 

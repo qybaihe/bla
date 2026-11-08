@@ -2,7 +2,7 @@
   "schema": "bla-crackme-v7-seal/v1",
   "mode": "release",
   "product": "Meridian",
-  "blaVersion": "3.1.0",
+  "blaVersion": "3.1.1",
   "hardenSeedLabel": "bound-at-build-into-opaque-predicates",
   "intensity": "bankrupt",
   "llmDirectives": false,
