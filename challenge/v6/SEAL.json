@@ -1,7 +1,7 @@
 {
   "schema": "bla-crackme-v6-seal/v2",
   "mode": "release",
-  "blaVersion": "3.1.1",
+  "blaVersion": "3.1.2",
   "recipe": "npm run crackme:build (hardenProject == `bla harden <dir> --intensity bankrupt --seed <seed>`)",
   "seed": "bla-crackme-v6-harden-native-2026-11",
   "intensity": "bankrupt",
