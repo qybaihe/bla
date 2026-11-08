@@ -270,7 +270,7 @@ function applyPanelDeriveRewrite(
   return rw.code;
 }
 
-function writeFileAtomicSync(
+export function writeFileAtomicSync(
   targetPath: string,
   content: string | Buffer,
   encoding?: BufferEncoding,

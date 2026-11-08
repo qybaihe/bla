@@ -47,6 +47,7 @@ import {
   verifySelfSealSelfDigest,
 } from "../shields/runtime/self-seal.js";
 import { withoutHostSelfCoverage } from "./integrity-coverage.js";
+import { writeFileAtomicSync } from "./protector.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
@@ -229,6 +230,12 @@ export interface HardenProjectReport {
   readonly selfSeal: boolean;
   /** True when caller opted into sidecar entry entanglement. */
   readonly sidecarEntangle: boolean;
+  /**
+   * Present when `sidecarEntangle` was requested but the entry rewrite failed,
+   * leaving the entry without the strip⇒fail binding. Such a run never reports
+   * `overallSuccess`.
+   */
+  readonly sidecarEntangleError?: string;
   /**
    * True when `requireAgentWeave` blocked mechanical hardening because source
    * files still need Host-Agent source surgery (`bla_verify_weave` failed).
@@ -1007,6 +1014,7 @@ export function hardenProject(
   // Per-artifact protect skips inject when harden did not pass explicit
   // sidecarEntanglePaths (avoids partial/double prepend). Only one entry is
   // rewritten so sibling digests stay stable.
+  let sidecarEntangleError: string | undefined;
   if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
     try {
       const jsLike = summaries.filter(
@@ -1039,7 +1047,7 @@ export function hardenProject(
             });
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);
-              writeFileSync(entryAbs, finalized.content, "utf8");
+              writeFileAtomicSync(entryAbs, finalized.content, "utf8");
             }
           }
         }
@@ -1076,7 +1084,7 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileSync(entryAbs, bound.code, "utf8");
+              writeFileAtomicSync(entryAbs, bound.code, "utf8");
             }
           }
         }
@@ -1113,13 +1121,16 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileSync(entryAbs, bound.bytes);
+              writeFileAtomicSync(entryAbs, bound.bytes);
             }
           }
         }
       }
-    } catch {
-      /* best-effort — leave entry as-is */
+    } catch (err) {
+      // Entanglement was explicitly requested, so a failure is not a harmless
+      // no-op: the entry ships without the strip⇒fail binding. Record it so the
+      // report can fail loudly instead of claiming success.
+      sidecarEntangleError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -1171,7 +1182,11 @@ export function hardenProject(
   }
   return {
     ...reportBase,
-    overallSuccess: !cancelled && summaries.length > 0 && failedCount === 0,
+    overallSuccess:
+      !cancelled &&
+      summaries.length > 0 &&
+      failedCount === 0 &&
+      sidecarEntangleError === undefined,
     hardenedCount,
     failedCount,
     artifacts: summaries,
@@ -1184,6 +1199,7 @@ export function hardenProject(
     ...(integrityCoverageSelfVerified !== undefined
       ? { integrityCoverageSelfVerified }
       : {}),
+    ...(sidecarEntangleError !== undefined ? { sidecarEntangleError } : {}),
   };
 }
 
@@ -1217,6 +1233,11 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
   if (report.selfSealRecommended) {
     lines.push(
       `  ⚠ self_seal recommended: ${report.selfSealRecommendation ?? "multi-artifact tree — pass --self-seal / self_seal:true"}`,
+    );
+  }
+  if (report.sidecarEntangleError !== undefined) {
+    lines.push(
+      `  ⚠ sidecar entanglement failed: ${report.sidecarEntangleError} — entry shipped WITHOUT the strip⇒fail binding`,
     );
   }
   for (const a of report.artifacts) {
