@@ -9,14 +9,34 @@
     <link rel="stylesheet" href="../assets/styles.css" />
   </head>
   <body>
+    <noscript>
+      <style>
+        @media (max-width: 1023px) {
+          .nav-toggle { display: none !important; }
+          .nav-panel {
+            display: flex !important;
+            position: static !important;
+            flex-direction: column;
+            background: transparent;
+            box-shadow: none;
+          }
+          .nav-bar { height: auto !important; min-height: 64px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
+          .nav-links { flex-wrap: wrap; }
+        }
+      </style>
+    </noscript>
     <header class="site-header">
       <div class="container nav-bar">
         <a href="../" class="brand">
           <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
           <span>BLA</span>
-          <span class="brand-badge" data-i18n="nav.badge">BLUE SHIELD v1.5</span>
         </a>
-        <nav class="nav-links">
+        <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
+          <span class="nav-toggle-icon" aria-hidden="true"></span>
+          <span class="visually-hidden">Menu</span>
+        </button>
+        <div class="nav-panel" id="site-nav">
+        <nav class="nav-links" data-i18n-attr="aria-label:nav.primary">
           <a href="../" class="nav-link" data-i18n="nav.overview">Overview</a>
           <a href="./" class="nav-link active" data-i18n="nav.getStarted">Get Started</a>
           <a href="../showcase/" class="nav-link" data-i18n="nav.showcase">Benchmarks</a>
@@ -26,7 +46,7 @@
           <a href="../enterprise/" class="nav-link" data-i18n="nav.enterprise">Enterprise</a>
         </nav>
         <div class="nav-actions">
-          <select id="bla-lang-select" class="lang-select" aria-label="Select Language">
+          <select id="bla-lang-select" class="lang-select" aria-label="Select Language" data-i18n-attr="aria-label:nav.lang">
             <option value="en">🌐 English</option>
             <option value="zh-CN">🌐 简体中文</option>
             <option value="zh-TW">🌐 繁體中文</option>
@@ -39,8 +59,9 @@
           <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
             <span>★</span>
             <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars>★</span>
+            <span class="star-pill" data-gh-stars data-state="loading">—</span>
           </a>
+        </div>
         </div>
       </div>
     </header>
@@ -117,9 +138,10 @@ export default {
           <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
           <a href="../" data-i18n="nav.overview">Overview</a>
         </div>
+        <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>
     <script src="../assets/i18n.js"></script>
-    <script src="../assets/main.js"></script>
+    <script type="module" src="../assets/main.js"></script>
   </body>
 </html>

@@ -18,6 +18,7 @@ const REQUIRED_HTML_PAGES = [
 const REQUIRED_ASSETS = [
   "assets/styles.css",
   "assets/main.js",
+  "assets/live-stats.mjs",
   "assets/i18n.js",
   "assets/home.js",
   "assets/logo.png",
@@ -123,6 +124,41 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
       if (/'unsafe-eval'/i.test(csp)) {
         errors.push(`${rel}: CSP must not allow 'unsafe-eval'`);
       }
+      if (/script-src\s+[^;]*'unsafe-inline'/i.test(csp)) {
+        errors.push(`${rel}: CSP must not allow script-src 'unsafe-inline'`);
+      }
+      if (!/connect-src[^;]*https:\/\/api\.github\.com/i.test(csp)) {
+        errors.push(`${rel}: CSP must allow https://api.github.com for live figures`);
+      }
+    }
+
+    if (/data-gh-stars[^>]*>\s*\d/.test(html) || /data-gh-stars[^>]*>\s*★/.test(html)) {
+      errors.push(`${rel}: star pill must not ship a hardcoded count`);
+    }
+    if (!html.includes('data-live-stamp="stars"')) {
+      errors.push(`${rel}: missing visible GitHub star source stamp`);
+    }
+    if (!/<script\s+type="module"\s+src="(?:\.\.\/)?assets\/main\.js"><\/script>/.test(html)) {
+      errors.push(`${rel}: main.js must load as a module`);
+    }
+    if (rel === "crackme/index.html" && !html.includes("data-crackme-live")) {
+      errors.push(`${rel}: missing repository challenge status panel`);
+    }
+
+    if (/brand-badge|data-i18n=["']nav\.badge["']|蓝军防护|藍軍防護|BLUE SHIELD v1\./.test(html)) {
+      errors.push(`${rel}: navigation shield badge must be removed`);
+    }
+    if (/\bonclick\s*=/i.test(html)) {
+      errors.push(`${rel}: inline onclick is not allowed`);
+    }
+    if (!html.includes('class="nav-toggle"') || !html.includes('id="site-nav"')) {
+      errors.push(`${rel}: accessible nav collapse control is missing`);
+    }
+    if (!html.includes('aria-controls="site-nav"') || !html.includes('aria-expanded="false"')) {
+      errors.push(`${rel}: nav toggle missing aria-expanded or aria-controls`);
+    }
+    if (!html.includes('class="nav-links"') || !html.includes('id="bla-lang-select"') || !html.includes('class="nav-cta"')) {
+      errors.push(`${rel}: language switch, primary nav, or Star control is missing`);
     }
 
     const pageDir = dirname(full);
@@ -157,6 +193,75 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
           errors.push(`${rel}: broken anchor '#${rawHash}' in '${ref}'`);
         }
       }
+    }
+  }
+
+  const i18nPath = resolve(absRoot, "assets/i18n.js");
+  if (existsSync(i18nPath)) {
+    const i18n = readFileSync(i18nPath, "utf8");
+    if (/nav\.badge/.test(i18n)) {
+      errors.push("assets/i18n.js: nav.badge must be removed");
+    }
+    for (const key of [
+      "nav.menu",
+      "nav.menuClose",
+      "nav.primary",
+      "nav.lang",
+      "live.stars.live",
+      "live.stars.stale",
+      "live.stars.unavailable",
+      "live.crackme.noSolve",
+      "live.crackme.commitment",
+    ]) {
+      const count = i18n.split(`"${key}"`).length - 1;
+      if (count < 8) {
+        errors.push(`assets/i18n.js: ${key} must exist in all 8 languages (found ${count})`);
+      }
+    }
+  }
+
+  const livePath = resolve(absRoot, "assets/live-stats.mjs");
+  if (existsSync(livePath)) {
+    const live = readFileSync(livePath, "utf8");
+    if (!live.includes("STAR_REFRESH_MS = 5 * 60 * 1000")) {
+      errors.push("assets/live-stats.mjs: star refresh must stay at 5 minutes");
+    }
+    if (!live.includes("CRACKME_REFRESH_MS = 10 * 60 * 1000")) {
+      errors.push("assets/live-stats.mjs: CrackMe refresh must stay at 10 minutes");
+    }
+    if (!live.includes("FETCH_TIMEOUT_MS = 8000")) {
+      errors.push("assets/live-stats.mjs: fetch timeout must stay at 8 seconds");
+    }
+    if (!live.includes("stargazers_count")) {
+      errors.push("assets/live-stats.mjs: stars must come from stargazers_count");
+    }
+  }
+
+  const cssPath = resolve(absRoot, "assets/styles.css");
+  if (existsSync(cssPath)) {
+    const css = readFileSync(cssPath, "utf8");
+    if (/\.brand-badge\b/.test(css)) {
+      errors.push("assets/styles.css: .brand-badge must be removed");
+    }
+    if (!/\.nav-link\s*\{[^}]*white-space:\s*nowrap/.test(css)) {
+      errors.push("assets/styles.css: .nav-link must stay on one line (white-space: nowrap)");
+    }
+    if (!/@media\s*\(\s*max-width:\s*1023px\s*\)/.test(css)) {
+      errors.push("assets/styles.css: missing max-width 1023px nav collapse breakpoint");
+    }
+  }
+
+  const mainPath = resolve(absRoot, "assets/main.js");
+  if (existsSync(mainPath)) {
+    const main = readFileSync(mainPath, "utf8");
+    if (!main.includes("initNavMenu") || !main.includes('addEventListener("click"')) {
+      errors.push("assets/main.js: nav toggle must be wired without inline handlers");
+    }
+    if (!main.includes('from "./live-stats.mjs"') || !main.includes("startLiveFigures")) {
+      errors.push("assets/main.js: live star and CrackMe figures must be wired");
+    }
+    if (main.includes("toFixed") || main.includes("bla_gh_stars")) {
+      errors.push("assets/main.js: do not abbreviate stars or reuse the untimed star cache");
     }
   }
 

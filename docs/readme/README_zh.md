@@ -264,3 +264,15 @@ flowchart LR
 ## 📄 开源协议
 
 [MIT](../../LICENSE)
+
+## Star 增长
+
+[Star History](https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left) 绘制 [`qybaihe/bla`](https://github.com/qybaihe/bla) 的 GitHub Star 增长曲线。图片由对方缓存约一天，不是逐秒计数。点击图片可打开完整历史。
+
+<a href="https://www.star-history.com/?repos=qybaihe%2Fbla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+   <img alt="qybaihe/bla 仓库的 GitHub Star 增长曲线" src="https://api.star-history.com/chart?repos=qybaihe/bla&type=date&legend=top-left" />
+ </picture>
+</a>

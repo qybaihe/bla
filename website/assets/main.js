@@ -1,3 +1,24 @@
+import {
+  CRACKME_REFRESH_MS,
+  FETCH_FRESH_MS,
+  FETCH_TIMEOUT_MS,
+  POLL_CHECK_MS,
+  README_SOURCE_LABEL,
+  STAR_REFRESH_MS,
+  STAR_SOURCE_LABEL,
+  fillTemplate,
+  formatExactCount,
+  formatUtcMinute,
+  loadCrackmeStatus,
+  loadStars,
+  readStoredRecord,
+  shouldFetch,
+  versionTreeUrl,
+} from "./live-stats.mjs";
+
+const STAR_CACHE_KEY = "bla_live_stars_v1";
+const CRACKME_CACHE_KEY = "bla_live_crackme_v1";
+
 function detectInitialLang() {
   const params = new URLSearchParams(window.location.search);
   const queryLang = params.get("lang");
@@ -46,6 +67,16 @@ function applyLanguage(lang) {
     if (val) el.innerHTML = val;
   });
 
+  document.querySelectorAll("[data-i18n-attr]").forEach((el) => {
+    const spec = el.getAttribute("data-i18n-attr") || "";
+    const splitAt = spec.indexOf(":");
+    if (splitAt <= 0) return;
+    const attr = spec.slice(0, splitAt);
+    const key = spec.slice(splitAt + 1);
+    const val = langDict[key] || enDict[key];
+    if (attr && val) el.setAttribute(attr, val);
+  });
+
   const select = document.getElementById("bla-lang-select");
   if (select && select.value !== lang) {
     select.value = lang;
@@ -55,53 +86,312 @@ function applyLanguage(lang) {
   window.dispatchEvent(new CustomEvent("bla:langchange", { detail: { lang } }));
 }
 
-function formatStarCount(count) {
-  const n = Number(count);
-  if (!Number.isFinite(n) || n < 0) return "★";
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+function liveDict() {
+  const root = window.BLA_I18N || {};
+  const lang = window.BLA_CURRENT_LANG || "en";
+  return root[lang] || root.en || {};
 }
 
-async function loadGitHubStars() {
-  const renderStars = (val) => {
-    document.querySelectorAll("[data-gh-stars]").forEach((el) => {
-      el.textContent = formatStarCount(val);
-    });
-  };
-
+function readCache(key) {
   try {
-    const cached = sessionStorage.getItem("bla_gh_stars");
-    if (cached !== null) {
-      renderStars(cached);
-    }
+    return readStoredRecord(sessionStorage.getItem(key));
   } catch {
-    // ignore
+    return null;
   }
+}
 
+function writeCache(key, value) {
   try {
-    const res = await fetch("https://api.github.com/repos/qybaihe/bla", {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (typeof data.stargazers_count === "number") {
-        renderStars(data.stargazers_count);
-        try {
-          sessionStorage.setItem("bla_gh_stars", String(data.stargazers_count));
-        } catch {
-          // ignore
-        }
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore quota and private-mode failures
+  }
+}
+
+let starState = { state: "loading", count: null, fetchedAt: null, failedAt: null, retryAt: null };
+let crackmeState = { state: "loading", record: null, fetchedAt: null, failedAt: null, retryAt: null };
+let starFlight = false;
+let crackmeFlight = false;
+
+function renderStars() {
+  const language = liveDict();
+  const countText = formatExactCount(starState.count) || "—";
+  const messageKey = {
+    live: "live.stars.live",
+    stale: "live.stars.stale",
+    unavailable: "live.stars.unavailable",
+  }[starState.state] || "live.stars.loading";
+  const stamp = fillTemplate(language[messageKey] || "", {
+    count: countText,
+    source: STAR_SOURCE_LABEL,
+    time: formatUtcMinute(starState.fetchedAt) || "—",
+    failed: formatUtcMinute(starState.failedAt) || "—",
+  });
+  document.querySelectorAll("[data-gh-stars]").forEach((el) => {
+    el.textContent = countText;
+    el.setAttribute("data-state", starState.state);
+    el.setAttribute("title", stamp);
+  });
+  document.querySelectorAll('[data-live-stamp="stars"]').forEach((el) => {
+    el.textContent = stamp;
+    el.setAttribute("data-state", starState.state);
+  });
+}
+
+function setCrackmeText(root, selector, text) {
+  const node = root.querySelector(selector);
+  if (node) node.textContent = text;
+}
+
+function renderCrackme() {
+  const root = document.querySelector("[data-crackme-live]");
+  if (!root) return;
+  const language = liveDict();
+  const record = crackmeState.record;
+  const showRecord = record && (crackmeState.state === "live" || crackmeState.state === "stale");
+  if (!showRecord) {
+    for (const selector of [
+      "[data-crackme-version]",
+      "[data-crackme-status]",
+      "[data-crackme-product]",
+      "[data-crackme-engine]",
+      "[data-crackme-label]",
+      "[data-crackme-flag]",
+    ]) {
+      setCrackmeText(root, selector, "—");
+    }
+    const list = root.querySelector("[data-crackme-history]");
+    if (list) list.replaceChildren();
+    const link = root.querySelector("[data-crackme-link]");
+    if (link) link.setAttribute("href", "https://github.com/qybaihe/bla/tree/main/challenge");
+  } else {
+    const flag = record.seal && /^[0-9a-f]{64}$/.test(record.seal.flagSha256) ? record.seal.flagSha256 : "—";
+    setCrackmeText(root, "[data-crackme-version]", String(record.current.name || "—"));
+    setCrackmeText(root, "[data-crackme-status]", String(record.current.status || "—"));
+    setCrackmeText(root, "[data-crackme-product]", record.seal?.product || "—");
+    setCrackmeText(root, "[data-crackme-engine]", record.seal?.blaVersion || "—");
+    setCrackmeText(root, "[data-crackme-label]", record.seal?.label || "—");
+    setCrackmeText(root, "[data-crackme-flag]", flag);
+    const list = root.querySelector("[data-crackme-history]");
+    if (list) {
+      list.replaceChildren();
+      for (const row of record.rows || []) {
+        if (!row || row.id === record.current.id) continue;
+        const item = document.createElement("li");
+        item.textContent = `${row.name} — ${row.status}`;
+        list.appendChild(item);
       }
     }
-  } catch {
-    // ignore network issues
+    const link = root.querySelector("[data-crackme-link]");
+    if (link) {
+      link.setAttribute("href", versionTreeUrl(record.current.path) || "https://github.com/qybaihe/bla/tree/main/challenge");
+    }
   }
+  const stampKey = {
+    live: "live.crackme.source",
+    stale: "live.crackme.stale",
+    unavailable: "live.crackme.unavailable",
+  }[crackmeState.state] || "live.crackme.loading";
+  const stamp = fillTemplate(language[stampKey] || "", {
+    source: README_SOURCE_LABEL,
+    time: formatUtcMinute(crackmeState.fetchedAt) || "—",
+    failed: formatUtcMinute(crackmeState.failedAt) || "—",
+  });
+  const stampEl = root.querySelector('[data-live-stamp="crackme"]');
+  if (stampEl) {
+    stampEl.textContent = stamp;
+    stampEl.setAttribute("data-state", crackmeState.state);
+  }
+  root.setAttribute("data-state", crackmeState.state);
+}
+
+async function refreshStars(reason) {
+  if (starFlight) return;
+  const now = Date.now();
+  if (!shouldFetch({
+    now,
+    fetchedAt: starState.fetchedAt,
+    visible: document.visibilityState !== "hidden",
+    reason,
+    freshMs: FETCH_FRESH_MS,
+    intervalMs: STAR_REFRESH_MS,
+    retryAt: starState.retryAt,
+  })) {
+    return;
+  }
+  starFlight = true;
+  try {
+    const result = await loadStars({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    if (result.ok) {
+      starState = { state: "live", count: result.count, fetchedAt: result.fetchedAt, failedAt: null, retryAt: null };
+      writeCache(STAR_CACHE_KEY, { count: result.count, fetchedAt: result.fetchedAt });
+    } else if (formatExactCount(starState.count)) {
+      starState = { ...starState, state: "stale", failedAt: now, retryAt: result.retryAt || starState.retryAt };
+    } else {
+      starState = { state: "unavailable", count: null, fetchedAt: null, failedAt: now, retryAt: result.retryAt || null };
+    }
+    renderStars();
+  } finally {
+    starFlight = false;
+  }
+}
+
+async function refreshCrackme(reason) {
+  if (!document.querySelector("[data-crackme-live]") || crackmeFlight) return;
+  const now = Date.now();
+  if (!shouldFetch({
+    now,
+    fetchedAt: crackmeState.fetchedAt,
+    visible: document.visibilityState !== "hidden",
+    reason,
+    freshMs: FETCH_FRESH_MS,
+    intervalMs: CRACKME_REFRESH_MS,
+    retryAt: crackmeState.retryAt,
+  })) {
+    return;
+  }
+  crackmeFlight = true;
+  try {
+    const result = await loadCrackmeStatus({ fetchImpl: fetch.bind(globalThis), now, timeoutMs: FETCH_TIMEOUT_MS });
+    if (result.ok) {
+      crackmeState = { state: "live", record: result, fetchedAt: result.fetchedAt, failedAt: null, retryAt: null };
+      writeCache(CRACKME_CACHE_KEY, {
+        fetchedAt: result.fetchedAt,
+        current: result.current,
+        rows: result.rows,
+        seal: result.seal,
+        readmeUrl: result.readmeUrl,
+      });
+    } else if (crackmeState.record) {
+      crackmeState = { ...crackmeState, state: "stale", failedAt: now, retryAt: result.retryAt || crackmeState.retryAt };
+    } else {
+      crackmeState = { state: "unavailable", record: null, fetchedAt: null, failedAt: now, retryAt: result.retryAt || null };
+    }
+    renderCrackme();
+  } finally {
+    crackmeFlight = false;
+  }
+}
+
+function startLiveFigures() {
+  const cachedStars = readCache(STAR_CACHE_KEY);
+  if (cachedStars && formatExactCount(cachedStars.count)) {
+    starState = {
+      state: "live",
+      count: cachedStars.count,
+      fetchedAt: cachedStars.fetchedAt,
+      failedAt: null,
+      retryAt: null,
+    };
+  }
+  const cachedCrackme = readCache(CRACKME_CACHE_KEY);
+  if (
+    cachedCrackme &&
+    cachedCrackme.current &&
+    typeof cachedCrackme.current.name === "string" &&
+    typeof cachedCrackme.current.status === "string" &&
+    Array.isArray(cachedCrackme.rows)
+  ) {
+    crackmeState = {
+      state: "live",
+      record: cachedCrackme,
+      fetchedAt: cachedCrackme.fetchedAt,
+      failedAt: null,
+      retryAt: null,
+    };
+  }
+  renderStars();
+  renderCrackme();
+  refreshStars("open");
+  refreshCrackme("open");
+  window.setInterval(() => {
+    refreshStars("timer");
+    refreshCrackme("timer");
+  }, POLL_CHECK_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    refreshStars("timer");
+    refreshCrackme("timer");
+  });
+  window.addEventListener("bla:langchange", () => {
+    renderStars();
+    renderCrackme();
+  });
+}
+
+function navLabel(key, fallback) {
+  const dictRoot = window.BLA_I18N || {};
+  const lang = window.BLA_CURRENT_LANG || "en";
+  const dict = dictRoot[lang] || dictRoot.en || {};
+  const en = dictRoot.en || {};
+  return dict[key] || en[key] || fallback;
+}
+
+function syncNavToggleLabel(toggle) {
+  if (!toggle) return;
+  const open = toggle.getAttribute("aria-expanded") === "true";
+  const label = open ? navLabel("nav.menuClose", "Close menu") : navLabel("nav.menu", "Menu");
+  toggle.setAttribute("aria-label", label);
+  const hidden = toggle.querySelector(".visually-hidden");
+  if (hidden) hidden.textContent = label;
+}
+
+function initNavMenu() {
+  const toggle = document.querySelector(".nav-toggle");
+  const header = document.querySelector(".site-header");
+  if (!toggle || !header) return;
+
+  const setOpen = (open) => {
+    header.classList.toggle("nav-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    syncNavToggleLabel(toggle);
+  };
+
+  toggle.addEventListener("click", (event) => {
+    const next = toggle.getAttribute("aria-expanded") !== "true";
+    setOpen(next);
+    if (next && event.detail === 0) {
+      const first = header.querySelector(".nav-link");
+      if (first) first.focus();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && header.classList.contains("nav-open")) {
+      setOpen(false);
+      toggle.focus();
+    }
+  });
+
+  header.querySelectorAll(".nav-link").forEach((link) => {
+    link.addEventListener("click", () => setOpen(false));
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!header.classList.contains("nav-open")) return;
+    if (event.target instanceof Node && header.contains(event.target)) return;
+    setOpen(false);
+  });
+
+  const desktop = window.matchMedia("(min-width: 1024px)");
+  const closeOnDesktop = () => {
+    if (desktop.matches) setOpen(false);
+  };
+  if (typeof desktop.addEventListener === "function") {
+    desktop.addEventListener("change", closeOnDesktop);
+  } else if (typeof desktop.addListener === "function") {
+    desktop.addListener(closeOnDesktop);
+  }
+
+  window.addEventListener("bla:langchange", () => syncNavToggleLabel(toggle));
+  syncNavToggleLabel(toggle);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   const initialLang = detectInitialLang();
   applyLanguage(initialLang);
-  loadGitHubStars();
+  startLiveFigures();
+  initNavMenu();
 
   const select = document.getElementById("bla-lang-select");
   if (select) {
