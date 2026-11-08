@@ -843,13 +843,15 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
       delete remainingManifestClients[client.id];
     }
 
-    // Check if another still-installed client in manifest (or another client not targeted in this uninstall) shares `skillPath`
-    const targetIdsSet = new Set(targetClients.map((c) => c.id));
-    const sharedByOtherRemainingManifestClient = Object.values(remainingManifestClients).some(
-      (rec) => rec.clientId !== client.id && rec.skillPath === skillPath && !targetIdsSet.has(rec.clientId),
+    // A skill may be shared by several clients. Delete it only after every
+    // manifest owner has been successfully unregistered, including clients
+    // selected for this same run whose removal has not yet succeeded.
+    // A failed removal also leaves the current client's manifest record intact.
+    const stillOwnedByManifestClient = Object.values(remainingManifestClients).some(
+      (rec) => rec.skillPath === skillPath,
     );
 
-    if (!sharedByOtherRemainingManifestClient && existsSync(skillPath)) {
+    if (!stillOwnedByManifestClient && existsSync(skillPath)) {
       try {
         const currentSkillSha = sha256Hex(readFileSync(skillPath));
         const ownedByThisManifest =
