@@ -1,3 +1,5 @@
+import type { DefenseCoverageContract } from "./coverage-contract.js";
+
 export type ArtifactFormat =
   | "javascript"
   | "typescript"
@@ -137,6 +139,11 @@ export interface AuditReport {
   readonly recommendedCommand: string;
   /** Entries skipped while walking a directory tree (depth/entry/file-size bounds). */
   readonly walkSkipped?: { directories: number; files: number; bytes: number };
+  /**
+   * Machine-readable statement of what this audit does and does not guarantee
+   * (client-artifact scope only; no confidentiality or access-control claim).
+   */
+  readonly coverageContract?: DefenseCoverageContract;
 }
 
 export interface ProtectionOptions {
@@ -322,6 +329,11 @@ export interface VerificationReport {
   readonly costAmplificationFactor: number;
   readonly obligationGraphExpansionFactor: number;
   readonly functionalIntegrityVerified: boolean;
+  /**
+   * Machine-readable statement of what this verification does and does not
+   * guarantee (client-artifact scope only; server authorization is external).
+   */
+  readonly coverageContract?: DefenseCoverageContract;
 }
 
 export interface ShowcaseCaseResult {
