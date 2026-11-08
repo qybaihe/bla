@@ -141,10 +141,13 @@ describe("CrackMe repository status", () => {
     if (!parsed.ok) return;
     expect(parsed.current.kind).toBe("current");
     expect(parsed.current.path).toBe(`challenge/${parsed.current.id}/`);
-    expect(sealPathFor(parsed.current.path)).toBe(`challenge/${parsed.current.id}/SEAL.json`);
+    const currentPath = parsed.current.path;
+    expect(currentPath).not.toBeNull();
+    if (currentPath == null) return;
+    expect(sealPathFor(currentPath)).toBe(`challenge/${parsed.current.id}/SEAL.json`);
     expect(parsed.rows.filter((row) => row.kind === "current")).toHaveLength(1);
     expect(parsed.rows.some((row) => row.kind === "snapshot")).toBe(true);
-    expect(versionTreeUrl(parsed.current.path)).toBe(
+    expect(versionTreeUrl(currentPath)).toBe(
       `https://github.com/qybaihe/bla/tree/main/challenge/${parsed.current.id}/`,
     );
   });
