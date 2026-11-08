@@ -1047,9 +1047,10 @@ export function hardenProject(
             });
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);
-              writeFileAtomicSync(entryAbs, finalized.content, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              // hardenProject always writes into a fresh outputRoot distinct
+              // from the source directory (enforced above) — there is no
+              // legitimate in-place case here, so never follow a planted link.
+              writeFileAtomicSync(entryAbs, finalized.content, "utf8");
             }
           }
         }
@@ -1086,9 +1087,7 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileAtomicSync(entryAbs, bound.code, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              writeFileAtomicSync(entryAbs, bound.code, "utf8");
             }
           }
         }
@@ -1125,9 +1124,7 @@ export function hardenProject(
               seedTag: String(options.seed ?? runId),
             });
             if (bound) {
-              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
-                allowLinkWriteThrough: options.inPlace === true,
-              });
+              writeFileAtomicSync(entryAbs, bound.bytes);
             }
           }
         }
