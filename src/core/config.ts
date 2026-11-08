@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { writeFileAtomicSync } from "./output-path.js";
 import type { ProtectionIntensity } from "./types.js";
 
 export interface BlaProjectConfig {
@@ -82,6 +83,7 @@ const BOOLEAN_CONFIG_KEYS = [
   "honeySourceMaps",
   "weaveDecoys",
   "selfSeal",
+  "sidecarEntangle",
   "allowLaneIndependentGates",
   "allowPlaintextSeal",
   "allowWasmClearParamCarriers",
@@ -227,7 +229,7 @@ function persistSeed(targetPath: string, seed: string, existing: BlaProjectConfi
     ...existing,
     seed,
   };
-  writeFileSync(targetPath, JSON.stringify(next, null, 2) + "\n", "utf8");
+  writeFileAtomicSync(targetPath, JSON.stringify(next, null, 2) + "\n", "utf8");
 }
 
 /**
@@ -262,7 +264,7 @@ export function resolveProjectSeed(
   let targetPath: string;
   if (loaded.sourcePath && !loaded.sourcePath.endsWith("package.json")) {
     targetPath = loaded.sourcePath;
-    const existing = JSON.parse(readFileSync(targetPath, "utf8")) as BlaProjectConfig;
+    const existing = readConfigFile(targetPath);
     persistSeed(targetPath, seed, existing);
   } else {
     targetPath = join(root, ".blarc");
@@ -280,7 +282,7 @@ export function initBlaConfig(
 ): { configPath: string; created: boolean; config: BlaProjectConfig } {
   const configPath = join(resolve(targetDir), "bla.config.json");
   if (existsSync(configPath) && !overwrite) {
-    const existing = JSON.parse(readFileSync(configPath, "utf8")) as BlaProjectConfig;
+    const existing = readConfigFile(configPath);
     const merged = { ...DEFAULT_BLA_CONFIG, ...existing };
     if (!isUsableSeed(merged.seed)) {
       const seed = generateProjectSeed();
@@ -302,7 +304,7 @@ export function initBlaConfig(
     ...DEFAULT_BLA_CONFIG,
     seed: generateProjectSeed(),
   };
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  writeFileAtomicSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
   return {
     configPath,
     created: true,

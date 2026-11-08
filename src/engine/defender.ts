@@ -1,5 +1,5 @@
-import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { writeFileAtomicSync } from "../core/output-path.js";
 import { BLA_IDENTITY } from "../identity.js";
 import {
   inspectReleaseExposure,
@@ -310,7 +310,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       payloadToWrite = signManifestPayload(manifestPayload, manifestSigningKeyPem!);
       manifestSigned = true;
     }
-    writeFileSync(manifestPath, JSON.stringify(payloadToWrite, null, 2) + "\n", "utf8");
+    writeFileAtomicSync(manifestPath, JSON.stringify(payloadToWrite, null, 2) + "\n", "utf8");
     stages.push({
       stage: "5-defense-attestation-manifest",
       status: "passed",

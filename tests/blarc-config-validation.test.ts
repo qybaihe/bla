@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadBlaConfig } from "../src/core/config.js";
+import { initBlaConfig, loadBlaConfig, resolveProjectSeed } from "../src/core/config.js";
 
 const tempDirs: string[] = [];
 function createTempDir(): string {
@@ -47,6 +47,8 @@ describe(".blarc/config validation", () => {
     const dir = createTempDir();
     writeFileSync(join(dir, ".blarc"), JSON.stringify({ selfSeal: "yes" }), "utf8");
     expect(() => loadBlaConfig(dir)).toThrow(/selfSeal.*boolean/);
+    writeFileSync(join(dir, ".blarc"), JSON.stringify({ sidecarEntangle: "yes" }), "utf8");
+    expect(() => loadBlaConfig(dir)).toThrow(/sidecarEntangle.*boolean/);
   });
 
   it("rejects config files above the size cap", () => {
@@ -67,5 +69,52 @@ describe(".blarc/config validation", () => {
       "utf8",
     );
     expect(() => loadBlaConfig(pkgDir)).toThrow(/package\.json \(bla field\)/);
+  });
+
+  it("initBlaConfig writes valid starter config and validates existing config before updating", () => {
+    const dir = createTempDir();
+    const res = initBlaConfig(dir);
+    expect(res.created).toBe(true);
+    expect(res.config.sidecarEntangle).toBe(false);
+    expect(res.config.seed).toMatch(/^bla-[0-9a-f]{32}$/);
+
+    // Existing valid config without seed is updated safely
+    writeFileSync(
+      join(dir, "bla.config.json"),
+      JSON.stringify({ intensity: "stealth", sidecarEntangle: true }),
+      "utf8",
+    );
+    const updated = initBlaConfig(dir);
+    expect(updated.created).toBe(false);
+    expect(updated.config.intensity).toBe("stealth");
+    expect(updated.config.sidecarEntangle).toBe(true);
+    expect(updated.config.seed).toMatch(/^bla-[0-9a-f]{32}$/);
+
+    // Corrupt existing config is rejected instead of corrupted
+    writeFileSync(join(dir, "bla.config.json"), "{ invalid json", "utf8");
+    expect(() => initBlaConfig(dir)).toThrow(/Invalid BLA config/);
+  });
+
+  it("resolveProjectSeed validates existing config file before persisting new seed", () => {
+    const dir = createTempDir();
+    writeFileSync(
+      join(dir, ".blarc"),
+      JSON.stringify({ intensity: "maximum", sidecarEntangle: "invalid" }),
+      "utf8",
+    );
+    expect(() => resolveProjectSeed(dir)).toThrow(/sidecarEntangle.*boolean/);
+
+    // With valid config, persists seed cleanly
+    writeFileSync(
+      join(dir, ".blarc"),
+      JSON.stringify({ intensity: "maximum", sidecarEntangle: true }),
+      "utf8",
+    );
+    const resolved = resolveProjectSeed(dir);
+    expect(resolved.persisted).toBe(true);
+    const onDisk = JSON.parse(readFileSync(resolved.sourcePath!, "utf8"));
+    expect(onDisk.intensity).toBe("maximum");
+    expect(onDisk.sidecarEntangle).toBe(true);
+    expect(onDisk.seed).toBe(resolved.seed);
   });
 });
