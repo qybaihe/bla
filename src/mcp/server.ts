@@ -610,7 +610,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_verify",
     description:
-      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult. Optional run_id / summary_path correlate this verify with a prior harden summary (unsigned).",
+      "Verifies a BLA-protected artifact against REA's static/semantic resource limits, call-graph tarpit expansion, and token bankruptcy amplification. Pass protection-side honesty metadata (self_seal_enabled / sidecar_entangle_enabled / wasm_export_rename_applied) so defenseScore soft-caps reflect what actually ran — same fields defend/harden already forward from ProtectionResult. Optional run_id / summary_path correlate this verify with a prior harden summary (unsigned).",
     inputSchema: {
       type: "object",
       properties: {
@@ -626,6 +626,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Honesty metadata: true when protect/defend ran with self-seal. Omitting it soft-caps JS-like scores with self-seal-not-enabled (issue #40.6).",
+        },
+        sidecar_entangle_enabled: {
+          type: "boolean",
+          description:
+            "Honesty metadata: true when protect/defend/harden ran with sidecarEntangle. Omitting it soft-caps formats that support strip⇒fail entanglement with sidecar-entangle-not-enabled (issue #40 / DESIGN).",
         },
         wasm_export_rename_applied: {
           type: "boolean",
@@ -1485,6 +1490,9 @@ function verifyHonestyOptions(args: Record<string, unknown>): VerifyTargetOption
   return {
     ...(typeof args.self_seal_enabled === "boolean"
       ? { selfSealEnabled: args.self_seal_enabled }
+      : {}),
+    ...(typeof args.sidecar_entangle_enabled === "boolean"
+      ? { sidecarEntangleEnabled: args.sidecar_entangle_enabled }
       : {}),
     ...(typeof args.wasm_export_rename_applied === "boolean"
       ? { wasmExportRenameApplied: args.wasm_export_rename_applied }

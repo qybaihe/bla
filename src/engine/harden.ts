@@ -37,6 +37,8 @@ import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
 import {
+  BUN_SIDECAR_COMPANION_SUFFIX,
+  entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
@@ -364,6 +366,7 @@ function collectRootArtifacts(
       if (/\.shielded(\.|$)/i.test(name)) return false;
       if (name.endsWith(".bla-manifest.json")) return false;
       if (name.endsWith(".bunfs-snapshot")) return false;
+      if (name.endsWith(".bla-sidecar.v1.json")) return false;
       formats.set(full, format);
       return true;
     },
@@ -1048,7 +1051,7 @@ export function hardenProject(
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);
               writeFileAtomicSync(entryAbs, finalized.content, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
+                allowLinkWriteThrough: false,
               });
             }
           }
@@ -1087,7 +1090,7 @@ export function hardenProject(
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.code, "utf8", {
-                allowLinkWriteThrough: options.inPlace === true,
+                allowLinkWriteThrough: false,
               });
             }
           }
@@ -1126,9 +1129,55 @@ export function hardenProject(
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
-                allowLinkWriteThrough: options.inPlace === true,
+                allowLinkWriteThrough: false,
               });
             }
+          }
+        }
+      }
+
+      // Bun / EOF-preserved native companion note only when no JS/Python/WASM
+      // entry was bound — binary stays byte-exact; `.bla-sidecar.v1.json`
+      // binds the sibling `.bunfs-snapshot` planted by protect.
+      if (!jsEntry && !pyEntry && !wasmEntry) {
+        const nativeLike = summaries.filter(
+          (s) =>
+            s.success &&
+            (s.format === "native-elf" ||
+              s.format === "native-macho" ||
+              s.format === "native-pe"),
+        );
+        for (const nativeEntry of nativeLike) {
+          const entryAbs = join(outputRoot, nativeEntry.relativePath);
+          const snapshotAbs = `${entryAbs}.bunfs-snapshot`;
+          if (!existsSync(entryAbs) || !existsSync(snapshotAbs)) continue;
+          const entryLabel = basename(entryAbs);
+          const snapshotLabel = `${entryLabel}.bunfs-snapshot`;
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [
+            { pathLabel: snapshotLabel, bytes: readFileSync(snapshotAbs) },
+          ];
+          const entryDir = dirname(entryAbs);
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === nativeEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            if (rel === snapshotLabel) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          const bound = entangleBunEntryWithSidecars({
+            entryPath: entryLabel,
+            entryBytes: readFileSync(entryAbs),
+            sidecars,
+            seedTag: String(options.seed ?? runId),
+          });
+          if (bound) {
+            writeFileAtomicSync(
+              `${entryAbs}${BUN_SIDECAR_COMPANION_SUFFIX}`,
+              bound.noteBytes,
+              "utf8",
+              { allowLinkWriteThrough: false },
+            );
           }
         }
       }

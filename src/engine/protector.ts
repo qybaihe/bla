@@ -92,6 +92,8 @@ import {
 } from "./js-wasm-hydrate-dump-lint.js";
 import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import {
+  BUN_SIDECAR_COMPANION_SUFFIX,
+  entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
@@ -874,6 +876,43 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       decoyFunctionsInjected += decoy.moduleCount;
       chaffPayloadsEmbedded += decoy.chaffPayloadsEmbedded;
       counteredVectors.add("bun-standalone-module-graph");
+      // Opt-in sidecarEntangle: bind the byte-exact binary to its
+      // `.bunfs-snapshot` (and any explicit sidecarEntanglePaths) via a sibling
+      // `.bla-sidecar.v1.json` companion note — never rewrite the binary.
+      if (options.sidecarEntangle === true) {
+        const entryLabel = basename(absOutput);
+        const snapshotLabel = `${entryLabel}.bunfs-snapshot`;
+        const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [
+          { pathLabel: snapshotLabel, bytes: decoy.buffer },
+        ];
+        const base = dirname(absOutput);
+        for (const rel of options.sidecarEntanglePaths ?? []) {
+          if (typeof rel !== "string" || rel.length === 0) continue;
+          if (rel === snapshotLabel || basename(rel) === snapshotLabel) continue;
+          const abs = isAbsolute(rel) ? rel : join(base, rel);
+          try {
+            if (!existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          } catch {
+            /* skip unreadable */
+          }
+        }
+        const bound = entangleBunEntryWithSidecars({
+          entryPath: entryLabel,
+          entryBytes: res.buffer,
+          sidecars,
+          seedTag: String(seed),
+          softFold: options.sidecarEntangleSoftFold === true,
+        });
+        if (bound) {
+          writeProtectedOutput(
+            `${absOutput}${BUN_SIDECAR_COMPANION_SUFFIX}`,
+            bound.noteBytes,
+            "utf8",
+          );
+          sidecarEntangleApplied = true;
+        }
+      }
     }
   } else if (format === "sqlite") {
     const rawDb = readFileSync(absInput);

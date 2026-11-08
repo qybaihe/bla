@@ -1,6 +1,6 @@
 # DESIGN: Sidecar / entry entanglement (issue #40 / STATE)
 
-Status: **JS + Python + WASM strip⇒fail** — binding digest + JS/Python preambles + WASM `bla.sidecar.v1` custom-section note + protect/harden opt-in landed; ASAR/Bun companions + defenseScore gap when off still TBD.
+Status: **JS + Python + WASM + Bun companion strip⇒fail** — binding digest + JS/Python preambles + WASM `bla.sidecar.v1` custom-section note + Bun sibling `.bla-sidecar.v1.json` companion note (byte-exact binary) + protect/harden opt-in landed; defenseScore gap when `sidecarEntangle` is off landed; ASAR archive-note companion still TBD.
 
 ## Goal
 
@@ -40,5 +40,6 @@ checks beat orphan honeypot files.
 - ~~Entry self-coverage~~ — landed 2026-11-05: self-seal embeds a canonical entry self-digest finalized at write time; harden reports `integrityCoverageSelfVerified` and drops paper self edges when it does not verify.
 - ~~Wire planner into `protectTarget` for JS + Python when `sidecarEntangle` is set.~~ — JS 2026-11-05; Python 2026-11-06 nightly.
 - ~~WASM custom-section note + host-side verify.~~ — 2026-11-07 nightly: `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection`; protect + harden WASM-only post-pass.
-- Extend to ASAR / Bun snapshot / native companion files.
-- Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).
+- ~~Bun / EOF-preserved native companion note.~~ — 2026-11-08 nightly: `generateSidecarBunCompanionNote` / `bindBunSidecarEntanglement` / `entangleBunEntryWithSidecars` / `verifyBunSidecarCompanionNote`; protect auto-binds `.bunfs-snapshot`; harden Bun-only post-pass; binary stays byte-exact.
+- ~~Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).~~ — 2026-11-08 nightly: `sidecar-entangle-not-enabled` soft-cap (93) via `sidecarEntangleEnabled` / MCP `sidecar_entangle_enabled`.
+- Extend to ASAR archive-note companion (plant `.bla/sidecar.v1.json` + optional main JS preamble).
