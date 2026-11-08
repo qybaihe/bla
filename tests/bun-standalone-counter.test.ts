@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SeededPrng } from "../src/core/prng.js";
 import { REA_INTERNAL_LIMITS } from "../src/identity.js";
@@ -28,7 +28,12 @@ const REA_ROOT = resolve(
   (process.env.REA_ROOT ?? "").trim() || join(BLA_ROOT, "..", "rea"),
 );
 const REA_BUN_READER = join(REA_ROOT, "src/artifacts/BunStandaloneArtifactReader.ts");
-const REA_TSX = join(REA_ROOT, "node_modules/.bin/tsx");
+// Resolve tsx's CLI entry instead of the `node_modules/.bin/tsx` shim: on Windows
+// npm writes a POSIX shell script there (alongside `tsx.cmd` / `tsx.ps1`), so
+// `existsSync` sees it but `execFileSync` cannot execute it and spawns ENOENT.
+// Running the entry through `process.execPath` works on every platform — same
+// reasoning as `runNpmPack` in src/core/release-plan.ts.
+const REA_TSX_CLI = join(REA_ROOT, "node_modules/tsx/dist/cli.mjs");
 const HOST_ELF = "/bin/true";
 
 function decodeSuffix(buf: Buffer): { byteCount: bigint; tableLength: number; entry: number } {
@@ -123,16 +128,21 @@ describe("Bun standalone module graph counter (REA #6998)", () => {
   });
 
   it("real REA BunStandaloneArtifactReader admits the decoy and publishes indexed-path limitations", () => {
-    if (!existsSync(REA_BUN_READER) || !existsSync(REA_TSX)) return;
+    if (!existsSync(REA_BUN_READER) || !existsSync(REA_TSX_CLI)) return;
     const dir = mkdtempSync(join(tmpdir(), "bla-bun-rea-"));
     try {
       const r = generateBunStandaloneDecoyGraph(new SeededPrng("rea-live"), "balanced");
       const decoy = join(dir, "app.bunfs-snapshot");
       writeFileSync(decoy, r.buffer);
       const script = join(dir, "probe.mts");
+      // The probe must import the REA reader through a `file://` URL: a bare
+      // Windows path (`D:\...`) is rejected by Node's ESM loader with
+      // ERR_UNSUPPORTED_ESM_URL_SCHEME. `pathToFileURL` yields a valid specifier
+      // on every platform.
+      const readerSpecifier = pathToFileURL(REA_BUN_READER).href;
       writeFileSync(
         script,
-        `import { BunStandaloneArtifactReader } from ${JSON.stringify(REA_BUN_READER)};
+        `import { BunStandaloneArtifactReader } from ${JSON.stringify(readerSpecifier)};
 import { buffer } from "node:stream/consumers";
 const reader = new BunStandaloneArtifactReader(${JSON.stringify(decoy)});
 const entries = [];
@@ -144,7 +154,7 @@ await reader.close();
 console.log(JSON.stringify({ count: entries.length, limited, indexed, first: entries[0].path, canary: first.includes("PROTECTED_CANARY_CREDENTIAL=") }));
 `,
       );
-      const out = execFileSync(REA_TSX, [script], { cwd: REA_ROOT, encoding: "utf8", timeout: 120_000 });
+      const out = execFileSync(process.execPath, [REA_TSX_CLI, script], { cwd: REA_ROOT, encoding: "utf8", timeout: 120_000 });
       const res = JSON.parse(out.trim().split("\n").pop()!);
       expect(res.count).toBeGreaterThanOrEqual(r.moduleCount);
       expect(res.limited).toBe(r.deepNameModules);
