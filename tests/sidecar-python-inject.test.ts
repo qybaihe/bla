@@ -14,12 +14,13 @@ import {
   generateSidecarPythonPreamble,
   SIDECAR_ENTANGLE_SCHEMA,
 } from "../src/shields/runtime/sidecar-entangle.js";
+import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 function runPython(entryAbs: string): {
   status: number | null;
   out: string;
 } {
-  const r = spawnSync("python3", [entryAbs], { encoding: "utf8" });
+  const r = spawnSync(python3(), [entryAbs], { encoding: "utf8" });
   return {
     status: r.status,
     out: `${r.stderr || ""}${r.stdout || ""}`,
@@ -82,7 +83,7 @@ describe("sidecar Python inject strip⇒fail", () => {
     expect(inject.expectedU32).toBe(digest.u32);
   });
 
-  it("runtime: intact sidecars pass; stripped sidecar fails closed", () => {
+  it.skipIf(!PY3)("runtime: intact sidecars pass; stripped sidecar fails closed", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-inject-"));
     try {
       const entryPath = "main.py";
@@ -118,7 +119,7 @@ describe("sidecar Python inject strip⇒fail", () => {
     }
   });
 
-  it("runtime: altered sidecar fails closed", () => {
+  it.skipIf(!PY3)("runtime: altered sidecar fails closed", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-alter-"));
     try {
       const entryPath = "main.py";
@@ -152,7 +153,7 @@ describe("sidecar Python inject strip⇒fail", () => {
     }
   });
 
-  it("softFold flips digest u32 instead of raising when sidecar missing", () => {
+  it.skipIf(!PY3)("softFold flips digest u32 instead of raising when sidecar missing", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-soft-"));
     try {
       const entryPath = "main.py";

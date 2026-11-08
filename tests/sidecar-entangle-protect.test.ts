@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { protectTarget } from "../src/engine/protector.js";
 import { computeSidecarBindingDigest } from "../src/shields/runtime/sidecar-entangle.js";
+import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -121,7 +122,7 @@ describe("sidecar entangle protectTarget Python wiring", () => {
     }
   });
 
-  it("flag on writes Python binding; intact runs; strip fails closed", () => {
+  it.skipIf(!PY3)("flag on writes Python binding; intact runs; strip fails closed", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-on-"));
     try {
       const entry = join(dir, "main.py");
@@ -143,12 +144,12 @@ describe("sidecar entangle protectTarget Python wiring", () => {
       expect(code).toContain("hashlib");
       expect(code).toContain("integrity binding mismatch");
 
-      const intact = spawnSync("python3", [out], { encoding: "utf8" });
+      const intact = spawnSync(python3(), [out], { encoding: "utf8" });
       expect(intact.status, `${intact.stderr || ""}${intact.stdout || ""}`).toBe(0);
       expect((intact.stdout || "")).toContain("py-ok");
 
       rmSync(join(dir, "sib-for-out.bin"));
-      const stripped = spawnSync("python3", [out], { encoding: "utf8" });
+      const stripped = spawnSync(python3(), [out], { encoding: "utf8" });
       const strippedOut = `${stripped.stderr || ""}${stripped.stdout || ""}`;
       expect(stripped.status, strippedOut).not.toBe(0);
       expect(strippedOut).toMatch(/integrity binding mismatch/);
@@ -159,7 +160,7 @@ describe("sidecar entangle protectTarget Python wiring", () => {
 });
 
 describe("sidecar entangle hardenProject Python-only post-pass", () => {
-  it("Python-only project binds entry; strip of sibling fails closed", async () => {
+  it.skipIf(!PY3)("Python-only project binds entry; strip of sibling fails closed", async () => {
     const { hardenProject } = await import("../src/engine/harden.js");
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-py-harden-"));
     try {
@@ -186,7 +187,7 @@ describe("sidecar entangle hardenProject Python-only post-pass", () => {
       expect(code).toContain("hashlib");
       expect(code).toContain("integrity binding mismatch");
 
-      const intact = spawnSync("python3", [policyOut!.outputPath], { encoding: "utf8" });
+      const intact = spawnSync(python3(), [policyOut!.outputPath], { encoding: "utf8" });
       expect(intact.status, `${intact.stderr || ""}${intact.stdout || ""}`).toBe(0);
       expect((intact.stdout || "").trim()).toContain("7");
 
@@ -195,7 +196,7 @@ describe("sidecar entangle hardenProject Python-only post-pass", () => {
       );
       expect(helperOut).toBeTruthy();
       rmSync(helperOut!.outputPath);
-      const stripped = spawnSync("python3", [policyOut!.outputPath], { encoding: "utf8" });
+      const stripped = spawnSync(python3(), [policyOut!.outputPath], { encoding: "utf8" });
       const strippedOut = `${stripped.stderr || ""}${stripped.stdout || ""}`;
       expect(stripped.status, strippedOut).not.toBe(0);
       expect(strippedOut).toMatch(/integrity binding mismatch/);
