@@ -550,8 +550,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         } else {
           console.log(formatHardenProjectReport(report));
         }
+        // Exit 2 covers both "nothing to harden" and "at least one artifact
+        // failed", matching the refuse-code contract used by the lint commands.
         if (report.dryRun) return report.discoveredCount === 0 ? 2 : 0;
-        return report.overallSuccess || report.discoveredCount === 0 ? (report.discoveredCount === 0 ? 2 : 0) : 2;
+        return report.discoveredCount === 0 || !report.overallSuccess ? 2 : 0;
       }
 
       case "defend": {
