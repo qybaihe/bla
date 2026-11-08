@@ -183,6 +183,11 @@ export function verifyTarget(
     ...(originalPath ? { originalPath: resolve(originalPath) } : {}),
     detectedFormat: afterAudit.detectedFormat,
     overallPassed: passedCount === checks.length,
+    verificationScope: "counter-rea-structural",
+    runtimeEquivalence: {
+      status: "not-tested",
+      reason: "No original-versus-protected programme execution or equivalence oracle was run.",
+    },
     defenseScore: honesty.cappedScore,
     defenseScoreRaw: honesty.rawScore,
     defenseScoreGaps: honesty.gaps.map((g) => ({
@@ -196,7 +201,8 @@ export function verifyTarget(
     tokenAmplificationFactor: tokenAmp,
     costAmplificationFactor: costAmp,
     obligationGraphExpansionFactor: graphAmp,
-    functionalIntegrityVerified: sim.parseStatus === "complete",
+    // Static parsing alone cannot establish executable functional equivalence.
+    functionalIntegrityVerified: false,
     coverageContract: buildDefenseCoverageContract({
       clientProtected: afterAudit.protectionStatus === "BLA_PROTECTED",
     }),

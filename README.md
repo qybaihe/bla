@@ -10,7 +10,7 @@
 
 ### **Poison → Exhaust → Hallucinate. Make Reverse Engineering Bankrupt Again.**
 
-**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — with 100% runtime equivalence.**
+**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines). Runtime equivalence is tested on bundled showcase targets; custom artefacts require their own before/after execution tests.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents_v3.1.2-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
@@ -59,8 +59,8 @@ Every analyzer pass hits deterministic resource ceilings (`primitive-candidates 
 </td>
 <td width="33%" valign="top">
 
-### ⚡ 100% Runtime Equivalent
-Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **14/14** benchmark targets pass **100% input/output equivalence**.
+### ⚡ Showcase Runtime Equivalence
+Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **14/14 bundled benchmark targets** pass their input/output equivalence tests. This does not establish equivalence for arbitrary customer artefacts: run your own before/after execution tests. `bla verify` checks Counter-REA structural gates; it does not execute the programmes.
 
 </td>
 </tr>
@@ -127,7 +127,7 @@ flowchart LR
     E --> F["bla_harden / bla_defend\n(19+ Format Shields + Self-Seal)"]
   end
   subgraph S4["4 · Counter-REA Gate"]
-    F --> G["bla_verify\n(Budget Trip + 100% Runtime Equivalence)"]
+    F --> G["bla_verify\n(Structural Counter-REA Checks Only)"]
   end
 ```
 
@@ -226,7 +226,7 @@ npx bla-agents benchmark
 
 > **Note:** Token and USD columns below are **internal estimates** derived from BLA's catalog of REA limits to illustrate relative amplification across formats — for actual process-level REA errors, see the [Empirical Results](#empirical-results-vs-real-rea) table above.
 
-**Aggregate Showcase Result:** **~639.5×** token amplification · **~304.4×** cost amplification · **14/14 (100%)** runtime equivalence.
+**Aggregate Showcase Result:** **~639.5×** token amplification · **~304.4×** cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. This result is limited to the benchmark fixtures.
 
 | Target Artifact | Unprotected Baseline (est.) | BLA Protected (est.) | Token Multiplier | Runtime Equivalence |
 | :--- | :--- | :--- | ---: | :---: |

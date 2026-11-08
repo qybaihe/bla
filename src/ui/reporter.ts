@@ -147,6 +147,8 @@ export function formatVerificationReport(report: VerificationReport): string {
     `${ANSI.bold}Defense Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (${report.overallPassed ? "ALL COUNTER-REA GATES PASSED" : "PARTIAL PASS"})`,
     `${ANSI.bold}Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
     `${ANSI.dim}${report.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
+    `${ANSI.bold}Runtime equivalence:${ANSI.reset} NOT VERIFIED (no original-versus-protected execution test was run)`,
+    `${ANSI.dim}The overall pass/fail verdict covers Counter-REA structural checks only.${ANSI.reset}`,
   ];
 
   if (
