@@ -14,11 +14,12 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { SeededPrng } from "../core/prng.js";
 import {
   classifySensitiveLiteral,
@@ -64,7 +65,65 @@ const TARGET_NAMES = new Set([
   "license.cjs",
   "license.js",
   "vault.cjs",
+  "gate.cjs",
 ]);
+
+const SKIP_DIR_NAMES = new Set([
+  "node_modules",
+  ".git",
+  ".hg",
+  ".svn",
+  ".bla-hardened",
+  "coverage",
+  ".next",
+  ".turbo",
+  "vendor",
+  "__pycache__",
+]);
+
+const SCAN_EXT = /\.(?:html?|[cm]?js|tsx?|mts|cts)$/i;
+
+function walkEncryptTargets(root: string, depth: number, out: string[]): void {
+  if (depth > 6 || out.length >= 48) return;
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    if (out.length >= 48) break;
+    if (ent.name.startsWith(".") && ent.name !== ".fixture") continue;
+    const full = join(root, ent.name);
+    if (ent.isDirectory()) {
+      if (SKIP_DIR_NAMES.has(ent.name)) continue;
+      walkEncryptTargets(full, depth + 1, out);
+    } else if (ent.isFile() && SCAN_EXT.test(ent.name)) {
+      if (
+        /\.d\.ts$/i.test(ent.name) ||
+        /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name) ||
+        /\.(?:min|shielded)\.[cm]?js$/i.test(ent.name)
+      ) {
+        continue;
+      }
+      out.push(full);
+    }
+  }
+}
+
+function listTargets(pathIn: string): string[] {
+  const abs = resolve(pathIn);
+  if (!existsSync(abs)) return [];
+  const st = statSync(abs);
+  if (st.isFile()) return [abs];
+  const out: string[] = [];
+  for (const name of TARGET_NAMES) {
+    const p = join(abs, name);
+    if (existsSync(p) && statSync(p).isFile()) out.push(p);
+  }
+  walkEncryptTargets(abs, 0, out);
+  return [...new Set(out)];
+}
 
 const HONESTY =
   "XOR string hiding raises static grepping cost only. " +
@@ -273,19 +332,6 @@ function transformHtml(
   return { code, encrypted: allEncrypted, skipped };
 }
 
-function listTargets(pathIn: string): string[] {
-  const abs = resolve(pathIn);
-  if (!existsSync(abs)) return [];
-  const st = statSync(abs);
-  if (st.isFile()) return [abs];
-  const out: string[] = [];
-  for (const name of TARGET_NAMES) {
-    const p = join(abs, name);
-    if (existsSync(p) && statSync(p).isFile()) out.push(p);
-  }
-  return out;
-}
-
 export function encryptStrings(options: EncryptStringsOptions): EncryptStringsReport {
   try {
     if (typeof options.seed !== "string" || options.seed.length === 0) {
@@ -314,6 +360,9 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
       };
     }
 
+    const absPath = resolve(options.path);
+    const isSingleFileInput = existsSync(absPath) && statSync(absPath).isFile();
+    const baseRoot = isSingleFileInput ? dirname(absPath) : absPath;
     const rootPrng = new SeededPrng(options.seed).derive("string.encrypt");
     const includeUrls = options.includeUrls !== false;
     const outDir = options.outDir ? resolve(options.outDir) : null;
@@ -330,7 +379,10 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
         ? transformHtml(source, filePrng, includeUrls)
         : transformJsSource(source, filePrng, includeUrls);
 
-      const outPath = outDir ? join(outDir, basename(file)) : file;
+      const relFromRoot = isSingleFileInput
+        ? basename(file)
+        : relative(baseRoot, file) || basename(file);
+      const outPath = outDir ? join(outDir, relFromRoot) : file;
       let written = false;
       if (result.encrypted.length > 0 && !options.dryRun) {
         if (outDir) mkdirSync(dirname(outPath), { recursive: true });
@@ -338,10 +390,19 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
         written = true;
       }
 
+      if (
+        result.encrypted.length === 0 &&
+        !isSingleFileInput &&
+        !TARGET_NAMES.has(basename(file).toLowerCase()) &&
+        targets.length > 1
+      ) {
+        continue;
+      }
+
       totalEncrypted += result.encrypted.length;
       files.push({
         path: file,
-        relativeName: basename(file),
+        relativeName: relFromRoot.replace(/\\/g, "/"),
         encryptedCount: result.encrypted.length,
         skippedCount: result.skipped,
         literals: result.encrypted.map((s) =>

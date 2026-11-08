@@ -224,8 +224,10 @@ export function collectEsmExportedSymbols(program: t.Program): string[] {
               : spec.exported.value,
           );
         } else if (t.isExportNamespaceSpecifier(spec)) {
-          // ExportNamespaceSpecifier.exported is always Identifier (Babel types).
-          exported.push(spec.exported.name);
+          const nsExported = spec.exported as t.Identifier | t.StringLiteral;
+          exported.push(
+            t.isIdentifier(nsExported) ? nsExported.name : nsExported.value,
+          );
         }
       }
       const decl = stmt.declaration;
