@@ -14,6 +14,7 @@ Official website and interactive Counter-REA defense labs for **[BLA: Blind LLM 
 - `/showcase/` ([`showcase/index.html`](./showcase/index.html)): 8-target Counter-REA benchmark suite and deep-dive case studies (Notion Electron IPC, DX-Ball Sound-Pan, Native ELF64 / SQLite3 / Safetensors).
 - `/guides/` ([`guides/index.html`](./guides/index.html)): Format-by-format defense workflows across all 19 supported artifact types.
 - `/faq/` ([`faq/index.html`](./faq/index.html)): Frequently asked questions and troubleshooting (`bla doctor`, `bla update`).
+- `/enterprise/` ([`enterprise/index.html`](./enterprise/index.html)): Enterprise hardening engagement — assess, custom harden, verify; public contact `qybaihe@gmail.com`; pricing confirmed by email.
 
 ## Binding Custom Domain (`bla.tools`)
 
