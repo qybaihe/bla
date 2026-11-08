@@ -262,6 +262,8 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
     `  ${ANSI.bold}Hardened Output:${ANSI.reset}   ${ANSI.cyan}${rep.outputPath}${ANSI.reset}`,
     `  ${ANSI.bold}Intensity Preset:${ANSI.reset}  ${ANSI.magenta}${rep.intensity.toUpperCase()}${ANSI.reset} (Defense Score: ${ANSI.green}${ANSI.bold}${rep.verification.defenseScore}/100${ANSI.reset})`,
     `  ${ANSI.dim}${rep.verification.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
+    `  ${ANSI.bold}Overall success scope:${ANSI.reset} Hardening + Counter-REA structural gates only`,
+    `  ${ANSI.bold}Runtime equivalence:${ANSI.reset} NOT VERIFIED (no original-versus-protected execution evidence)`,
     ...(rep.verification.defenseScoreRaw !== undefined &&
     rep.verification.defenseScoreRaw !== rep.verification.defenseScore
       ? [

@@ -8,8 +8,9 @@ import {
   InvalidJavaScriptCarrierError,
 } from "../src/shields/javascript/ast-shield.js";
 import { protectTarget } from "../src/engine/protector.js";
+import { defendTarget } from "../src/engine/defender.js";
 import { verifyTarget } from "../src/engine/verifier.js";
-import { formatVerificationReport } from "../src/ui/reporter.js";
+import { formatOneClickDefenseReport, formatVerificationReport } from "../src/ui/reporter.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -210,5 +211,30 @@ describe("issue #154: verifier is explicit about absence of executable parity ev
     expect(report.runtimeEquivalence?.status).toBe("not-tested");
     expect(report.verificationScope).toBe("counter-rea-structural");
     expect(formatVerificationReport(report)).toContain("NOT VERIFIED");
+  });
+
+  it("one-click defend scopes overall success to structural gates and executes the protected entry correctly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-issue154-defend-"));
+    dirs.push(dir);
+    const source = join(dir, "original.cjs");
+    const output = join(dir, "protected.cjs");
+    writeFileSync(source, `function calculate() {
+      const secretValue = 40;
+      return eval("secretValue + 2");
+    }
+    module.exports = calculate;\n`);
+    const report = defendTarget({
+      inputPath: source,
+      outputPath: output,
+      intensity: "balanced",
+      seed: "issue-154-defend-honesty",
+    });
+    expect(report.overallSuccess).toBe(true);
+    expect(report.overallSuccessScope).toBe("hardening-and-structural-checks");
+    expect(report.runtimeEquivalence?.status).toBe("not-tested");
+    expect(report.verification.functionalIntegrityVerified).toBe(false);
+    expect(executeCjs(readFileSync(source, "utf8"))).toBe(42);
+    expect(executeCjs(readFileSync(output, "utf8"))).toBe(42);
+    expect(formatOneClickDefenseReport(report)).toContain("NOT VERIFIED");
   });
 });
