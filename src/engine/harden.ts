@@ -162,6 +162,12 @@ export interface HardenProjectOptions {
   readonly allowJsWasmHydrateDump?: boolean;
   readonly allowWasmXorMaskSidecar?: boolean;
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** Allow bankrupt despite plaintext string/secret markers (R8). Default false. */
+  readonly allowPlaintextString?: boolean;
+  /** Allow bankrupt despite single-point integrity coverage (R9). Default false. */
+  readonly allowSinglePointIntegrity?: boolean;
+  /** Allow bankrupt despite narrow/missing bind runtime scope (R10). Default false. */
+  readonly allowMissingBindRuntime?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
   /**
@@ -486,6 +492,9 @@ export function hardenProject(
     allowJsWasmHydrateDump: options.allowJsWasmHydrateDump,
     allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
     allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
+    allowPlaintextString: options.allowPlaintextString,
+    allowSinglePointIntegrity: options.allowSinglePointIntegrity,
+    allowMissingBindRuntime: options.allowMissingBindRuntime,
   });
   const blockingSeals = packagingBlocks.blockingSeals;
   const blockingWasmParms = packagingBlocks.blockingWasmParms;
@@ -493,6 +502,9 @@ export function hardenProject(
   const blockingJsHydrateDump = packagingBlocks.blockingJsHydrateDump;
   const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
   const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
+  const blockingPlaintextSecrets = packagingBlocks.blockingPlaintextSecrets;
+  const blockingIntegrityCoverage = packagingBlocks.blockingIntegrityCoverage;
+  const blockingBindScope = packagingBlocks.blockingBindScope;
   const outputRoot = resolve(
     options.outputDirectory ??
       (statSync(absDir).isDirectory()
@@ -648,7 +660,14 @@ export function hardenProject(
     };
   }
 
-  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0 || blockingWasmXorMask.length > 0 || blockingWasmSealXor.length > 0) {
+  if (
+    blockingSeals.length > 0 ||
+    blockingWasmParms.length > 0 ||
+    blockingJsAes.length > 0 ||
+    blockingJsHydrateDump.length > 0 ||
+    blockingWasmXorMask.length > 0 ||
+    blockingWasmSealXor.length > 0
+  ) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -728,7 +747,14 @@ export function hardenProject(
     if (blockingJsHydrateDump.length > 0) blockParts.push("JS WASM hydrate param-dump");
     if (blockingWasmXorMask.length > 0) blockParts.push("WASM XOR-mask sidecar");
     if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
-    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts, ...wasmXorMaskArtifacts, ...wasmSealXorArtifacts];
+    const blockedExtras = [
+      ...sealArtifacts,
+      ...wasmArtifacts,
+      ...jsAesArtifacts,
+      ...jsHydrateDumpArtifacts,
+      ...wasmXorMaskArtifacts,
+      ...wasmSealXorArtifacts,
+    ];
     // Attribute the specific refusal to the artifact that triggered the gate;
     // every other planned artifact is skipped because the run was blocked.
     const refusalByPath = new Map(

@@ -621,6 +621,9 @@ export function evaluateHardenProjectPackagingBlocks(
   readonly blockingJsHydrateDump: readonly JsWasmHydrateDumpReport[];
   readonly blockingWasmXorMask: readonly WasmXorMaskSidecarReport[];
   readonly blockingWasmSealXor: readonly WasmSealXorKnownPlaintextReport[];
+  readonly blockingPlaintextSecrets: readonly PlaintextSecretReport[];
+  readonly blockingIntegrityCoverage: readonly IntegrityCoverageFileReport[];
+  readonly blockingBindScope: readonly BindScopeLintReport[];
 } {
   // Harden project-level: do not include protect-time gates in the scan used
   // for the early refuse path (preserves prior semantics).
@@ -658,6 +661,21 @@ export function evaluateHardenProjectPackagingBlocks(
     options.allowWasmSealXorKnownPlaintext !== true
       ? report.details.wasmSealXor.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const blockingPlaintextSecrets =
+    intensityEnforcesPlaintextSecretRefusal(intensity) &&
+    options.allowPlaintextString !== true
+      ? report.details.plaintextSecrets.filter((r) => r.shouldRefuseBankrupt)
+      : [];
+  const blockingIntegrityCoverage =
+    intensity === "bankrupt" &&
+    options.allowSinglePointIntegrity !== true
+      ? report.details.integrityCoverage.filter((r) => r.shouldRefuseBankrupt)
+      : [];
+  const blockingBindScope =
+    intensityEnforcesBindScopeRefusal(intensity) &&
+    options.allowMissingBindRuntime !== true
+      ? report.details.bindScope.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   return {
     report,
     blockingSeals,
@@ -666,6 +684,9 @@ export function evaluateHardenProjectPackagingBlocks(
     blockingJsHydrateDump,
     blockingWasmXorMask,
     blockingWasmSealXor,
+    blockingPlaintextSecrets,
+    blockingIntegrityCoverage,
+    blockingBindScope,
   };
 }
 

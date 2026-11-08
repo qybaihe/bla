@@ -33,6 +33,18 @@ describe("CLI flag validation", () => {
     expect(parseCliArgs(["--seed", "abc"]).argErrors).toEqual([]);
   });
 
+  it("parses packaging gate override flags", () => {
+    const parsed = parseCliArgs([
+      "--allow-plaintext-string",
+      "--allow-single-point-integrity",
+      "--allow-missing-bind-runtime",
+    ]);
+    expect(parsed.argErrors).toEqual([]);
+    expect(parsed.allowPlaintextString).toBe(true);
+    expect(parsed.allowSinglePointIntegrity).toBe(true);
+    expect(parsed.allowMissingBindRuntime).toBe(true);
+  });
+
   it("returns exit code 1 for invalid flags and 0 for --help", async () => {
     await expect(runCli(["--fail-under", "-1", "protect", "x"])).resolves.toBe(1);
     await expect(runCli(["--help", "--fail-under", "-1"])).resolves.toBe(0);

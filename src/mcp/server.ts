@@ -834,6 +834,14 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Treat cleartext sensitive literals as non-blocking (lab only)",
         },
+        allow_single_point_integrity: {
+          type: "boolean",
+          description: "Treat single-point integrity coverage as non-blocking (lab only)",
+        },
+        allow_missing_bind_runtime: {
+          type: "boolean",
+          description: "Treat missing/narrow bind runtime scope as non-blocking (lab only)",
+        },
       },
       additionalProperties: false,
     },
@@ -1518,6 +1526,12 @@ function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesRep
       : {}),
     ...(args.allow_plaintext_string === true
       ? { allowPlaintextString: true }
+      : {}),
+    ...(args.allow_single_point_integrity === true
+      ? { allowSinglePointIntegrity: true }
+      : {}),
+    ...(args.allow_missing_bind_runtime === true
+      ? { allowMissingBindRuntime: true }
       : {}),
   });
 }

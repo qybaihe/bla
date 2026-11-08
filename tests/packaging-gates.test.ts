@@ -68,4 +68,26 @@ module.exports = { check };
     expect(report.findings.some((f) => f.gate === "lane-independence")).toBe(true);
     expect(report.shouldRefuseBankrupt).toBe(true);
   });
+
+  it("evaluates plaintext-secret and bind-scope blocks in evaluateHardenProjectPackagingBlocks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-pg-r8-r10-"));
+    mkdirSync(dir, { recursive: true });
+    // Plant a plaintext secret in a license file
+    writeFileSync(
+      join(dir, "license.js"),
+      'const secret = "FLAG{bla_v8_demo_fixture_secret_key}";\nmodule.exports = { secret };',
+    );
+    const blocked = evaluateHardenProjectPackagingBlocks({
+      directory: dir,
+      intensity: "bankrupt",
+    });
+    expect(blocked.blockingPlaintextSecrets.length).toBeGreaterThan(0);
+
+    const allowed = evaluateHardenProjectPackagingBlocks({
+      directory: dir,
+      intensity: "bankrupt",
+      allowPlaintextString: true,
+    });
+    expect(allowed.blockingPlaintextSecrets).toEqual([]);
+  });
 });

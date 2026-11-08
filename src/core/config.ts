@@ -41,6 +41,12 @@ export interface BlaProjectConfig {
   readonly allowWasmXorMaskSidecar?: boolean;
   /** When true, allow bankrupt despite seal.revision XOR known-plaintext packs (red-blue round-7). Default false. */
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** When true, allow bankrupt despite plaintext strings/secrets (R8). Default false. */
+  readonly allowPlaintextString?: boolean;
+  /** When true, allow bankrupt despite single-point integrity coverage (R9). Default false. */
+  readonly allowSinglePointIntegrity?: boolean;
+  /** When true, allow bankrupt despite narrow/missing bind runtime scope (R10). Default false. */
+  readonly allowMissingBindRuntime?: boolean;
 }
 
 /**
@@ -91,6 +97,9 @@ const BOOLEAN_CONFIG_KEYS = [
   "allowJsWasmHydrateDump",
   "allowWasmXorMaskSidecar",
   "allowWasmSealXorKnownPlaintext",
+  "allowPlaintextString",
+  "allowSinglePointIntegrity",
+  "allowMissingBindRuntime",
 ] as const;
 
 /**
