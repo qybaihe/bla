@@ -27,6 +27,7 @@ jobs:
             website/showcase/index.html \
             website/guides/index.html \
             website/faq/index.html \
+            website/enterprise/index.html \
             website/assets/styles.css \
             website/assets/main.js \
             website/assets/i18n.js \
