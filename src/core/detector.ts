@@ -216,7 +216,11 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   if ([".html", ".htm"].includes(ext)) return "html-bundle";
   if ([".py", ".pyw"].includes(ext)) return "python-source";
   if (ext === ".wasm") return "wasm";
-  if ([".sqlite", ".sqlite3", ".db"].includes(ext)) return "sqlite";
+  // No extension fallback for SQLite: a `.db`/`.sqlite` file without the
+  // `SQLite format 3\0` magic is not a database (app runtime outputs use the
+  // extension too), and routing it to the SQLite shield aborts a whole
+  // directory defend. Real databases are caught by the magic check above,
+  // whatever the file is named.
   if (ext === ".gguf") return "model-gguf";
   if (ext === ".dex") return "android-dex";
   if ([".plist", ".entitlements", ".mobileprovision"].includes(ext)) return "apple-plist";

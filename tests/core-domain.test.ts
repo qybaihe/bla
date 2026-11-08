@@ -25,15 +25,23 @@ describe("core domain modules previously without dedicated tests", () => {
       const py = path.join(dir, "app.py");
       const wasm = path.join(dir, "core.wasm");
       const sqlite = path.join(dir, "db.sqlite");
+      const realDb = path.join(dir, "real.db");
+      const fakeDb = path.join(dir, "trial.db");
       const missing = path.join(dir, "nope.xyz");
       fs.writeFileSync(py, "x = 1\n", "utf8");
       fs.writeFileSync(wasm, Buffer.from([0x00, 0x61, 0x73, 0x6d]), "utf8");
       fs.writeFileSync(sqlite, Buffer.from("SQLite format 3\0"), "utf8");
+      fs.writeFileSync(realDb, Buffer.from("SQLite format 3\0"), "utf8");
+      // A .db file without the SQLite magic is not a database: it must not
+      // route to the SQLite shield, or a directory defend aborts on it.
+      fs.writeFileSync(fakeDb, Buffer.from("7b2273746172746564223a747275657d", "utf8"));
       fs.mkdirSync(path.join(dir, "sub"));
 
       expect(detectArtifactFormat(py)).toBe("python-source");
       expect(detectArtifactFormat(wasm)).toBe("wasm");
       expect(detectArtifactFormat(sqlite)).toBe("sqlite");
+      expect(detectArtifactFormat(realDb)).toBe("sqlite");
+      expect(detectArtifactFormat(fakeDb)).toBe("unknown");
       expect(detectArtifactFormat(missing)).toBe("unknown");
       expect(detectArtifactFormat(path.join(dir, "sub"))).toBe("directory");
     });

@@ -54,4 +54,28 @@ describe("directory protection reports child failures instead of copying unprote
     expect(result.detectedFormat).toBe("directory");
     expect(readFileSync(join(output, "notes.txt"), "utf8")).toBe("plain text asset");
   });
+
+  it("copies a .db file without the SQLite magic through instead of aborting the defend", () => {
+    const dir = createTempDir();
+    const input = join(dir, "in");
+    const output = join(dir, "out");
+    mkdirSync(input, { recursive: true });
+    writeFileSync(join(input, "app.js"), "const x = 1;\n", "utf8");
+    // A runtime output file that happens to end in .db, not a database:
+    // hex-encoded JSON, like an app's first-run state file.
+    const runtimeDb = Buffer.from(
+      JSON.stringify({ started: true, runs: 1 }).split("").map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join(""),
+      "utf8",
+    );
+    writeFileSync(join(input, "trial.db"), runtimeDb);
+
+    const result = protectTarget({
+      inputPath: input,
+      outputPath: output,
+      intensity: "balanced",
+    });
+
+    expect(result.detectedFormat).toBe("directory");
+    expect(readFileSync(join(output, "trial.db"))).toEqual(runtimeDb);
+  });
 });
