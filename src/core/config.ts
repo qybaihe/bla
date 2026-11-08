@@ -22,6 +22,8 @@ export interface BlaProjectConfig {
   readonly selfSeal?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). Parity with CLI `--sidecar-entangle` / MCP `sidecar_entangle`. */
   readonly sidecarEntangle?: boolean;
+  /** Enforce Agent-First Closed-Loop: refuse hardening if source files lack verified Stage 2 surgical weave. */
+  readonly requireAgentWeave?: boolean;
   /** WASM export names that must remain the public ABI when export rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
   /** When true, allow harden/defend of lane-independent JS gates (issue #40.1). Default false. */
@@ -82,6 +84,8 @@ const BOOLEAN_CONFIG_KEYS = [
   "honeySourceMaps",
   "weaveDecoys",
   "selfSeal",
+  "sidecarEntangle",
+  "requireAgentWeave",
   "allowLaneIndependentGates",
   "allowPlaintextSeal",
   "allowWasmClearParamCarriers",
@@ -262,7 +266,7 @@ export function resolveProjectSeed(
   let targetPath: string;
   if (loaded.sourcePath && !loaded.sourcePath.endsWith("package.json")) {
     targetPath = loaded.sourcePath;
-    const existing = JSON.parse(readFileSync(targetPath, "utf8")) as BlaProjectConfig;
+    const existing = readConfigFile(targetPath);
     persistSeed(targetPath, seed, existing);
   } else {
     targetPath = join(root, ".blarc");
@@ -280,7 +284,7 @@ export function initBlaConfig(
 ): { configPath: string; created: boolean; config: BlaProjectConfig } {
   const configPath = join(resolve(targetDir), "bla.config.json");
   if (existsSync(configPath) && !overwrite) {
-    const existing = JSON.parse(readFileSync(configPath, "utf8")) as BlaProjectConfig;
+    const existing = readConfigFile(configPath);
     const merged = { ...DEFAULT_BLA_CONFIG, ...existing };
     if (!isUsableSeed(merged.seed)) {
       const seed = generateProjectSeed();

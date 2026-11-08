@@ -5,8 +5,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
+import { physicalPath } from "../core/output-path.js";
 import { walkBounded } from "../core/walk.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
@@ -336,6 +337,7 @@ function collectRootArtifacts(
   projectRoot: string,
   maxArtifacts: number,
   skipDirs: ReadonlySet<string>,
+  excludeDir?: string,
 ): DiscoveredArtifact[] {
   const formats = new Map<string, ArtifactFormat>();
   const files = walkBounded(root, {
@@ -346,6 +348,9 @@ function collectRootArtifacts(
     // Locale-independent name sort so offset paging is stable across platforms.
     sortEntries: true,
     accept: (full, name) => {
+      if (excludeDir && (full === excludeDir || full.startsWith(excludeDir + sep))) {
+        return false;
+      }
       const format = detectArtifactFormat(full);
       if (!isProtectableFormat(format)) return false;
       // Skip already-shielded outputs to avoid re-hardening loops.
@@ -373,7 +378,7 @@ function collectRootArtifacts(
  */
 export function discoverHardenableArtifacts(
   directory: string = process.cwd(),
-  options: { readonly maxArtifacts?: number; readonly offset?: number } = {},
+  options: { readonly maxArtifacts?: number; readonly offset?: number; readonly outputDirectory?: string } = {},
 ): readonly DiscoveredArtifact[] {
   return discoverHardenTargets(directory, options).artifacts;
 }
@@ -387,13 +392,14 @@ export function discoverHardenableArtifacts(
  */
 export function discoverHardenTargets(
   directory: string = process.cwd(),
-  options: { readonly maxArtifacts?: number; readonly offset?: number } = {},
+  options: { readonly maxArtifacts?: number; readonly offset?: number; readonly outputDirectory?: string } = {},
 ): HardenDiscoveryResult {
   const abs = resolve(directory);
   const maxArtifacts = Math.max(1, Math.floor(options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const excludeDir = options.outputDirectory ? resolve(options.outputDirectory) : undefined;
   // Collect one past the page end so truncated/nextOffset stay honest.
-  const all = collectHardenableArtifacts(abs, offset + maxArtifacts + 1);
+  const all = collectHardenableArtifacts(abs, offset + maxArtifacts + 1, excludeDir);
   const page = all.slice(offset, offset + maxArtifacts);
   const truncated = all.length > offset + maxArtifacts;
   return {
@@ -409,6 +415,7 @@ export function discoverHardenTargets(
 function collectHardenableArtifacts(
   abs: string,
   maxArtifacts: number,
+  excludeDir?: string,
 ): readonly DiscoveredArtifact[] {
   if (!existsSync(abs)) {
     throw new Error(`Path not found: ${abs}`);
@@ -430,11 +437,11 @@ function collectHardenableArtifacts(
   for (const root of preferred) {
     const remaining = maxArtifacts - found.length;
     if (remaining <= 0) break;
-    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES));
+    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES, excludeDir));
   }
   if (includeProjectRootSupplemental && found.length < maxArtifacts) {
     found.push(
-      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES),
+      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES, excludeDir),
     );
   }
   // De-dupe by absolute path (cargo release may overlap target/)
@@ -473,8 +480,37 @@ export function hardenProject(
   }
   const maxArtifacts = options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS;
 
+  const outputRoot = resolve(
+    options.outputDirectory ??
+      (existsSync(absDir) && statSync(absDir).isDirectory()
+        ? join(absDir, ".bla-hardened")
+        : join(dirname(absDir), ".bla-hardened")),
+  );
+
+  if (options.outputDirectory) {
+    if (existsSync(absDir)) {
+      const physSrc = physicalPath(absDir);
+      const physOut = physicalPath(outputRoot);
+      if (physSrc === physOut) {
+        throw new Error(
+          "Output directory must not be the input directory; in-place project hardening is not supported.",
+        );
+      }
+    }
+    const relFromProject = relative(absDir, outputRoot);
+    const checkSegments =
+      !isAbsolute(relFromProject) && !relFromProject.startsWith("..")
+        ? relFromProject.split(/[\\/]+/).filter(Boolean)
+        : [basename(outputRoot)];
+    for (const seg of checkSegments) {
+      if (seg === ".git" || seg === "node_modules" || seg === ".hg" || seg === ".svn") {
+        throw new Error(`Refusing to use protected directory as output: ${outputRoot}`);
+      }
+    }
+  }
+
   const dryRun = options.dryRun === true;
-  const discovery = discoverHardenTargets(absDir, { maxArtifacts });
+  const discovery = discoverHardenTargets(absDir, { maxArtifacts, outputDirectory: outputRoot });
   const discovered = discovery.artifacts;
 
   const packagingBlocks = evaluateHardenProjectPackagingBlocks({
@@ -493,12 +529,6 @@ export function hardenProject(
   const blockingJsHydrateDump = packagingBlocks.blockingJsHydrateDump;
   const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
   const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
-  const outputRoot = resolve(
-    options.outputDirectory ??
-      (statSync(absDir).isDirectory()
-        ? join(absDir, ".bla-hardened")
-        : join(dirname(absDir), ".bla-hardened")),
-  );
   let plannedOutputs = discovered.map((artifact) => {
     const outputPath = planArtifactOutputPath(artifact, outputRoot);
     return { artifact, outputPath, outputExisted: existsSync(outputPath) };

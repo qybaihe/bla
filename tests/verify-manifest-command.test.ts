@@ -84,4 +84,41 @@ describe("bla verify-manifest", () => {
     writeFileSync(manifestPath, JSON.stringify({ a: 1 }), "utf8");
     await expect(runCli(["verify-manifest", manifestPath, "--json"])).resolves.toBe(2);
   });
+
+  it("verifies adjacent file artifact SHA-256 and detects post-sign artifact tampering", async () => {
+    const dir = createTempDir();
+    const pair = generateManifestSigningKeyPair();
+    const artifactPath = join(dir, "bundle.shielded.js");
+    const manifestPath = `${artifactPath}.bla-manifest.json`;
+    const publicKeyPath = join(dir, "public.pem");
+    const content = "const x = 42;\n";
+    writeFileSync(artifactPath, content, "utf8");
+    const { createHash } = await import("node:crypto");
+    const sha = createHash("sha256").update(content).digest("hex");
+    const signed = signManifestPayload(
+      {
+        schema: "https://bla.tools/schemas/defense-manifest-v1.json",
+        blaVersion: "3.1.0",
+        protectedSha256: sha,
+      },
+      pair.privateKeyPem,
+    );
+    writeFileSync(manifestPath, JSON.stringify(signed, null, 2), "utf8");
+    writeFileSync(publicKeyPath, pair.publicKeyPem, "utf8");
+
+    const okRes = verifyManifestFile(manifestPath, publicKeyPath);
+    expect(okRes).toMatchObject({
+      ok: true,
+      signed: true,
+      pinned: true,
+      artifactVerified: true,
+    });
+
+    // Tamper with the artifact without changing the signed manifest
+    writeFileSync(artifactPath, "const x = 999;\n", "utf8");
+    const badRes = verifyManifestFile(manifestPath, publicKeyPath);
+    expect(badRes.ok).toBe(false);
+    expect(badRes.artifactVerified).toBe(false);
+    expect(badRes.reason).toMatch(/artifact SHA-256 mismatch/);
+  });
 });

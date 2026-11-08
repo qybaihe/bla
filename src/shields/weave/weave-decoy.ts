@@ -1441,6 +1441,11 @@ function walkWeaveCandidateFiles(
       if (/\.shielded(\.|$)/i.test(ent.name)) continue;
       const ext = extname(ent.name).toLowerCase();
       if (INTERESTING_EXT.has(ext) || ent.name === "global-metadata.dat") {
+        // Generic `.db` files may be non-SQLite runtime state (#130); only include
+        // them as weave candidates when format detection recognizes them.
+        if (ext === ".db" && detectArtifactFormat(full) === "unknown") {
+          continue;
+        }
         out.push(full);
       }
     }

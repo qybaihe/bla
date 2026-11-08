@@ -10,6 +10,8 @@
  * MCP: bla_encrypt_strings.
  */
 
+import { parse } from "@babel/parser";
+import _traverse from "@babel/traverse";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -26,6 +28,13 @@ import {
   extractStringLiterals,
   lintPlaintextSecretsSource,
 } from "./plaintext-secret-lint.js";
+
+type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
+type TraverseFn = UnwrapDefault<typeof _traverse>;
+const traverse: TraverseFn =
+  typeof _traverse === "function"
+    ? (_traverse as unknown as TraverseFn)
+    : (_traverse as unknown as { readonly default: TraverseFn }).default;
 
 export const ENCRYPT_STRINGS_SCHEMA = "bla-encrypt-strings/v1" as const;
 
@@ -213,30 +222,127 @@ function shouldEncrypt(lit: string, includeUrls: boolean): boolean {
   return true;
 }
 
-function replaceLiteralsInJs(
-  source: string,
-  replacements: Map<string, string>,
-): { readonly code: string; readonly count: number } {
-  let count = 0;
-  const keys = [...replacements.keys()].sort((a, b) => b.length - a.length);
-  let code = source;
-  for (const lit of keys) {
-    const call = replacements.get(lit)!;
-    const patterns = [
-      JSON.stringify(lit),
-      `'${lit.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`,
-      `"${lit.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-    ];
-    for (const p of patterns) {
-      if (!code.includes(p)) continue;
-      const parts = code.split(p);
-      if (parts.length > 1) {
-        count += parts.length - 1;
-        code = parts.join(call);
-      }
+interface LiteralSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly value: string;
+}
+
+function isNonReplaceableStringPosition(path: {
+  readonly node: unknown;
+  readonly parent: unknown;
+  readonly parentPath?: { readonly parent: unknown } | null;
+}): boolean {
+  const node = path.node as Record<string, unknown>;
+  const parent = path.parent as Record<string, unknown> | null | undefined;
+  if (!parent) return false;
+  const pType = parent.type;
+
+  // Module specifiers in import / export declarations
+  if (
+    (pType === "ImportDeclaration" ||
+      pType === "ExportAllDeclaration" ||
+      pType === "ExportNamedDeclaration") &&
+    parent.source === node
+  ) {
+    return true;
+  }
+  if (pType === "ImportAttribute") {
+    return true;
+  }
+  // TypeScript literal types or module references
+  if (
+    pType === "TSLiteralType" ||
+    pType === "TSExternalModuleReference" ||
+    pType === "TSImportType"
+  ) {
+    return true;
+  }
+  // Non-computed object / class keys or destructuring pattern keys
+  if (
+    (pType === "ObjectProperty" ||
+      pType === "ObjectMethod" ||
+      pType === "ClassProperty" ||
+      pType === "ClassMethod" ||
+      pType === "TSPropertySignature" ||
+      pType === "TSMethodSignature") &&
+    parent.key === node &&
+    parent.computed !== true
+  ) {
+    return true;
+  }
+  if (pType === "ObjectProperty" && path.parentPath?.parent) {
+    const grand = path.parentPath.parent as Record<string, unknown>;
+    if (grand.type === "ObjectPattern") return true;
+  }
+  // CommonJS require("...") or dynamic import("...")
+  if (pType === "CallExpression") {
+    const callee = parent.callee as Record<string, unknown> | undefined;
+    const args = parent.arguments as unknown[] | undefined;
+    if (
+      args?.[0] === node &&
+      (callee?.type === "Import" ||
+        (callee?.type === "Identifier" && callee.name === "require"))
+    ) {
+      return true;
     }
   }
-  return { code, count };
+  return false;
+}
+
+function collectJsLiteralSpans(source: string): LiteralSpan[] {
+  try {
+    const ast = parse(source, {
+      sourceType: "unambiguous",
+      allowReturnOutsideFunction: true,
+      allowImportExportEverywhere: true,
+      allowSuperOutsideMethod: true,
+      plugins: ["typescript", "jsx", "decorators-legacy"],
+    });
+    const spans: LiteralSpan[] = [];
+    traverse(ast, {
+      StringLiteral(path) {
+        if (isNonReplaceableStringPosition(path)) return;
+        const { start, end, value } = path.node;
+        if (typeof start === "number" && typeof end === "number") {
+          spans.push({ start, end, value });
+        }
+      },
+      TemplateLiteral(path) {
+        if (
+          path.parent.type === "TaggedTemplateExpression" ||
+          path.node.expressions.length > 0 ||
+          path.node.quasis.length !== 1 ||
+          isNonReplaceableStringPosition(path)
+        ) {
+          return;
+        }
+        const quasi = path.node.quasis[0];
+        const { start, end } = path.node;
+        const value = quasi?.value.cooked ?? quasi?.value.raw ?? "";
+        if (typeof start === "number" && typeof end === "number") {
+          spans.push({ start, end, value });
+        }
+      },
+    });
+    spans.sort((a, b) => a.start - b.start);
+    return spans;
+  } catch {
+    // Fallback for non-standard script fragments: match quote/backtick literals while skipping comments
+    const spans: LiteralSpan[] = [];
+    const tokenRe =
+      /\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\$]|\$(?!\{))*`/g;
+    let m: RegExpExecArray | null;
+    while ((m = tokenRe.exec(source)) !== null) {
+      const raw = m[0]!;
+      if (raw.startsWith("//") || raw.startsWith("/*")) continue;
+      const [decoded] = extractStringLiterals(raw);
+      if (decoded !== undefined) {
+        spans.push({ start: m.index, end: m.index + raw.length, value: decoded });
+      }
+    }
+    return spans;
+  }
 }
 
 function transformJsSource(
@@ -248,20 +354,28 @@ function transformJsSource(
   readonly encrypted: string[];
   readonly skipped: number;
 } {
-  const literals = extractStringLiterals(source);
+  // Never re-encrypt a file that already carries the _blaS decrypt stub
+  if (source.includes("var _blaS=") && source.includes("var _blaT=")) {
+    return { code: source, encrypted: [], skipped: 0 };
+  }
+
+  const spans = collectJsLiteralSpans(source);
+  const replaceable: LiteralSpan[] = [];
   const unique: string[] = [];
   const seen = new Set<string>();
   let skipped = 0;
-  for (const lit of literals) {
-    if (!shouldEncrypt(lit, includeUrls)) {
+  for (const span of spans) {
+    if (!shouldEncrypt(span.value, includeUrls)) {
       skipped += 1;
       continue;
     }
-    if (seen.has(lit)) continue;
-    seen.add(lit);
-    unique.push(lit);
+    replaceable.push(span);
+    if (!seen.has(span.value)) {
+      seen.add(span.value);
+      unique.push(span.value);
+    }
   }
-  if (unique.length === 0) {
+  if (unique.length === 0 || replaceable.length === 0) {
     return { code: source, encrypted: [], skipped };
   }
 
@@ -276,14 +390,20 @@ function transformJsSource(
   const ksName = prng.identifier({ style: "camel", hint: "blaK", entropy: 3 });
   const stub = buildRuntimeStub(table, keystream, fnName, tableName, ksName);
 
-  const replacements = new Map<string, string>();
+  const indexByLiteral = new Map<string, number>();
   unique.forEach((lit, i) => {
-    replacements.set(lit, `${fnName}(${i})`);
+    indexByLiteral.set(lit, i);
   });
-  const { code: body, count } = replaceLiteralsInJs(source, replacements);
-  if (count === 0) {
-    return { code: source, encrypted: [], skipped };
+
+  // Splice AST spans in reverse order so earlier offsets stay valid.
+  let body = source;
+  const descending = [...replaceable].sort((a, b) => b.start - a.start);
+  for (const span of descending) {
+    const idx = indexByLiteral.get(span.value);
+    if (idx === undefined) continue;
+    body = `${body.slice(0, span.start)}${fnName}(${idx})${body.slice(span.end)}`;
   }
+
   // Keep shebang / "use strict" at the very top so Node can still execute the file.
   const shebangMatch = body.match(/^#![^\n]*\n/);
   const shebang = shebangMatch ? shebangMatch[0] : "";

@@ -25,15 +25,21 @@ describe("core domain modules previously without dedicated tests", () => {
       const py = path.join(dir, "app.py");
       const wasm = path.join(dir, "core.wasm");
       const sqlite = path.join(dir, "db.sqlite");
+      const sqliteDb = path.join(dir, "db-with-magic.db");
+      const opaqueDb = path.join(dir, "runtime-output.db");
       const missing = path.join(dir, "nope.xyz");
       fs.writeFileSync(py, "x = 1\n", "utf8");
       fs.writeFileSync(wasm, Buffer.from([0x00, 0x61, 0x73, 0x6d]), "utf8");
       fs.writeFileSync(sqlite, Buffer.from("SQLite format 3\0"), "utf8");
+      fs.writeFileSync(sqliteDb, Buffer.from("SQLite format 3\0"), "utf8");
+      fs.writeFileSync(opaqueDb, "not a database\n", "utf8");
       fs.mkdirSync(path.join(dir, "sub"));
 
       expect(detectArtifactFormat(py)).toBe("python-source");
       expect(detectArtifactFormat(wasm)).toBe("wasm");
       expect(detectArtifactFormat(sqlite)).toBe("sqlite");
+      expect(detectArtifactFormat(sqliteDb)).toBe("sqlite");
+      expect(detectArtifactFormat(opaqueDb)).toBe("unknown");
       expect(detectArtifactFormat(missing)).toBe("unknown");
       expect(detectArtifactFormat(path.join(dir, "sub"))).toBe("directory");
     });

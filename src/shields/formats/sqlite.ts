@@ -233,11 +233,22 @@ function snapshotBusinessTables(
   const digests: BusinessTableDigest[] = [];
   for (const { name } of tables) {
     if (isHoneyTableName(name)) continue;
-    const rows = db
-      .prepare(`SELECT * FROM ${quoteIdentifier(name)} ORDER BY rowid`)
-      .all();
+    let rows: unknown[];
+    try {
+      rows = db
+        .prepare(`SELECT * FROM ${quoteIdentifier(name)} ORDER BY rowid`)
+        .all();
+    } catch {
+      rows = db
+        .prepare(`SELECT * FROM ${quoteIdentifier(name)}`)
+        .all();
+    }
     const hash = createHash("sha256")
-      .update(JSON.stringify(rows))
+      .update(
+        JSON.stringify(rows, (_k, v) =>
+          typeof v === "bigint" ? v.toString() : v,
+        ),
+      )
       .digest("hex");
     digests.push({
       name,

@@ -24,25 +24,5 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Verify required pages and assets exist
-        run: |
-          for f in \
-            website/index.html \
-            website/get-started/index.html \
-            website/showcase/index.html \
-            website/guides/index.html \
-            website/faq/index.html \
-            website/enterprise/index.html \
-            website/assets/styles.css \
-            website/assets/main.js \
-            website/assets/i18n.js \
-            website/assets/home.js \
-            website/assets/logo.png \
-            website/assets/favicon.png \
-            website/assets/favicon.svg \
-            website/assets/social-card.svg \
-            website/schemas/defense-manifest-v1.json \
-            website/schemas/bla.config.v1.json; do
-            test -f "$f" || (echo "Missing required website file: $f" && exit 1)
-          done
-          echo "All website pages and assets verified."
+      - name: Verify website pages, CSP headers, assets, and internal links
+        run: node scripts/verify-website.mjs
