@@ -6,62 +6,74 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>Benchmarks — BLA (bla-agents)</title>
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../assets/styles.css" />
   </head>
   <body>
     <noscript>
       <style>
         @media (max-width: 1023px) {
-          .nav-toggle { display: none !important; }
-          .nav-panel {
-            display: flex !important;
-            position: static !important;
-            flex-direction: column;
-            background: transparent;
-            box-shadow: none;
-          }
-          .nav-bar { height: auto !important; min-height: 64px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
-          .nav-links { flex-wrap: wrap; }
+          .links { display: flex !important; flex-wrap: wrap; }
+          .pop.menu { display: none !important; }
+          .nav-box { height: auto; min-height: 56px; flex-wrap: wrap; padding: 12px 14px; }
         }
       </style>
     </noscript>
-    <header class="site-header">
-      <div class="container nav-bar">
-        <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+    <header class="nav intro" style="--d: 80ms">
+      <div class="nav-box">
+        <a class="brand" href="../">
+          <img src="../assets/logo.png" alt="BLA Shield Logo" width="32" height="32" />
           <span>BLA</span>
         </a>
-        <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
-          <span class="nav-toggle-icon" aria-hidden="true"></span>
-          <span class="visually-hidden">Menu</span>
-        </button>
-        <div class="nav-panel" id="site-nav">
-        <nav class="nav-links" data-i18n-attr="aria-label:nav.primary">
-          <a href="../" class="nav-link" data-i18n="nav.overview">Overview</a>
-          <a href="../get-started/" class="nav-link" data-i18n="nav.getStarted">Get Started</a>
-          <a href="./" class="nav-link active" data-i18n="nav.showcase">Benchmarks</a>
-          <a href="../crackme/" class="nav-link" data-i18n="nav.crackme">CrackMe</a>
-          <a href="../guides/" class="nav-link" data-i18n="nav.guides">Guides</a>
-          <a href="../faq/" class="nav-link" data-i18n="nav.faq">FAQ</a>
-          <a href="../enterprise/" class="nav-link" data-i18n="nav.enterprise">Enterprise</a>
+        <nav class="links" aria-label="Site" data-i18n-attr="aria-label:nav.primary">
+          <a href="../index.html" data-i18n="nav.overview">Overview</a>
+          <a href="../get-started/index.html" data-i18n="nav.getStarted">Get Started</a>
+          <a href="../showcase/index.html" class="active" data-i18n="nav.showcase">Benchmarks</a>
+          <a href="../crackme/index.html" data-i18n="nav.crackme">CrackMe</a>
+          <a href="../guides/index.html" data-i18n="nav.guides">Guides</a>
+          <a href="../faq/index.html" data-i18n="nav.faq">FAQ</a>
+          <a href="../enterprise/index.html" data-i18n="nav.enterprise">Enterprise</a>
         </nav>
-        <div class="nav-actions">
-          <select id="bla-lang-select" class="lang-select" aria-label="Select Language" data-i18n-attr="aria-label:nav.lang">
-            <option value="en">🌐 English</option>
-            <option value="zh-CN">🌐 简体中文</option>
-            <option value="zh-TW">🌐 繁體中文</option>
-            <option value="ja">🌐 日本語</option>
-            <option value="ko">🌐 한국어</option>
-            <option value="es">🌐 Español</option>
-            <option value="fr">🌐 Français</option>
-            <option value="de">🌐 Deutsch</option>
-          </select>
-          <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
-            <span>★</span>
-            <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars data-state="loading">—</span>
+        <div class="nav-right">
+          <details class="pop lang">
+            <summary aria-label="Language">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm-9 9h18M12 3c2.6 2.4 3.9 5.4 3.9 9S14.6 18.6 12 21M12 3C9.4 5.4 8.1 8.4 8.1 12s1.3 6.6 3.9 9"></path></svg>
+              <span class="lang-name">English</span>
+              <svg class="chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m4 6 4 4 4-4"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" data-lang="en" aria-current="true">English</a>
+              <a role="menuitem" data-lang="id">Bahasa Indonesia</a>
+              <a role="menuitem" data-lang="zh-CN">简体中文</a>
+              <a role="menuitem" data-lang="zh-TW">繁體中文</a>
+              <a role="menuitem" data-lang="ja">日本語</a>
+              <a role="menuitem" data-lang="ko">한국어</a>
+              <a role="menuitem" data-lang="es">Español</a>
+              <a role="menuitem" data-lang="fr">Français</a>
+              <a role="menuitem" data-lang="de">Deutsch</a>
+            </div>
+          </details>
+          <a class="star" href="https://github.com/qybaihe/bla" title="Star BLA on GitHub" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+            <span class="star-label">Star</span>
+            <span class="star-count" data-gh-stars data-state="loading">—</span>
           </a>
-        </div>
+          <details class="pop menu">
+            <summary aria-label="Menu">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" href="../index.html">Overview</a>
+              <a role="menuitem" href="../get-started/index.html">Get Started</a>
+              <a role="menuitem" href="../showcase/index.html">Benchmarks</a>
+              <a role="menuitem" href="../crackme/index.html">CrackMe</a>
+              <a role="menuitem" href="../guides/index.html">Guides</a>
+              <a role="menuitem" href="../faq/index.html">FAQ</a>
+              <a role="menuitem" href="../enterprise/index.html">Enterprise</a>
+            </div>
+          </details>
         </div>
       </div>
     </header>
@@ -77,92 +89,68 @@
             </p>
           </div>
 
-          <div class="grid-2">
-            <div class="card">
-              <span class="card-tag">Target 01 · Electron .asar</span>
-              <h3>Notion Desktop Clipboard Bridge</h3>
-              <p>
-                <strong>Baseline:</strong> Analyzed in 38s ($0.20).<br />
-                <strong>Protected:</strong> IPC de-literalized + 22 obligation families + shadow logic → <strong>41.3x token ratio ($14.88)</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• ipcChannelsPairedUniquely: 0
+          <div class="mu-grid">
+            <div class="mu-item">
+              <h3>Electron .asar</h3>
+              <p>Notion Desktop Clipboard Bridge — IPC de-literalized + 22 obligation families + shadow logic. <strong>41.3× token ratio ($14.88)</strong> vs baseline 38s ($0.20).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• ipcChannelsPairedUniquely: 0
 • triggeredLimits: ["alias-selections", "primitive-candidates", "primitive-bytes", "getter-expansion"]
 • runtimeEquivalence: 100% Exact</div>
               </details>
             </div>
 
-            <div class="card">
-              <span class="card-tag">Target 02 · JavaScript Audio/Physics</span>
-              <h3>DX-Ball Stereo Sound-Pan Engine</h3>
-              <p>
-                <strong>Baseline:</strong> Analyzed in 22s ($0.13).<br />
-                <strong>Protected:</strong> 9-chunk opaque ternaries + 40-node SCC mesh → <strong>49.2x token ratio ($11.45)</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• primitiveCandidateBranches: 512 (> 256 limit)
+            <div class="mu-item">
+              <h3>JavaScript Audio / Physics</h3>
+              <p>DX-Ball Stereo Sound-Pan Engine — 9-chunk opaque ternaries + 40-node SCC mesh. <strong>49.2× token ratio ($11.45)</strong> vs baseline 22s ($0.13).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• primitiveCandidateBranches: 512 (> 256 limit)
 • sccLabyrinthEdges: 160
 • runtimeEquivalence: calculateSoundPan(160, 640) === -0.5</div>
               </details>
             </div>
 
-            <div class="card">
-              <span class="card-tag">Target 03 · Native ELF64 / Mach-O / PE</span>
-              <h3>Enterprise License &amp; Fuse Daemon</h3>
-              <p>
-                <strong>Baseline:</strong> Crates &amp; fuses extracted in 45s.<br />
-                <strong>Protected:</strong> 72 rustc hashes (&gt;64 limit) + 33 fuse sentinels (&gt;32 limit) → <strong>Parser Limit Reached</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• RustBinaryProvider: exceeds MAX_RUSTC_HASHES (64)
+            <div class="mu-item">
+              <h3>Native ELF64 / Mach-O / PE</h3>
+              <p>Enterprise License &amp; Fuse Daemon — 72 rustc hashes (&gt;64 limit) + 33 fuse sentinels (&gt;32 limit). <strong>Parser Limit Reached</strong> vs baseline 45s ($0.27).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• RustBinaryProvider: exceeds MAX_RUSTC_HASHES (64)
 • ElectronFuseReader: exceeds maximumSentinelsPerSlice (32)
 • Native exports preserved: 100%</div>
               </details>
             </div>
 
-            <div class="card">
-              <span class="card-tag">Target 04 · SQLite &amp; AI Models</span>
-              <h3>.sqlite, .safetensors &amp; .gguf Vaults</h3>
-              <p>
-                <strong>Baseline:</strong> Schema &amp; tensor headers parsed in 19s.<br />
-                <strong>Protected:</strong> Virtual generated-column guard + 35-level metadata nesting → <strong>38.6x token ratio</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• SQLite: SqliteColumnEvaluationFailure on read-only connection
+            <div class="mu-item">
+              <h3>SQLite &amp; AI Models</h3>
+              <p>.sqlite, .safetensors &amp; .gguf Vaults — virtual generated-column guard + 35-level metadata nesting. <strong>38.6× token ratio</strong> vs baseline 19s ($0.11).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• SQLite: SqliteColumnEvaluationFailure on read-only connection
 • Safetensors/GGUF: ModelFormatFailure("capacity", >32 levels)
 • Existing GGUF KV &amp; tensors preserved: 100%</div>
               </details>
             </div>
 
-            <div class="card">
-              <span class="card-tag">Target 05 · WebAssembly &amp; Python</span>
-              <h3>.wasm Linear Memory &amp; .py / .pyc Modules</h3>
-              <p>
-                <strong>Baseline:</strong> Exports &amp; marshal constants extracted in 26s.<br />
-                <strong>Protected:</strong> WABT interface exhaustion + sidecar digest entanglement → <strong>36.4x token ratio</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• WasmInterfaceExhaustion: custom section + import/export descriptors expanded
+            <div class="mu-item">
+              <h3>WebAssembly &amp; Python</h3>
+              <p>.wasm linear memory &amp; .py / .pyc modules — WABT interface exhaustion + sidecar digest entanglement. <strong>36.4× token ratio</strong> vs baseline 26s ($0.11).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• WasmInterfaceExhaustion: custom section + import/export descriptors expanded
 • PythonSidecarEntangle: strip or tamper fails closed at startup
 • Runtime output equivalence: 100% Exact</div>
               </details>
             </div>
 
-            <div class="card">
-              <span class="card-tag">Target 06 · Mobile, Bytecode &amp; Firmware</span>
-              <h3>Android DEX / APK, Unity IL2CPP, BEAM &amp; EVM</h3>
-              <p>
-                <strong>Baseline:</strong> Class descriptors &amp; metadata tables indexed in 31s.<br />
-                <strong>Protected:</strong> Recomputed SHA-1/Adler32 DEX + IFF/UF2 decoy chunks → <strong>34.8x token ratio</strong>.
-              </p>
-              <details class="evidence-drawer">
-                <summary>View Verification Output</summary>
-                <div class="drawer-body">• AndroidDex: SHA-1 signature + Adler32 checksum verified
+            <div class="mu-item">
+              <h3>Mobile, Bytecode &amp; Firmware</h3>
+              <p>Android DEX / APK, Unity IL2CPP, BEAM &amp; EVM — recomputed SHA-1/Adler32 DEX + IFF/UF2 decoy chunks. <strong>34.8× token ratio</strong> vs baseline 31s ($0.13).</p>
+              <details class="mu-details">
+                <summary>Verification output</summary>
+                <div class="mu-details-body">• AndroidDex: SHA-1 signature + Adler32 checksum verified
 • Il2CppMetadata: decoy string &amp; type descriptors injected
 • Erlang BEAM / PCAP / PTX / UF2: container integrity 100% preserved</div>
               </details>

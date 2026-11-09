@@ -6,62 +6,74 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <title>FAQ — BLA (bla-agents)</title>
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../assets/styles.css" />
   </head>
   <body>
     <noscript>
       <style>
         @media (max-width: 1023px) {
-          .nav-toggle { display: none !important; }
-          .nav-panel {
-            display: flex !important;
-            position: static !important;
-            flex-direction: column;
-            background: transparent;
-            box-shadow: none;
-          }
-          .nav-bar { height: auto !important; min-height: 64px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
-          .nav-links { flex-wrap: wrap; }
+          .links { display: flex !important; flex-wrap: wrap; }
+          .pop.menu { display: none !important; }
+          .nav-box { height: auto; min-height: 56px; flex-wrap: wrap; padding: 12px 14px; }
         }
       </style>
     </noscript>
-    <header class="site-header">
-      <div class="container nav-bar">
-        <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+    <header class="nav intro" style="--d: 80ms">
+      <div class="nav-box">
+        <a class="brand" href="../">
+          <img src="../assets/logo.png" alt="BLA Shield Logo" width="32" height="32" />
           <span>BLA</span>
         </a>
-        <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
-          <span class="nav-toggle-icon" aria-hidden="true"></span>
-          <span class="visually-hidden">Menu</span>
-        </button>
-        <div class="nav-panel" id="site-nav">
-        <nav class="nav-links" data-i18n-attr="aria-label:nav.primary">
-          <a href="../" class="nav-link" data-i18n="nav.overview">Overview</a>
-          <a href="../get-started/" class="nav-link" data-i18n="nav.getStarted">Get Started</a>
-          <a href="../showcase/" class="nav-link" data-i18n="nav.showcase">Benchmarks</a>
-          <a href="../crackme/" class="nav-link" data-i18n="nav.crackme">CrackMe</a>
-          <a href="../guides/" class="nav-link" data-i18n="nav.guides">Guides</a>
-          <a href="./" class="nav-link active" data-i18n="nav.faq">FAQ</a>
-          <a href="../enterprise/" class="nav-link" data-i18n="nav.enterprise">Enterprise</a>
+        <nav class="links" aria-label="Site" data-i18n-attr="aria-label:nav.primary">
+          <a href="../index.html" data-i18n="nav.overview">Overview</a>
+          <a href="../get-started/index.html" data-i18n="nav.getStarted">Get Started</a>
+          <a href="../showcase/index.html" data-i18n="nav.showcase">Benchmarks</a>
+          <a href="../crackme/index.html" data-i18n="nav.crackme">CrackMe</a>
+          <a href="../guides/index.html" data-i18n="nav.guides">Guides</a>
+          <a href="../faq/index.html" class="active" data-i18n="nav.faq">FAQ</a>
+          <a href="../enterprise/index.html" data-i18n="nav.enterprise">Enterprise</a>
         </nav>
-        <div class="nav-actions">
-          <select id="bla-lang-select" class="lang-select" aria-label="Select Language" data-i18n-attr="aria-label:nav.lang">
-            <option value="en">🌐 English</option>
-            <option value="zh-CN">🌐 简体中文</option>
-            <option value="zh-TW">🌐 繁體中文</option>
-            <option value="ja">🌐 日本語</option>
-            <option value="ko">🌐 한국어</option>
-            <option value="es">🌐 Español</option>
-            <option value="fr">🌐 Français</option>
-            <option value="de">🌐 Deutsch</option>
-          </select>
-          <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
-            <span>★</span>
-            <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars data-state="loading">—</span>
+        <div class="nav-right">
+          <details class="pop lang">
+            <summary aria-label="Language">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm-9 9h18M12 3c2.6 2.4 3.9 5.4 3.9 9S14.6 18.6 12 21M12 3C9.4 5.4 8.1 8.4 8.1 12s1.3 6.6 3.9 9"></path></svg>
+              <span class="lang-name">English</span>
+              <svg class="chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m4 6 4 4 4-4"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" data-lang="en" aria-current="true">English</a>
+              <a role="menuitem" data-lang="id">Bahasa Indonesia</a>
+              <a role="menuitem" data-lang="zh-CN">简体中文</a>
+              <a role="menuitem" data-lang="zh-TW">繁體中文</a>
+              <a role="menuitem" data-lang="ja">日本語</a>
+              <a role="menuitem" data-lang="ko">한국어</a>
+              <a role="menuitem" data-lang="es">Español</a>
+              <a role="menuitem" data-lang="fr">Français</a>
+              <a role="menuitem" data-lang="de">Deutsch</a>
+            </div>
+          </details>
+          <a class="star" href="https://github.com/qybaihe/bla" title="Star BLA on GitHub" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+            <span class="star-label">Star</span>
+            <span class="star-count" data-gh-stars data-state="loading">—</span>
           </a>
-        </div>
+          <details class="pop menu">
+            <summary aria-label="Menu">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" href="../index.html">Overview</a>
+              <a role="menuitem" href="../get-started/index.html">Get Started</a>
+              <a role="menuitem" href="../showcase/index.html">Benchmarks</a>
+              <a role="menuitem" href="../crackme/index.html">CrackMe</a>
+              <a role="menuitem" href="../guides/index.html">Guides</a>
+              <a role="menuitem" href="../faq/index.html">FAQ</a>
+              <a role="menuitem" href="../enterprise/index.html">Enterprise</a>
+            </div>
+          </details>
         </div>
       </div>
     </header>
@@ -74,39 +86,40 @@
             <h1 class="section-title" data-i18n="faq.title">Common Questions About BLA (`bla-agents`)</h1>
           </div>
 
-          <div class="faq-list">
-            <details class="evidence-drawer" open>
+          <div class="zfaq-list">
+            <details class="zfaq" open>
               <summary data-i18n="faq.q1">Why does BLA use a Blue theme?</summary>
-              <div class="drawer-body" data-i18n-html="faq.a1">
+              <p data-i18n-html="faq.a1">
                 In security engineering, offensive and reverse-engineering tools are traditionally associated with Red Team workflows, while defensive protection tools represent Blue Team workflows. <strong>BLA</strong> (<code>bla-agents</code>) focuses on the defensive side: auditing exposure and protecting release artifacts.
-              </div>
+              </p>
             </details>
 
-            <details class="evidence-drawer">
+            <details class="zfaq">
               <summary data-i18n="faq.q2">Does BLA affect runtime performance or change program output?</summary>
-              <div class="drawer-body" data-i18n-html="faq.a2">
+              <p data-i18n-html="faq.a2">
                 No. Static budget guards and call-graph state machines are placed behind O(1) bitwise invariants (such as <code>(Math.imul(x, x + 1) &amp; 1) === 0</code>) inside unreachable branches, so hot-path execution remains unchanged.
-              </div>
+              </p>
             </details>
 
-            <details class="evidence-drawer">
+            <details class="zfaq">
               <summary data-i18n="faq.q3">How do I run the full protection workflow in one step?</summary>
-              <div class="drawer-body" data-i18n-html="faq.a3">
+              <p data-i18n-html="faq.a3">
                 Run <code>npx bla-agents@latest harden .</code> from your terminal, or ask your connected coding agent to call the <code>bla_harden</code> MCP tool. It executes release exposure checks, auditing, protection, and verification in sequence.
-              </div>
+              </p>
             </details>
 
-            <details class="evidence-drawer">
+            <details class="zfaq">
               <summary data-i18n="faq.q4">Does BLA preserve existing GGUF model tensors and binary checksums?</summary>
-              <div class="drawer-body" data-i18n-html="faq.a4">
+              <p data-i18n-html="faq.a4">
                 Yes. <code>protectGgufBuffer</code> preserves all original GGUF v2/v3 KV entries and trailing tensor slices while appending metadata entries, and Android DEX protection recomputes both the 20-byte SHA-1 signature and Adler32 checksum.
-              </div>
+              </p>
             </details>
-            <details class="evidence-drawer">
+
+            <details class="zfaq">
               <summary data-i18n="faq.q5">What are BLA's honest limits?</summary>
-              <div class="drawer-body" data-i18n-html="faq.a5">
+              <p data-i18n-html="faq.a5">
                 BLA raises analyzer cost and plants decoys; it is not a magic anti-RE seal. Traditional interactive reverse engineering is out of scope of the commodity REA red-team numbers. Try the public CrackMe v6 challenge on GitHub.
-              </div>
+              </p>
             </details>
           </div>
         </div>

@@ -28,7 +28,7 @@ const CRACKME_CACHE_KEY = "bla_live_crackme_v1";
 function detectInitialLang() {
   const params = new URLSearchParams(window.location.search);
   const queryLang = params.get("lang");
-  const supported = ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de"];
+  const supported = ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de", "id"];
   if (queryLang && supported.includes(queryLang)) {
     return queryLang;
   }
@@ -46,6 +46,7 @@ function detectInitialLang() {
   if (nav.startsWith("es")) return "es";
   if (nav.startsWith("fr")) return "fr";
   if (nav.startsWith("de")) return "de";
+  if (nav.startsWith("id")) return "id";
   return "en";
 }
 
@@ -83,10 +84,15 @@ function applyLanguage(lang) {
     if (attr && val) el.setAttribute(attr, val);
   });
 
-  const select = document.getElementById("bla-lang-select");
-  if (select && select.value !== lang) {
-    select.value = lang;
-  }
+  document.querySelectorAll(".pop.lang .pop-menu a[data-lang]").forEach((a) => {
+    if (a.getAttribute("data-lang") === lang) {
+      a.setAttribute("aria-current", "true");
+      const nameEl = a.closest(".pop.lang")?.querySelector(".lang-name");
+      if (nameEl) nameEl.textContent = a.textContent;
+    } else {
+      a.removeAttribute("aria-current");
+    }
+  });
 
   window.BLA_CURRENT_LANG = lang;
   window.dispatchEvent(new CustomEvent("bla:langchange", { detail: { lang } }));
@@ -409,72 +415,37 @@ function startLiveFigures() {
   });
 }
 
-function navLabel(key, fallback) {
-  const dictRoot = window.BLA_I18N || {};
-  const lang = window.BLA_CURRENT_LANG || "en";
-  const dict = dictRoot[lang] || dictRoot.en || {};
-  const en = dictRoot.en || {};
-  return dict[key] || en[key] || fallback;
-}
-
-function syncNavToggleLabel(toggle) {
-  if (!toggle) return;
-  const open = toggle.getAttribute("aria-expanded") === "true";
-  const label = open ? navLabel("nav.menuClose", "Close menu") : navLabel("nav.menu", "Menu");
-  toggle.setAttribute("aria-label", label);
-  const hidden = toggle.querySelector(".visually-hidden");
-  if (hidden) hidden.textContent = label;
-}
-
 function initNavMenu() {
-  const toggle = document.querySelector(".nav-toggle");
-  const header = document.querySelector(".site-header");
-  if (!toggle || !header) return;
+  document.querySelectorAll(".pop").forEach((details) => {
+    document.addEventListener("click", (e) => {
+      if (!details.contains(e.target)) details.removeAttribute("open");
+    });
+  });
 
-  const setOpen = (open) => {
-    header.classList.toggle("nav-open", open);
-    toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    syncNavToggleLabel(toggle);
-  };
+  document.querySelectorAll(".pop.menu .pop-menu a").forEach((link) => {
+    link.addEventListener("click", () => {
+      link.closest("details").removeAttribute("open");
+    });
+  });
 
-  toggle.addEventListener("click", (event) => {
-    const next = toggle.getAttribute("aria-expanded") !== "true";
-    setOpen(next);
-    if (next && event.detail === 0) {
-      const first = header.querySelector(".nav-link");
-      if (first) first.focus();
+  document.querySelectorAll(".pop.lang .pop-menu a[data-lang]").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const lang = link.getAttribute("data-lang");
+      if (lang) applyLanguage(lang);
+      link.closest(".pop-menu").querySelectorAll("a").forEach((a) => a.removeAttribute("aria-current"));
+      link.setAttribute("aria-current", "true");
+      const nameEl = link.closest(".pop.lang").querySelector(".lang-name");
+      if (nameEl) nameEl.textContent = link.textContent;
+      link.closest("details").removeAttribute("open");
+    });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".pop[open]").forEach((d) => d.removeAttribute("open"));
     }
   });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && header.classList.contains("nav-open")) {
-      setOpen(false);
-      toggle.focus();
-    }
-  });
-
-  header.querySelectorAll(".nav-link").forEach((link) => {
-    link.addEventListener("click", () => setOpen(false));
-  });
-
-  document.addEventListener("click", (event) => {
-    if (!header.classList.contains("nav-open")) return;
-    if (event.target instanceof Node && header.contains(event.target)) return;
-    setOpen(false);
-  });
-
-  const desktop = window.matchMedia("(min-width: 1024px)");
-  const closeOnDesktop = () => {
-    if (desktop.matches) setOpen(false);
-  };
-  if (typeof desktop.addEventListener === "function") {
-    desktop.addEventListener("change", closeOnDesktop);
-  } else if (typeof desktop.addListener === "function") {
-    desktop.addListener(closeOnDesktop);
-  }
-
-  window.addEventListener("bla:langchange", () => syncNavToggleLabel(toggle));
-  syncNavToggleLabel(toggle);
 }
 
 function initMain() {
@@ -485,9 +456,7 @@ function initMain() {
 
   const select = document.getElementById("bla-lang-select");
   if (select) {
-    select.addEventListener("change", (e) => {
-      applyLanguage(e.target.value);
-    });
+    select.addEventListener("change", (e) => applyLanguage(e.target.value));
   }
 
   document.querySelectorAll("[data-copy]").forEach((btn) => {

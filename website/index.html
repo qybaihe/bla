@@ -12,204 +12,168 @@
     <meta property="og:title" content="BLA: Blind LLM Agents — Blue Defense Shield" />
     <meta property="og:image" content="assets/logo.png" />
     <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="assets/styles.css" />
   </head>
   <body>
     <noscript>
       <style>
         @media (max-width: 1023px) {
-          .nav-toggle { display: none !important; }
-          .nav-panel {
-            display: flex !important;
-            position: static !important;
-            flex-direction: column;
-            background: transparent;
-            box-shadow: none;
-          }
-          .nav-bar { height: auto !important; min-height: 64px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
-          .nav-links { flex-wrap: wrap; }
+          .links { display: flex !important; flex-wrap: wrap; }
+          .pop.menu { display: none !important; }
+          .nav-box { height: auto; min-height: 56px; flex-wrap: wrap; padding: 12px 14px; }
         }
       </style>
     </noscript>
-    <header class="site-header">
-      <div class="container nav-bar">
-        <a href="./" class="brand">
-          <img src="assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+    <header class="nav intro" style="--d: 80ms">
+      <div class="nav-box">
+        <a class="brand" href="./">
+          <img src="assets/logo.png" alt="BLA Shield Logo" width="32" height="32" />
           <span>BLA</span>
         </a>
-        <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
-          <span class="nav-toggle-icon" aria-hidden="true"></span>
-          <span class="visually-hidden">Menu</span>
-        </button>
-        <div class="nav-panel" id="site-nav">
-        <nav class="nav-links" data-i18n-attr="aria-label:nav.primary">
-          <a href="./" class="nav-link active" data-i18n="nav.overview">Overview</a>
-          <a href="get-started/" class="nav-link" data-i18n="nav.getStarted">Get Started</a>
-          <a href="showcase/" class="nav-link" data-i18n="nav.showcase">Benchmarks</a>
-          <a href="crackme/" class="nav-link" data-i18n="nav.crackme">CrackMe</a>
-          <a href="guides/" class="nav-link" data-i18n="nav.guides">Guides</a>
-          <a href="faq/" class="nav-link" data-i18n="nav.faq">FAQ</a>
-          <a href="enterprise/" class="nav-link" data-i18n="nav.enterprise">Enterprise</a>
+        <nav class="links" aria-label="Site" data-i18n-attr="aria-label:nav.primary">
+          <a href="./" class="active" data-i18n="nav.overview">Overview</a>
+          <a href="get-started/index.html" data-i18n="nav.getStarted">Get Started</a>
+          <a href="showcase/index.html" data-i18n="nav.showcase">Benchmarks</a>
+          <a href="crackme/index.html" data-i18n="nav.crackme">CrackMe</a>
+          <a href="guides/index.html" data-i18n="nav.guides">Guides</a>
+          <a href="faq/index.html" data-i18n="nav.faq">FAQ</a>
+          <a href="enterprise/index.html" data-i18n="nav.enterprise">Enterprise</a>
         </nav>
-        <div class="nav-actions">
-          <select id="bla-lang-select" class="lang-select" aria-label="Select Language" data-i18n-attr="aria-label:nav.lang">
-            <option value="en">🌐 English</option>
-            <option value="zh-CN">🌐 简体中文</option>
-            <option value="zh-TW">🌐 繁體中文</option>
-            <option value="ja">🌐 日本語</option>
-            <option value="ko">🌐 한국어</option>
-            <option value="es">🌐 Español</option>
-            <option value="fr">🌐 Français</option>
-            <option value="de">🌐 Deutsch</option>
-          </select>
-          <a href="https://github.com/qybaihe/bla" class="nav-cta" target="_blank" rel="noopener">
-            <span>★</span>
-            <span data-i18n="nav.star">Star</span>
-            <span class="star-pill" data-gh-stars data-state="loading">—</span>
+        <div class="nav-right">
+          <details class="pop lang">
+            <summary aria-label="Language">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm-9 9h18M12 3c2.6 2.4 3.9 5.4 3.9 9S14.6 18.6 12 21M12 3C9.4 5.4 8.1 8.4 8.1 12s1.3 6.6 3.9 9"></path></svg>
+              <span class="lang-name">English</span>
+              <svg class="chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m4 6 4 4 4-4"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" data-lang="en" aria-current="true">English</a>
+              <a role="menuitem" data-lang="id">Bahasa Indonesia</a>
+              <a role="menuitem" data-lang="zh-CN">简体中文</a>
+              <a role="menuitem" data-lang="zh-TW">繁體中文</a>
+              <a role="menuitem" data-lang="ja">日本語</a>
+              <a role="menuitem" data-lang="ko">한국어</a>
+              <a role="menuitem" data-lang="es">Español</a>
+              <a role="menuitem" data-lang="fr">Français</a>
+              <a role="menuitem" data-lang="de">Deutsch</a>
+            </div>
+          </details>
+          <a class="star" href="https://github.com/qybaihe/bla" title="Star BLA on GitHub" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+            <span class="star-label">Star</span>
+            <span class="star-count" data-gh-stars data-state="loading">—</span>
           </a>
-        </div>
+          <details class="pop menu">
+            <summary aria-label="Menu">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"></path></svg>
+            </summary>
+            <div class="pop-menu" role="menu">
+              <a role="menuitem" href="./">Overview</a>
+              <a role="menuitem" href="get-started/index.html">Get Started</a>
+              <a role="menuitem" href="showcase/index.html">Benchmarks</a>
+              <a role="menuitem" href="crackme/index.html">CrackMe</a>
+              <a role="menuitem" href="guides/index.html">Guides</a>
+              <a role="menuitem" href="faq/index.html">FAQ</a>
+              <a role="menuitem" href="enterprise/index.html">Enterprise</a>
+            </div>
+          </details>
         </div>
       </div>
     </header>
 
     <main>
       <!-- Hero Section -->
-      <section class="hero">
-        <canvas class="hero-particles" id="bla-hero-canvas" aria-hidden="true"></canvas>
-        <div class="container">
-          <div class="hero-logo-orbital">
-            <div class="orbital-ring ring-outer" aria-hidden="true"></div>
-            <div class="orbital-ring ring-inner" aria-hidden="true"></div>
-            <img src="assets/logo.png" alt="BLA Blue Shield Logo" class="hero-logo" width="78" height="78" />
-          </div>
-          <div class="hero-pill">
-            <span class="dot-red" data-i18n="hero.pill.red">RE = Reverse Engineering</span>
-            <span>·</span>
-            <span data-i18n="hero.pill.blue">BL = Blue Defense (Blind LLM Agents)</span>
-          </div>
-          <h1 class="hero-title" data-i18n-html="hero.title">
-            Protect Build Artifacts.<br />
-            <span class="text-blue">Disrupt Automated Reverse Engineering.</span>
-          </h1>
-          <p class="hero-subtitle" data-i18n="hero.subtitle">
-            One MCP server and CLI for auditing, protecting, and verifying JavaScript, Electron, WebAssembly, Python, SQLite, AI Models, and Native Binaries against AI reverse-engineering workflows—while preserving 100% of original runtime behavior.
-          </p>
+      <section class="wrap hero">
+        <img class="hero-icon intro" style="--d: 120ms" src="assets/logo.png" alt="BLA" width="104" height="104" />
+        <h1 class="hero-title" data-split="" aria-label="Protect Build Artifacts. Disrupt Automated Reverse Engineering.">
+          <span class="ch" style="--i: 0">Protect</span>
+          <span class="ch" style="--i: 1">Build</span>
+          <span class="ch" style="--i: 2">Artifacts.</span><wbr>
+          <em>
+            <span class="ch" style="--i: 3">Disrupt</span>
+            <span class="ch" style="--i: 4">Automated</span>
+            <span class="ch" style="--i: 5">Reverse</span>
+            <span class="ch" style="--i: 6">Engineering.</span>
+          </em>
+        </h1>
+        <p class="lead intro" style="--d: 900ms" data-i18n="hero.subtitle">
+          One MCP server and CLI for auditing, protecting, and verifying JavaScript, Electron, WebAssembly, Python, SQLite, AI Models, and Native Binaries against AI reverse-engineering workflows—while preserving 100% of original runtime behavior.
+        </p>
+        <p class="proof intro" style="--d: 980ms">
+          <b>19 formats · 14/14 benchmarks passed · 41–49× token inflation · 100% runtime preserved.</b>
+          <a href="showcase/index.html">How it was measured</a>
+        </p>
 
-          <div class="command-box">
-            <code class="command-code">npx bla-agents@latest setup &amp;&amp; npx bla-agents@latest harden .</code>
-            <button
-              class="copy-btn"
-              data-copy="npx bla-agents@latest setup && npx bla-agents@latest harden ."
-              data-i18n="hero.copy"
-            >
-              Copy
-            </button>
+        <div class="install intro" style="--d: 1050ms" id="install">
+          <div class="tabs" role="tablist" aria-label="Install">
+            <button class="tab active" id="tab-cli" role="tab" aria-selected="true" aria-controls="panel-cli" data-tab="cli">Command line<span class="sub">npm</span></button>
+            <button class="tab" id="tab-gh" role="tab" aria-selected="false" aria-controls="panel-gh" data-tab="gh" tabindex="-1">GitHub<span class="sub">source</span></button>
+            <span class="tab-ink" aria-hidden="true"></span>
           </div>
-
-          <div class="hero-actions">
-            <a href="get-started/" class="btn-primary" data-i18n="hero.ctaPrimary">Quick Start →</a>
-            <a href="showcase/" class="btn-secondary" data-i18n="hero.ctaSecondary">View Benchmarks</a>
-            <a href="https://github.com/qybaihe/bla" target="_blank" rel="noopener" class="btn-star">
-              <span>⭐</span>
-              <span data-i18n="hero.starBtn">Star on GitHub</span>
-              <span class="star-pill" data-gh-stars data-state="loading">—</span>
-            </a>
+          <div class="panel" id="panel-cli" role="tabpanel" aria-labelledby="tab-cli">
+            <div class="cmd">
+              <code><span class="prompt">$ </span><span data-type="npx bla-agents@latest setup && npx bla-agents@latest harden ." data-type-delay="1200"></span><span class="caret" aria-hidden="true"></span></code>
+              <button class="copy" type="button" data-copy="npx bla-agents@latest setup && npx bla-agents@latest harden .">Copy</button>
+            </div>
+            <p class="hint">Needs Node.js 18+. Run <code>npx bla-agents setup</code> once, then <code>npx bla-agents harden .</code> in a project folder.</p>
           </div>
-
-          <p class="star-welcome">
-            <a href="https://github.com/qybaihe/bla" target="_blank" rel="noopener" data-i18n="hero.starWelcome">
-              ⭐ Open-source under the MIT License — if BLA is helpful to your project, welcome to give us a Star on GitHub!
-            </a>
-          </p>
-
-          <div class="hero-metrics">
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">19</span>
-              <span class="hero-metric-label" data-i18n="formats.eyebrow">19 Supported Artifact Formats</span>
+          <div class="panel" id="panel-gh" role="tabpanel" aria-labelledby="tab-gh" hidden>
+            <div class="cmd">
+              <code><span class="prompt">$ </span><span data-type="git clone https://github.com/qybaihe/bla.git && cd bla && npm install" data-type-delay="1200"></span><span class="caret" aria-hidden="true"></span></code>
+              <button class="copy" type="button" data-copy="git clone https://github.com/qybaihe/bla.git && cd bla && npm install">Copy</button>
             </div>
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">14 / 14</span>
-              <span class="hero-metric-label" data-i18n="nav.showcase">Benchmarks</span>
-            </div>
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">41.3× – 49.2×</span>
-              <span class="hero-metric-label" data-i18n="sim.blue.tokensLabel">Estimated Token Usage</span>
-            </div>
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">100%</span>
-              <span class="hero-metric-label" data-i18n="ent.c3.tag">03 · Verify &amp; deliver</span>
-            </div>
+            <p class="hint">Clone the repo and install dependencies. See <a href="get-started/index.html">Get Started</a> for full instructions.</p>
           </div>
         </div>
+
+        <a class="cue intro" style="--d: 1200ms" href="#analysis"><span class="down" aria-hidden="true">↓</span> See the comparison</a>
       </section>
 
-      <!-- Interactive Analysis Comparison -->
-      <section class="section">
+      <!-- Comparison — Zapi-style stepped layout -->
+      <section class="section" id="analysis">
         <div class="container">
           <div class="section-header">
             <div class="eyebrow" data-i18n="sim.eyebrow">Static &amp; Semantic Analysis Comparison</div>
-            <h2 class="section-title" data-i18n="sim.title">Unprotected Baseline vs. Protected with BLA (`bla-agents`)</h2>
+            <h2 class="section-title" data-i18n="sim.title">Unprotected Baseline vs. Protected with BLA (<code>bla-agents</code>)</h2>
             <p class="section-lead" data-i18n-html="sim.lead">
-              Select a target format below to see how <code>npx bla-agents harden</code> changes static analyzer output, resource budget consumption, and reconstruction status.
+              See how <code>npx bla-agents harden</code> changes analyzer output, resource budget consumption, and reconstruction status.
             </p>
           </div>
 
-          <div class="sim-tabs">
-            <button class="sim-tab active" data-scenario="electron" data-i18n="sim.tab.electron">Electron .asar</button>
-            <button class="sim-tab" data-scenario="dxball" data-i18n="sim.tab.dxball">JavaScript / TypeScript</button>
-            <button class="sim-tab" data-scenario="native" data-i18n="sim.tab.native">Native ELF / Mach-O / PE</button>
-            <button class="sim-tab" data-scenario="model" data-i18n="sim.tab.model">SQLite &amp; Safetensors / GGUF</button>
-          </div>
+          <nav class="sim-nav" aria-label="Target format">
+            <button class="sim-link active" data-scenario="electron" data-i18n="sim.tab.electron">Electron .asar</button>
+            <button class="sim-link" data-scenario="dxball" data-i18n="sim.tab.dxball">JavaScript / TypeScript</button>
+            <button class="sim-link" data-scenario="native" data-i18n="sim.tab.native">Native ELF / Mach-O / PE</button>
+            <button class="sim-link" data-scenario="model" data-i18n="sim.tab.model">SQLite &amp; Safetensors / GGUF</button>
+          </nav>
 
-          <div class="duel-grid">
-            <div class="duel-panel red">
-              <div class="duel-badge red" data-i18n="sim.red.badge">🔴 UNPROTECTED BASELINE (REA ANALYSIS)</div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.red.timeLabel">Analysis Time</span>
-                <span class="metric-val red" id="sim-red-time">38s (5 MCP calls)</span>
+          <div class="duel-row">
+            <div class="step-data-card">
+              <div class="step-data-header">
+                <span class="dot red"></span>
+                <span>Unprotected Baseline</span>
               </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.red.tokensLabel">Estimated Token Usage</span>
-                <span class="metric-val red" id="sim-red-tokens">4,800 tokens</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.red.costLabel">Estimated API Cost</span>
-                <span class="metric-val red" id="sim-red-cost">$0.20 USD</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.red.verdictLabel">Analysis Status</span>
-                <span class="metric-val red" id="sim-red-verdict">Complete</span>
-              </div>
-              <details class="evidence-drawer">
-                <summary data-i18n="sim.red.drawer">View Baseline Static &amp; Semantic Output</summary>
-                <div class="drawer-body" id="sim-red-trace"></div>
-              </details>
+              <div class="step-data-row"><span>Analysis Time</span><span class="val red" id="sim-red-time">38s (5 MCP calls)</span></div>
+              <div class="step-data-row"><span>Token Usage</span><span class="val red" id="sim-red-tokens">4,800 tokens</span></div>
+              <div class="step-data-row"><span>API Cost</span><span class="val red" id="sim-red-cost">$0.20 USD</span></div>
+              <div class="step-data-row"><span>Status</span><span class="val red" id="sim-red-verdict">Complete</span></div>
             </div>
 
-            <div class="duel-panel blue">
-              <div class="duel-badge blue" data-i18n="sim.blue.badge">🔵 PROTECTED WITH BLA (`bla-agents`)</div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.blue.timeLabel">Analysis Duration</span>
-                <span class="metric-val blue" id="sim-blue-time">17+ min (Budget Limited)</span>
+            <div class="step-data-card">
+              <div class="step-data-header">
+                <span class="dot blue"></span>
+                <span>Protected with BLA</span>
               </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.blue.tokensLabel">Estimated Token Usage</span>
-                <span class="metric-val blue" id="sim-blue-tokens">198,400 tokens (41.3x)</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.blue.costLabel">Estimated API Cost</span>
-                <span class="metric-val blue" id="sim-blue-cost">$14.88 USD</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label" data-i18n="sim.blue.verdictLabel">Analysis Status</span>
-                <span class="metric-val blue" id="sim-blue-verdict">Limited</span>
-              </div>
-              <details class="evidence-drawer">
-                <summary data-i18n="sim.blue.drawer">View Protected Analyzer Output</summary>
-                <div class="drawer-body" id="sim-blue-trace"></div>
-              </details>
+              <div class="step-data-row"><span>Analysis Duration</span><span class="val blue" id="sim-blue-time">17+ min (Budget Limited)</span></div>
+              <div class="step-data-row"><span>Token Usage</span><span class="val blue" id="sim-blue-tokens">198,400 tokens (41.3x)</span></div>
+              <div class="step-data-row"><span>API Cost</span><span class="val blue" id="sim-blue-cost">$14.88 USD</span></div>
+              <div class="step-data-row"><span>Status</span><span class="val blue" id="sim-blue-verdict">Limited</span></div>
             </div>
           </div>
+
         </div>
       </section>
 
@@ -224,29 +188,122 @@
             </p>
           </div>
 
-          <div class="grid-3">
-            <div class="card">
-              <span class="card-tag" data-i18n="pillars.c1.tag">01 · Resource Budget Guards</span>
-              <h3 data-i18n="pillars.c1.title">Saturate Static &amp; Semantic Limits</h3>
-              <p data-i18n-html="pillars.c1.desc">
-                Triggers analyzer admission caps (<code>primitive-candidates &gt; 256</code>, <code>alias-selections &gt; 512</code>, <code>primitive-bytes &gt; 1 MiB</code>) and expands <code>ReconstructionObligationPolicies</code> across strongly connected call-graph meshes.
-              </p>
+          <div class="pillars-layout">
+            <div class="pillars-list">
+              <div class="pillar-card">
+                <span class="pillar-num">01</span>
+                <div class="pillar-body">
+                  <h3 data-i18n="pillars.c1.title">Saturate Static &amp; Semantic Limits</h3>
+                  <p data-i18n-html="pillars.c1.desc">
+                    Triggers analyzer admission caps (<code>primitive-candidates &gt; 256</code>, <code>alias-selections &gt; 512</code>, <code>primitive-bytes &gt; 1 MiB</code>) and expands <code>ReconstructionObligationPolicies</code> across strongly connected call-graph meshes.
+                  </p>
+                </div>
+              </div>
+
+              <div class="pillar-card">
+                <span class="pillar-num">02</span>
+                <div class="pillar-body">
+                  <h3 data-i18n="pillars.c2.title">Demote Real Paths, Surface Decoy Logic</h3>
+                  <p data-i18n-html="pillars.c2.desc">
+                    Demotes core business logic to <code>status: "unknown"</code> under static inspection while presenting self-consistent shadow state machines, enclave delegation metadata, and decoy source maps.
+                  </p>
+                </div>
+              </div>
+
+              <div class="pillar-card">
+                <span class="pillar-num">03</span>
+                <div class="pillar-body">
+                  <h3 data-i18n="pillars.c3.title">MCP Server, CLI &amp; Bundler Plugins</h3>
+                  <p data-i18n-html="pillars.c3.desc">
+                    Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_harden</code> or <code>npx bla-agents harden</code>.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <div class="card">
-              <span class="card-tag" data-i18n="pillars.c2.tag">02 · Evidence &amp; Control-Flow Decoys</span>
-              <h3 data-i18n="pillars.c2.title">Demote Real Paths, Surface Decoy Logic</h3>
-              <p data-i18n-html="pillars.c2.desc">
-                Demotes core business logic to <code>status: "unknown"</code> under static inspection while presenting self-consistent shadow state machines, enclave delegation metadata, and decoy source maps.
-              </p>
-            </div>
+            <div class="pillars-visual">
+              <div class="flow-scene">
+                <div class="flow-sources">
+                  <div class="flow-node src n1"><span class="fn-dot c-js"></span>JavaScript / TypeScript</div>
+                  <div class="flow-node src n2"><span class="fn-dot c-el"></span>Electron .asar</div>
+                  <div class="flow-node src n3"><span class="fn-dot c-wa"></span>WebAssembly</div>
+                  <div class="flow-node src n4"><span class="fn-dot c-py"></span>Python .py / .pyc</div>
+                  <div class="flow-node src n5"><span class="fn-dot c-na"></span>ELF / Mach-O / PE</div>
+                  <div class="flow-node src n6"><span class="fn-dot c-db"></span>SQLite / Safetensors</div>
+                  <div class="flow-node src n7"><span class="fn-dot c-mo"></span>Android DEX / Unity</div>
+                </div>
 
-            <div class="card">
-              <span class="card-tag" data-i18n="pillars.c3.tag">03 · One-Command Workflow</span>
-              <h3 data-i18n="pillars.c3.title">MCP Server, CLI &amp; Bundler Plugins</h3>
-              <p data-i18n-html="pillars.c3.desc">
-                Run <code>npx bla-agents setup</code> to register with Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, then run the 5-stage protection pipeline with <code>bla_harden</code> or <code>npx bla-agents harden</code>.
-              </p>
+                <svg class="flow-lines" viewBox="0 0 140 340" aria-hidden="true">
+                  <defs>
+                    <radialGradient id="dot-glow">
+                      <stop offset="0%" stop-color="rgba(96,165,250,0.9)" />
+                      <stop offset="100%" stop-color="rgba(96,165,250,0)" />
+                    </radialGradient>
+                  </defs>
+                  <path class="flow-path p1" d="M0,25 C50,25 90,170 140,170" />
+                  <path class="flow-path p2" d="M0,73 C50,73 90,170 140,170" />
+                  <path class="flow-path p3" d="M0,121 C50,121 90,170 140,170" />
+                  <path class="flow-path p4" d="M0,170 C50,170 90,170 140,170" />
+                  <path class="flow-path p5" d="M0,218 C50,218 90,170 140,170" />
+                  <path class="flow-path p6" d="M0,266 C50,266 90,170 140,170" />
+                  <path class="flow-path p7" d="M0,315 C50,315 90,170 140,170" />
+                  <!-- flowing data dots -->
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.5s" path="M0,25 C50,25 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.9s" path="M0,73 C50,73 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="1.3s" path="M0,121 C50,121 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="1.7s" path="M0,170 C50,170 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="2.1s" path="M0,218 C50,218 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="2.5s" path="M0,266 C50,266 90,170 140,170" />
+                  </circle>
+                  <circle class="flow-dot" r="3" fill="url(#dot-glow)">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" begin="2.9s" path="M0,315 C50,315 90,170 140,170" />
+                  </circle>
+                </svg>
+
+                <div class="flow-core">
+                  <div class="flow-core-ring"></div>
+                  <div class="flow-core-inner">
+                    <img src="assets/logo.png" alt="" width="40" height="40" />
+                    <span>BLA</span>
+                  </div>
+                </div>
+
+                <svg class="flow-lines out" viewBox="0 0 100 340" aria-hidden="true">
+                  <defs>
+                    <radialGradient id="dot-glow-out">
+                      <stop offset="0%" stop-color="rgba(74,222,128,0.9)" />
+                      <stop offset="100%" stop-color="rgba(74,222,128,0)" />
+                    </radialGradient>
+                  </defs>
+                  <path class="flow-path p-out" d="M0,170 L100,170" />
+                  <circle class="flow-dot out" r="3" fill="url(#dot-glow-out)">
+                    <animateMotion dur="1.8s" repeatCount="indefinite" begin="2.5s" path="M0,170 L100,170" />
+                  </circle>
+                  <circle class="flow-dot out" r="3" fill="url(#dot-glow-out)">
+                    <animateMotion dur="1.8s" repeatCount="indefinite" begin="3.4s" path="M0,170 L100,170" />
+                  </circle>
+                </svg>
+
+                <div class="flow-output">
+                  <div class="flow-node hardened"><span class="fn-dot c-ok"></span>Hardened Artifact</div>
+                  <div class="flow-stats">
+                    <span class="flow-stat">41–49× token inflation</span>
+                    <span class="flow-stat">100% runtime preserved</span>
+                    <span class="flow-stat">14/14 benchmarks passed</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -263,36 +320,48 @@
             </p>
           </div>
 
-          <div class="grid-3">
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f1.tag">JS / TS / Bundlers</span>
-              <h3 data-i18n="formats.f1.title">Web &amp; Node Bundles</h3>
-              <p data-i18n="formats.f1.desc">Opaque ternary guards, dynamic alias selectors, call-graph state machines, decoy SourceMaps, and Vite/Webpack/Rollup/esbuild plugins.</p>
+          <div class="formats-grid">
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f1.title">Web &amp; Node Bundles</h3>
+                <p data-i18n="formats.f1.desc">Opaque ternary guards, dynamic alias selectors, call-graph state machines, decoy SourceMaps, and Vite/Webpack/Rollup/esbuild plugins.</p>
+              </div>
             </div>
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f2.tag">Electron .asar &amp; Fuses</span>
-              <h3 data-i18n="formats.f2.title">Desktop Applications</h3>
-              <p data-i18n="formats.f2.desc">De-literalizes IPC channels, adds duplicate decoy handlers, hardens Electron V1 Fuses (RunAsNode=0), and exceeds the 32-sentinel scan limit.</p>
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f2.title">Desktop Applications</h3>
+                <p data-i18n="formats.f2.desc">De-literalizes IPC channels, adds duplicate decoy handlers, hardens Electron V1 Fuses (RunAsNode=0), and exceeds the 32-sentinel scan limit.</p>
+              </div>
             </div>
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f3.tag">ELF / Mach-O / PE</span>
-              <h3 data-i18n="formats.f3.title">Native Binaries</h3>
-              <p data-i18n="formats.f3.desc">Exceeds MAX_RUSTC_HASHES = 64, adds decoy .dep-v0 &amp; Go buildinfo metadata, and emits C/C++, Rust, and Go compile-time headers.</p>
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f3.title">Native Binaries</h3>
+                <p data-i18n="formats.f3.desc">Exceeds MAX_RUSTC_HASHES = 64, adds decoy .dep-v0 &amp; Go buildinfo metadata, and emits C/C++, Rust, and Go compile-time headers.</p>
+              </div>
             </div>
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f4.tag">WebAssembly &amp; Python</span>
-              <h3 data-i18n="formats.f4.title">.wasm &amp; .py / .pyc</h3>
-              <p data-i18n="formats.f4.desc">Expands WABT interface descriptors, adds custom decoy sections, and appends CPython marshal constant-pool entries.</p>
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f4.title">.wasm &amp; .py / .pyc</h3>
+                <p data-i18n="formats.f4.desc">Expands WABT interface descriptors, adds custom decoy sections, and appends CPython marshal constant-pool entries.</p>
+              </div>
             </div>
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f5.tag">SQLite &amp; AI Models</span>
-              <h3 data-i18n="formats.f5.title">.sqlite, .safetensors, .gguf</h3>
-              <p data-i18n="formats.f5.desc">Adds virtual generated-column guards on read-only snapshots and exceeds 32-level JSON/GGUF metadata nesting limits.</p>
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f5.title">.sqlite, .safetensors, .gguf</h3>
+                <p data-i18n="formats.f5.desc">Adds virtual generated-column guards on read-only snapshots and exceeds 32-level JSON/GGUF metadata nesting limits.</p>
+              </div>
             </div>
-            <div class="card">
-              <span class="card-tag" data-i18n="formats.f6.tag">Android &amp; Unity</span>
-              <h3 data-i18n="formats.f6.title">DEX, APK &amp; IL2CPP</h3>
-              <p data-i18n="formats.f6.desc">Appends decoy DEX string descriptors with recomputed SHA-1/Adler32 headers and adds decoy metadata entries in Unity global-metadata.dat.</p>
+            <div class="pillar-card">
+              <span class="fn-dot c-grey"></span>
+              <div class="pillar-body">
+                <h3 data-i18n="formats.f6.title">DEX, APK &amp; IL2CPP</h3>
+                <p data-i18n="formats.f6.desc">Appends decoy DEX string descriptors with recomputed SHA-1/Adler32 headers and adds decoy metadata entries in Unity global-metadata.dat.</p>
+              </div>
             </div>
           </div>
         </div>
@@ -306,7 +375,7 @@
         </div>
                 <div>
           <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="enterprise/" data-i18n="nav.enterprise">Enterprise</a> ·
+          <a href="enterprise/index.html" data-i18n="nav.enterprise">Enterprise</a> ·
           <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
           <a href="https://www.npmjs.com/package/bla-agents">npm (`bla-agents`)</a>
         </div>
