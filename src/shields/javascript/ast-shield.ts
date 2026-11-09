@@ -1,5 +1,5 @@
 import { parse, type ParserPlugin } from "@babel/parser";
-import _traverse from "@babel/traverse";
+import _traverse, { type Scope } from "@babel/traverse";
 import _generate from "@babel/generator";
 import * as t from "@babel/types";
 import { generateProjectSeed } from "../../core/config.js";
@@ -429,7 +429,7 @@ function buildOpaqueIntegerAst(
 
 const RENAME_RESERVED = new Set([
   "exports", "module", "require", "arguments", "undefined", "NaN", "Infinity",
-  "globalThis", "global", "window", "self", "console", "Math", "Object", "Array",
+  "globalThis", "global", "window", "self", "console", "Object", "Array",
   "Promise", "Buffer", "process", "__dirname", "__filename", "JSON", "Date",
   "Error", "TypeError", "RangeError", "Map", "Set", "WeakMap", "WeakSet",
   "Symbol", "Proxy", "Reflect", "parseInt", "parseFloat", "isNaN", "isFinite",
@@ -526,6 +526,105 @@ export function transformJavaScriptWithBlaShield(
 
   const exportedSymbolsBefore = collectEsmExportedSymbols(ast.program);
 
+  // Collect dynamic-lookup scope before renaming anything. Direct eval can
+  // reference parent-scope bindings that Babel cannot see inside the string.
+  const bindingsVisibleToDirectEval = new Set<t.Identifier>();
+  traverse(ast, {
+    CallExpression(path) {
+      if (
+        t.isIdentifier(path.node.callee) &&
+        path.node.callee.name === "eval" &&
+        path.scope.getBinding("eval") === undefined
+      ) {
+        for (const binding of Object.values(path.scope.getAllBindings())) {
+          bindingsVisibleToDirectEval.add(binding.identifier);
+        }
+      }
+    },
+  });
+
+  // Rename customer-local Math before creating any injected predicates.
+  // Renaming after insertion can rewrite BLA's own Math.imul references to
+  // the customer's Math parameter, causing a throw or a top-level TDZ.
+  traverse(ast, {
+    Scope(path) {
+      const binding = path.scope.bindings.Math;
+      if (binding === undefined) return;
+      if (
+        binding.kind === "module" ||
+        bindingsVisibleToDirectEval.has(binding.identifier) ||
+        binding.path.isFunctionDeclaration() ||
+        binding.path.isClassDeclaration() ||
+        exportedSymbolsBefore.includes("Math")
+      ) {
+        throw new InvalidJavaScriptCarrierError(
+          "Cannot safely protect a lexical Math binding: injected predicates require the ambient Math.imul",
+        );
+      }
+      path.scope.rename("Math", path.scope.generateUidIdentifier("blaLocalMath").name);
+    },
+  });
+
+  // Preserve observable names without dropping the existing obfuscation
+  // of unrelated private helper functions and class declarations.
+  const nameObservedBindings = new Set<t.Identifier>();
+  const observeNameOf = (scope: Scope, node: t.Node): void => {
+    if (t.isIdentifier(node)) {
+      let binding = scope.getBinding(node.name);
+      while (binding !== undefined && !nameObservedBindings.has(binding.identifier)) {
+        nameObservedBindings.add(binding.identifier);
+        if (binding.path.isVariableDeclarator()) {
+          const init = binding.path.node.init;
+          if (t.isIdentifier(init)) {
+            binding = binding.scope.getBinding(init.name);
+            continue;
+          }
+          if (t.isNewExpression(init) && t.isIdentifier(init.callee)) {
+            observeNameOf(binding.scope, init.callee);
+          }
+        }
+        break;
+      }
+    } else if (t.isNewExpression(node) && t.isIdentifier(node.callee)) {
+      observeNameOf(scope, node.callee);
+    } else if (
+      (t.isMemberExpression(node) || t.isOptionalMemberExpression(node)) &&
+      (node.computed
+        ? t.isStringLiteral(node.property) && node.property.value === "constructor"
+        : t.isIdentifier(node.property) && node.property.name === "constructor")
+    ) {
+      observeNameOf(scope, node.object);
+    }
+  };
+  const observesName = (node: t.MemberExpression | t.OptionalMemberExpression): boolean =>
+    node.computed
+      ? t.isStringLiteral(node.property) && node.property.value === "name"
+      : t.isIdentifier(node.property) && node.property.name === "name";
+
+  traverse(ast, {
+    MemberExpression(path) {
+      if (observesName(path.node)) observeNameOf(path.scope, path.node.object);
+    },
+    OptionalMemberExpression(path) {
+      if (observesName(path.node)) observeNameOf(path.scope, path.node.object);
+    },
+    CallExpression(path) {
+      const callee = path.node.callee;
+      if (
+        t.isMemberExpression(callee) &&
+        t.isIdentifier(callee.object) &&
+        t.isIdentifier(callee.property) &&
+        ((callee.object.name === "Object" && callee.property.name === "getOwnPropertyDescriptor") ||
+          (callee.object.name === "Reflect" && callee.property.name === "get")) &&
+        t.isStringLiteral(path.node.arguments[1]) &&
+        path.node.arguments[1].value === "name"
+      ) {
+        const target = path.node.arguments[0];
+        if (target && !t.isSpreadElement(target)) observeNameOf(path.scope, target);
+      }
+    },
+  });
+
   const seedVarName = prng.identifier({ style: "camel", hint: "runtimeSeed", entropy: 4 });
   const observedIpcChannels = new Set<string>();
   const observedProtocolSchemes = new Set<string>();
@@ -547,6 +646,8 @@ export function transformJavaScriptWithBlaShield(
     },
   ): void => {
     const callee = path.node.callee;
+    // Leave dynamic eval arguments untouched: they may contain lexical names.
+    if (t.isIdentifier(callee) && callee.name === "eval") return;
     if (t.isIdentifier(callee) && callee.name === "require") {
       usesCjsAst = true;
       const reqArg = path.node.arguments[0];
@@ -864,7 +965,7 @@ export function transformJavaScriptWithBlaShield(
       if (
         t.isCallExpression(parent) &&
         t.isIdentifier(parent.callee) &&
-        parent.callee.name === "require"
+        (parent.callee.name === "require" || parent.callee.name === "eval")
       ) {
         return;
       }
@@ -941,6 +1042,10 @@ export function transformJavaScriptWithBlaShield(
     Scope(path) {
       for (const [name, binding] of Object.entries(path.scope.bindings)) {
         if (binding.scope !== path.scope) continue;
+        if (bindingsVisibleToDirectEval.has(binding.identifier)) continue;
+        // Function/class names remain obfuscated except when the source
+        // actually reads their runtime .name (including constructor.name).
+        if (nameObservedBindings.has(binding.identifier)) continue;
         if (RENAME_RESERVED.has(name)) continue;
         if (exportedNameSet.has(name)) continue;
         if (binding.kind === "module") continue;
@@ -1001,6 +1106,19 @@ export function transformJavaScriptWithBlaShield(
         } catch {
           // Binding may be constant-violating or conflict; skip safely
         }
+      }
+    },
+  });
+
+  // Injected predicates require the ambient Math.imul. Rename supported
+  // customer Math bindings, but fail closed for imported/exported or eval-
+  // visible bindings that cannot be renamed without breaking the programme.
+  traverse(ast, {
+    Scope(path) {
+      if (Object.hasOwn(path.scope.bindings, "Math")) {
+        throw new InvalidJavaScriptCarrierError(
+          "Cannot safely protect a lexical Math binding: injected predicates require the ambient Math.imul",
+        );
       }
     },
   });

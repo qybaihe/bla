@@ -313,7 +313,14 @@ export interface VerificationReport {
   readonly targetPath: string;
   readonly originalPath?: string;
   readonly detectedFormat: ArtifactFormat;
+  /** Structural Counter-REA checks only; not an executable runtime-parity verdict. */
   readonly overallPassed: boolean;
+  readonly verificationScope?: "counter-rea-structural";
+  /** Static inspection does not execute original and protected programmes. */
+  readonly runtimeEquivalence?: {
+    readonly status: "not-tested";
+    readonly reason: string;
+  };
   /** Soft-capped Counter-REA gate score (0–100). Not a preimage-hardness claim. */
   readonly defenseScore: number;
   /** Raw gate score before honesty soft-caps (issue #40.6). */
@@ -328,6 +335,7 @@ export interface VerificationReport {
   readonly tokenAmplificationFactor: number;
   readonly costAmplificationFactor: number;
   readonly obligationGraphExpansionFactor: number;
+  /** True only with actual executable before/after parity evidence; static verify returns false. */
   readonly functionalIntegrityVerified: boolean;
   /**
    * Machine-readable statement of what this verification does and does not

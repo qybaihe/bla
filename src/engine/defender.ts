@@ -93,7 +93,11 @@ export interface OneClickDefenseReport {
   readonly sidecarEntangle: boolean;
   /** True when stage 5 emitted an ed25519-signed manifest. */
   readonly manifestSigned?: boolean;
+  /** Success of the hardening pipeline and structural Counter-REA checks only. */
   readonly overallSuccess: boolean;
+  readonly overallSuccessScope: "hardening-and-structural-checks";
+  /** Customers must independently test executable runtime equivalence. */
+  readonly runtimeEquivalence?: VerificationReport["runtimeEquivalence"];
   readonly stages: readonly OneClickDefenseStageSummary[];
   readonly releaseExposure: ReleaseExposureReport | null;
   readonly beforeAudit: AuditReport;
@@ -277,7 +281,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     {
       stage: "4-counter-rea-invariant-verification",
       status: verification.overallPassed ? "passed" : "warn",
-      headline: `Defense score ${verification.defenseScore}/100 | Token amplification: ${verification.tokenAmplificationFactor}x | Attacker API bill: ~$${afterEst.estimatedCostUsd.toFixed(2)}`,
+      headline: `Defense score ${verification.defenseScore}/100 | Token amplification: ${verification.tokenAmplificationFactor}x | Attacker API bill: ~$${afterEst.estimatedCostUsd.toFixed(2)} | Runtime equivalence NOT VERIFIED`,
     },
   ];
 
@@ -336,6 +340,8 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     selfSeal: options.selfSeal === true,
     sidecarEntangle: options.sidecarEntangle === true,
     overallSuccess: verification.overallPassed,
+    overallSuccessScope: "hardening-and-structural-checks",
+    runtimeEquivalence: verification.runtimeEquivalence,
     stages,
     releaseExposure,
     beforeAudit,
