@@ -169,6 +169,7 @@ function applySidecarEntangleToJs(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
+  carrier: "module" | "script" | "commonjs",
 ): { code: string; applied: boolean } {
   if (options.sidecarEntangle !== true) return { code: source, applied: false };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
@@ -194,6 +195,7 @@ function applySidecarEntangleToJs(
     sidecars,
     seedTag: String(seed),
     softFold: options.sidecarEntangleSoftFold === true,
+    carrier,
   });
   if (!bound) return { code: source, applied: false };
   return { code: bound.code, applied: true };
@@ -592,7 +594,13 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     }
 
     {
-      const entangled = applySidecarEntangleToJs(finalCode, options, absOutput, seed);
+      const entangled = applySidecarEntangleToJs(
+        finalCode,
+        options,
+        absOutput,
+        seed,
+        transformed.carrierType,
+      );
       finalCode = entangled.code;
       if (entangled.applied) sidecarEntangleApplied = true;
     }

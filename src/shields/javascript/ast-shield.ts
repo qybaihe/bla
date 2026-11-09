@@ -208,6 +208,43 @@ export function inferJsCarrierFromPath(filename?: string): JsCarrierType {
   return "auto";
 }
 
+/**
+ * Re-detect the runtime carrier of an already-transformed entry (e.g. a
+ * protected output read back by a post-pass) using the same rules the shield
+ * applies to its own input.
+ */
+export function detectJsCarrierForSource(
+  source: string,
+  filename?: string,
+): "module" | "script" | "commonjs" {
+  const loader = inferJsLoaderFromPath(filename);
+  const requested = inferJsCarrierFromPath(filename);
+  const parserSourceType =
+    requested === "module"
+      ? "module"
+      : requested === "commonjs" || requested === "script"
+        ? "script"
+        : "unambiguous";
+  try {
+    const ast = parse(source, {
+      sourceType: parserSourceType,
+      plugins: buildParserPlugins(loader, filename !== undefined),
+      errorRecovery: false,
+    });
+    const hasEsmNodes = ast.program.body.some(
+      (stmt) =>
+        t.isImportDeclaration(stmt) ||
+        t.isExportNamedDeclaration(stmt) ||
+        t.isExportDefaultDeclaration(stmt) ||
+        t.isExportAllDeclaration(stmt),
+    );
+    if (requested === "module" || hasEsmNodes) return "module";
+    return requested === "commonjs" ? "commonjs" : "script";
+  } catch {
+    return requested === "module" ? "module" : requested === "commonjs" ? "commonjs" : "script";
+  }
+}
+
 export function collectEsmExportedSymbols(program: t.Program): string[] {
   const exported: string[] = [];
   for (const stmt of program.body) {
