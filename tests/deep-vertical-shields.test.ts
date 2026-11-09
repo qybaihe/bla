@@ -199,7 +199,10 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
   });
 
   it("protects Android DEX (classes.dex) and Unity IL2CPP (global-metadata.dat) containers", () => {
-    const resDex = protectAndroidDexBuffer(Buffer.alloc(0), {
+    const dexInput = Buffer.alloc(112, 0);
+    dexInput.write("dex\n035\0", 0, "latin1");
+    dexInput.writeUInt32LE(112, 36);
+    const resDex = protectAndroidDexBuffer(dexInput, {
       intensity: "balanced",
       seed: "dex-seed",
     });
@@ -210,7 +213,9 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     expect(dexInfo.fileSize).toBe(resDex.buffer.length);
     expect(dexInfo.blaProtected).toBe(true);
 
-    const resIl2cpp = protectIl2cppMetadataBuffer(Buffer.alloc(0), {
+    const il2cppInput = Buffer.alloc(256, 0);
+    il2cppInput.writeUInt32LE(0xfab11baf, 0);
+    const resIl2cpp = protectIl2cppMetadataBuffer(il2cppInput, {
       intensity: "balanced",
       seed: "il2cpp-seed",
     });

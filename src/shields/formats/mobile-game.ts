@@ -66,6 +66,17 @@ export function protectAndroidDexBuffer(
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
 } {
+  if (
+    bytes.length < 112 ||
+    bytes[0] !== 0x64 ||
+    bytes[1] !== 0x65 ||
+    bytes[2] !== 0x78 ||
+    bytes[3] !== 0x0a
+  ) {
+    throw new Error(
+      "Invalid Android DEX container: expected a 'dex\\n' header with at least 112 bytes; refusing to synthesize a replacement container.",
+    );
+  }
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-dex-shield-v1");
   const chaffPayloads = generateChaffPayloads(prng, intensity);
@@ -81,15 +92,7 @@ export function protectAndroidDexBuffer(
     decoyClasses.push(`Lcom/enclave/tarpit/EnclaveStateNode_${prng.hex(6)}_${i};`);
   }
 
-  let baseDex: Buffer;
-  if (bytes.length >= 112 && bytes[0] === 0x64 && bytes[1] === 0x65 && bytes[2] === 0x78) {
-    baseDex = Buffer.from(bytes);
-  } else {
-    baseDex = Buffer.alloc(112, 0);
-    baseDex.write("dex\n035\0", 0, "ascii");
-    baseDex.writeUInt32LE(112, 36); // header_size = 0x70
-    baseDex.writeUInt32LE(0x12345678, 40); // endian_tag
-  }
+  const baseDex = Buffer.from(bytes);
 
   // Trailer doubles as a string-pool pollution region for JADX/JEB string scanners
   // and plants JNI-mangled Java_* names that match the decoy .so exports (REA #7472).
@@ -143,14 +146,12 @@ export function protectIl2cppMetadataBuffer(
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
-  let header: Buffer;
-  if (bytes.length >= 256 && bytes.readUInt32LE(0) === 0xfab11baf) {
-    header = Buffer.from(bytes);
-  } else {
-    header = Buffer.alloc(256, 0);
-    header.writeUInt32LE(0xfab11baf, 0); // magic
-    header.writeInt32LE(29, 4); // version 29
+  if (bytes.length < 256 || bytes.readUInt32LE(0) !== 0xfab11baf) {
+    throw new Error(
+      "Invalid Unity IL2CPP metadata: expected the 0xFAB11BAF magic with at least 256 bytes; refusing to synthesize a replacement container.",
+    );
   }
+  const header = Buffer.from(bytes);
 
   const decoyLiteralsCount = intensity === "stealth" ? 32 : intensity === "balanced" ? 128 : 512;
   const literals: string[] = [];
