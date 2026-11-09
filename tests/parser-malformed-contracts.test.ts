@@ -1,11 +1,16 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { inspectErlangBeam, protectErlangBeamBuffer } from "../src/shields/formats/erlang-beam.js";
 import { inspectPcapCapture, protectPcapCaptureBuffer } from "../src/shields/formats/pcap-capture.js";
 import { protectApplePlistBuffer } from "../src/shields/formats/apple-plist.js";
 import { protectDotnetManagedBuffer } from "../src/shields/formats/dotnet-managed.js";
-import { protectGpuPtxText } from "../src/shields/formats/gpu-ptx.js";
+import { inspectGpuPtx, protectGpuPtxText } from "../src/shields/formats/gpu-ptx.js";
 import { protectEvmBytecodeBuffer } from "../src/shields/formats/evm-bytecode.js";
 import { UF2_BLOCK_BYTES, protectUf2FirmwareBuffer } from "../src/shields/formats/firmware-uf2.js";
+import { auditTarget } from "../src/engine/auditor.js";
+import { verifyTarget } from "../src/engine/verifier.js";
 
 const u32 = (n: number): Buffer => {
   const b = Buffer.alloc(4);
@@ -116,5 +121,31 @@ describe("parser shields fail closed on malformed input", () => {
     const trickyBytecode = Buffer.from([0x60, 0x00, 0xa1, 0xaa, 0xbb, 0x00, 0x03]);
     const out = protectEvmBytecodeBuffer(trickyBytecode, { intensity: "balanced", seed: "evm-contract" });
     expect(out.buffer.subarray(0, trickyBytecode.length).equals(trickyBytecode)).toBe(true);
+  });
+
+  it("rejects bare [BLA-PTX-SHIELD] marker spoofing without structural decoy kernels (#155)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-ptx-spoof-"));
+    try {
+      const origPath = join(dir, "original.ptx");
+      const spoofPath = join(dir, "spoofed.ptx");
+      const basePtx = `.version 7.5\n.target sm_80\n.address_size 64\n.visible .entry customerKernel() {\n  ret;\n}\n`;
+      const spoofedPtx = `${basePtx}\n// [BLA-PTX-SHIELD]\n`;
+      writeFileSync(origPath, basePtx, "utf8");
+      writeFileSync(spoofPath, spoofedPtx, "utf8");
+
+      const inspected = inspectGpuPtx(spoofedPtx);
+      expect(inspected.blaProtected).toBe(false);
+      expect(inspected.decoyEntryCount).toBe(0);
+
+      const audit = auditTarget(spoofPath);
+      expect(audit.protectionStatus).toBe("UNPROTECTED");
+      expect(audit.reaSimulation.decoyFunctionsDetectedAsReal).toBe(0);
+      expect(audit.reaSimulation.triggeredResourceLimits).toEqual([]);
+
+      const verify = verifyTarget(spoofPath, origPath);
+      expect(verify.overallPassed).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

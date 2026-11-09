@@ -28,6 +28,12 @@ import { readZipEntries } from "../shields/formats/archive.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { inspectModelBuffer } from "../shields/formats/model.js";
 import { inspectAndroidDex } from "../shields/formats/mobile-game.js";
+import { inspectErlangBeam } from "../shields/formats/erlang-beam.js";
+import { inspectEvmBytecode } from "../shields/formats/evm-bytecode.js";
+import { inspectPcapCapture } from "../shields/formats/pcap-capture.js";
+import { inspectGpuPtx } from "../shields/formats/gpu-ptx.js";
+import { inspectUf2Firmware } from "../shields/formats/firmware-uf2.js";
+import { REA_INTERNAL_LIMITS } from "../identity.js";
 
 type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
 type TraverseFn = UnwrapDefault<typeof _traverse>;
@@ -1089,8 +1095,21 @@ export function auditTarget(targetPath: string): AuditReport {
       };
     } else if (format === "erlang-beam") {
       vulnerableVectors.add("erlang-beam-inspection");
-      const text = rawBytes.toString("latin1");
-      const isProtected = text.includes("[BLA-BEAM-SHIELD]");
+      const beamInfo = inspectErlangBeam(rawBytes);
+      const isProtected =
+        beamInfo.validMagic &&
+        beamInfo.blaProtected &&
+        (beamInfo.chunkCount > REA_INTERNAL_LIMITS.BEAM_DEFAULT_MAX_CHUNKS ||
+          beamInfo.atomCount > 10);
+      const limits: string[] = [];
+      if (beamInfo.chunkCount > REA_INTERNAL_LIMITS.BEAM_DEFAULT_MAX_CHUNKS) {
+        limits.push("erlang-beam-chunks (max_chunks default 64)");
+      }
+      if (beamInfo.atomCount > REA_INTERNAL_LIMITS.BEAM_DEFAULT_MAX_ATOMS) {
+        limits.push("erlang-beam-atoms (max_atoms default 4096)");
+      } else if (isProtected) {
+        limits.push(`erlang-beam-decoy-atoms (${beamInfo.atomCount} atoms)`);
+      }
       exposedItems.push({
         id: `beam_${basename(absPath)}`,
         name: basename(absPath),
@@ -1107,12 +1126,7 @@ export function auditTarget(targetPath: string): AuditReport {
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
-        triggeredResourceLimits: isProtected
-          ? [
-              "erlang-beam-chunks (max_chunks default 64)",
-              "erlang-beam-atoms (max_atoms default 4096)",
-            ]
-          : [],
+        triggeredResourceLimits: limits,
         totalFunctions: 6,
         decoyFunctionsDetectedAsReal: isProtected ? 24 : 0,
         obligationLedgerNodes: isProtected ? 72 : 6,
@@ -1120,8 +1134,18 @@ export function auditTarget(targetPath: string): AuditReport {
       };
     } else if (format === "evm-bytecode") {
       vulnerableVectors.add("evm-bytecode-inspection");
-      const text = rawBytes.toString("utf8");
-      const isProtected = text.includes("[BLA-EVM-SHIELD]");
+      const evmInfo = inspectEvmBytecode(rawBytes);
+      const isProtected =
+        evmInfo.hasSolidityMetadata &&
+        evmInfo.blaProtected &&
+        evmInfo.metadataBytes >= 32;
+      const limits: string[] = [];
+      if (rawBytes.length >= REA_INTERNAL_LIMITS.EVM_INPUT_BYTES - 8192) {
+        limits.push("evm-input-bytes (EVM_INTERFACE_LIMITS.inputBytes)");
+      }
+      if (isProtected) {
+        limits.push("evm-solidity-metadata-cbor");
+      }
       exposedItems.push({
         id: `evm_${basename(absPath)}`,
         name: basename(absPath),
@@ -1138,9 +1162,7 @@ export function auditTarget(targetPath: string): AuditReport {
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
-        triggeredResourceLimits: isProtected
-          ? ["evm-input-bytes (EVM_INTERFACE_LIMITS.inputBytes)", "evm-solidity-metadata-cbor"]
-          : [],
+        triggeredResourceLimits: limits,
         totalFunctions: 4,
         decoyFunctionsDetectedAsReal: isProtected ? 16 : 0,
         obligationLedgerNodes: isProtected ? 36 : 4,
@@ -1148,7 +1170,9 @@ export function auditTarget(targetPath: string): AuditReport {
       };
     } else if (format === "pcap-capture") {
       vulnerableVectors.add("pcap-capture-inspection");
-      const isProtected = rawBytes.includes(Buffer.from("[BLA-PCAP-SHIELD]", "utf8"));
+      const pcapInfo = inspectPcapCapture(rawBytes);
+      const isProtected =
+        pcapInfo.validMagic && pcapInfo.blaProtected && pcapInfo.packetCount >= 8;
       exposedItems.push({
         id: `pcap_${basename(absPath)}`,
         name: basename(absPath),
@@ -1169,14 +1193,22 @@ export function auditTarget(targetPath: string): AuditReport {
           ? ["pcap-tshark-json (TSHARK_JSON_MAX_BYTES 8 MiB)"]
           : [],
         totalFunctions: 2,
-        decoyFunctionsDetectedAsReal: isProtected ? 16 : 0,
-        obligationLedgerNodes: isProtected ? 32 : 2,
+        decoyFunctionsDetectedAsReal: isProtected ? pcapInfo.packetCount : 0,
+        obligationLedgerNodes: isProtected ? Math.max(16, pcapInfo.packetCount * 2) : 2,
         architecturalChaffPayloads: isProtected ? 4 : 0,
       };
     } else if (format === "gpu-ptx") {
       vulnerableVectors.add("gpu-ptx-inspection");
       const text = rawBytes.toString("utf8");
-      const isProtected = text.includes("[BLA-PTX-SHIELD]");
+      const ptxInfo = inspectGpuPtx(text);
+      const isProtected = ptxInfo.blaProtected;
+      const limits: string[] = [];
+      if (rawBytes.length >= REA_INTERNAL_LIMITS.GPU_REPORT_BYTES) {
+        limits.push("gpu-report-bytes (GPU_REPORT_BYTES 16 MiB)");
+      }
+      if (isProtected) {
+        limits.push(`gpu-ptx-entry-facts (${ptxInfo.decoyEntryCount} decoy .entry kernels)`);
+      }
       exposedItems.push({
         id: `ptx_${basename(absPath)}`,
         name: basename(absPath),
@@ -1187,23 +1219,25 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: isProtected ? 48_000 : 1_200,
         estimatedCostUsd: isProtected ? 3.6 : 0.05,
         reason: isProtected
-          ? "Protected by BLA PTX decoy .entry flood + diagnostic comments"
+          ? `Protected by BLA PTX decoy .entry flood (${ptxInfo.decoyEntryCount} decoy kernels) + diagnostic comments`
           : "PTX .entry/.param declarations directly harvested by REA",
       });
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
-        triggeredResourceLimits: isProtected
-          ? ["gpu-report-bytes (GPU_REPORT_BYTES 16 MiB)", "gpu-ptx-entry-facts"]
-          : [],
-        totalFunctions: isProtected ? 20 : 1,
-        decoyFunctionsDetectedAsReal: isProtected ? 20 : 0,
-        obligationLedgerNodes: isProtected ? 48 : 2,
-        architecturalChaffPayloads: isProtected ? 5 : 0,
+        triggeredResourceLimits: limits,
+        totalFunctions: Math.max(1, ptxInfo.entryCount),
+        decoyFunctionsDetectedAsReal: ptxInfo.decoyEntryCount,
+        obligationLedgerNodes: isProtected
+          ? Math.max(16, ptxInfo.decoyEntryCount * 2)
+          : Math.max(2, ptxInfo.entryCount),
+        architecturalChaffPayloads: isProtected ? ptxInfo.diagnosticCommentCount : 0,
       };
     } else if (format === "firmware-uf2") {
       vulnerableVectors.add("uf2-firmware-inspection");
-      const isProtected = rawBytes.includes(Buffer.from("[BLA-UF2-SHIELD]", "utf8"));
+      const uf2Info = inspectUf2Firmware(rawBytes);
+      const isProtected =
+        uf2Info.validMagic && uf2Info.blaProtected && uf2Info.blockCount >= 4;
       exposedItems.push({
         id: `uf2_${basename(absPath)}`,
         name: basename(absPath),

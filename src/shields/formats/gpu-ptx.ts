@@ -5,6 +5,8 @@ import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.j
 export interface GpuPtxInspection {
   readonly looksLikePtx: boolean;
   readonly entryCount: number;
+  readonly decoyEntryCount: number;
+  readonly diagnosticCommentCount: number;
   readonly blaProtected: boolean;
 }
 
@@ -13,10 +15,21 @@ export function inspectGpuPtx(text: string): GpuPtxInspection {
     /\.version\s+\d/.test(text) &&
     (/\.entry\s+\w/.test(text) || /\.target\s+sm_/.test(text));
   const entryCount = (text.match(/\.entry\s+/g) ?? []).length;
+  const decoyEntryCount = (
+    text.match(
+      /\.visible\s+\.entry\s+bla_tarpit_kernel_\d+_[0-9a-f]{4,16}\s*\(\.param\s+\.u64\s+bla_tarpit_kernel_\d+_[0-9a-f]{4,16}_param_0\)/g,
+    ) ?? []
+  ).length;
+  const diagnosticCommentCount = (text.match(/^\/\/ DIAG: /gm) ?? []).length;
   return {
     looksLikePtx,
     entryCount,
-    blaProtected: text.includes("[BLA-PTX-SHIELD]"),
+    decoyEntryCount,
+    diagnosticCommentCount,
+    blaProtected:
+      text.includes("[BLA-PTX-SHIELD]") &&
+      decoyEntryCount >= 8 &&
+      diagnosticCommentCount >= 4,
   };
 }
 

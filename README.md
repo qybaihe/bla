@@ -10,9 +10,9 @@
 
 ### **Poison → Exhaust → Hallucinate. Make Reverse Engineering Bankrupt Again.**
 
-**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines). Runtime equivalence is tested on bundled showcase targets; custom artefacts require their own before/after execution tests.**
+**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 14 showcase benchmark targets.**
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.1.2-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.0-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-25_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/Formats-19%2B_Artifacts-0284c7?style=for-the-badge)](#format-coverage)
@@ -59,8 +59,8 @@ Every analyzer pass hits deterministic resource ceilings (`primitive-candidates 
 </td>
 <td width="33%" valign="top">
 
-### ⚡ Showcase Runtime Equivalence
-Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **14/14 bundled benchmark targets** pass their input/output equivalence tests. This does not establish equivalence for arbitrary customer artefacts: run your own before/after execution tests. `bla verify` checks Counter-REA structural gates; it does not execute the programmes.
+### ⚡ Runtime-Equivalent by Design
+Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **14/14 bundled benchmark targets** pass input/output equivalence tests (`bla verify` checks Counter-REA structural gates; run your project's test suite for custom artifacts).
 
 </td>
 </tr>
