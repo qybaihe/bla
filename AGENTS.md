@@ -22,7 +22,7 @@ This repository contains **BLA (`bla-agents` — Blind LLM Agents)**, an open-so
   - `javascript/ast-shield.ts`: Babel AST shield combining opaque ternaries, Electron IPC de-literalization, exhaustion suite, and deception suite.
   - `formats/`: Format-specific shields for `sourcemap.ts`, `asar.ts`, `electron-fuses.ts`, `wasm.ts`, `python.ts`, `native.ts`, `sqlite.ts`, `model.ts`, `mobile-game.ts`, `apple-plist.ts`, `dotnet-managed.ts`, `headers.ts`, and `archive.ts`.
 - `src/bundler/index.ts`: Vite, Rollup, Webpack, and esbuild bundler plugins (`bla-agents/bundler`).
-- `src/engine/`: `defender.ts` (One-Click 5-Stage `defendTarget`), `auditor.ts`, `protector.ts`, `verifier.ts`, and `benchmark.ts` (8-target showcase benchmark).
+- `src/engine/`: `defender.ts` (One-Click 5-Stage `defendTarget`), `auditor.ts`, `protector.ts`, `verifier.ts`, and `benchmark.ts` (14-target showcase benchmark).
 - `src/mcp/server.ts`: JSON-RPC 2.0 MCP stdio server (`bla_defend`, `bla_audit`, `bla_protect`, `bla_verify`, `bla_benchmark`, `bla_emit_headers`, `bla_doctor`).
 - `src/setup/`: Auto-registration for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity.
 

@@ -9,7 +9,7 @@ description: >
   MCP tools / CLI — do not invent new MCP tools. Default verb: bla_harden. Refuse
   crack/RE of third-party software.
 metadata:
-  version: "3.1.1"
+  version: "3.2.5"
 ---
 
 # BLA: Blind LLM Agents (3.0 Agent-Driven Hardening Playbook)

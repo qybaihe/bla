@@ -55,6 +55,13 @@ Patch extending opt-in `sidecarEntangle` to **Electron ASAR archive-note compani
 ### Fixed
 - Removed accidental `selfSeal` spread onto the ASAR decoy `VirtualAsarFile` for `enclave/hardware-tee-bridge.js`.
 
+## [3.2.1] — 2026-11-09
+
+Patch release tightening the pre-flight checks that decide whether an artifact may claim BLA protection.
+
+### Fixed
+- **Structural proof before protection claims (#154, #155):** `auditTarget` / `verifyTarget` now require real decoy kernels and container structure before reporting `BLA_PROTECTED`, closing the JS runtime-parity regression and the PTX marker-spoof false positive.
+
 ## [3.2.0] — 2026-11-08
 
 Minor release extending opt-in `sidecarEntangle` to **Bun / EOF-preserved native companions** and closing the defenseScore honesty gap when entanglement is left OFF.
