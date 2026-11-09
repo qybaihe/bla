@@ -1,5 +1,29 @@
 # BLA nightly development log
 
+## 2026-11-09 ~Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `559083be2` → `e9b6c87c1` (**+142** commits).
+- Headline surface area: desktop/AppImage host tooling, Android `.note.android.ident`,
+  Deno compile inventory (#8527), ELF unwind/init arrays, V8 cachedData boundaries —
+  no new 1:1 trip-able budget constants that beat the queued ASAR companion slice.
+- Electron ASAR tests/polish only (`#9549` authorized ASAR path) — reinforces
+  archive-note strip⇒fail as the right defensive increment.
+
+### Done tonight
+- ASAR archive-note sidecar entanglement (`generateSidecarAsarArchiveNote` /
+  `bindAsar` / `entangleAsar` / `verifyAsarSidecarArchiveNote`; in-archive
+  `.bla/sidecar.v1.json` binding `enclave/hardware-tee-bridge.js`; protect +
+  harden ASAR-only post-pass; default OFF via existing `sidecarEntangle`).
+- Fixed accidental `selfSeal` spread onto the ASAR decoy `VirtualAsarFile`.
+- Gates: build OK, tests **683 passed / 4 skipped**, benchmark **14/14** runtime-equivalent.
+- Pushed `origin/main`; release **bla-agents@3.2.2**.
+
+### Next step (following night)
+1. Optional ASAR main JS preamble (Electron fs-patched member re-measure).
+2. Optional JS-loader `verifyWasmSidecarCustomSection`.
+3. Scan REA Deno compile (#8527) / ELF unwind for a net-positive 1:1 counter.
+
 ## 2026-11-01 ~02:10 (Asia/Singapore)
 
 ### REA delta

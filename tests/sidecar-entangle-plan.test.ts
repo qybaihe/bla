@@ -44,7 +44,7 @@ describe("sidecar entry entanglement planner (Direction-3)", () => {
     expect(plan.coverageEvaluation.shouldRefuseBankrupt).toBe(true);
   });
 
-  it("guesses python / wasm hook kinds", () => {
+  it("guesses python / wasm / asar hook kinds", () => {
     expect(
       planSidecarEntanglement({ entryPath: "app.py", sidecarPaths: ["app.pyc"] })
         .entryHookKind,
@@ -53,5 +53,9 @@ describe("sidecar entry entanglement planner (Direction-3)", () => {
       planSidecarEntanglement({ entryPath: "core.wasm", sidecarPaths: ["core.name"] })
         .entryHookKind,
     ).toBe("wasm-custom-section");
+    expect(
+      planSidecarEntanglement({ entryPath: "app.asar", sidecarPaths: ["enclave/hardware-tee-bridge.js"] })
+        .entryHookKind,
+    ).toBe("asar-archive-note");
   });
 });

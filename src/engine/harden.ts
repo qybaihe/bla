@@ -36,13 +36,16 @@ import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
 import {
+  ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
   BUN_SIDECAR_COMPANION_SUFFIX,
+  entangleAsarEntryWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
 } from "../shields/runtime/sidecar-entangle.js";
+import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
 import {
   finalizeSelfSealSelfDigest,
   verifySelfSealSelfDigest,
@@ -1178,6 +1181,58 @@ export function hardenProject(
               { allowLinkWriteThrough: false },
             );
           }
+        }
+      }
+
+      // ASAR archive-note post-pass only when no JS/Python/WASM/Bun entry was
+      // bound — plant `.bla/sidecar.v1.json` binding the decoy bridge member.
+      const asarLike = summaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "electron-asar" ||
+            /\.asar$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      if (!jsEntry && !pyEntry && !wasmEntry && asarLike.length > 0) {
+        for (const asarEntry of asarLike) {
+          const entryAbs = join(outputRoot, asarEntry.relativePath);
+          if (!existsSync(entryAbs)) continue;
+          const raw = readFileSync(entryAbs);
+          let members;
+          try {
+            members = unpackAsarBuffer(raw);
+          } catch {
+            continue;
+          }
+          if (members.some((m) => m.relativePath === ASAR_SIDECAR_ARCHIVE_NOTE_PATH)) {
+            continue; // already planted by protect
+          }
+          const bridge = members.find(
+            (m) => m.relativePath === "enclave/hardware-tee-bridge.js",
+          );
+          if (!bridge) continue;
+          const entryLabel = basename(entryAbs);
+          const bound = entangleAsarEntryWithSidecars({
+            entryPath: entryLabel,
+            entryBytes: raw,
+            sidecars: [
+              {
+                pathLabel: "enclave/hardware-tee-bridge.js",
+                bytes: bridge.content,
+              },
+            ],
+            seedTag: String(options.seed ?? runId),
+          });
+          if (!bound) continue;
+          const repacked = packAsarBuffer([
+            ...members,
+            {
+              relativePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+              content: bound.noteBytes,
+            },
+          ]);
+          writeFileAtomicSync(entryAbs, repacked, undefined, {
+            allowLinkWriteThrough: false,
+          });
         }
       }
     } catch (err) {

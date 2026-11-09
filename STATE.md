@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 3.1.1 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 3.2.2 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tagged releases (`git tag bla-agents-<version>`) plus GitHub Releases. The release workflow can also publish the packed tarball to npm with provenance when `NPM_TOKEN`/OIDC is configured; a release cut may intentionally skip the npm step (see `CHANGELOG.md`).
 
@@ -106,7 +106,7 @@ CrackMe v8 red team (round-20261106): **NO PRIZE** — key/FLAG not recovered; `
 ## Nightly roadmap remaining
 
 1. ~~**Self-seal / defenseScore honesty (#40)**~~ — landed soft-caps + opt-in `--self-seal` / MCP `self_seal` / `.blarc selfSeal` (batch 2026-11-02). Remaining: deeper onefile/peel score model.
-2. **Sidecar entry entanglement** — JS strip⇒fail landed 2026-11-05; Python preamble landed 2026-11-06 nightly; WASM `bla.sidecar.v1` custom-section + host verify landed 2026-11-07 nightly; Bun `.bla-sidecar.v1.json` companion + defenseScore `sidecar-entangle-not-enabled` gap landed 2026-11-08 nightly. Remaining: ASAR archive-note companion; optional JS-loader `verifyWasmSidecarCustomSection`.
+2. **Sidecar entry entanglement** — JS strip⇒fail landed 2026-11-05; Python preamble landed 2026-11-06 nightly; WASM `bla.sidecar.v1` custom-section + host verify landed 2026-11-07 nightly; Bun `.bla-sidecar.v1.json` companion + defenseScore `sidecar-entangle-not-enabled` gap landed 2026-11-08 nightly; ASAR `.bla/sidecar.v1.json` archive-note landed 2026-11-09 nightly. Remaining: optional ASAR main JS preamble; optional JS-loader `verifyWasmSidecarCustomSection`.
 3. **Deception shields → more formats** — WASM export rename + `wasmPreserveExports` landed; DEX/SQLite/model densify and broader numeric template hygiene still open.
 4. **Empirical JADX / Android red-team** — real REA mapping+JNI vs BLA-hardened unsigned APK.
 5. **ESP flash / esp-image (#8228)** — if REA moved there; UF2 empirical red-team otherwise.

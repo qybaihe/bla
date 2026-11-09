@@ -8,7 +8,8 @@
  * `sidecarEntangle` is set; WASM uses a `bla.sidecar.v1` custom-section note
  * plus host-side `verifyWasmSidecarCustomSection`; Bun standalone plants a
  * sibling `.bla-sidecar.v1.json` companion note (byte-exact binary preserved)
- * verified by `verifyBunSidecarCompanionNote` (see
+ * verified by `verifyBunSidecarCompanionNote`; Electron ASAR plants an in-archive
+ * `.bla/sidecar.v1.json` note verified by `verifyAsarSidecarArchiveNote` (see
  * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
@@ -33,6 +34,7 @@ import {
   readWasmCustomSectionContent,
   stripWasmCustomSectionByName,
 } from "../formats/wasm.js";
+import { unpackAsarBuffer } from "../formats/asar.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -73,6 +75,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   if (/\.(mjs|cjs|js|ts|tsx|jsx)$/.test(lower)) return "js-preamble";
   if (/\.py$/.test(lower)) return "python-preamble";
   if (/\.wasm$/.test(lower)) return "wasm-custom-section";
+  if (/\.asar$/.test(lower)) return "asar-archive-note";
   return "unspecified";
 }
 
@@ -1227,6 +1230,327 @@ export function verifyBunSidecarCompanionNote(
         bytes: new TextEncoder().encode(`missing:${label}`),
       });
     }
+  }
+
+  const measured = computeSidecarBindingDigest(
+    {
+      pathLabel: note.entryPath,
+      bytes: new Uint8Array(0),
+    },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+
+  if (measured.hex === note.digest) {
+    return {
+      ok: true,
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+
+  if (note.softFold) {
+    return {
+      ok: false,
+      reason: "integrity binding mismatch (soft-fold)",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: (measured.u32 ^ 0xffffffff) >>> 0,
+      softFold: true,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "integrity binding mismatch",
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: false,
+  };
+}
+
+
+
+/** In-archive companion note path inside an Electron `.asar` (Pickle member). */
+export const ASAR_SIDECAR_ARCHIVE_NOTE_PATH = ".bla/sidecar.v1.json" as const;
+export const ASAR_SIDECAR_ARCHIVE_NOTE_KIND = "asar-archive-note" as const;
+
+export interface AsarSidecarArchiveNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof ASAR_SIDECAR_ARCHIVE_NOTE_KIND;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarAsarInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). */
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarAsarInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof ASAR_SIDECAR_ARCHIVE_NOTE_KIND;
+  /** UTF-8 JSON archive note (written as `.bla/sidecar.v1.json` member). */
+  readonly noteJson: string;
+  readonly note: AsarSidecarArchiveNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Canonical in-archive member path for the note. */
+  readonly archiveNotePath: typeof ASAR_SIDECAR_ARCHIVE_NOTE_PATH;
+}
+
+/**
+ * Build an ASAR archive-note that embeds the protect-time sidecar binding
+ * digest + path labels. The note is planted as the Pickle member
+ * `.bla/sidecar.v1.json` (not a sibling on disk). Strip/alter detection is via
+ * host-side `verifyAsarSidecarArchiveNote` (and optional future main JS preamble).
+ *
+ * Typical sidecars are in-archive decoys such as `enclave/hardware-tee-bridge.js`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarAsarArchiveNote(
+  options: SidecarAsarInjectOptions,
+): SidecarAsarInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: AsarSidecarArchiveNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: ASAR_SIDECAR_ARCHIVE_NOTE_KIND,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = `${JSON.stringify(note, null, 2)}\n`;
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: ASAR_SIDECAR_ARCHIVE_NOTE_KIND,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    archiveNotePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+  };
+}
+
+export interface SidecarAsarBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarAsarInjectResult;
+  /** Archive-note JSON bytes to plant as `.bla/sidecar.v1.json` (entry asar rebuilt). */
+  readonly noteBytes: Buffer;
+}
+
+/**
+ * Plan + bind for an Electron ASAR entry: compute the offline digest from
+ * in-memory in-archive sidecar member bytes and return a `bound` plan plus
+ * archive-note bytes. Uses sidecars-mode digest; the asar is repacked with the
+ * note member (real app modules otherwise untouched by this helper).
+ */
+export function bindAsarSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarAsarBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarAsarArchiveNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "asar-archive-note",
+    status: "bound",
+    note: "Bound — ASAR archive note `.bla/sidecar.v1.json` ready; plant as Pickle member with decoy sidecars. Strip/alter fails closed via verifyAsarSidecarArchiveNote.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    noteBytes: Buffer.from(inject.noteJson, "utf8"),
+  };
+}
+
+/**
+ * Convenience: given final in-archive sidecar member bytes + ASAR entry label,
+ * produce the archive note. Returns null when there are no sidecars to bind.
+ * Does NOT rewrite other members — caller plants `noteBytes` and repacks.
+ */
+export function entangleAsarEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarAsarBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindAsarSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface AsarSidecarVerifyOptions {
+  /** Archive note JSON bytes (or parsed UTF-8 string), or full ASAR buffer to unpack. */
+  readonly noteBytes?: Uint8Array | string;
+  /** Full ASAR bytes — when set, note is read from `.bla/sidecar.v1.json` member. */
+  readonly asarBytes?: Uint8Array;
+  /**
+   * In-memory archive members keyed by relative path (overrides asar unpack /
+   * disk). Used for unit tests and protect-time checks.
+   */
+  readonly memberBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface AsarSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: AsarSidecarArchiveNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+function parseAsarSidecarArchiveNote(
+  raw: string,
+): { ok: true; note: AsarSidecarArchiveNote } | { ok: false; reason: string } {
+  try {
+    const parsed = JSON.parse(raw) as AsarSidecarArchiveNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== ASAR_SIDECAR_ARCHIVE_NOTE_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return { ok: false, reason: "asar archive note malformed" };
+    }
+    return {
+      ok: true,
+      note: {
+        schema: SIDECAR_ENTANGLE_SCHEMA,
+        kind: ASAR_SIDECAR_ARCHIVE_NOTE_KIND,
+        digest: parsed.digest.toLowerCase(),
+        seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+        entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+        sidecarPaths: Array.isArray(parsed.sidecarPaths)
+          ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+          : [],
+        softFold: parsed.softFold === true,
+        mode: "sidecars",
+      },
+    };
+  } catch {
+    return { ok: false, reason: "asar archive note is not valid JSON" };
+  }
+}
+
+/**
+ * Host-side strip⇒fail check for ASAR archive notes: parse
+ * `.bla/sidecar.v1.json`, re-hash listed in-archive member bytes with the same
+ * layout as `computeSidecarBindingDigest` (sidecars mode), and compare to the
+ * embedded digest. Missing note / missing member / altered member ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY — for tests, loaders, and harden post-pass verification.
+ */
+export function verifyAsarSidecarArchiveNote(
+  options: AsarSidecarVerifyOptions,
+): AsarSidecarVerifyResult {
+  let noteRaw: string | undefined;
+  const members: Record<string, Uint8Array> = {
+    ...(options.memberBytes ?? {}),
+  };
+
+  if (options.asarBytes) {
+    try {
+      const unpacked = unpackAsarBuffer(Buffer.from(options.asarBytes));
+      for (const vf of unpacked) {
+        if (!(vf.relativePath in members)) {
+          members[vf.relativePath] = vf.content;
+        }
+      }
+    } catch {
+      return { ok: false, reason: "asar archive could not be unpacked" };
+    }
+  }
+
+  if (options.noteBytes !== undefined) {
+    noteRaw =
+      typeof options.noteBytes === "string"
+        ? options.noteBytes
+        : Buffer.from(options.noteBytes).toString("utf8");
+  } else if (members[ASAR_SIDECAR_ARCHIVE_NOTE_PATH]) {
+    noteRaw = Buffer.from(members[ASAR_SIDECAR_ARCHIVE_NOTE_PATH]!).toString("utf8");
+  } else {
+    return { ok: false, reason: "asar archive note not supplied" };
+  }
+
+  const parsed = parseAsarSidecarArchiveNote(noteRaw);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  const note = parsed.note;
+
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = members[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    sidecarParts.push({
+      pathLabel: label,
+      bytes: new TextEncoder().encode(`missing:${label}`),
+    });
   }
 
   const measured = computeSidecarBindingDigest(

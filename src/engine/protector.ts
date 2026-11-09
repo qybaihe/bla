@@ -92,7 +92,9 @@ import {
 } from "./js-wasm-hydrate-dump-lint.js";
 import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import {
+  ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
   BUN_SIDECAR_COMPANION_SUFFIX,
+  entangleAsarEntryWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
@@ -730,11 +732,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       },
     );
+    const decoyBridgeContent = Buffer.from(decoyBridgeJs.code, "utf8");
     protectedFiles.push({
       relativePath: "enclave/hardware-tee-bridge.js",
-      content: Buffer.from(decoyBridgeJs.code, "utf8"),
-    
-      ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
+      content: decoyBridgeContent,
     });
 
     // Flood ASAR Pickle JSON header past REA DEFAULT_ASAR_MAX_HEADER_BYTES at
@@ -742,6 +743,49 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     const asarAmplification = planAsarHeaderAmplification(prng, intensity);
     for (const decoy of asarAmplification.files) {
       protectedFiles.push(decoy);
+    }
+
+    // Opt-in sidecarEntangle: plant `.bla/sidecar.v1.json` archive note binding
+    // the decoy bridge (+ explicit sidecarEntanglePaths that resolve to members).
+    if (options.sidecarEntangle === true) {
+      const entryLabel = basename(absOutput);
+      const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [
+        { pathLabel: "enclave/hardware-tee-bridge.js", bytes: decoyBridgeContent },
+      ];
+      const memberIndex = new Map(
+        protectedFiles.map((f) => [f.relativePath, f.content] as const),
+      );
+      for (const rel of options.sidecarEntanglePaths ?? []) {
+        if (typeof rel !== "string" || rel.length === 0) continue;
+        if (rel === "enclave/hardware-tee-bridge.js") continue;
+        if (rel === ASAR_SIDECAR_ARCHIVE_NOTE_PATH) continue;
+        const member = memberIndex.get(rel);
+        if (member) {
+          sidecars.push({ pathLabel: rel, bytes: member });
+          continue;
+        }
+        const abs = isAbsolute(rel) ? rel : join(dirname(absOutput), rel);
+        try {
+          if (!existsSync(abs)) continue;
+          sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+        } catch {
+          /* skip unreadable */
+        }
+      }
+      const bound = entangleAsarEntryWithSidecars({
+        entryPath: entryLabel,
+        entryBytes: rawAsar,
+        sidecars,
+        seedTag: String(seed),
+        softFold: options.sidecarEntangleSoftFold === true,
+      });
+      if (bound) {
+        protectedFiles.push({
+          relativePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+          content: bound.noteBytes,
+        });
+        sidecarEntangleApplied = true;
+      }
     }
 
     const repacked = packAsarBuffer(protectedFiles);

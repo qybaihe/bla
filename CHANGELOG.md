@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.2] — 2026-11-09
+
+Patch extending opt-in `sidecarEntangle` to **Electron ASAR archive-note companions**.
+
+### Added
+- **Sidecar ASAR archive-note strip⇒fail (`.bla/sidecar.v1.json`):** `generateSidecarAsarArchiveNote` / `bindAsarSidecarEntanglement` / `entangleAsarEntryWithSidecars` / `verifyAsarSidecarArchiveNote`. When `sidecarEntangle` is on, `protectTarget` plants an in-archive `.bla/sidecar.v1.json` note binding the decoy `enclave/hardware-tee-bridge.js` (plus any explicit `sidecarEntanglePaths`). `hardenProject` ASAR-only post-pass covers trees with no JS/Python/WASM entry. Default still OFF.
+
+### Fixed
+- Removed accidental `selfSeal` spread onto the ASAR decoy `VirtualAsarFile` for `enclave/hardware-tee-bridge.js`.
+
 ## [3.2.0] — 2026-11-08
 
 Minor release extending opt-in `sidecarEntangle` to **Bun / EOF-preserved native companions** and closing the defenseScore honesty gap when entanglement is left OFF.
