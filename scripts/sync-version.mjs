@@ -70,3 +70,20 @@ for (const rel of [
   }
 }
 
+for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
+  const docPath = resolve(root, rel);
+  try {
+    const docText = readFileSync(docPath, "utf8");
+    const next = docText.replace(
+      /npm-bla--agents_v[0-9]+\.[0-9]+\.[0-9]+/g,
+      `npm-bla--agents_v${version}`,
+    );
+    if (next !== docText) {
+      writeFileSync(docPath, next, "utf8");
+      console.log(`Synced ${rel} badge -> ${version}`);
+    }
+  } catch {
+    // ignore missing optional docs
+  }
+}
+
