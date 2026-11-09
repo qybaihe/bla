@@ -167,6 +167,26 @@ interface ParsedCliArgs {
   readonly version: boolean;
 }
 
+/**
+ * Flags that always take a value. `--flag=value` is expanded into two tokens
+ * before parsing so every value flag accepts both spellings.
+ */
+const CLI_VALUE_FLAGS = new Set<string>([
+  "-o",
+  "--output",
+  "-c",
+  "--config",
+  "--fail-under",
+  "--intensity",
+  "--seed",
+  "--lang",
+  "--manifest-key",
+  "--public-key",
+  "--artifact",
+  "--client",
+  "--wasm-preserve-exports",
+]);
+
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let command = "";
   const positionals: string[] = [];
@@ -211,8 +231,28 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let help = false;
   let version = false;
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+  const expandedArgs: string[] = [];
+  for (const raw of argv) {
+    const eq = raw.startsWith("--") ? raw.indexOf("=") : -1;
+    if (eq > 2 && CLI_VALUE_FLAGS.has(raw.slice(0, eq))) {
+      expandedArgs.push(raw.slice(0, eq), raw.slice(eq + 1));
+      continue;
+    }
+    expandedArgs.push(raw);
+  }
+
+  let flagsEnded = false;
+  for (let i = 0; i < expandedArgs.length; i++) {
+    const arg = expandedArgs[i]!;
+    if (flagsEnded) {
+      if (!command) command = arg;
+      else positionals.push(arg);
+      continue;
+    }
+    if (arg === "--") {
+      flagsEnded = true;
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       help = true;
     } else if (arg === "-v" || arg === "--version") {
@@ -235,12 +275,18 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       manifest = true;
     } else if (arg === "--sign-manifest") {
       signManifest = true;
-    } else if (arg === "--manifest-key" && i + 1 < argv.length) {
-      manifestKey = argv[++i]!;
-    } else if (arg === "--public-key" && i + 1 < argv.length) {
-      publicKey = argv[++i]!;
-    } else if (arg === "--artifact" && i + 1 < argv.length) {
-      artifactPath = argv[++i]!;
+    } else if (arg === "--manifest-key") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push("--manifest-key requires a value");
+      else manifestKey = value;
+    } else if (arg === "--public-key") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push("--public-key requires a value");
+      else publicKey = value;
+    } else if (arg === "--artifact") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push("--artifact requires a value");
+      else artifactPath = value;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -275,27 +321,30 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowSinglePointIntegrity = true;
     } else if (arg === "--allow-missing-bind-runtime") {
       allowMissingBindRuntime = true;
-    } else if (arg.startsWith("--wasm-preserve-exports=")) {
-      wasmPreserveExports = arg
-        .slice("--wasm-preserve-exports=".length)
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-    } else if (arg === "--wasm-preserve-exports" && i + 1 < argv.length) {
-      wasmPreserveExports = argv[++i]!
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+    } else if (arg === "--wasm-preserve-exports") {
+      const value = expandedArgs[++i];
+      if (value === undefined) {
+        argErrors.push("--wasm-preserve-exports requires a value");
+      } else {
+        wasmPreserveExports = value
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
     } else if (arg === "--mcp") {
       command = "mcp";
     } else if (arg === "--update") {
       command = "update";
-    } else if ((arg === "-o" || arg === "--output") && i + 1 < argv.length) {
-      output = argv[++i]!;
-    } else if ((arg === "-c" || arg === "--config") && i + 1 < argv.length) {
-      configPath = argv[++i]!;
+    } else if (arg === "-o" || arg === "--output") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push(`${arg} requires a value`);
+      else output = value;
+    } else if (arg === "-c" || arg === "--config") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push(`${arg} requires a value`);
+      else configPath = value;
     } else if (arg === "--fail-under") {
-      const raw = argv[++i];
+      const raw = expandedArgs[++i];
       const n = raw === undefined ? Number.NaN : Number(raw);
       if (raw === undefined) {
         argErrors.push("--fail-under requires a value");
@@ -305,7 +354,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
         failUnder = n;
       }
     } else if (arg === "--intensity") {
-      const val = argv[++i];
+      const val = expandedArgs[++i];
       if (val === undefined) {
         argErrors.push("--intensity requires a value");
       } else if (!["stealth", "balanced", "maximum", "bankrupt"].includes(val)) {
@@ -314,14 +363,14 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
         intensity = val as ProtectionIntensity;
       }
     } else if (arg === "--seed") {
-      const val = argv[++i];
+      const val = expandedArgs[++i];
       if (val === undefined || val.trim().length === 0) {
         argErrors.push("--seed requires a non-empty value");
       } else {
         seed = val;
       }
     } else if (arg === "--lang") {
-      const val = argv[++i];
+      const val = expandedArgs[++i];
       if (val === undefined) {
         argErrors.push("--lang requires a value");
       } else if (!["c", "rust", "go"].includes(val)) {
@@ -329,11 +378,15 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       } else {
         lang = val as NativeHeaderLanguage;
       }
-    } else if (arg === "--client" && i + 1 < argv.length) {
-      clients.push(argv[++i]! as SupportedAgentClientId);
+    } else if (arg === "--client") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push("--client requires a value");
+      else clients.push(value as SupportedAgentClientId);
     } else if (!arg.startsWith("-")) {
       if (!command) command = arg;
       else positionals.push(arg);
+    } else {
+      argErrors.push(`unknown option '${arg}'`);
     }
   }
 
