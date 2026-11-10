@@ -1,0 +1,34 @@
+{
+  "name": "bla",
+  "owner": {
+    "name": "BLA Contributors"
+  },
+  "description": "BLA (Blind LLM Agents) agent skill",
+  "plugins": [
+    {
+      "name": "bla",
+      "displayName": "BLA",
+      "description": "BLA (Blind LLM Agents) Counter-REA defense skill for Claude Code",
+      "source": "./",
+      "strict": false,
+      "author": {
+        "name": "BLA Contributors",
+        "url": "https://github.com/qybaihe/bla"
+      },
+      "homepage": "https://bla.tools",
+      "repository": "https://github.com/qybaihe/bla",
+      "license": "MIT",
+      "keywords": [
+        "bla",
+        "counter-rea",
+        "llm-security",
+        "adversarial-defense",
+        "mcp"
+      ],
+      "category": "development",
+      "skills": [
+        "./.agents/skills/blind-llm-agents"
+      ]
+    }
+  ]
+}

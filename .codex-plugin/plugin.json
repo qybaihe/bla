@@ -1,0 +1,29 @@
+{
+  "name": "bla",
+  "description": "BLA (Blind LLM Agents) agent skill",
+  "author": {
+    "name": "BLA Contributors",
+    "url": "https://github.com/qybaihe/bla"
+  },
+  "homepage": "https://bla.tools",
+  "repository": "https://github.com/qybaihe/bla",
+  "license": "MIT",
+  "keywords": [
+    "bla",
+    "counter-rea",
+    "llm-security",
+    "adversarial-defense",
+    "mcp"
+  ],
+  "skills": [
+    "./.agents/skills/blind-llm-agents"
+  ],
+  "interface": {
+    "displayName": "BLA",
+    "shortDescription": "BLA (Blind LLM Agents) agent skill",
+    "longDescription": "Agent skill for hardening software against AI reverse-engineering agents with BLA, installed from the skill already in this repository.",
+    "developerName": "BLA Contributors",
+    "category": "Developer Tools",
+    "websiteURL": "https://bla.tools"
+  }
+}
