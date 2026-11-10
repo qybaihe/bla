@@ -12,7 +12,7 @@
 
 **The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 14 showcase benchmark targets.**
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.3-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.4-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-25_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/Formats-19%2B_Artifacts-0284c7?style=for-the-badge)](#format-coverage)

@@ -9,7 +9,9 @@
  * plus host-side `verifyWasmSidecarCustomSection`; Bun standalone plants a
  * sibling `.bla-sidecar.v1.json` companion note (byte-exact binary preserved)
  * verified by `verifyBunSidecarCompanionNote`; Electron ASAR plants an in-archive
- * `.bla/sidecar.v1.json` note verified by `verifyAsarSidecarArchiveNote` (see
+ * `.bla/sidecar.v1.json` note verified by `verifyAsarSidecarArchiveNote`, plus an
+ * optional in-archive main JS preamble (`generateSidecarAsarMainJsPreamble`) that
+ * re-measures members via Electron's fs-patched `readFileSync` (see
  * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
@@ -1320,7 +1322,7 @@ export interface SidecarAsarInjectResult {
  * Build an ASAR archive-note that embeds the protect-time sidecar binding
  * digest + path labels. The note is planted as the Pickle member
  * `.bla/sidecar.v1.json` (not a sibling on disk). Strip/alter detection is via
- * host-side `verifyAsarSidecarArchiveNote` (and optional future main JS preamble).
+ * host-side `verifyAsarSidecarArchiveNote` and optional in-archive main JS preamble.
  *
  * Typical sidecars are in-archive decoys such as `enclave/hardware-tee-bridge.js`.
  *
@@ -1405,7 +1407,7 @@ export function bindAsarSidecarEntanglement(
     ...plan,
     entryHookKind: "asar-archive-note",
     status: "bound",
-    note: "Bound — ASAR archive note `.bla/sidecar.v1.json` ready; plant as Pickle member with decoy sidecars. Strip/alter fails closed via verifyAsarSidecarArchiveNote.",
+    note: "Bound — ASAR archive note `.bla/sidecar.v1.json` ready; plant as Pickle member with decoy sidecars; optionally prepend generateSidecarAsarMainJsPreamble to the main JS member. Strip/alter fails closed.",
   };
   return {
     plan: boundPlan,
@@ -1595,6 +1597,285 @@ export function verifyAsarSidecarArchiveNote(
     measuredU32: measured.u32,
     softFold: false,
   };
+}
+
+
+/** Marker substring embedded in ASAR main JS strip⇒fail preambles (detect / idempotency). */
+export const ASAR_SIDECAR_MAIN_JS_MARKER = "__blaAsarSidecarDigest" as const;
+
+/**
+ * Resolve an asar-root-relative member path so it can be read via
+ * `path.join(__dirname, …)` from a main module that may live in a subdirectory.
+ */
+export function asarMemberPathFromMain(
+  mainRelativePath: string,
+  memberRelativePath: string,
+): string {
+  const main = mainRelativePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const member = memberRelativePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const slash = main.lastIndexOf("/");
+  const mainDir = slash === -1 ? "" : main.slice(0, slash);
+  if (!mainDir) return member;
+  const mainParts = mainDir.split("/").filter((p) => p.length > 0 && p !== ".");
+  const memberParts = member.split("/").filter((p) => p.length > 0 && p !== ".");
+  let i = 0;
+  while (
+    i < mainParts.length &&
+    i < memberParts.length &&
+    mainParts[i] === memberParts[i]
+  ) {
+    i++;
+  }
+  const ups = mainParts.length - i;
+  const down = memberParts.slice(i);
+  const rel = [...Array.from({ length: ups }, () => ".."), ...down].join("/");
+  return rel.length > 0 ? rel : ".";
+}
+
+/**
+ * Pick the Electron main JS member inside an ASAR: `package.json#main` when it
+ * points at an in-archive `.js/.mjs/.cjs`, else common entry filenames, else the
+ * first top-level JS member that is not a BLA decoy.
+ */
+export function selectAsarMainJsMember(
+  members: readonly { readonly relativePath: string; readonly content?: Uint8Array }[],
+): string | null {
+  const normalized = members.map((m) => ({
+    relativePath: m.relativePath.replaceAll("\\", "/"),
+    content: m.content,
+  }));
+  const byPath = new Map(normalized.map((m) => [m.relativePath, m]));
+  const pkg = byPath.get("package.json");
+  if (pkg?.content) {
+    try {
+      const json = JSON.parse(Buffer.from(pkg.content).toString("utf8")) as {
+        main?: unknown;
+      };
+      if (typeof json.main === "string" && json.main.length > 0) {
+        const main = json.main.replaceAll("\\", "/").replace(/^\.\//, "");
+        if (byPath.has(main) && /\.(mjs|cjs|js)$/i.test(main)) return main;
+      }
+    } catch {
+      /* ignore malformed package.json */
+    }
+  }
+  for (const candidate of [
+    "main.js",
+    "index.js",
+    "app.js",
+    "src/main.js",
+    "src/index.js",
+    "lib/main.js",
+    "lib/index.js",
+  ]) {
+    if (byPath.has(candidate)) return candidate;
+  }
+  for (const m of normalized) {
+    const p = m.relativePath;
+    if (p.includes("/")) continue;
+    if (!/\.(mjs|cjs|js)$/i.test(p)) continue;
+    if (p.startsWith(".")) continue;
+    return p;
+  }
+  return null;
+}
+
+export interface SidecarAsarMainJsInjectOptions {
+  /** Entry path label used in the binding digest (usually the `.asar` basename). */
+  readonly entryPath: string;
+  /** In-archive relative path of the main JS member that will host the preamble. */
+  readonly mainRelativePath: string;
+  /** Asar-root-relative sidecar member paths (digest labels). */
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+  readonly bindingName?: string;
+}
+
+export interface SidecarAsarMainJsInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: typeof ASAR_SIDECAR_MAIN_JS_MARKER | string;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  readonly mainRelativePath: string;
+  /** Asar-root path labels hashed into the digest. */
+  readonly sidecarPathLabels: readonly string[];
+  /** Paths used with `path.join(__dirname, …)` from the main member. */
+  readonly sidecarReadPaths: readonly string[];
+}
+
+/**
+ * Emit an Electron-ASAR main JS preamble that re-measures in-archive sidecar
+ * members via fs-patched `readFileSync` (paths resolved from the main member's
+ * `__dirname` back to the asar root) and compares against the protect-time
+ * digest. Digest path *labels* stay asar-root-relative so they match
+ * `generateSidecarAsarArchiveNote` / `verifyAsarSidecarArchiveNote`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarAsarMainJsPreamble(
+  options: SidecarAsarMainJsInjectOptions,
+): SidecarAsarMainJsInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const bindingName = options.bindingName ?? ASAR_SIDECAR_MAIN_JS_MARKER;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const mainRelativePath = options.mainRelativePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const readPaths = sidecars.map((sp) => asarMemberPathFromMain(mainRelativePath, sp));
+  const labelsLiteral = JSON.stringify(sidecars);
+  const readsLiteral = JSON.stringify(readPaths);
+  const entryLiteral = JSON.stringify(options.entryPath);
+  const seedLiteral = JSON.stringify(seedTag);
+
+  const lines: string[] = [];
+  lines.push(`(function(){`);
+  lines.push(`  var __expected = ${JSON.stringify(expectedHex)};`);
+  lines.push(`  var ${bindingName} = 0;`);
+  lines.push(`  try {`);
+  lines.push(`    var _c = require("node:crypto");`);
+  lines.push(`    var _fs = require("node:fs");`);
+  lines.push(`    var _path = require("node:path");`);
+  lines.push(`    var h = _c.createHash("sha256");`);
+  lines.push(`    var entryLabel = ${entryLiteral};`);
+  lines.push(`    h.update(entryLabel);`);
+  lines.push(`    h.update(String.fromCharCode(0));`);
+  lines.push(`    var sidecars = ${labelsLiteral};`);
+  lines.push(`    var reads = ${readsLiteral};`);
+  lines.push(`    for (var i = 0; i < sidecars.length; i++) {`);
+  lines.push(`      var sp = sidecars[i];`);
+  lines.push(`      var spAbs = reads[i];`);
+  lines.push(
+    `      if (!_path.isAbsolute(spAbs) && typeof __dirname === "string") spAbs = _path.join(__dirname, spAbs);`,
+  );
+  lines.push(`      h.update(sp);`);
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(
+    `      try { h.update(_fs.readFileSync(spAbs)); } catch (_e1) { h.update("missing:" + String(sp)); }`,
+  );
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(`    }`);
+  lines.push(`    h.update(${seedLiteral});`);
+  lines.push(`    var hex = h.digest("hex");`);
+  lines.push(`    ${bindingName} = parseInt(hex.slice(0, 8), 16) >>> 0;`);
+  if (softFold) {
+    lines.push(
+      `    if (hex !== __expected) { ${bindingName} = (${bindingName} ^ 0xffffffff) >>> 0; }`,
+    );
+  } else {
+    lines.push(
+      `    if (hex !== __expected) { throw new Error("integrity binding mismatch"); }`,
+    );
+  }
+  lines.push(`  } catch (_e2) {`);
+  if (softFold) {
+    lines.push(`    ${bindingName} = 0;`);
+  } else {
+    lines.push(
+      `    if (_e2 && _e2.message === "integrity binding mismatch") throw _e2;`,
+    );
+    lines.push(`    throw new Error("integrity binding mismatch");`);
+  }
+  lines.push(`  }`);
+  lines.push(`  return ${bindingName};`);
+  lines.push(`})();`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    mainRelativePath,
+    sidecarPathLabels: sidecars,
+    sidecarReadPaths: readPaths,
+  };
+}
+
+/**
+ * Prepend an ASAR main JS preamble after shebang / `"use strict"`, idempotent
+ * when the marker is already present.
+ */
+export function prependAsarMainJsPreamble(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(ASAR_SIDECAR_MAIN_JS_MARKER)) return entrySource;
+  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
+  const shebang = shebangMatch ? shebangMatch[0] : "";
+  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
+  const strictMatch = afterShebang.match(/^["']use strict["'];?\r?\n/);
+  const strict = strictMatch ? strictMatch[0] : "";
+  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
+  return `${shebang}${strict}${preamble}\n${body}`;
+}
+
+/**
+ * Plant (or refresh) the ASAR main JS strip⇒fail preamble on the selected main
+ * member. Returns null when no suitable main JS member exists.
+ */
+export function entangleAsarMainJsWithSidecars(options: {
+  readonly members: readonly {
+    readonly relativePath: string;
+    readonly content: Buffer;
+    readonly executable?: boolean;
+  }[];
+  readonly entryPath: string;
+  readonly expectedHex: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): {
+  readonly mainRelativePath: string;
+  readonly inject: SidecarAsarMainJsInjectResult;
+  readonly members: {
+    relativePath: string;
+    content: Buffer;
+    executable?: true;
+  }[];
+} | null {
+  const mainRelativePath = selectAsarMainJsMember(options.members);
+  if (!mainRelativePath) return null;
+  const inject = generateSidecarAsarMainJsPreamble({
+    entryPath: options.entryPath,
+    mainRelativePath,
+    sidecarPaths: options.sidecarPaths,
+    seedTag: options.seedTag,
+    expectedHex: options.expectedHex,
+    softFold: options.softFold,
+  });
+  type MemberOut = {
+    relativePath: string;
+    content: Buffer;
+    executable?: true;
+  };
+  const members: MemberOut[] = options.members.map((m): MemberOut => {
+    const rel = m.relativePath.replaceAll("\\", "/");
+    if (rel !== mainRelativePath) {
+      return m.executable
+        ? { relativePath: m.relativePath, content: m.content, executable: true }
+        : { relativePath: m.relativePath, content: m.content };
+    }
+    const next = prependAsarMainJsPreamble(
+      m.content.toString("utf8"),
+      inject.preamble,
+    );
+    const content = Buffer.from(next, "utf8");
+    return m.executable
+      ? { relativePath: m.relativePath, content, executable: true }
+      : { relativePath: m.relativePath, content };
+  });
+  return { mainRelativePath, inject, members };
 }
 
 /** Test/helper: strip the sidecar note section from a WASM binary. */

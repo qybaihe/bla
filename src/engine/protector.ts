@@ -95,6 +95,7 @@ import {
   ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
   BUN_SIDECAR_COMPANION_SUFFIX,
   entangleAsarEntryWithSidecars,
+  entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
@@ -784,7 +785,22 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           relativePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
           content: bound.noteBytes,
         });
+        // In-archive main JS preamble: Electron fs-patched re-measure of the
+        // same sidecar members (strip⇒fail at process start, not only host verify).
+        const withMain = entangleAsarMainJsWithSidecars({
+          members: protectedFiles,
+          entryPath: entryLabel,
+          expectedHex: bound.digest.hex,
+          sidecarPaths: sidecars.map((s) => s.pathLabel),
+          seedTag: String(seed),
+          softFold: options.sidecarEntangleSoftFold === true,
+        });
+        if (withMain) {
+          protectedFiles.length = 0;
+          protectedFiles.push(...withMain.members);
+        }
         sidecarEntangleApplied = true;
+        counteredVectors.add("asar-sidecar-entangle");
       }
     }
 

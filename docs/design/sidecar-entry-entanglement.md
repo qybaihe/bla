@@ -1,6 +1,6 @@
 # DESIGN: Sidecar / entry entanglement (issue #40 / STATE)
 
-Status: **JS + Python + WASM + Bun companion + ASAR archive-note strip⇒fail** — binding digest + JS/Python preambles + WASM `bla.sidecar.v1` custom-section note + Bun sibling `.bla-sidecar.v1.json` companion note (byte-exact binary) + ASAR in-archive `.bla/sidecar.v1.json` note + protect/harden opt-in landed; defenseScore gap when `sidecarEntangle` is off landed; optional ASAR main JS preamble / JS-loader `verifyWasmSidecarCustomSection` still TBD.
+Status: **JS + Python + WASM + Bun companion + ASAR archive-note + ASAR main JS preamble strip⇒fail** — binding digest + JS/Python preambles + WASM `bla.sidecar.v1` custom-section note + Bun sibling `.bla-sidecar.v1.json` companion note (byte-exact binary) + ASAR in-archive `.bla/sidecar.v1.json` note + optional Electron main JS preamble (`generateSidecarAsarMainJsPreamble`) + protect/harden opt-in landed; defenseScore gap when `sidecarEntangle` is off landed; optional JS-loader `verifyWasmSidecarCustomSection` still TBD.
 
 ## Goal
 
@@ -42,4 +42,5 @@ checks beat orphan honeypot files.
 - ~~WASM custom-section note + host-side verify.~~ — 2026-11-07 nightly: `generateSidecarWasmCustomSection` / `bindWasmSidecarEntanglement` / `entangleWasmEntryWithSidecars` / `verifyWasmSidecarCustomSection`; protect + harden WASM-only post-pass.
 - ~~Bun / EOF-preserved native companion note.~~ — 2026-11-08 nightly: `generateSidecarBunCompanionNote` / `bindBunSidecarEntanglement` / `entangleBunEntryWithSidecars` / `verifyBunSidecarCompanionNote`; protect auto-binds `.bunfs-snapshot`; harden Bun-only post-pass; binary stays byte-exact.
 - ~~Honesty: when entanglement is off, defenseScore gap annotation (like self-seal).~~ — 2026-11-08 nightly: `sidecar-entangle-not-enabled` soft-cap (93) via `sidecarEntangleEnabled` / MCP `sidecar_entangle_enabled`.
-- ~~Extend to ASAR archive-note companion~~ — 2026-11-09 nightly: `generateSidecarAsarArchiveNote` / `bindAsarSidecarEntanglement` / `entangleAsarEntryWithSidecars` / `verifyAsarSidecarArchiveNote`; protect + harden ASAR post-pass plant `.bla/sidecar.v1.json` binding `enclave/hardware-tee-bridge.js`. Optional in-archive main JS preamble still TBD.
+- ~~Extend to ASAR archive-note companion~~ — 2026-11-09 nightly: `generateSidecarAsarArchiveNote` / `bindAsarSidecarEntanglement` / `entangleAsarEntryWithSidecars` / `verifyAsarSidecarArchiveNote`; protect + harden ASAR post-pass plant `.bla/sidecar.v1.json` binding `enclave/hardware-tee-bridge.js`.
+- ~~ASAR main JS preamble (Electron fs-patched re-measure)~~ — 2026-11-10 nightly: `generateSidecarAsarMainJsPreamble` / `selectAsarMainJsMember` / `entangleAsarMainJsWithSidecars`; protect + harden prepend strip⇒fail preamble to package.json#main (or heuristic entry). Optional JS-loader `verifyWasmSidecarCustomSection` still TBD.

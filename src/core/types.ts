@@ -55,6 +55,7 @@ export type ReaAttackVectorId =
   | "android-dex-il2cpp-inspection"
   | "archive-inventory"
   | "asar-header-admission"
+  | "asar-sidecar-entangle"
   | "erlang-beam-inspection"
   | "evm-bytecode-inspection"
   | "pcap-capture-inspection"

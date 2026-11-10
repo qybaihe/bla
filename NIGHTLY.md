@@ -1,5 +1,33 @@
 # BLA nightly development log
 
+## 2026-11-10 ~America/Los_Angeles (box) / Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `e9b6c87c1` → `b2f3dc81f` (**+12** commits).
+- Headline: recoverable analysis budgets across CLI/MCP (#9706) — existing
+  ceilings become caller-selectable/recoverable (desktop SQLite view policy,
+  ASAR/Ghidra admission, JS semantic precision, WASM representation, source-map,
+  historical capture, Frida/LLDB retention, Go/Rust inspection, etc.). **No new
+  1:1 trip-able densify constants** that beat the queued ASAR main JS preamble.
+- Also: PE cert-table misalignment reject (#9666), desktop multi-task capture
+  (#9216), JS application path admission (#9789), docs/CI polish.
+
+### Done tonight
+- ASAR main JS preamble strip⇒fail (`generateSidecarAsarMainJsPreamble` /
+  `selectAsarMainJsMember` / `asarMemberPathFromMain` /
+  `entangleAsarMainJsWithSidecars` / `prependAsarMainJsPreamble`; marker
+  `__blaAsarSidecarDigest`; protect + harden ASAR post-pass; vector
+  `asar-sidecar-entangle`; default OFF via existing `sidecarEntangle`).
+- Gates: build OK, tests **693 passed / 4 skipped**, benchmark **14/14**
+  runtime-equivalent.
+- Pushed `origin/main`; release **bla-agents@3.2.4**.
+
+### Next step (following night)
+1. Optional JS-loader `verifyWasmSidecarCustomSection` (host JS snippet for WASM loaders).
+2. Deception shields → more formats (DEX string pool / SQLite comments / Safetensors·GGUF header metadata densify) or MCP one-click polish.
+3. Re-scan REA recoverable-budget calibration for any new numeric densify targets.
+
+
 ## 2026-11-09 ~Asia/Shanghai
 
 ### REA delta

@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.4] — 2026-11-10
+
+Patch completing opt-in ASAR sidecar entanglement with an **in-archive Electron main JS preamble** that re-measures decoy members via fs-patched `readFileSync` (strip⇒fail at process start, not only host verify).
+
+### Added
+- **ASAR main JS preamble (`generateSidecarAsarMainJsPreamble` / `selectAsarMainJsMember` / `entangleAsarMainJsWithSidecars` / `prependAsarMainJsPreamble`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` ASAR post-pass prepend a strip⇒fail preamble to `package.json#main` (or heuristic entry). Digest path labels stay asar-root-relative (parity with `.bla/sidecar.v1.json`); read paths are resolved from the main member `__dirname`. Marker `__blaAsarSidecarDigest` keeps the rewrite idempotent. Default still OFF.
+- **`ReaAttackVectorId` `asar-sidecar-entangle`:** recorded when the ASAR main JS preamble is planted.
+
+### Notes
+- REA tip `b2f3dc81f` (+12 since `e9b6c87c1`): recoverable analysis budgets (#9706) expose caller recovery for existing ceilings (desktop SQLite view, ASAR/Ghidra admission, WASM/JS semantic, etc.) — **no new 1:1 trip-able densify constants** tonight. PE cert-table misalignment reject (#9666) is analyzer validation, not a densify target.
+
 ## [3.2.3] — 2026-11-10
 
 Major anti-spoofing audit reinforcement, Windows PE32/PE32+ mapped `.enclave` COFF section hardening (closes #157), default JS decoy function entanglement into opaque-predicate seeds, and real before/after equivalence verification across all 14 benchmark targets.

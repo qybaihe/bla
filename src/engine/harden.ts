@@ -37,13 +37,16 @@ import {
 } from "./packaging-gates.js";
 import {
   ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+  ASAR_SIDECAR_MAIN_JS_MARKER,
   BUN_SIDECAR_COMPANION_SUFFIX,
   entangleAsarEntryWithSidecars,
+  entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
+  verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
 import {
@@ -1203,33 +1206,75 @@ export function hardenProject(
           } catch {
             continue;
           }
-          if (members.some((m) => m.relativePath === ASAR_SIDECAR_ARCHIVE_NOTE_PATH)) {
-            continue; // already planted by protect
-          }
           const bridge = members.find(
             (m) => m.relativePath === "enclave/hardware-tee-bridge.js",
           );
           if (!bridge) continue;
           const entryLabel = basename(entryAbs);
-          const bound = entangleAsarEntryWithSidecars({
-            entryPath: entryLabel,
-            entryBytes: raw,
-            sidecars: [
+          const seedTag = String(options.seed ?? runId);
+          const hasNote = members.some(
+            (m) => m.relativePath === ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+          );
+          let expectedHex: string | undefined;
+          let working = members.map((m) => ({
+            relativePath: m.relativePath,
+            content: m.content,
+            ...(m.executable ? { executable: true as const } : {}),
+          }));
+          if (!hasNote) {
+            const bound = entangleAsarEntryWithSidecars({
+              entryPath: entryLabel,
+              entryBytes: raw,
+              sidecars: [
+                {
+                  pathLabel: "enclave/hardware-tee-bridge.js",
+                  bytes: bridge.content,
+                },
+              ],
+              seedTag,
+            });
+            if (!bound) continue;
+            expectedHex = bound.digest.hex;
+            working = [
+              ...working,
               {
-                pathLabel: "enclave/hardware-tee-bridge.js",
-                bytes: bridge.content,
+                relativePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
+                content: bound.noteBytes,
               },
-            ],
-            seedTag: String(options.seed ?? runId),
-          });
-          if (!bound) continue;
-          const repacked = packAsarBuffer([
-            ...members,
-            {
-              relativePath: ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
-              content: bound.noteBytes,
-            },
-          ]);
+            ];
+          } else {
+            const verified = verifyAsarSidecarArchiveNote({
+              memberBytes: Object.fromEntries(
+                working.map((m) => [m.relativePath, m.content]),
+              ),
+            });
+            expectedHex = verified.expectedHex ?? verified.note?.digest;
+          }
+          if (!expectedHex) continue;
+          const alreadyMain =
+            working.some(
+              (m) =>
+                m.content.toString("utf8").includes(ASAR_SIDECAR_MAIN_JS_MARKER),
+            );
+          if (!alreadyMain) {
+            const withMain = entangleAsarMainJsWithSidecars({
+              members: working,
+              entryPath: entryLabel,
+              expectedHex,
+              sidecarPaths: ["enclave/hardware-tee-bridge.js"],
+              seedTag,
+            });
+            if (withMain) {
+              working = withMain.members.map((m) => ({
+                relativePath: m.relativePath,
+                content: m.content,
+                ...(m.executable ? { executable: true as const } : {}),
+              }));
+            }
+          } else if (hasNote) {
+            continue; // note + preamble already present
+          }
+          const repacked = packAsarBuffer(working);
           writeFileAtomicSync(entryAbs, repacked, undefined, {
             allowLinkWriteThrough: false,
           });
