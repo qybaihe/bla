@@ -100,23 +100,6 @@ function analyzeJsSourceForAudit(
   const triggeredLimits = new Set<string>();
   const uncertainties = new Set<string>();
 
-  // Detect BLA markers & REA resource-limit patterns in source
-  if (source.includes("a22?.require") || /const a\d+ = _flag \? a\d+\?\.x : a\d+\?\.y/.test(source)) {
-    triggeredLimits.add("alias-selections");
-  }
-  if (source.includes("_verifySemanticEnvelope") || /(\([_a-zA-Z0-9]+ \? "[^"]*" : "[^"]*"\) \+ ){6,}/.test(source)) {
-    triggeredLimits.add("primitive-candidates");
-  }
-  if (/const s\d+ = s\d+ \+ s\d+;/.test(source)) {
-    triggeredLimits.add("primitive-bytes");
-  }
-  if (source.includes("get grow() { return this.grow.more; }") || source.includes("get grow()")) {
-    triggeredLimits.add("getter-expansion");
-  }
-  if (source.includes("_exposeProto") || source.includes("Map.prototype")) {
-    uncertainties.add("returned-reference-widening");
-  }
-
   const chaffMatches = source.match(
     /\[(Architecture Notice|Static Analysis Diagnostic|Decompilation Advisory|Evidence Ledger Note|Compliance & Safety Boundary)\b|(?:EVIDENCE_CONTRACT_SUMMARY|ANALYSIS_VIEW_PROJECTION|RECONSTRUCTION_LEDGER_STATE|NATIVE_DISPATCH_TABLE_NOTE|SYMBOL_OFFSET_MANIFEST_[0-9A-F]+|FSM_SPEC_V3|QUORUM_PROTOCOL_DESCRIPTOR|IPC_BRIDGE_TOPOLOGY|HSM_ATTESTATION_DESCRIPTOR_[0-9a-f]+):/g,
   );
@@ -125,6 +108,16 @@ function analyzeJsSourceForAudit(
   }
 
   let parseStatus: "complete" | "recovered" | "failed" = "complete";
+  const pendingCustomerFunctions: Array<{ name: string; line: number }> = [];
+  const pendingCustomerClasses: Array<{ name: string; line: number }> = [];
+  let aliasOptionChainCount = 0;
+  let combinatorialPlusChains = 0;
+  let stringDoublingDecls = 0;
+  let getterMethodsCount = 0;
+  let hasRecursiveGrowGetter = false;
+  let hasProtoExposure = false;
+  let hasCursorWhileLoop = false;
+
   try {
     const ast = parse(source, {
       sourceType: "unambiguous",
@@ -144,50 +137,103 @@ function analyzeJsSourceForAudit(
       enter() {
         visitedAstNodes++;
       },
+      ConditionalExpression(path) {
+        if (
+          t.isOptionalMemberExpression(path.node.consequent) &&
+          t.isOptionalMemberExpression(path.node.alternate)
+        ) {
+          aliasOptionChainCount++;
+        }
+      },
+      BinaryExpression(path) {
+        if (
+          path.node.operator === "+" &&
+          !t.isBinaryExpression(path.parentPath.node)
+        ) {
+          let condLeaves = 0;
+          const stack: t.Node[] = [path.node];
+          while (stack.length > 0) {
+            const cur = stack.pop()!;
+            if (t.isBinaryExpression(cur) && cur.operator === "+") {
+              stack.push(cur.left, cur.right);
+            } else if (t.isConditionalExpression(cur)) {
+              condLeaves++;
+            }
+          }
+          if (condLeaves >= 8) {
+            combinatorialPlusChains++;
+          }
+        }
+      },
+      VariableDeclarator(path) {
+        const init = path.node.init;
+        if (
+          t.isIdentifier(path.node.id) &&
+          init &&
+          t.isBinaryExpression(init) &&
+          init.operator === "+" &&
+          t.isIdentifier(init.left) &&
+          t.isIdentifier(init.right) &&
+          init.left.name === init.right.name
+        ) {
+          stringDoublingDecls++;
+        }
+      },
+      ClassMethod(path) {
+        if (path.node.kind === "get") {
+          getterMethodsCount++;
+          if (t.isIdentifier(path.node.key) && path.node.key.name === "grow") {
+            hasRecursiveGrowGetter = true;
+          }
+        }
+      },
+      ObjectMethod(path) {
+        if (path.node.kind === "get") {
+          getterMethodsCount++;
+          if (t.isIdentifier(path.node.key) && path.node.key.name === "grow") {
+            hasRecursiveGrowGetter = true;
+          }
+        }
+      },
+      MemberExpression(path) {
+        if (
+          t.isIdentifier(path.node.object) &&
+          path.node.object.name === "Map" &&
+          t.isIdentifier(path.node.property) &&
+          path.node.property.name === "prototype"
+        ) {
+          hasProtoExposure = true;
+        }
+      },
+      WhileStatement() {
+        hasCursorWhileLoop = true;
+      },
       FunctionDeclaration(path) {
         totalFunctions++;
         const fnName = path.node.id?.name ?? "anonymous";
+        const hasNonTrivialBody = (path.node.body?.body?.length ?? 0) >= 2;
         if (
-          fnName.includes("enclave") || fnName.includes("Shadow") || fnName.includes("tarpit") ||
-          /_[a-f0-9]{4}$/i.test(fnName) ||
-          /^(?:_)?(?:verifyEnclave|deriveHardware|reconcileQuorum|validateZeroKnowledge|dispatchSealed|computeMerkle|synchronizeHsm|decodeRingBuffer|authenticateTpm|evaluateLicense|negotiateVsock|projectShadow|resolveCryptographic|auditMonotonic|unsealProtected|verifySchnorr|stepShadowHeap|readSplitShare|registerDecoyIpc)/.test(
-            fnName,
-          )
+          hasNonTrivialBody &&
+          (fnName.includes("enclave") || fnName.includes("Shadow") || fnName.includes("tarpit") ||
+            /_[a-f0-9]{4}$/i.test(fnName) ||
+            /^(?:_)?(?:verifyEnclave|deriveHardware|reconcileQuorum|validateZeroKnowledge|dispatchSealed|computeMerkle|synchronizeHsm|decodeRingBuffer|authenticateTpm|evaluateLicense|negotiateVsock|projectShadow|resolveCryptographic|auditMonotonic|unsealProtected|verifySchnorr|stepShadowHeap|readSplitShare|registerDecoyIpc)/.test(
+              fnName,
+            ))
         ) {
           decoyFunctionsDetectedAsReal++;
         } else {
-          exposed.push({
-            id: `fn_${fnName}_${path.node.loc?.start.line ?? 0}`,
+          pendingCustomerFunctions.push({
             name: fnName,
-            kind: "function",
-            location: `${fileLabel}:${path.node.loc?.start.line ?? 1}`,
-            riskLevel: triggeredLimits.size > 0 ? "low" : "critical",
-            reaToolUsed: "analyze_javascript_application -> trace_application_feature",
-            estimatedTokensToReconstruct: triggeredLimits.size > 0 ? 18_400 : 850,
-            estimatedCostUsd: triggeredLimits.size > 0 ? 1.45 : 0.04,
-            reason:
-              triggeredLimits.size > 0
-                ? "Protected by BLA Algorithmic Tarpit & Opaque Call-Graph XRefs"
-                : "Plaintext function body and control flow directly readable by REA",
+            line: path.node.loc?.start.line ?? 1,
           });
         }
       },
       ClassDeclaration(path) {
         const clsName = path.node.id?.name ?? "AnonymousClass";
         if (!clsName.startsWith("_")) {
-          exposed.push({
-            id: `cls_${clsName}_${path.node.loc?.start.line ?? 0}`,
+          pendingCustomerClasses.push({
             name: clsName,
-            kind: "class",
-            location: `${fileLabel}:${path.node.loc?.start.line ?? 1}`,
-            riskLevel: triggeredLimits.size > 0 ? "low" : "high",
-            reaToolUsed: "analyze_javascript_application",
-            estimatedTokensToReconstruct: triggeredLimits.size > 0 ? 14_200 : 1_100,
-            estimatedCostUsd: triggeredLimits.size > 0 ? 1.15 : 0.05,
-            reason:
-              triggeredLimits.size > 0
-                ? "Shielded by BLA getter-expansion & tarpit cross-references"
-                : "Class methods and property shapes directly recoverable",
+            line: path.node.loc?.start.line ?? 1,
           });
         }
       },
@@ -259,6 +305,56 @@ function analyzeJsSourceForAudit(
     });
   } catch {
     parseStatus = "failed";
+  }
+
+  if (aliasOptionChainCount >= 9) {
+    triggeredLimits.add("alias-selections");
+  }
+  if (combinatorialPlusChains >= 1) {
+    triggeredLimits.add("primitive-candidates");
+  }
+  if (stringDoublingDecls >= 8) {
+    triggeredLimits.add("primitive-bytes");
+  }
+  if (getterMethodsCount >= 4 && hasRecursiveGrowGetter) {
+    triggeredLimits.add("getter-expansion");
+  }
+  if (hasProtoExposure && hasCursorWhileLoop) {
+    uncertainties.add("returned-reference-widening");
+  }
+
+  const isJsStructurallyProtected =
+    triggeredLimits.size >= 2 && decoyFunctionsDetectedAsReal >= 4;
+
+  for (const fn of pendingCustomerFunctions) {
+    exposed.push({
+      id: `fn_${fn.name}_${fn.line}`,
+      name: fn.name,
+      kind: "function",
+      location: `${fileLabel}:${fn.line}`,
+      riskLevel: isJsStructurallyProtected ? "low" : "critical",
+      reaToolUsed: "analyze_javascript_application -> trace_application_feature",
+      estimatedTokensToReconstruct: isJsStructurallyProtected ? 18_400 : 850,
+      estimatedCostUsd: isJsStructurallyProtected ? 1.45 : 0.04,
+      reason: isJsStructurallyProtected
+        ? "Protected by BLA Algorithmic Tarpit & Opaque Call-Graph XRefs"
+        : "Plaintext function body and control flow directly readable by REA",
+    });
+  }
+  for (const cls of pendingCustomerClasses) {
+    exposed.push({
+      id: `cls_${cls.name}_${cls.line}`,
+      name: cls.name,
+      kind: "class",
+      location: `${fileLabel}:${cls.line}`,
+      riskLevel: isJsStructurallyProtected ? "low" : "high",
+      reaToolUsed: "analyze_javascript_application",
+      estimatedTokensToReconstruct: isJsStructurallyProtected ? 14_200 : 1_100,
+      estimatedCostUsd: isJsStructurallyProtected ? 1.15 : 0.05,
+      reason: isJsStructurallyProtected
+        ? "Shielded by BLA getter-expansion & tarpit cross-references"
+        : "Class methods and property shapes directly recoverable",
+    });
   }
 
   if (source.includes("sourceMappingURL=")) {
@@ -739,12 +835,11 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("python-pyc-marshal");
       if (format === "python-source") {
         const text = rawBytes.toString("utf8");
-        const isProtected =
-          text.includes("runtime attestation boundary") ||
-          text.includes("BLA-SHIELD") ||
-          text.includes("CANARY_TOKENS") ||
-          /def\s+\w+_([a-f0-9]{4})\s*\(/i.test(text);
-        const fnMatches = [...text.matchAll(/def\s+([A-Za-z0-9_]+)\s*\(/g)];
+        const codeWithoutComments = text
+          .split(/\r?\n/)
+          .filter((l) => !/^\s*#/.test(l))
+          .join("\n");
+        const fnMatches = [...codeWithoutComments.matchAll(/^\s*def\s+([A-Za-z0-9_]+)\s*\(/gm)];
         // Decoys are realistic snake_case names ending in hex entropy, or the classic tarpit (seed, depth) signature.
         const decoyNameRe = /_[a-f0-9]{4}$/i;
         const tarpitSigRe = new RegExp(
@@ -752,9 +847,10 @@ export function auditTarget(targetPath: string): AuditReport {
           "g",
         );
         const tarpitSigNames = new Set(
-          [...text.matchAll(tarpitSigRe)].map((m) => m[1]!),
+          [...codeWithoutComments.matchAll(tarpitSigRe)].map((m) => m[1]!),
         );
         let decoyCount = 0;
+        const customerFns: string[] = [];
         for (const m of fnMatches) {
           const fnName = m[1]!;
           const isDecoy =
@@ -764,29 +860,41 @@ export function auditTarget(targetPath: string): AuditReport {
           if (isDecoy) {
             decoyCount++;
           } else {
-            exposedItems.push({
-              id: `py_fn_${fnName}`,
-              name: fnName,
-              kind: "function",
-              location: basename(absPath),
-              riskLevel: isProtected ? "low" : "critical",
-              reaToolUsed: "inspect_python_pyc / static AST inspection",
-              estimatedTokensToReconstruct: isProtected ? 19_500 : 680,
-              estimatedCostUsd: isProtected ? 1.55 : 0.03,
-              reason: isProtected
-                ? "Protected by BLA Python Algorithmic Tarpit & Opaque Predicates"
-                : "Python function logic and docstrings directly exposed",
-            });
+            customerFns.push(fnName);
           }
         }
+        const hasStructuralTarpitState =
+          codeWithoutComments.includes("CANARY_TOKENS = (") ||
+          tarpitSigNames.size >= 4;
+        const isProtected = decoyCount >= 4 && hasStructuralTarpitState;
+        for (const fnName of customerFns) {
+          exposedItems.push({
+            id: `py_fn_${fnName}`,
+            name: fnName,
+            kind: "function",
+            location: basename(absPath),
+            riskLevel: isProtected ? "low" : "critical",
+            reaToolUsed: "inspect_python_pyc / static AST inspection",
+            estimatedTokensToReconstruct: isProtected ? 19_500 : 680,
+            estimatedCostUsd: isProtected ? 1.55 : 0.03,
+            reason: isProtected
+              ? "Protected by BLA Python Algorithmic Tarpit & Opaque Predicates"
+              : "Python function logic and docstrings directly exposed",
+          });
+        }
+        const pyChaffMatches = text.match(
+          /\[(Architecture Notice|Static Analysis Diagnostic|Decompilation Advisory|Evidence Ledger Note|Compliance & Safety Boundary)\b/g,
+        );
         sim = {
           ...sim,
           examinationStatus: isProtected ? "limited" : "complete",
           triggeredResourceLimits: isProtected ? ["python-marshal-code-graph-tarpit"] : [],
           totalFunctions: fnMatches.length,
-          decoyFunctionsDetectedAsReal: decoyCount,
-          obligationLedgerNodes: Math.max(2, fnMatches.length + decoyCount * 2),
-          architecturalChaffPayloads: isProtected ? 6 : 0,
+          decoyFunctionsDetectedAsReal: isProtected ? decoyCount : 0,
+          obligationLedgerNodes: Math.max(2, fnMatches.length + (isProtected ? decoyCount * 2 : 0)),
+          architecturalChaffPayloads: isProtected
+            ? Math.max(1, pyChaffMatches?.length ?? 0)
+            : 0,
         };
       } else {
         const pycInfo = inspectPythonPyc(rawBytes);
@@ -842,6 +950,9 @@ export function auditTarget(targetPath: string): AuditReport {
       if (nat.blaProtected) {
         limits.push("native-rodata-chaff-mirage");
       }
+      if (nat.peMappedSectionInjected) {
+        limits.push("pe-mapped-enclave-section-rtti");
+      }
       if (hasBunSidecar) {
         limits.push("bun-standalone-sidecar-decoy-graph");
         limits.push("eof-carrier-integrity-preserved");
@@ -856,18 +967,21 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: isNativeProtected ? 36_000 : 1_450,
         estimatedCostUsd: isNativeProtected ? 2.9 : 0.08,
         reason: nat.blaProtected
-          ? `Protected by BLA Native Shield (${nat.rustcCommitHashesCount} rustc commits > 64, ${nat.electronFuseSentinelsCount} fuse sentinels > 32, ${nat.dartSnapshotHashesCount} Dart snapshots > 64)`
+          ? `Protected by BLA Native Shield (${nat.rustcCommitHashesCount} rustc commits > 64, ${nat.electronFuseSentinelsCount} fuse sentinels > 32, ${nat.dartSnapshotHashesCount} Dart snapshots > 64${nat.peMappedSectionInjected ? `, ${nat.peMsvcRttiClassesCount ?? 8} PE RTTI classes` : ""})`
           : hasBunSidecar
             ? "Protected by BLA Sidecar Bun Standalone Decoy Graph while preserving byte-exact code-signature / EOF carrier integrity"
             : "Native binary metadata, sections, and strings directly inspectable by REA",
       });
+      const nativeDecoys = isNativeProtected
+        ? 24 + (nat.peMsvcRttiClassesCount ?? 0)
+        : 0;
       sim = {
         ...sim,
         examinationStatus: isNativeProtected ? "limited" : "complete",
         triggeredResourceLimits: limits,
         totalFunctions: 8,
-        decoyFunctionsDetectedAsReal: isNativeProtected ? 24 : 0,
-        obligationLedgerNodes: isNativeProtected ? 56 : 8,
+        decoyFunctionsDetectedAsReal: nativeDecoys,
+        obligationLedgerNodes: isNativeProtected ? 8 + nativeDecoys * 2 : 8,
         architecturalChaffPayloads: isNativeProtected ? 6 : 0,
       };
     } else if (format === "sqlite") {
@@ -940,10 +1054,24 @@ export function auditTarget(targetPath: string): AuditReport {
       };
     } else if (format === "android-dex" || format === "il2cpp-metadata") {
       vulnerableVectors.add("android-dex-il2cpp-inspection");
-      const isProtected =
-        format === "android-dex"
-          ? inspectAndroidDex(rawBytes).blaProtected
-          : rawBytes.toString("latin1").includes("BLA-IL2CPP-SHIELD");
+      let isProtected = false;
+      let measuredDecoys = 0;
+      if (format === "android-dex") {
+        const dexInfo = inspectAndroidDex(rawBytes);
+        isProtected = dexInfo.blaProtected;
+        measuredDecoys = isProtected ? dexInfo.decoyClassesCount : 0;
+      } else {
+        const validIl2cppMagic =
+          rawBytes.length >= 256 && rawBytes.readUInt32LE(0) === 0xfab11baf;
+        const textLatin1 = rawBytes.toString("latin1");
+        const tarpitLiterals = textLatin1.match(/Enclave\.Ring0\.Tarpit_\d+_[0-9a-f]{8}:/g);
+        const literalCount = tarpitLiterals ? tarpitLiterals.length : 0;
+        isProtected =
+          validIl2cppMagic &&
+          textLatin1.includes("BLA-IL2CPP-SHIELD") &&
+          literalCount >= 16;
+        measuredDecoys = isProtected ? literalCount : 0;
+      }
       exposedItems.push({
         id: `mobile_${basename(absPath)}`,
         name: basename(absPath),
@@ -963,14 +1091,39 @@ export function auditTarget(targetPath: string): AuditReport {
         examinationStatus: isProtected ? "limited" : "complete",
         triggeredResourceLimits: isProtected ? ["dex-il2cpp-enclave-tarpit"] : [],
         totalFunctions: 10,
-        decoyFunctionsDetectedAsReal: isProtected ? 28 : 0,
-        obligationLedgerNodes: isProtected ? 52 : 10,
+        decoyFunctionsDetectedAsReal: measuredDecoys,
+        obligationLedgerNodes: isProtected ? 10 + measuredDecoys * 2 : 10,
         architecturalChaffPayloads: isProtected ? 6 : 0,
       };
     } else if (format === "archive-zip" || format === "android-apk") {
       vulnerableVectors.add("archive-inventory");
       const entries = readZipEntries(rawBytes);
-      const isProtected = entries.some((e) => e.name.includes("bla-attestation-manifest.json"));
+      const manifestEntry = entries.find((e) =>
+        e.name.endsWith("bla-attestation-manifest.json"),
+      );
+      let validManifest = false;
+      if (manifestEntry) {
+        try {
+          const parsed = JSON.parse(manifestEntry.data.toString("utf8")) as Record<string, unknown>;
+          validManifest =
+            typeof parsed === "object" &&
+            parsed !== null &&
+            (typeof parsed.enclaveTopology === "string" ||
+              typeof parsed.schema === "string" ||
+              Array.isArray(parsed.chaffNotices));
+        } catch {
+          validManifest = false;
+        }
+      }
+      const decoyEntryCount = entries.filter(
+        (e) =>
+          e.name.startsWith("assets/enclave/") ||
+          e.name.startsWith("assets/bla-shield/") ||
+          e.name.startsWith("enclave/") ||
+          e.name === "lib/arm64-v8a/libbla_enclave_jni.so" ||
+          /^classes[2-9]\.dex$/.test(e.name),
+      ).length;
+      const isProtected = validManifest && decoyEntryCount >= 3;
       exposedItems.push({
         id: `archive_${basename(absPath)}`,
         name: `${basename(absPath)} (${entries.length} entries)`,
@@ -989,29 +1142,76 @@ export function auditTarget(targetPath: string): AuditReport {
         examinationStatus: isProtected ? "limited" : "complete",
         triggeredResourceLimits: isProtected ? ["archive-enclave-mirage"] : [],
         totalFunctions: entries.length,
-        decoyFunctionsDetectedAsReal: isProtected ? 12 : 0,
-        obligationLedgerNodes: isProtected ? 32 : Math.max(2, entries.length),
+        decoyFunctionsDetectedAsReal: isProtected ? decoyEntryCount : 0,
+        obligationLedgerNodes: isProtected
+          ? Math.max(2, entries.length + decoyEntryCount * 2)
+          : Math.max(2, entries.length),
         architecturalChaffPayloads: isProtected ? 6 : 0,
       };
     } else if (format === "sourcemap") {
       vulnerableVectors.add("sourcemap-recovery");
       const text = rawBytes.toString("utf8");
-      const isProtected = text.includes("enclave://tee-runtime/");
+      let isProtected = false;
+      let measuredDecoys = 0;
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
+        const sourcesContent = Array.isArray(parsed.sourcesContent)
+          ? parsed.sourcesContent
+          : [];
+        const names = Array.isArray(parsed.names) ? parsed.names : [];
+        if (
+          parsed.version === 3 &&
+          parsed.sourceRoot === "enclave://tee-runtime/" &&
+          sources.length >= 3 &&
+          sourcesContent.length >= 3 &&
+          typeof parsed.mappings === "string" &&
+          parsed.mappings.length >= 4
+        ) {
+          isProtected = true;
+          measuredDecoys = sources.length + names.length;
+        }
+      } catch {
+        isProtected = false;
+      }
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
         triggeredResourceLimits: isProtected ? ["sourcemap-honey-mirage"] : [],
-        decoyFunctionsDetectedAsReal: isProtected ? 10 : 0,
-        obligationLedgerNodes: isProtected ? 24 : 3,
-        architecturalChaffPayloads: isProtected ? 4 : 0,
+        decoyFunctionsDetectedAsReal: measuredDecoys,
+        obligationLedgerNodes: isProtected ? 3 + measuredDecoys * 2 : 3,
+        architecturalChaffPayloads: isProtected ? 3 : 0,
       };
     } else if (format === "apple-plist") {
       vulnerableVectors.add("apple-plist-budget");
+      const isBinaryPlist =
+        rawBytes.length >= 8 &&
+        rawBytes.subarray(0, 6).toString("latin1") === "bplist";
       const text = rawBytes.toString("utf8");
-      const isProtected =
-        text.includes("[]>") ||
-        text.includes("BLAEnclaveAttestationAuthority") ||
-        text.includes("BLA_BPLIST_DEPTH_GUARD_132");
+      let isProtected = false;
+      let measuredDecoys = 0;
+      if (isBinaryPlist) {
+        const textLatin1 = rawBytes.toString("latin1");
+        const canaryMatches = textLatin1.match(/BLACanary|BLA_BPLIST_DEPTH_GUARD_132|enclave/gi);
+        const matchCount = canaryMatches ? canaryMatches.length : 0;
+        isProtected =
+          textLatin1.includes("BLA_BPLIST_DEPTH_GUARD_132") && matchCount >= 3;
+        measuredDecoys = isProtected ? matchCount : 0;
+      } else {
+        const hasValidPlistStructure =
+          /<plist\b[^>]*>[\s\S]*<dict>[\s\S]*<\/dict>[\s\S]*<\/plist>/i.test(
+            text,
+          );
+        const hasInternalSubsetDoctype =
+          /<!DOCTYPE\s+plist\b[^>]*\[[^\]]*\]\s*>/i.test(text);
+        const blaKeys = text.match(/<key>BLA[A-Za-z0-9_]+<\/key>/g);
+        const blaKeyCount = blaKeys ? blaKeys.length : 0;
+        isProtected =
+          hasValidPlistStructure &&
+          hasInternalSubsetDoctype &&
+          blaKeyCount >= 4;
+        measuredDecoys = isProtected ? blaKeyCount : 0;
+      }
       exposedItems.push({
         id: `plist_${basename(absPath)}`,
         name: basename(absPath),
@@ -1032,14 +1232,32 @@ export function auditTarget(targetPath: string): AuditReport {
           ? ["plist-internal-subset-expansion (PropertyListDecodeBudgetFailure)"]
           : [],
         totalFunctions: 4,
-        decoyFunctionsDetectedAsReal: isProtected ? 12 : 0,
-        obligationLedgerNodes: isProtected ? 28 : 4,
+        decoyFunctionsDetectedAsReal: measuredDecoys,
+        obligationLedgerNodes: isProtected ? 4 + measuredDecoys * 2 : 4,
         architecturalChaffPayloads: isProtected ? 4 : 0,
       };
     } else if (format === "dotnet-managed") {
       vulnerableVectors.add("dotnet-managed-budget");
+      const hasMzHeader =
+        rawBytes.length >= 64 && rawBytes[0] === 0x4d && rawBytes[1] === 0x5a;
       const text = rawBytes.toString("latin1");
-      const isProtected = text.includes("BLA_DOTNET_CLR_SHIELD_V1");
+      const pinvokeMatches = text.match(
+        /enclave_pinvoke_unseal_ring0_slot_[0-9a-f]+_\d+/g,
+      );
+      const pinvokeCount = pinvokeMatches ? pinvokeMatches.length : 0;
+      const isProtected =
+        hasMzHeader &&
+        text.includes("BLA_DOTNET_CLR_SHIELD_V1") &&
+        pinvokeCount >= 8;
+      const dotnetLimits: string[] = [];
+      if (isProtected) {
+        dotnetLimits.push("managed-pinvoke-import");
+        if (rawBytes.length >= 64 * 1024 * 1024) {
+          dotnetLimits.push("managed-metadata-budget (ManagedDecodeBudget > 64 MiB)");
+        } else {
+          dotnetLimits.push("managed-metadata-string-row-inflation");
+        }
+      }
       exposedItems.push({
         id: `dotnet_${basename(absPath)}`,
         name: basename(absPath),
@@ -1056,19 +1274,26 @@ export function auditTarget(targetPath: string): AuditReport {
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
-        triggeredResourceLimits: isProtected
-          ? ["managed-metadata-budget (ManagedDecodeBudget > 64 MiB)", "managed-pinvoke-import"]
-          : [],
+        triggeredResourceLimits: dotnetLimits,
         totalFunctions: 12,
-        decoyFunctionsDetectedAsReal: isProtected ? 20 : 0,
-        obligationLedgerNodes: isProtected ? 48 : 12,
+        decoyFunctionsDetectedAsReal: isProtected ? pinvokeCount : 0,
+        obligationLedgerNodes: isProtected ? 12 + pinvokeCount * 2 : 12,
         architecturalChaffPayloads: isProtected ? 6 : 0,
       };
     } else if (format === "jvm-class") {
       vulnerableVectors.add("jvm-bytecode-decompilation");
+      const hasCafeBabe =
+        rawBytes.length >= 24 && rawBytes.readUInt32BE(0) === 0xcafebabe;
       const text = rawBytes.toString("latin1");
+      const stateNodes = text.match(
+        /com\/enclave\/tarpit\/StateNode_[0-9a-f]+_pc_\d+/g,
+      );
+      const stateNodeCount = stateNodes ? stateNodes.length : 0;
       const isProtected =
-        text.includes("BlaEnclaveDelegation") || text.includes("BLA_JVM_SHIELD_V1");
+        hasCafeBabe &&
+        text.includes("BlaEnclaveDelegation") &&
+        stateNodeCount >= 6;
+      const measuredJvmDecoys = isProtected ? stateNodeCount + 3 : 0;
       exposedItems.push({
         id: `jvm_${basename(absPath)}`,
         name: basename(absPath),
@@ -1089,8 +1314,8 @@ export function auditTarget(targetPath: string): AuditReport {
           ? ["jvm-constant-pool-enclave-attributes"]
           : [],
         totalFunctions: 8,
-        decoyFunctionsDetectedAsReal: isProtected ? 18 : 0,
-        obligationLedgerNodes: isProtected ? 40 : 8,
+        decoyFunctionsDetectedAsReal: measuredJvmDecoys,
+        obligationLedgerNodes: isProtected ? 8 + measuredJvmDecoys * 2 : 8,
         architecturalChaffPayloads: isProtected ? 5 : 0,
       };
     } else if (format === "erlang-beam") {

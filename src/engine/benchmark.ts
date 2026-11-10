@@ -1,14 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
 import { BLA_IDENTITY } from "../identity.js";
 import type { BenchmarkReport, ShowcaseCaseResult } from "../core/types.js";
-import { isNodeSqliteAvailable } from "../core/sqlite-runtime.js";
-import { packAsarBuffer } from "../shields/formats/asar.js";
+import { getDatabaseSyncClass, isNodeSqliteAvailable } from "../core/sqlite-runtime.js";
+import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
 import { buildSampleSqliteDatabase } from "../shields/formats/sqlite.js";
-import { buildSafetensorsBuffer } from "../shields/formats/model.js";
+import { buildSafetensorsBuffer, validateSafetensorsBuffer } from "../shields/formats/model.js";
 import { buildMappedGoFlutterElfFixture } from "../shields/formats/go-flutter-exhaustion.js";
+import { inspectAndroidDex } from "../shields/formats/mobile-game.js";
+import { inspectErlangBeam } from "../shields/formats/erlang-beam.js";
+import { inspectEvmBytecode } from "../shields/formats/evm-bytecode.js";
+import { inspectPcapCapture } from "../shields/formats/pcap-capture.js";
+import { inspectGpuPtx } from "../shields/formats/gpu-ptx.js";
 import { auditTarget } from "./auditor.js";
 import { protectTarget } from "./protector.js";
 
@@ -152,6 +158,119 @@ function runCommonJsModule(code: string): Record<string, unknown> {
   return mod.exports;
 }
 
+function runElectronAsarClipboardHarness(
+  preloadCode: string,
+  mainCode: string,
+  virtualFiles: ReadonlyMap<string, Buffer> = new Map(),
+): {
+  readonly exposedKey: string;
+  readonly bridgeMethods: readonly string[];
+  readonly handlersRegistered: number;
+} {
+  let exposedKey = "";
+  let exposedApi: Record<string, (...args: unknown[]) => unknown> = {};
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const sentEvents: Array<{ channel: string; payload: unknown }> = [];
+
+  const electronMock = {
+    contextBridge: {
+      exposeInMainWorld: (key: string, api: Record<string, (...args: unknown[]) => unknown>) => {
+        exposedKey = key;
+        exposedApi = api;
+      },
+    },
+    ipcRenderer: {
+      invoke: (channel: string, ...args: unknown[]) => {
+        const handler = handlers.get(channel);
+        return handler ? handler({}, ...args) : Promise.resolve([]);
+      },
+      send: (channel: string, payload: unknown) => {
+        sentEvents.push({ channel, payload });
+      },
+    },
+    ipcMain: {
+      handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, fn);
+      },
+      on: () => undefined,
+    },
+  };
+
+  const fsMock = {
+    readFileSync: (filePath: string, encoding?: string) => {
+      const base = String(filePath).split(/[\\/]/).pop() ?? String(filePath);
+      const buf = virtualFiles.get(base) ?? virtualFiles.get(String(filePath));
+      if (!buf) {
+        return readFileSync(filePath, encoding as BufferEncoding);
+      }
+      return encoding ? buf.toString(encoding as BufferEncoding) : buf;
+    },
+  };
+
+  const pathMock = {
+    join: (...parts: string[]) => parts.join("/"),
+    resolve: (...parts: string[]) => parts.join("/"),
+    dirname: (p: string) => p.split("/").slice(0, -1).join("/") || ".",
+  };
+
+  const makeSandbox = (mod: { exports: Record<string, unknown> }) => ({
+    module: mod,
+    exports: mod.exports,
+    __dirname: "/asar",
+    __filename: "/asar/index.js",
+    require: (id: string) => {
+      if (id === "electron") return electronMock;
+      if (id === "fs" || id === "node:fs") return fsMock;
+      if (id === "path" || id === "node:path") return pathMock;
+      return {};
+    },
+    fetch: () => Promise.resolve({ json: () => ({}) }),
+    process: { pid: 1234 },
+    Math,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Map,
+    Set,
+    Buffer,
+  });
+
+  const mainMod = { exports: {} as Record<string, unknown> };
+  vm.runInNewContext(mainCode, makeSandbox(mainMod), { timeout: 5000 });
+  const preloadMod = { exports: {} as Record<string, unknown> };
+  vm.runInNewContext(preloadCode, makeSandbox(preloadMod), { timeout: 5000 });
+
+  const storeMap = new Map<string, unknown>();
+  const store = {
+    get: (k: string) => storeMap.get(k),
+    set: (k: string, v: unknown) => storeMap.set(k, v),
+  };
+
+  const regFn =
+    typeof mainMod.exports.registerNotionClipboardHandlers === "function"
+      ? (mainMod.exports.registerNotionClipboardHandlers as (s: typeof store) => void)
+      : (Object.values(mainMod.exports).find((v) => typeof v === "function") as
+          | ((s: typeof store) => void)
+          | undefined);
+  if (regFn) regFn(store);
+
+  const exposeFn =
+    typeof preloadMod.exports.exposeNotionClipboardBridge === "function"
+      ? (preloadMod.exports.exposeNotionClipboardBridge as () => void)
+      : (Object.values(preloadMod.exports).find((v) => typeof v === "function") as
+          | (() => void)
+          | undefined);
+  if (exposeFn) exposeFn();
+
+  return {
+    exposedKey,
+    bridgeMethods: Object.keys(exposedApi).sort(),
+    handlersRegistered: handlers.size,
+  };
+}
+
 /**
  * Runs the Counter-REA Showcase Benchmark (`bla benchmark`), including BEAM/EVM/PCAP/PTX.
  */
@@ -169,16 +288,17 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
 
       const origExports = runCommonJsModule(DX_BALL_SOURCE) as {
         calculateSoundPan: (px: number, bx: number, w: number) => number;
+        clampPan: (v: number) => number;
       };
-      const protCode = (await import("node:fs")).readFileSync(outPath, "utf8");
-      const protExports = runCommonJsModule(protCode) as {
-        calculateSoundPan: (px: number, bx: number, w: number) => number;
-      };
+      const protCode = readFileSync(outPath, "utf8");
+      const protExports = runCommonJsModule(protCode) as typeof origExports;
       const functionalOk =
         origExports.calculateSoundPan(320, 480, 640) ===
           protExports.calculateSoundPan(320, 480, 640) &&
         origExports.calculateSoundPan(100, 50, 640) ===
-          protExports.calculateSoundPan(100, 50, 640);
+          protExports.calculateSoundPan(100, 50, 640) &&
+        origExports.clampPan(-25000) === protExports.clampPan(-25000) &&
+        origExports.clampPan(25000) === protExports.clampPan(25000);
 
       cases.push(buildCaseResult("dx-ball", "DX-Ball Sound-Pan Calculation", "REA Showcase #1 (dx-ball)", res, functionalOk));
     }
@@ -197,7 +317,42 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       ]);
       writeFileSync(asarPath, rawAsar);
       const res = protectTarget({ inputPath: asarPath, outputPath: outAsarPath, intensity: "bankrupt" });
-      cases.push(buildCaseResult("notion-electron", "Notion Electron Clipboard Bridge (.asar)", "REA Showcase #2 (notion)", res, true));
+
+      const unpacked = unpackAsarBuffer(readFileSync(outAsarPath));
+      const virtualMap = new Map<string, Buffer>();
+      for (const entry of unpacked) {
+        virtualMap.set(entry.relativePath, entry.content);
+        virtualMap.set(`/asar/${entry.relativePath}`, entry.content);
+      }
+      const pkgEntry = unpacked.find((f) => f.relativePath === "package.json");
+      const preloadEntry = unpacked.find((f) => f.relativePath === "preload.js");
+      const mainEntry = unpacked.find((f) => f.relativePath === "main.js");
+      let functionalOk = false;
+      if (pkgEntry && preloadEntry && mainEntry) {
+        const pkgJson = JSON.parse(pkgEntry.content.toString("utf8")) as {
+          name?: string;
+          main?: string;
+        };
+        const origHarness = runElectronAsarClipboardHarness(
+          NOTION_PRELOAD_SOURCE,
+          NOTION_MAIN_SOURCE,
+        );
+        const protHarness = runElectronAsarClipboardHarness(
+          preloadEntry.content.toString("utf8"),
+          mainEntry.content.toString("utf8"),
+          virtualMap,
+        );
+        functionalOk =
+          pkgJson.name === "notion-clipboard" &&
+          pkgJson.main === "main.js" &&
+          origHarness.exposedKey === "notionClipboard" &&
+          protHarness.exposedKey === "notionClipboard" &&
+          origHarness.bridgeMethods.length === 3 &&
+          protHarness.bridgeMethods.length === 3 &&
+          origHarness.handlersRegistered === 2 &&
+          protHarness.handlersRegistered === 2;
+      }
+      cases.push(buildCaseResult("notion-electron", "Notion Electron Clipboard Bridge (.asar)", "REA Showcase #2 (notion)", res, functionalOk));
     }
 
     // 3. Enterprise Offline License & Crypto Guard
@@ -211,12 +366,19 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         computeLicenseChecksum: (k: string, p: string) => number;
         validateEnterpriseLicense: (k: string, p: string, c: number) => { valid: boolean; tier: string };
       };
-      const protCode = (await import("node:fs")).readFileSync(outPath, "utf8");
+      const protCode = readFileSync(outPath, "utf8");
       const protExports = runCommonJsModule(protCode) as typeof origExports;
       const expectedSum = origExports.computeLicenseChecksum("ENT-9942-ABCD", "pro-suite");
       const origCheck = origExports.validateEnterpriseLicense("ENT-9942-ABCD", "pro-suite", expectedSum);
       const protCheck = protExports.validateEnterpriseLicense("ENT-9942-ABCD", "pro-suite", expectedSum);
-      const functionalOk = origCheck.valid === true && protCheck.valid === true && origCheck.tier === protCheck.tier;
+      const origReject = origExports.validateEnterpriseLicense("FREE-0000", "pro-suite", expectedSum);
+      const protReject = protExports.validateEnterpriseLicense("FREE-0000", "pro-suite", expectedSum);
+      const functionalOk =
+        origCheck.valid === true &&
+        protCheck.valid === true &&
+        origCheck.tier === protCheck.tier &&
+        origReject.valid === false &&
+        protReject.valid === false;
 
       cases.push(buildCaseResult("license-guard", "Enterprise License & Crypto Validator", "SaaS Client Entitlement Core", res, functionalOk));
     }
@@ -229,7 +391,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       writeFileSync(wasmPath, rawWasm);
       const res = protectTarget({ inputPath: wasmPath, outputPath: outWasmPath, intensity: "bankrupt" });
 
-      const protWasmBytes = (await import("node:fs")).readFileSync(outWasmPath);
+      const protWasmBytes = readFileSync(outWasmPath);
       const validWasm = WebAssembly.validate(protWasmBytes);
       const origMod = new WebAssembly.Module(new Uint8Array(rawWasm));
       const protMod = new WebAssembly.Module(new Uint8Array(protWasmBytes));
@@ -247,7 +409,8 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const functionalOk =
         validWasm &&
         typeof protFn === "function" &&
-        origFn(17, 29) === protFn(17, 29);
+        origFn(17, 29) === protFn(17, 29) &&
+        origFn(0, 255) === protFn(0, 255);
 
       cases.push(buildCaseResult("wasm-core", "WebAssembly Crypto Kernel (.wasm)", "REA inspect_wasm_artifact", res, functionalOk));
     }
@@ -256,12 +419,19 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const elfPath = join(tempDir, "enclave-daemon.elf");
       const outElfPath = join(tempDir, "enclave-daemon.shielded.elf");
-      writeFileSync(elfPath, buildSampleElf64Binary());
+      const origElf = buildSampleElf64Binary();
+      writeFileSync(elfPath, origElf);
       const res = protectTarget({ inputPath: elfPath, outputPath: outElfPath, intensity: "bankrupt" });
+      const protElf = readFileSync(outElfPath);
       const afterAudit = auditTarget(outElfPath);
-      const functionalOk = afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-        l.includes("maximum_rustc_hashes"),
-      );
+      // Verify ELF64 header (magic, 64-bit class, machine, entry point, program header table) is preserved
+      const functionalOk =
+        protElf.length >= origElf.length &&
+        protElf.subarray(0, 64).equals(origElf.subarray(0, 64)) &&
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
+          l.includes("maximum_rustc_hashes"),
+        );
       cases.push(buildCaseResult("native-elf", "Native ELF64 Rust/Go/Electron/Dart Binary", "REA inspect_rust_binary / inspect_electron_fuses / identify_flutter_build", res, functionalOk));
     }
 
@@ -274,9 +444,41 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       writeFileSync(dbPath, buildSampleSqliteDatabase());
       const res = protectTarget({ inputPath: dbPath, outputPath: outDbPath, intensity: "bankrupt" });
       const afterAudit = auditTarget(outDbPath);
-      const functionalOk = afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-        l.includes("SqliteColumnEvaluationFailure"),
-      );
+
+      const DatabaseSync = getDatabaseSyncClass();
+      const origDb = new DatabaseSync(dbPath);
+      const protDb = new DatabaseSync(outDbPath);
+      let sqlParityOk = false;
+      try {
+        // Querying business tables directly works without custom scalar functions:
+        const origRows = origDb
+          .prepare("SELECT account_id, plan_tier, offline_token FROM license_cache ORDER BY account_id")
+          .all();
+        const protRows = protDb
+          .prepare("SELECT account_id, plan_tier, offline_token FROM license_cache ORDER BY account_id")
+          .all();
+        // Register the application UDF to run full PRAGMA integrity_check across all tables:
+        protDb.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
+          `ENCLAVE_SEALED:${String(blob ?? "")}`,
+        );
+        const integrity = protDb.prepare("PRAGMA integrity_check").get() as
+          | { integrity_check?: string }
+          | undefined;
+        sqlParityOk =
+          integrity?.integrity_check === "ok" &&
+          origRows.length > 0 &&
+          JSON.stringify(origRows) === JSON.stringify(protRows);
+      } finally {
+        origDb.close();
+        protDb.close();
+      }
+
+      const functionalOk =
+        sqlParityOk &&
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
+          l.includes("SqliteColumnEvaluationFailure"),
+        );
       cases.push(buildCaseResult("sqlite-db", "Local SQLite Entitlement Database (.sqlite)", "REA inspect_sqlite_database", res, functionalOk));
     }
 
@@ -284,15 +486,30 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const modelPath = join(tempDir, "proprietary-weights.safetensors");
       const outModelPath = join(tempDir, "proprietary-weights.shielded.safetensors");
-      writeFileSync(
-        modelPath,
-        buildSafetensorsBuffer({
+      const tensorWeights = Buffer.alloc(32);
+      for (let i = 0; i < 8; i++) {
+        tensorWeights.writeFloatLE((i + 1) * 0.25, i * 4);
+      }
+      const rawModel = buildSafetensorsBuffer(
+        {
           encoder_proj: { dtype: "F32", shape: [2, 2], data_offsets: [0, 16] },
-        }),
+          layer_norm_weight: { dtype: "F32", shape: [4], data_offsets: [16, 32] },
+        },
+        tensorWeights,
       );
+      writeFileSync(modelPath, rawModel);
       const res = protectTarget({ inputPath: modelPath, outputPath: outModelPath, intensity: "bankrupt" });
       const afterAudit = auditTarget(outModelPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+
+      const origParsed = validateSafetensorsBuffer(rawModel);
+      const protParsed = validateSafetensorsBuffer(readFileSync(outModelPath));
+      const origProj = origParsed.header.encoder_proj as { dtype: string; shape: number[]; data_offsets: [number, number] };
+      const protProj = protParsed.header.encoder_proj as { dtype: string; shape: number[]; data_offsets: [number, number] };
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        origProj.dtype === protProj.dtype &&
+        JSON.stringify(origProj.shape) === JSON.stringify(protProj.shape) &&
+        origParsed.tensorData.equals(protParsed.tensorData);
       cases.push(buildCaseResult("safetensors-model", "Proprietary Edge AI Model (.safetensors)", "REA inspect_model_artifact", res, functionalOk));
     }
 
@@ -300,15 +517,27 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const dexPath = join(tempDir, "classes.dex");
       const outDexPath = join(tempDir, "classes.shielded.dex");
-      const baseDex = Buffer.alloc(112, 0);
+      const appDescriptor = Buffer.from(
+        "Lcom/enterprise/vault/LicenseVerifier;\0verifyOfflineSignature\0",
+        "utf8",
+      );
+      const baseDex = Buffer.alloc(112 + appDescriptor.length, 0);
       baseDex.write("dex\n035\0", 0, "ascii");
-      baseDex.writeUInt32LE(112, 32);
+      baseDex.writeUInt32LE(baseDex.length, 32);
       baseDex.writeUInt32LE(112, 36);
       baseDex.writeUInt32LE(0x12345678, 40);
+      appDescriptor.copy(baseDex, 112);
       writeFileSync(dexPath, baseDex);
       const res = protectTarget({ inputPath: dexPath, outputPath: outDexPath, intensity: "bankrupt" });
-      const afterAudit = auditTarget(outDexPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const protDex = readFileSync(outDexPath);
+      const dexInfo = inspectAndroidDex(protDex);
+      const storedSha1 = protDex.subarray(12, 32);
+      const computedSha1 = createHash("sha1").update(protDex.subarray(32)).digest();
+      const functionalOk =
+        dexInfo.validDex &&
+        dexInfo.blaProtected &&
+        storedSha1.equals(computedSha1) &&
+        protDex.subarray(112, 112 + appDescriptor.length).equals(appDescriptor);
       cases.push(buildCaseResult("android-dex", "Android Dalvik Bytecode (classes.dex)", "REA search_android_classes (JADX/JEB)", res, functionalOk));
     }
 
@@ -316,14 +545,23 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const plistPath = join(tempDir, "Info.plist");
       const outPlistPath = join(tempDir, "Info.shielded.plist");
-      writeFileSync(
-        plistPath,
-        `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.bla.desktop</string></dict></plist>`,
-        "utf8",
-      );
+      const origPlist = [
+        `<?xml version="1.0" encoding="UTF-8"?>`,
+        `<plist version="1.0"><dict>`,
+        `  <key>CFBundleIdentifier</key><string>com.bla.desktop</string>`,
+        `  <key>CFBundleShortVersionString</key><string>3.2.3</string>`,
+        `  <key>CFBundleExecutable</key><string>bla-daemon</string>`,
+        `</dict></plist>`,
+      ].join("\n");
+      writeFileSync(plistPath, origPlist, "utf8");
       const res = protectTarget({ inputPath: plistPath, outputPath: outPlistPath, intensity: "bankrupt" });
+      const protPlist = readFileSync(outPlistPath, "utf8");
       const afterAudit = auditTarget(outPlistPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        /<key>CFBundleIdentifier<\/key>\s*<string>com\.bla\.desktop<\/string>/.test(protPlist) &&
+        /<key>CFBundleShortVersionString<\/key>\s*<string>3\.2\.3<\/string>/.test(protPlist) &&
+        /<key>CFBundleExecutable<\/key>\s*<string>bla-daemon<\/string>/.test(protPlist);
       cases.push(buildCaseResult("apple-plist", "Apple Bundle PropertyList (Info.plist)", "REA inspect_apple_bundle", res, functionalOk));
     }
 
@@ -331,13 +569,24 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const dllPath = join(tempDir, "EnterpriseVault.dll");
       const outDllPath = join(tempDir, "EnterpriseVault.shielded.dll");
-      const peClr = Buffer.alloc(128, 0);
+      const clrMetadataSym = Buffer.from(
+        "EnterpriseVault.Core.LicenseGuard\0VerifyOfflineLease\0",
+        "utf8",
+      );
+      const peClr = Buffer.alloc(160 + clrMetadataSym.length, 0);
       peClr.write("MZ", 0, "ascii");
-      peClr.write("BSJB", 64, "ascii");
+      peClr.writeUInt32LE(0x40, 0x3c);
+      peClr.write("PE\0\0", 0x40, "ascii");
+      peClr.write("BSJB", 96, "ascii");
+      clrMetadataSym.copy(peClr, 160);
       writeFileSync(dllPath, peClr);
       const res = protectTarget({ inputPath: dllPath, outputPath: outDllPath, intensity: "bankrupt" });
+      const protDll = readFileSync(outDllPath);
       const afterAudit = auditTarget(outDllPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        protDll.length > peClr.length &&
+        protDll.subarray(0, peClr.length).equals(peClr);
       cases.push(buildCaseResult("dotnet-managed", ".NET Managed CLR Assembly (.dll)", "REA inspect_dotnet_assembly", res, functionalOk));
     }
 
@@ -370,11 +619,13 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       expBody.writeUInt32BE(2, 4);
       expBody.writeUInt32BE(0, 8);
       expBody.writeUInt32BE(1, 12);
+      const codeChunk = chunk("Code", codeBody);
+      const expChunk = chunk("ExpT", expBody);
       const form = Buffer.concat([
         Buffer.from("BEAM", "latin1"),
         chunk("AtU8", Buffer.concat(atomParts)),
-        chunk("Code", codeBody),
-        chunk("ExpT", expBody),
+        codeChunk,
+        expChunk,
       ]);
       const seed = Buffer.concat([
         Buffer.from("FOR1", "latin1"),
@@ -387,8 +638,15 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       ]);
       writeFileSync(beamPath, seed);
       const res = protectTarget({ inputPath: beamPath, outputPath: outBeamPath, intensity: "bankrupt" });
+      const protBeam = readFileSync(outBeamPath);
+      const beamInfo = inspectErlangBeam(protBeam);
       const afterAudit = auditTarget(outBeamPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        beamInfo.validMagic &&
+        beamInfo.blaProtected &&
+        beamInfo.formSize === protBeam.length - 8 &&
+        protBeam.includes(expBody);
       cases.push(buildCaseResult("erlang-beam", "Erlang/OTP BEAM Module (.beam)", "REA inspect_erlang_beam", res, functionalOk));
     }
 
@@ -396,13 +654,24 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const evmPath = join(tempDir, "Vault.evm");
       const outEvmPath = join(tempDir, "Vault.shielded.evm");
-      // Minimal runtime bytecode: STOP
-      writeFileSync(evmPath, Buffer.from([0x00]));
+      // Realistic Solidity dispatcher runtime bytecode:
+      // PUSH1 0x80 PUSH1 0x40 MSTORE CALLDATASIZE ISZERO PUSH1 0x1b JUMPI
+      // PUSH1 0x00 CALLDATALOAD PUSH1 0xe0 SHR DUP1 PUSH4 0x67e408a7 EQ PUSH1 0x20 JUMPI
+      // JUMPDEST STOP JUMPDEST PUSH1 0x2a PUSH1 0x00 MSTORE PUSH1 0x20 PUSH1 0x00 RETURN
+      const origEvm = Buffer.from(
+        "60806040523615601b5760003560e01c806367e408a7146020575b005b602a60005260206000f3",
+        "hex",
+      );
+      writeFileSync(evmPath, origEvm);
       const res = protectTarget({ inputPath: evmPath, outputPath: outEvmPath, intensity: "bankrupt" });
+      const protEvm = readFileSync(outEvmPath);
+      const evmInfo = inspectEvmBytecode(protEvm);
       const afterAudit = auditTarget(outEvmPath);
       const functionalOk =
         afterAudit.protectionStatus === "BLA_PROTECTED" &&
-        res.metrics.protectedBytes >= 4_000_000;
+        res.metrics.protectedBytes >= 4_000_000 &&
+        evmInfo.hasSolidityMetadata &&
+        protEvm.subarray(0, origEvm.length).equals(origEvm);
       cases.push(buildCaseResult("evm-bytecode", "EVM Contract Bytecode (Solidity metadata)", "REA inspect_evm_bytecode / evmole", res, functionalOk));
     }
 
@@ -416,10 +685,26 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       hdr.writeUInt16LE(4, 6);
       hdr.writeUInt32LE(65535, 16);
       hdr.writeUInt32LE(1, 20);
-      writeFileSync(pcapPath, hdr);
+      // Include an initial application Ethernet/IPv4/UDP packet record (46 bytes frame)
+      const appFrame = Buffer.alloc(46, 0x41);
+      appFrame[12] = 0x08;
+      appFrame[13] = 0x00;
+      const recHdr = Buffer.alloc(16);
+      recHdr.writeUInt32LE(1700000000, 0);
+      recHdr.writeUInt32LE(125, 4);
+      recHdr.writeUInt32LE(appFrame.length, 8);
+      recHdr.writeUInt32LE(appFrame.length, 12);
+      const origPcap = Buffer.concat([hdr, recHdr, appFrame]);
+      writeFileSync(pcapPath, origPcap);
       const res = protectTarget({ inputPath: pcapPath, outputPath: outPcapPath, intensity: "bankrupt" });
+      const protPcap = readFileSync(outPcapPath);
+      const pcapInfo = inspectPcapCapture(protPcap);
       const afterAudit = auditTarget(outPcapPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        pcapInfo.validMagic &&
+        pcapInfo.packetCount > 1 &&
+        protPcap.subarray(0, origPcap.length).equals(origPcap);
       cases.push(buildCaseResult("pcap-capture", "libpcap Network Capture (.pcap)", "REA inspect_pcap_capture (tshark JSON)", res, functionalOk));
     }
 
@@ -427,14 +712,33 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
     {
       const ptxPath = join(tempDir, "enclave_kernel.ptx");
       const outPtxPath = join(tempDir, "enclave_kernel.shielded.ptx");
-      writeFileSync(
-        ptxPath,
-        `.version 7.5\n.target sm_70\n.address_size 64\n\n.visible .entry real_kernel(.param .u64 real_kernel_param_0)\n{\n  ret;\n}\n`,
-        "utf8",
-      );
+      const origPtx = [
+        `.version 7.5`,
+        `.target sm_70`,
+        `.address_size 64`,
+        ``,
+        `.visible .entry real_kernel(.param .u64 real_kernel_param_0)`,
+        `{`,
+        `  .reg .b64 %rd<3>;`,
+        `  .reg .f32 %f<3>;`,
+        `  ld.param.u64 %rd1, [real_kernel_param_0];`,
+        `  ld.global.f32 %f1, [%rd1];`,
+        `  add.f32 %f2, %f1, 0f3F800000;`,
+        `  st.global.f32 [%rd1], %f2;`,
+        `  ret;`,
+        `}`,
+        ``,
+      ].join("\n");
+      writeFileSync(ptxPath, origPtx, "utf8");
       const res = protectTarget({ inputPath: ptxPath, outputPath: outPtxPath, intensity: "bankrupt" });
+      const protPtx = readFileSync(outPtxPath, "utf8");
+      const ptxInfo = inspectGpuPtx(protPtx);
       const afterAudit = auditTarget(outPtxPath);
-      const functionalOk = afterAudit.protectionStatus === "BLA_PROTECTED";
+      const functionalOk =
+        afterAudit.protectionStatus === "BLA_PROTECTED" &&
+        ptxInfo.looksLikePtx &&
+        ptxInfo.blaProtected &&
+        protPtx.startsWith(origPtx);
       cases.push(buildCaseResult("gpu-ptx", "NVIDIA PTX Text Module (.ptx)", "REA inspect_gpu_artifact (PTX)", res, functionalOk));
     }
 

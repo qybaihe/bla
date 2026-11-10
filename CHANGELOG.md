@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.3] — 2026-11-10
+
+Major anti-spoofing audit reinforcement, Windows PE32/PE32+ mapped `.enclave` COFF section hardening (closes #157), default JS decoy function entanglement into opaque-predicate seeds, and real before/after equivalence verification across all 14 benchmark targets.
+
+### Added
+- **Windows PE32/PE32+ Mapped `.enclave` COFF Section Hardening (`src/shields/formats/native.ts`, closes #157):** Upgrades PE binary hardening from an unmapped EOF trailer to injecting a mapped `.enclave` COFF section (`0x40000060`) and/or section-alignment slack containing 16-byte aligned x86-64 ABI function islands (`endbr64; push rbp; mov rbp, rsp; ...; ret`), MSVC C++ RTTI type descriptors (`.?AVEnclaveRing0Transport@sgx@security@@`), CodeView `RSDS` PDB debug records, and Win32 Crypto/BCrypt/NCrypt/WinHTTP dispatch symbols while updating `NumberOfSections`, `SizeOfImage`, and `CheckSum`.
+- **Structural AST & Container Verification in Auditor (`src/engine/auditor.ts`, `src/shields/formats/mobile-game.ts`, `src/shields/formats/native.ts`):** Replaces substring marker checks and hardcoded decoy counts with structural Babel AST verification (`alias-selections` optional-member ternaries, `primitive-candidates` conditional chains, `primitive-bytes` doubling chains, `getter-expansion` getter properties) and container header/checksum verification across JS/TS, Python, Android DEX (`file_size` + `Adler32`), Unity IL2CPP, ZIP/APK, SourceMap, Apple Plist, .NET Managed, JVM `.class`, and Native binaries.
+- **Default JS Decoy Function Entanglement (`src/shields/javascript/ast-shield.ts`):** Masks `opaqueSeedBase` with `0xfffffffc` and entangles all injected decoy/tarpit function identifiers into `seedVarName` at module initialization (`[...fns].every(_f => typeof _f === "function") && digestFn(0) === expectedDigest ? 1 : 0`), so stripping injected decoys throws a `ReferenceError` or inverts every opaque predicate (`(u * u) & 7`) without requiring `--self-seal`.
+- **14/14 Real Benchmark Equivalence Verification (`src/engine/benchmark.ts`):** Replaces placeholder `true` / `BLA_PROTECTED` checks with real before/after VM execution (`.asar` unpacked `main.js` + `preload.js` IPC harness), SQL query parity + `PRAGMA integrity_check` (`.sqlite`), Float32 tensor weight equality (`.safetensors`), SHA-1/Adler32 + class descriptor preservation (`.dex`), XML bundle key verification (`.plist`), PE/CLR metadata preservation (`.dll`), IFF chunk/export preservation (`.beam`), EVM dispatcher bytecode prefix + CBOR trailer verification (`.evm`), libpcap packet frame preservation (`.pcap`), and PTX kernel body verification (`.ptx`).
+
+### Fixed
+- **Runtime Shield Self-Sabotage Removal (`src/shields/runtime/runtime-shield.ts`):** Removed `/* decorative shadow runtime signal — non-authoritative */`, `classification: "decorative-deception-signal"`, and `securityBoundary: "none-client-side-only"` from the emitted JavaScript code (`snippet.code`) while preserving honest TypeScript return metadata.
+
 ## [3.2.2] — 2026-11-09
 
 Patch extending opt-in `sidecarEntangle` to **Electron ASAR archive-note companions**.

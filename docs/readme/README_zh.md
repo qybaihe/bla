@@ -12,7 +12,7 @@
 
 **开源的 Counter-REA 蓝队防御 MCP 服务与 CLI 工具 —— 专为保护软件发布产物免受 AI 逆向分析代理（`morluto/rea`、自动化反编译与大模型逆向流水线）还原而设计，同时保持 100% 运行时等价。**
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.2-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.3-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-25_项防御工具-0ea5e9?style=for-the-badge)](../cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/支持格式-19%2B_种构建产物-0284c7?style=for-the-badge)](#支持的产物格式与覆盖矩阵)
@@ -54,7 +54,7 @@ AI 逆向代理（`REA` + 编程 Agent）可在单条命令内解包 `.asar`、�
 <td width="33%" valign="top">
 
 ### 🛡️ 接入 BLA（`bla harden .`）后
-静态与语义分析器直接撞上确定性资源配额上限（`primitive-candidates > 256`、`ASAR > 16 MiB`、`WASM > Wabt 上限`、`SQLite 虚拟生成列陷阱`），陷入高拟真影子状态机，Token 消耗放大 **300×–2,800×**。
+静态与语义分析器直接撞上确定性资源配额上限（`primitive-candidates > 256`、`ASAR > 16 MiB`、`WASM > Wabt 上限`、`SQLite 虚拟生成列陷阱`），陷入高拟真影子状态机，模型化估算 Token 消耗放大 **300×–2,800×**（基于 `token-estimator.ts` 内部成本模型）。
 
 </td>
 <td width="33%" valign="top">
@@ -175,6 +175,7 @@ flowchart LR
 | **Safetensors (`.safetensors`)** | ✓ 元数据诱饵 | ✓ JSON 嵌套 >32 层 | **已验证** | 兼容 HuggingFace 加载，张量数据零改动 |
 | **GGUF (`.gguf`)** | ✓ | ✓ 数组嵌套 >32 层 | **已验证** | 保持模型权重与 KV 张量完整 |
 | **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB 构建信息 | **已验证** | 映射 ELF 节区注入 |
+| **Windows PE (`.exe` / `.dll`)** | ✓ | ✓ `.enclave` COFF 映射节区 + Fuse/Rust/Dart | **已验证** | 注入映射 `.enclave` 节区、x86-64 函数序言岛、MSVC RTTI 与 CodeView RSDS 调试记录 |
 | **Flutter / Dart Pool** | ✓ | ✓ URI/Token 阈值填充 | **已验证** | 快照魔数与工具链标识填充 |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ Chunk / Atom 填充 | **已验证** | 突破 64-chunk 预算上限 |
 | **EVM + Solidity 元数据** | ✓ | ✓ 逼近 4 MiB 上限 | **已验证** | CBOR 元数据与字节码致密化 |
@@ -185,11 +186,13 @@ flowchart LR
 
 ---
 
-## 📊 基准测试（14 个目标产物）
+## 📊 基准测试（14 个目标产物，内部模型估算）
 
-在本地运行 `npx bla-agents benchmark` 即可复现全部 14 个代表性产物的加固效果与 100% 运行时等价校验：
+在本地运行 `npx bla-agents benchmark` 即可复现全部 14 个代表性产物的加固效果与 100% 运行时/结构等价校验：
 
-**汇总结果：** 平均 Token 消耗放大 **~639.5×** · 逆向成本放大 **~304.4×** · **14/14 (100%)** 运行时行为完全一致。
+> **说明：** 下表中的 Token 与美元成本列为基于 `token-estimator.ts` 静态公式推导的**内部模型估算值**（用于横向对比不同格式下的义务节点膨胀倍率）；真实 `morluto/rea` 进程级预算爆破结果请参见上方[真机对抗实测结果](#真机对抗实测结果vs-真实-rea)。
+
+**汇总结果：** 模型估算 Token 消耗放大 **~639.5×** · 估算成本放大 **~304.4×** · **14/14 (100%)** 内置基准样本通过执行/查询/结构等价校验。
 
 | 基准测试目标 | 未保护基线（估算） | BLA 加固后（估算） | Token 放大倍率 | 运行时等价 |
 | :--- | :--- | :--- | ---: | :---: |

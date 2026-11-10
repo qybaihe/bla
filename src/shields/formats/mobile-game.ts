@@ -22,6 +22,7 @@ export function inspectAndroidDex(bytes: Buffer): {
   readonly validDex: boolean;
   readonly version: string;
   readonly fileSize: number;
+  readonly decoyClassesCount: number;
   readonly blaProtected: boolean;
 } {
   if (
@@ -31,18 +32,32 @@ export function inspectAndroidDex(bytes: Buffer): {
     bytes[2] !== 0x78 ||
     bytes[3] !== 0x0a
   ) {
-    return { validDex: false, version: "000", fileSize: 0, blaProtected: false };
+    return {
+      validDex: false,
+      version: "000",
+      fileSize: 0,
+      decoyClassesCount: 0,
+      blaProtected: false,
+    };
   }
   const version = bytes.subarray(4, 7).toString("ascii");
   const fileSize = bytes.readUInt32LE(32);
+  const storedAdler = bytes.readUInt32LE(8);
+  const computedAdler = computeAdler32(bytes.subarray(12));
   const textLatin1 = bytes.toString("latin1");
+  const decoyMatches = textLatin1.match(/Lcom\/enclave\/[A-Za-z0-9_/$]+;/g);
+  const decoyClassesCount = decoyMatches ? decoyMatches.length : 0;
+  const headerConsistent =
+    fileSize === bytes.length && storedAdler === computedAdler;
   return {
     validDex: true,
     version,
     fileSize,
+    decoyClassesCount,
     blaProtected:
-      textLatin1.includes("Lcom/enclave/sgx/TeeAttestationBridge;") ||
-      textLatin1.includes("BLA-DEX-SHIELD"),
+      headerConsistent &&
+      decoyClassesCount >= 8 &&
+      textLatin1.includes("Lcom/enclave/sgx/TeeAttestationBridge;"),
   };
 }
 

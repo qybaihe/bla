@@ -1229,13 +1229,14 @@ export function transformJavaScriptWithBlaShield(
   // When self-seal is on, also fold the integrity digest into the seed material.
   const opaqueSeedHi = prng.nextUint32() >>> 0;
   const opaqueSeedLo = prng.nextUint32() >>> 0;
-  const opaqueSeedBase = ((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffe) >>> 0;
+  const opaqueSeedBase =
+    (((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffc) >>> 0) || 4096;
   const selfSealFold =
     selfSealEnabled && selfSealBindingName
-      ? ` ^ ((${selfSealBindingName} >>> 0) & 0xfffffffe)`
+      ? ` ^ ((${selfSealBindingName} >>> 0) & 0xfffffffc)`
       : "";
   mirageLines.push(
-    `const ${seedVarName} = ((${opaqueSeedBase}${selfSealFold}) | ((typeof ${deceptionSuite.cognitiveArmor.digestFunctionName} === "function" && ${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+    `const ${seedVarName} = ((${opaqueSeedBase}${selfSealFold}) | ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
   );
   mirageLines.push(memoryDiffShield.code);
   const channelsToMirror =
@@ -1426,6 +1427,48 @@ export function transformJavaScriptWithBlaShield(
       (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
     );
   });
+  // Bind all hoisted decoy/tarpit/exhaustion function declarations directly into `seedVarName`
+  // so stripping the injected tail throws ReferenceError or zeroes the integrity bit.
+  if (seedInjectIndex >= 0 && injectedFnIdentifiers.length > 0) {
+    const seedStmt = sanitizedInjectedStatements[seedInjectIndex];
+    if (seedStmt && t.isVariableDeclaration(seedStmt)) {
+      const decl = seedStmt.declarations.find(
+        (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
+      );
+      if (
+        decl &&
+        decl.init &&
+        t.isBinaryExpression(decl.init) &&
+        decl.init.operator === "|" &&
+        t.isConditionalExpression(decl.init.right)
+      ) {
+        const fnParam = t.identifier("_f");
+        const everyCall = t.callExpression(
+          t.memberExpression(
+            t.arrayExpression(
+              injectedFnIdentifiers.map((id) => t.identifier(id.name)),
+            ),
+            t.identifier("every"),
+          ),
+          [
+            t.arrowFunctionExpression(
+              [fnParam],
+              t.binaryExpression(
+                "===",
+                t.unaryExpression("typeof", t.identifier("_f")),
+                t.stringLiteral("function"),
+              ),
+            ),
+          ],
+        );
+        decl.init.right.test = t.logicalExpression(
+          "&&",
+          everyCall,
+          decl.init.right.test,
+        );
+      }
+    }
+  }
   const topEnd =
     seedInjectIndex >= 0
       ? Math.min(

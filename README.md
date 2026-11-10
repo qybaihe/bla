@@ -12,7 +12,7 @@
 
 **The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 14 showcase benchmark targets.**
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.2-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.3-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-25_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/Formats-19%2B_Artifacts-0284c7?style=for-the-badge)](#format-coverage)
@@ -54,7 +54,7 @@ AI reverse-engineering agents (`REA` + coding agents) unpack `.asar` archives, r
 <td width="33%" valign="top">
 
 ### 🛡️ With BLA (`bla harden .`)
-Every analyzer pass hits deterministic resource ceilings (`primitive-candidates > 256`, `ASAR > 16 MiB`, `WASM > Wabt cap`, `SQLite virtual trap`), follows realistic shadow state machines, and burns **300×–2,800× more tokens**.
+Every analyzer pass hits deterministic resource ceilings (`primitive-candidates > 256`, `ASAR > 16 MiB`, `WASM > Wabt cap`, `SQLite virtual trap`), follows realistic shadow state machines, and projects **300×–2,800× modeled token amplification** (`token-estimator.ts`).
 
 </td>
 <td width="33%" valign="top">
@@ -206,6 +206,7 @@ All 19+ format shields are built directly into `bla-agents` with zero external p
 | **Safetensors (`.safetensors`)** | ✓ string metadata | ✓ JSON nesting >32 | **verified** | HuggingFace-loadable; tensor bytes preserved |
 | **GGUF (`.gguf`)** | ✓ | ✓ ARRAY nesting >32 | **verified** | Preserves model weights and KV tensors |
 | **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB | **verified** | Mapped ELF section |
+| **Windows PE (`.exe` / `.dll`)** | ✓ | ✓ `.enclave` COFF section + fuses/rustc/Dart | **verified** | Mapped `.enclave` section, x86-64 ABI function islands, MSVC RTTI, CodeView RSDS PDB |
 | **Flutter / Dart pool** | ✓ | ✓ URI/token caps | **verified** (projected) | Snapshot magic & toolchain flood |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ chunks / atoms | **verified** | Exceeds 64-chunk budget |
 | **EVM + Solidity meta** | ✓ | ✓ → 4 MiB input | **verified** (approach) | CBOR metadata + bytecode densification |

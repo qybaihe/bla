@@ -283,8 +283,11 @@ describe("Issues #18, #19, #20, #21 — SQLite Consistency/Policy, Debug Posture
       expect(snippet.classification).toBe("decorative-deception-signal");
       expect(snippet.revokesDebuggerAttach).toBe(false);
       expect(snippet.protectsClientPlaintextSecrets).toBe(false);
-      expect(snippet.code).toContain('classification: "decorative-deception-signal"');
-      expect(snippet.code).toContain('securityBoundary: "none-client-side-only"');
+      // Emitted bundle code must NOT self-report as a decorative decoy to an inspecting LLM/reverser
+      expect(snippet.code).not.toContain('classification: "decorative-deception-signal"');
+      expect(snippet.code).not.toContain('securityBoundary: "none-client-side-only"');
+      expect(snippet.code).not.toContain("decorative shadow runtime signal");
+      expect(snippet.code).toContain('status: "HARDWARE_ENCLAVE_DELEGATED"');
     });
   });
 

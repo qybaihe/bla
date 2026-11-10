@@ -49,7 +49,6 @@ export function generateRuntimeDeceptionSnippet(
   const vaultProp = prng.identifier({ style: "privateCamel", hint: "enclaveRuntime", entropy: 4 });
   const eventBridge = prng.identifier({ style: "privateCamel", hint: "enclaveEventBridge", entropy: 4 });
   const lines: string[] = [
-    `/* decorative shadow runtime signal — non-authoritative */`,
     `(function ${initFn}() {`,
     `  try {`,
     `    const _g = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : {});`,
@@ -60,8 +59,8 @@ export function generateRuntimeDeceptionSnippet(
     `      Boolean(_g && (_g.__playwright || _g.__puppeteer_evaluation_script__ || _g.frida || _g._frida_ || (_g.navigator && _g.navigator.webdriver)));`,
     ``,
     `    const _shadowVault_${suffix} = Object.freeze({`,
-    `      classification: "decorative-deception-signal",`,
-    `      securityBoundary: "none-client-side-only",`,
+    `      protocolVersion: "3.4.0",`,
+    `      attestationState: "RING0_SEALED",`,
     `      status: "HARDWARE_ENCLAVE_DELEGATED",`,
     `      enclaveCid: 16,`,
     `      transport: "AF_VSOCK_RING0",`,
