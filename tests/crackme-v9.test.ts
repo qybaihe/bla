@@ -136,7 +136,45 @@ describe("CrackMe v9 Sovereign (BLA 3.0 4-Stage Agent-Driven Hardening)", () => 
     }
   }, 180_000);
 
+  it("cleartext + fixture-harden: deleting seal.json hard-fails (ENOENT ≡ digest mismatch)", async () => {
+    const lib = await libP;
+    const clear = mkdtempSync(join(tmpdir(), "bla-crackme-v9-seal-clear-"));
+    const hard = mkdtempSync(join(tmpdir(), "bla-crackme-v9-seal-hard-"));
+    try {
+      await lib.materializeTarget({
+        key: lib.FIXTURE_KEY,
+        flag: lib.FIXTURE_FLAG,
+        outDir: clear,
+      });
+      unlinkSync(join(clear, "seal.json"));
+      const clearDel = lib.runLicense(clear, "WrongKey!!!!!!!!");
+      expect(clearDel.ok).toBe(false);
+      expect(clearDel.stdout).toMatch(/integrity check failed: seal\.json missing/);
+      expect(clearDel.stdout).not.toMatch(/\[license\] DENIED/);
+
+      await lib.hardenChallenge({
+        key: lib.FIXTURE_KEY,
+        flag: lib.FIXTURE_FLAG,
+        outDir: hard,
+      });
+      const run = lib.prepareRunnable(hard);
+      try {
+        unlinkSync(join(run, "seal.json"));
+        const hardDel = lib.runLicense(run, "WrongKey!!!!!!!!");
+        expect(hardDel.ok).toBe(false);
+        expect(hardDel.stdout).toMatch(/integrity check failed/);
+        expect(hardDel.stdout).not.toMatch(/\[license\] DENIED/);
+      } finally {
+        rmSync(run, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(clear, { recursive: true, force: true });
+      rmSync(hard, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it("DESIGN.md states v8 supersession + 4-stage BLA 3.0 playbook + covered seal.json + P2 honesty", () => {
+
     const d = readFileSync(join(V9, "DESIGN.md"), "utf8");
     expect(d).toMatch(/successor to CrackMe v8/i);
     expect(d).toMatch(/EXPECTED_SEAL_SHA256/);
