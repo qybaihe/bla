@@ -1,6 +1,6 @@
 {
   "name": "bla",
-  "description": "The BLA agent skill for Claude Code — Counter-REA hardening via bla MCP/CLI",
+  "description": "The BLA agent skill — Counter-REA hardening via bla MCP/CLI",
   "owner": {
     "name": "BLA Contributors",
     "url": "https://bla.tools"
