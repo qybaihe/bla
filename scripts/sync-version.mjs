@@ -87,3 +87,20 @@ for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
   }
 }
 
+const statePath = resolve(root, "STATE.md");
+try {
+  const stateText = readFileSync(statePath, "utf8");
+  const nextState = stateText.replace(
+    /\*\*Version:\*\*\s*[0-9]+\.[0-9]+\.[0-9]+/,
+    `**Version:** ${version}`,
+  );
+  if (nextState !== stateText) {
+    writeFileSync(statePath, nextState, "utf8");
+    console.log(`Synced STATE.md version -> ${version}`);
+  } else {
+    console.log(`STATE.md version already at ${version}`);
+  }
+} catch {
+  // ignore missing STATE.md
+}
+

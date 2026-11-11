@@ -68,6 +68,7 @@ export {
   encryptStrings,
   ENCRYPT_STRINGS_SCHEMA,
   buildKeystream,
+  deriveEntryKeystream,
   xorEncodeToBytes,
   xorDecodeBytes,
 } from "./engine/encrypt-strings.js";

@@ -101,6 +101,7 @@ export interface WeaveCrownJewelCandidate {
     | "single-point-boolean-gate"
     | "isolated-verify-oracle"
     | "cleartext-comparison"
+    | "narrow-32bit-gate"
     | "unentangled-export";
   readonly riskSummary: string;
   readonly agentRefactorDirective: string;
@@ -813,6 +814,9 @@ function buildJsSurgicalWorkorder(
         let hasCleartextComparison = false;
         let boolReturnLine = line;
         let cleartextLine = line;
+        let usesBitwise32Accumulator = false;
+        let bitwise32Line = line;
+        let usesCryptographicDigest = false;
 
         if (!t.isBlockStatement(path.node.body)) {
           const b = inspectRawBooleanReturnValue(path.node.body);
@@ -828,6 +832,35 @@ function buildJsSurgicalWorkorder(
           Function(innerPath) {
             innerPath.skip();
           },
+          CallExpression(callPath) {
+            const callee = callPath.node.callee;
+            if (t.isMemberExpression(callee) && t.isIdentifier(callee.property)) {
+              const prop = callee.property.name;
+              if (
+                prop === "createHash" ||
+                prop === "createHmac" ||
+                prop === "scryptSync" ||
+                prop === "pbkdf2Sync" ||
+                prop === "timingSafeEqual" ||
+                prop === "digest" ||
+                prop === "verify"
+              ) {
+                usesCryptographicDigest = true;
+              } else if (
+                prop === "imul" &&
+                t.isIdentifier(callee.object) &&
+                callee.object.name === "Math"
+              ) {
+                usesBitwise32Accumulator = true;
+                bitwise32Line = callPath.node.loc?.start.line ?? line;
+              }
+            } else if (
+              t.isIdentifier(callee) &&
+              /^(sha256|sha512|hmac|pbkdf2|scrypt)/i.test(callee.name)
+            ) {
+              usesCryptographicDigest = true;
+            }
+          },
           ReturnStatement(retPath) {
             const arg = retPath.node.argument;
             const b = inspectRawBooleanReturnValue(arg);
@@ -840,6 +873,10 @@ function buildJsSurgicalWorkorder(
             }
           },
           BinaryExpression(binPath) {
+            if (binPath.node.operator === ">>>" && t.isNumericLiteral(binPath.node.right) && binPath.node.right.value === 0) {
+              usesBitwise32Accumulator = true;
+              bitwise32Line = binPath.node.loc?.start.line ?? line;
+            }
             if (
               binPath.node.operator === "===" ||
               binPath.node.operator === "==" ||
@@ -874,7 +911,7 @@ function buildJsSurgicalWorkorder(
               line: boolReturnLine,
               vulnerabilityKind: "single-point-boolean-gate",
               riskSummary: `Function \`${fnName}\` (line ${boolReturnLine}) returns a raw boolean literal — an AI RE agent can 1-byte patch or NOP this branch without computing the real key/state.`,
-              agentRefactorDirective: `Refactor \`${fnName}\` so it accumulates a state digest on the shared carrier (e.g. FNV-1a / ARX mix into \`sessionLedgerState.digest\`) and couples downstream return values to that digest instead of an isolated \`true/false\` branch.`,
+              agentRefactorDirective: `Refactor \`${fnName}\` so it accumulates a state digest on the shared carrier and couples downstream return values to a SHA-256 commitment / KDF rather than an isolated \`true/false\` branch.`,
             });
           } else if (role === "gate-or-auth") {
             crownJewelCandidates.push({
@@ -883,6 +920,20 @@ function buildJsSurgicalWorkorder(
               vulnerabilityKind: "isolated-verify-oracle",
               riskSummary: `Auth/gate function \`${fnName}\` (line ${line}) acts as a standalone verification boundary.`,
               agentRefactorDirective: `Entangle \`${fnName}\` with module-level shared state and invoke 2–3 domain-plausible shadow helpers so static call-graph slicing cannot isolate the verification oracle.`,
+            });
+          }
+          if (
+            role === "gate-or-auth" &&
+            usesBitwise32Accumulator &&
+            !usesCryptographicDigest &&
+            crownJewelCandidates.length < 10
+          ) {
+            crownJewelCandidates.push({
+              functionName: fnName,
+              line: bitwise32Line,
+              vulnerabilityKind: "narrow-32bit-gate",
+              riskSummary: `Auth/gate function \`${fnName}\` (line ${bitwise32Line}) relies on a narrow 32-bit bitwise/Math.imul accumulator without a 256-bit cryptographic digest — coding agents can synthesize colliding inputs in <200ms via meet-in-the-middle.`,
+              agentRefactorDirective: `Upgrade \`${fnName}\` to a 256-bit one-way commitment (\`crypto.createHash("sha256")\`) and derive any secret payload mask via SHA-256 KDF (R8–R12 recipe) instead of a 32-bit FNV/ARX equality check.`,
             });
           }
           if (hasCleartextComparison && crownJewelCandidates.length < 10) {
