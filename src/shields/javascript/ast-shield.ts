@@ -973,6 +973,84 @@ export function transformJavaScriptWithBlaShield(
       path.skip();
       primitiveCandidateBranchesCreated += 256;
     },
+    TemplateLiteral(path) {
+      if (intensity !== "bankrupt" && intensity !== "maximum") {
+        return;
+      }
+      if (
+        (loader === "ts" || loader === "tsx") &&
+        isInsideTsConstAssertion(path)
+      ) {
+        return;
+      }
+      const parent = path.parent;
+      if (
+        t.isTaggedTemplateExpression(parent) ||
+        t.isTSLiteralType(parent) ||
+        t.isTSImportType(parent) ||
+        t.isTSExternalModuleReference(parent)
+      ) {
+        return;
+      }
+      if (
+        path.findParent(
+          (p) =>
+            p.isTSType() ||
+            p.isTSModuleDeclaration() ||
+            p.isTSExternalModuleReference() ||
+            p.isImportAttribute(),
+        )
+      ) {
+        return;
+      }
+      const quasis = path.node.quasis;
+      const exprs = path.node.expressions;
+      // Skip if any quasi lacks a valid cooked value (invalid escape sequence)
+      // or contains TypeScript type expressions inside template slots.
+      if (
+        quasis.some((q) => typeof q.value.cooked !== "string") ||
+        exprs.some((ex) => !t.isExpression(ex))
+      ) {
+        return;
+      }
+      const totalCookedLen = quasis.reduce(
+        (acc, q) => acc + (q.value.cooked?.length ?? 0),
+        0,
+      );
+      if (totalCookedLen < 3 || totalCookedLen > 256) {
+        return;
+      }
+      if (exprs.length === 0) {
+        const val = quasis[0]?.value.cooked ?? "";
+        path.replaceWith(buildCombinatorialStringAst(val, prng, seedVarName));
+        path.skip();
+        primitiveCandidateBranchesCreated += 256;
+        return;
+      }
+      // Rewrite `prefix ${a} mid ${b} suffix` into concatenated combinatorial
+      // string AST + `String(expr)` coercions, preserving exact JS `ToString`
+      // template evaluation order without leaving cleartext backtick chunks.
+      const parts: t.Expression[] = [];
+      for (let i = 0; i < quasis.length; i++) {
+        const chunk = quasis[i]!.value.cooked ?? "";
+        if (chunk.length >= 3) {
+          parts.push(buildCombinatorialStringAst(chunk, prng, seedVarName));
+          primitiveCandidateBranchesCreated += 256;
+        } else if (chunk.length > 0 || parts.length === 0) {
+          parts.push(t.stringLiteral(chunk));
+        }
+        if (i < exprs.length) {
+          const ex = exprs[i] as t.Expression;
+          parts.push(t.binaryExpression("+", t.stringLiteral(""), ex));
+        }
+      }
+      let combined: t.Expression = parts[0] ?? t.stringLiteral("");
+      for (let i = 1; i < parts.length; i++) {
+        combined = t.binaryExpression("+", combined, parts[i]!);
+      }
+      path.replaceWith(combined);
+      path.skip();
+    },
     NumericLiteral(path) {
       // Issue #40: bankrupt/maximum must not leave schedule / magic integers
       // bit-identical in the hardened output (probe: 0x9e3779b9).
@@ -1038,6 +1116,22 @@ export function transformJavaScriptWithBlaShield(
   // time with a fresh PRNG name desyncs `class Foo` from `new Foo()` (issue #40).
   const exportedNameSet = new Set(exportedSymbolsBefore);
   const generatedNames = new Set<string>();
+  // Strip unreferenced Stage-2 encryptStrings marker aliases (`_blaS`, `_blaT`)
+  // before scope renaming so hardened artifacts retain zero marker dead-vars.
+  traverse(ast, {
+    VariableDeclarator(path) {
+      if (
+        t.isIdentifier(path.node.id) &&
+        (path.node.id.name === "_blaS" || path.node.id.name === "_blaT") &&
+        path.scope.path.isProgram()
+      ) {
+        const binding = path.scope.getBinding(path.node.id.name);
+        if (binding && binding.references === 0 && !exportedNameSet.has(path.node.id.name)) {
+          path.remove();
+        }
+      }
+    },
+  });
   traverse(ast, {
     Scope(path) {
       for (const [name, binding] of Object.entries(path.scope.bindings)) {

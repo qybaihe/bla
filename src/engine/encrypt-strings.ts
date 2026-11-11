@@ -182,6 +182,27 @@ export function xorDecodeBytes(bytes: readonly number[], keystream: Buffer): str
   return out.toString("utf8");
 }
 
+/**
+ * Derive a per-entry keystream slice from the master keystream so two table
+ * rows never share an identical byte-0 XOR pad (eliminating many-time-pad
+ * cross-row plaintext recovery when a benign SQL/URL row is known).
+ */
+export function deriveEntryKeystream(
+  keystream: Buffer,
+  entryIndex: number,
+  byteLength: number,
+): Buffer {
+  const len = Math.max(1, byteLength);
+  const out = Buffer.alloc(len);
+  const kLen = keystream.length;
+  for (let j = 0; j < len; j++) {
+    const kBase = keystream[(j + entryIndex * 31) % kLen]!;
+    const kSalt = keystream[(entryIndex * 7 + (j >> 2)) % kLen]!;
+    out[j] = (kBase ^ ((kSalt + entryIndex * 73 + j * 19) & 0xff)) & 0xff;
+  }
+  return out;
+}
+
 function encodeByteCsv(bytes: readonly number[]): string {
   // Comma-separated decimals — avoids lane-independence "[n,n,n,n]" tables and
   // plaintext-secret hex/base64/high-entropy string classifiers.
@@ -205,8 +226,11 @@ function buildRuntimeStub(
     `var ${tableName}=${tableLit};` +
     `var ${ksName}=${ksLit};` +
     `function ${fnName}(i){` +
-    `var e=${tableName}[i],k=${ksName},o=new Uint8Array(e.length);` +
-    `for(var j=0;j<e.length;j++)o[j]=(e[j]^k[j%k.length])&255;` +
+    `var e=${tableName}[i],k=${ksName},kl=k.length,o=new Uint8Array(e.length);` +
+    `for(var j=0;j<e.length;j++){` +
+    `var kb=k[(j+i*31)%kl],ks=k[(i*7+(j>>2))%kl];` +
+    `o[j]=(e[j]^(kb^((ks+i*73+j*19)&255)))&255;` +
+    `}` +
     `return typeof Buffer!=="undefined"?Buffer.from(o).toString("utf8"):` +
     `(typeof TextDecoder!=="undefined"?new TextDecoder().decode(o):` +
     `String.fromCharCode.apply(null,Array.from(o)));` +
@@ -384,10 +408,15 @@ function transformJsSource(
     32,
   );
   const keystream = buildKeystream(prng, Math.max(64, maxLen));
-  const table = unique.map((u) => xorEncodeToBytes(u, keystream));
-  const fnName = prng.identifier({ style: "camel", hint: "blaS", entropy: 3 });
-  const tableName = prng.identifier({ style: "camel", hint: "blaT", entropy: 3 });
-  const ksName = prng.identifier({ style: "camel", hint: "blaK", entropy: 3 });
+  const table = unique.map((u, idx) =>
+    xorEncodeToBytes(
+      u,
+      deriveEntryKeystream(keystream, idx, Buffer.byteLength(u, "utf8")),
+    ),
+  );
+  const fnName = prng.identifier({ style: "camel", hint: "resolveBundleSlot", entropy: 3 });
+  const tableName = prng.identifier({ style: "camel", hint: "catalogFrameTable", entropy: 3 });
+  const ksName = prng.identifier({ style: "camel", hint: "sessionKeyMask", entropy: 3 });
   const stub = buildRuntimeStub(table, keystream, fnName, tableName, ksName);
 
   const indexByLiteral = new Map<string, number>();

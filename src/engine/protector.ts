@@ -117,12 +117,23 @@ function selfSealTransformOption(
   readonly siblingPaths: readonly string[];
   readonly expectedSiblingSha256?: Readonly<Record<string, string>>;
   readonly hardFailOnSiblingMismatch?: boolean;
+  readonly selfDigestCheck?: boolean;
+  readonly interleavedSites?: number;
 } | undefined {
   if (options.selfSeal !== true) return undefined;
-  if (!options.selfSealSiblingPaths || options.selfSealSiblingPaths.length === 0) {
-    return true;
+  const siblingPaths = options.selfSealSiblingPaths ?? [];
+  if (siblingPaths.length === 0) {
+    // Even without sibling paths (single-entry CLI or standalone JS module),
+    // explicit `selfSeal: true` must activate canonical entry self-digest
+    // verification with hard-fail on tamper (browser builds still soft-skip
+    // safely inside the `require("node:crypto")` try/catch).
+    return {
+      siblingPaths: [],
+      selfDigestCheck: true,
+      hardFailOnSiblingMismatch: true,
+      interleavedSites: 2,
+    };
   }
-  const siblingPaths = options.selfSealSiblingPaths;
   const base = dirname(absOutput);
   const expectedSiblingSha256: Record<string, string> = {};
   for (const rel of siblingPaths) {
@@ -139,12 +150,15 @@ function selfSealTransformOption(
   }
   return {
     siblingPaths,
+    selfDigestCheck: true,
     ...(Object.keys(expectedSiblingSha256).length > 0
       ? {
           expectedSiblingSha256,
           hardFailOnSiblingMismatch: true,
         }
-      : {}),
+      : {
+          hardFailOnSiblingMismatch: true,
+        }),
   };
 }
 

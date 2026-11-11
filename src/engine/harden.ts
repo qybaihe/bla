@@ -927,7 +927,7 @@ export function hardenProject(
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
-                bindableFormats.has(p.artifact.format),
+                isProtectableFormat(p.artifact.format),
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
             .filter((rel) => rel.length > 0 && !rel.startsWith(".."));
@@ -937,7 +937,7 @@ export function hardenProject(
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
-                bindableFormats.has(p.artifact.format),
+                isProtectableFormat(p.artifact.format),
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
             .filter((rel) => rel.length > 0);
