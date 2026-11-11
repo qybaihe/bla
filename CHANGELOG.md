@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.5] — 2026-11-11
+
+Patch extending opt-in `sidecarEntangle` to **CPython `.pyc` marshal trailer notes**, plus Counter-REA limit catalog hygiene for NativeAOT and IL2CPP v108.
+
+### Added
+- **Sidecar `.pyc` marshal-note strip⇒fail (`generateSidecarPycMarshalNote` / `bindPycSidecarEntanglement` / `entanglePycEntryWithSidecars` / `verifyPycSidecarMarshalNote` / `extractPycSidecarMarshalNote` / `stripPycSidecarMarshalNote`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` `.pyc` post-pass append a TYPE_ASCII marshal trailer (`__blaPycSidecarDigest=…`) after the root code object. `importlib` ignores post-root trailers, so executed bytecode stays runtime-equivalent. Host-side verify re-hashes sibling sidecars (sidecars-mode digest). Vector `pyc-sidecar-entangle`. Default still OFF.
+- **`REA_INTERNAL_LIMITS` catalog:** `NATIVE_AOT_MAX_*` (`nativeAotPe.ts`, REA #10067/#10094) and IL2CPP v108 sample/admission ceilings (`Il2cppMetadataV108.ts` / `Il2cppMetadataProvider.ts`, REA #9925) — honesty catalog only; no new densify trip targets tonight.
+- **defenseScore honesty:** `python-pyc` joins `SIDECAR_ENTANGLE_FORMATS` so omitting `sidecar_entangle` soft-caps with `sidecar-entangle-not-enabled`.
+
+### Notes
+- REA tip `0909d89c9` (+402 since `b2f3dc81f`): settings/limit plumbing, NativeAOT budget ownership, IL2CPP v108 bounded string sample, `audit_release_exposure` (#8525) — **no new 1:1 trip-able densify constants**. IL2CPP v108 samples 16×128 B strings; NativeAOT budgets pre-existed and were only re-owned per operation.
+
 ## [3.2.4] — 2026-11-10
 
 Patch completing opt-in ASAR sidecar entanglement with an **in-archive Electron main JS preamble** that re-measures decoy members via fs-patched `readFileSync` (strip⇒fail at process start, not only host verify).

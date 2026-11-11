@@ -98,6 +98,7 @@ import {
   entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
+  entanglePycEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
@@ -265,6 +266,41 @@ function applySidecarEntangleToWasm(
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: wasmBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarEntangleToPyc(
+  pycBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: pycBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: pycBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: pycBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entanglePycEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: pycBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: pycBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
 }
 
@@ -908,7 +944,16 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       seed,
       weaveDecoys: options.weaveDecoys === true,
     });
-    writeProtectedOutput(absOutput, res.buffer);
+    let finalPyc = res.buffer;
+    {
+      const entangled = applySidecarEntangleToPyc(finalPyc, options, absOutput, seed);
+      finalPyc = entangled.buffer;
+      if (entangled.applied) {
+        sidecarEntangleApplied = true;
+        counteredVectors.add("pyc-sidecar-entangle");
+      }
+    }
+    writeProtectedOutput(absOutput, finalPyc);
     decoyFunctionsInjected =
       res.decoyCodeObjectsInjected > 0 ? res.decoyCodeObjectsInjected : 14;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;

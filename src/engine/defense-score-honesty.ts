@@ -63,6 +63,7 @@ const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
   "electron-asar",
   "wasm",
   "python-source",
+  "python-pyc",
   "native-elf",
   "native-macho",
   "native-pe",
@@ -103,7 +104,7 @@ export function collectDefenseScoreGaps(
     gaps.push({
       id: "sidecar-entangle-not-enabled",
       summary:
-        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, or Bun .bla-sidecar.v1.json companion); default remains OFF (issue #40 / DESIGN).",
+        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun .bla-sidecar.v1.json companion, or .pyc marshal note); default remains OFF (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

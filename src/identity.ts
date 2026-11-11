@@ -5,7 +5,7 @@ export const BLA_IDENTITY = Object.freeze({
   packageAlias: "bla-shield",
   cliBinary: "bla",
   cliAlias: "bla-agents",
-  version: "3.2.4",
+  version: "3.2.5",
   slogan: "Poison -> Exhaust -> Hallucinate. Make Reverse Engineering Bankrupt Again.",
   counterpart: {
     name: "REA",
@@ -34,6 +34,8 @@ export const BLA_IDENTITY = Object.freeze({
  * - `src/domain/native/nativeExports.ts` (`MAX_NATIVE_EXPORT_ROWS`)
  * - `bridge/android/ReaJadxBridge.java` (`MAX_EXTERNAL_XREF_BYTES`, REA #8154)
  * - `src/domain/firmware/uf2.ts` (`UF2_BLOCK_BYTES`, `UF2_MAX_REGIONS`, REA #8230)
+ * - `src/domain/native/nativeAotPe.ts` (`NATIVE_AOT_MAX_*`, REA #10067/#10094)
+ * - `src/il2cpp/Il2cppMetadataV108.ts` + `Il2cppMetadataProvider.ts` (REA #9925)
  */
 export const REA_INTERNAL_LIMITS = Object.freeze({
   /** Maximum distinct alternatives retained in one normalized primitive value (`SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT`). */
@@ -207,4 +209,25 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   REGEX_DEFAULT_MATCHING_DEADLINE_MS: 5_000,
   REGEX_DEFAULT_WORKER_HEAP_REQUEST_MIB: 128,
   REGEX_MINIMUM_WORKER_HEAP_REQUEST_MIB: 7,
+  /**
+   * NativeAOT PE parser budgets (`src/domain/native/nativeAotPe.ts`).
+   * REA #10067/#10094 own these per-operation and retain frozen scan stops —
+   * constants pre-existed tip b2f3dc81f; catalogued for Counter-REA honesty.
+   */
+  NATIVE_AOT_MAX_SOURCE_BYTES: 134_217_728,
+  NATIVE_AOT_MAX_REPORT_BYTES: 4_194_304,
+  NATIVE_AOT_MAX_WORK_UNITS: 67_108_864,
+  NATIVE_AOT_MAX_WORKING_MEMORY_BYTES: 67_108_864,
+  /**
+   * IL2CPP metadata provider + v108 header/string observation
+   * (`Il2cppMetadataProvider.ts` INPUT/OUTPUT; `Il2cppMetadataV108.ts` —
+   * REA #9925 feat(il2cpp): retain v108 header and string evidence).
+   * Bounded sample only — not a densify trip target; catalogued for honesty.
+   */
+  IL2CPP_METADATA_INPUT_BYTES: 268_435_456,
+  IL2CPP_METADATA_OUTPUT_BYTES: 67_108_864,
+  IL2CPP_BINARY_BYTES: 1_073_741_824,
+  IL2CPP_V108_SAMPLE_STRINGS: 16,
+  IL2CPP_V108_SAMPLE_BYTES: 128,
+  IL2CPP_V108_SCAN_BATCH_BYTES: 65_536,
 });

@@ -43,6 +43,7 @@ import {
   entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
+  entanglePycEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
@@ -1141,9 +1142,51 @@ export function hardenProject(
         }
       }
 
+      // CPython .pyc marshal-note entanglement only when no JS/Python/WASM
+      // entry was bound — TYPE_ASCII trailer measured against FINAL siblings;
+      // importlib ignores the trailer (executed code object unchanged).
+      const pycLike = summaries.filter(
+        (s) =>
+          s.success && /\.pyc$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const pycEntry =
+        !jsEntry && !pyEntry && !wasmEntry
+          ? pycLike.find((s) => /__main__\.pyc$/i.test(s.relativePath)) ??
+            pycLike[0]
+          : undefined;
+      if (pycEntry) {
+        const entryAbs = join(outputRoot, pycEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === pycEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entanglePycEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+                allowLinkWriteThrough: false,
+              });
+            }
+          }
+        }
+      }
+
       // Bun / EOF-preserved native companion note only when no JS/Python/WASM
       // entry was bound — binary stays byte-exact; `.bla-sidecar.v1.json`
       // binds the sibling `.bunfs-snapshot` planted by protect.
+      // .pyc post-pass above runs first so Bun sidecar digests see final bytes.
       if (!jsEntry && !pyEntry && !wasmEntry) {
         const nativeLike = summaries.filter(
           (s) =>

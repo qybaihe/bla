@@ -11,7 +11,9 @@
  * verified by `verifyBunSidecarCompanionNote`; Electron ASAR plants an in-archive
  * `.bla/sidecar.v1.json` note verified by `verifyAsarSidecarArchiveNote`, plus an
  * optional in-archive main JS preamble (`generateSidecarAsarMainJsPreamble`) that
- * re-measures members via Electron's fs-patched `readFileSync` (see
+ * re-measures members via Electron's fs-patched `readFileSync`; CPython `.pyc`
+ * appends a TYPE_ASCII marshal trailer note (`__blaPycSidecarDigest=…`) verified
+ * by `verifyPycSidecarMarshalNote` (importlib ignores post-root trailers — see
  * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
@@ -64,7 +66,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -76,6 +78,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   const lower = entryPath.toLowerCase();
   if (/\.(mjs|cjs|js|ts|tsx|jsx)$/.test(lower)) return "js-preamble";
   if (/\.py$/.test(lower)) return "python-preamble";
+  if (/\.pyc$/.test(lower)) return "pyc-marshal-note";
   if (/\.wasm$/.test(lower)) return "wasm-custom-section";
   if (/\.asar$/.test(lower)) return "asar-archive-note";
   return "unspecified";
@@ -1877,6 +1880,366 @@ export function entangleAsarMainJsWithSidecars(options: {
   });
   return { mainRelativePath, inject, members };
 }
+
+
+/** Marker prefix inside the TYPE_ASCII marshal trailer for `.pyc` sidecar notes. */
+export const PYC_SIDECAR_MARSHAL_MARKER = "__blaPycSidecarDigest=" as const;
+export const PYC_SIDECAR_MARSHAL_KIND = "pyc-marshal-note" as const;
+
+export interface PycSidecarMarshalNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof PYC_SIDECAR_MARSHAL_KIND;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarPycInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). */
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarPycInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof PYC_SIDECAR_MARSHAL_KIND;
+  /** UTF-8 payload stored inside the TYPE_ASCII record (marker + JSON). */
+  readonly payload: string;
+  readonly note: PycSidecarMarshalNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Full marshal TYPE_ASCII record ready to append after the root object. */
+  readonly marshalRecord: Buffer;
+}
+
+/**
+ * Build a CPython marshal TYPE_ASCII record that carries the sidecar binding
+ * note. Appended AFTER the root marshal object so `importlib` / `marshal.load`
+ * stop at the woven root and runtime behavior stays byte-equivalent for the
+ * executed code object (same trailer convention as protectPythonPycBuffer honey).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarPycMarshalNote(
+  options: SidecarPycInjectOptions,
+): SidecarPycInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: PycSidecarMarshalNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: PYC_SIDECAR_MARSHAL_KIND,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const payload = `${PYC_SIDECAR_MARSHAL_MARKER}${JSON.stringify(note)}`;
+  const strBytes = Buffer.from(payload, "utf8");
+  const header = Buffer.alloc(5);
+  header[0] = 0x61; // TYPE_ASCII
+  header.writeUInt32LE(strBytes.length, 1);
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: PYC_SIDECAR_MARSHAL_KIND,
+    payload,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    marshalRecord: Buffer.concat([header, strBytes]),
+  };
+}
+
+export interface SidecarPycBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarPycInjectResult;
+  /** `.pyc` bytes with the marshal note trailer appended (root object untouched). */
+  readonly bytes: Buffer;
+}
+
+/**
+ * Plan + bind for a CPython `.pyc` entry: compute the offline digest from
+ * in-memory sidecar bytes and return a `bound` plan plus the rewritten `.pyc`
+ * with a TYPE_ASCII marshal trailer note. Uses sidecars-mode digest so
+ * appending the trailer does not invalidate H. Executed code object unchanged.
+ */
+export function bindPycSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarPycBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const entryBuf = Buffer.from(options.entryBytes);
+  if (entryBuf.length < 16 || entryBuf[2] !== 0x0d || entryBuf[3] !== 0x0a) {
+    throw new Error("entryBytes is not a valid CPython .pyc (bad magic marker)");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  // Strip any prior note trailer so re-bind is idempotent.
+  const stripped = stripPycSidecarMarshalNote(entryBuf);
+  const inject = generateSidecarPycMarshalNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const bytes = Buffer.concat([stripped, inject.marshalRecord]);
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "pyc-marshal-note",
+    status: "bound",
+    note: "Bound — .pyc TYPE_ASCII marshal trailer note planted; ship sidecars alongside and verify via verifyPycSidecarMarshalNote. Strip/alter fails closed. importlib ignores the trailer.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + `.pyc` entry bytes, produce
+ * the strip⇒fail-bound entry. Returns null when there are no sidecars to bind.
+ */
+export function entanglePycEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarPycBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindPycSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface PycSidecarVerifyOptions {
+  /** Full `.pyc` bytes (header + root marshal + optional trailers). */
+  readonly entryBytes: Uint8Array;
+  /**
+   * Absolute directory used to resolve relative sidecar paths from the note.
+   * Required when note.sidecarPaths are relative and not supplied in-memory.
+   */
+  readonly baseDir?: string;
+  /** Optional in-memory sidecar bytes keyed by pathLabel (overrides disk read). */
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface PycSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: PycSidecarMarshalNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+/**
+ * Locate the `__blaPycSidecarDigest=` TYPE_ASCII payload inside `.pyc` trailers.
+ * Returns null when the marker is absent.
+ */
+export function extractPycSidecarMarshalNote(
+  entryBytes: Uint8Array,
+): PycSidecarMarshalNote | null {
+  const buf = Buffer.from(entryBytes);
+  const marker = Buffer.from(PYC_SIDECAR_MARSHAL_MARKER, "utf8");
+  const at = buf.lastIndexOf(marker);
+  if (at < 0) return null;
+  // Prefer framed TYPE_ASCII: 0x61 + u32le len immediately before marker.
+  let jsonText: string | null = null;
+  if (at >= 5 && buf[at - 5] === 0x61) {
+    const declared = buf.readUInt32LE(at - 4);
+    const payloadStart = at;
+    const payloadEnd = payloadStart + declared;
+    if (payloadEnd <= buf.length) {
+      const payload = buf.subarray(payloadStart, payloadEnd).toString("utf8");
+      if (payload.startsWith(PYC_SIDECAR_MARSHAL_MARKER)) {
+        jsonText = payload.slice(PYC_SIDECAR_MARSHAL_MARKER.length);
+      }
+    }
+  }
+  if (jsonText === null) {
+    // Fallback: marker through end-of-buffer (or next NUL).
+    const rest = buf.subarray(at + marker.length).toString("utf8");
+    const nul = rest.indexOf("\0");
+    jsonText = nul >= 0 ? rest.slice(0, nul) : rest;
+  }
+  try {
+    const parsed = JSON.parse(jsonText) as PycSidecarMarshalNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== PYC_SIDECAR_MARSHAL_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return null;
+    }
+    return {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: PYC_SIDECAR_MARSHAL_KIND,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove a previously planted `.pyc` sidecar marshal note trailer (idempotent).
+ * Leaves honey/chaff TYPE_ASCII trailers from protectPythonPycBuffer intact
+ * when they do not carry the sidecar marker.
+ */
+export function stripPycSidecarMarshalNote(entryBytes: Uint8Array): Buffer {
+  const buf = Buffer.from(entryBytes);
+  const marker = Buffer.from(PYC_SIDECAR_MARSHAL_MARKER, "utf8");
+  const at = buf.lastIndexOf(marker);
+  if (at < 0) return buf;
+  if (at >= 5 && buf[at - 5] === 0x61) {
+    const declared = buf.readUInt32LE(at - 4);
+    const recordStart = at - 5;
+    const recordEnd = at + declared;
+    if (recordEnd <= buf.length && at + declared === recordEnd) {
+      // Drop this TYPE_ASCII record only.
+      return Buffer.concat([buf.subarray(0, recordStart), buf.subarray(recordEnd)]);
+    }
+  }
+  // Fallback: truncate from marker (may leave a dangling TYPE_ASCII header).
+  return buf.subarray(0, Math.max(0, at - 5));
+}
+
+/**
+ * Host-side strip⇒fail check for `.pyc` marshal notes: extract the trailer
+ * note, re-hash sibling sidecar bytes with the same layout as
+ * `computeSidecarBindingDigest` (sidecars mode), and compare to the embedded
+ * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY — for tests, loaders, and harden post-pass verification.
+ */
+export function verifyPycSidecarMarshalNote(
+  options: PycSidecarVerifyOptions,
+): PycSidecarVerifyResult {
+  const note = extractPycSidecarMarshalNote(options.entryBytes);
+  if (!note) {
+    return { ok: false, reason: "pyc sidecar marshal note missing" };
+  }
+
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = options.sidecarBytes?.[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      return {
+        ok: false,
+        reason: `sidecar ${label} not supplied and no baseDir to read`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        return {
+          ok: false,
+          reason: `sidecar ${label} missing on disk`,
+          note,
+          expectedHex: note.digest,
+          softFold: note.softFold,
+        };
+      }
+      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      return {
+        ok: false,
+        reason: `sidecar ${label} unreadable`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+  }
+
+  const measured = computeSidecarBindingDigest(
+    {
+      pathLabel: note.entryPath,
+      bytes: options.entryBytes,
+    },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+  if (measured.hex !== note.digest) {
+    return {
+      ok: false,
+      reason: "pyc sidecar digest mismatch",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+  return {
+    ok: true,
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: note.softFold,
+  };
+}
+
 
 /** Test/helper: strip the sidecar note section from a WASM binary. */
 export function stripWasmSidecarCustomSection(bytes: Uint8Array): Buffer {

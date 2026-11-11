@@ -56,6 +56,7 @@ export type ReaAttackVectorId =
   | "archive-inventory"
   | "asar-header-admission"
   | "asar-sidecar-entangle"
+  | "pyc-sidecar-entangle"
   | "erlang-beam-inspection"
   | "evm-bytecode-inspection"
   | "pcap-capture-inspection"
