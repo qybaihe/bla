@@ -68,6 +68,21 @@ describe("version and public-claim drift", () => {
       expect(match, `${rel} does not state the benchmark target count (${pattern})`).not.toBeNull();
       expect(match![1], `${rel} (${pattern})`).toBe(String(targets));
     }
+
+    // Localized READMEs repeat the same English claim. A translation that does
+    // not carry the sentence is skipped; one that does must match the code.
+    for (const entry of readdirSync(join(ROOT, "docs/readme"), { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const rel = `docs/readme/${entry.name}`;
+      const match = /Run (\d+)-target Counter-REA benchmark/.exec(read(rel));
+      if (!match) continue;
+      expect(match[1], `${rel} benchmark claim`).toBe(String(targets));
+    }
+
+    const websiteReadme = read("website/README.md");
+    const siteClaim = /(\d+)-target Counter-REA benchmark suite/.exec(websiteReadme);
+    expect(siteClaim, "website/README.md does not state the benchmark target count").not.toBeNull();
+    expect(siteClaim![1], "website/README.md benchmark claim").toBe(String(targets));
   });
 
   it("keeps the website Node floor equal to the declared engines range", () => {
