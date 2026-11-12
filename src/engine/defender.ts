@@ -163,10 +163,12 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
 
   // Stage 1: Release Exposure Scan (best-effort for local files/directories)
   let releaseExposure: ReleaseExposureReport | null = null;
+  let releaseExposureError: string | undefined;
   try {
     releaseExposure = inspectReleaseExposure(absInput);
-  } catch {
+  } catch (err) {
     releaseExposure = null;
+    releaseExposureError = err instanceof Error ? err.message : String(err);
   }
 
   // Stage 2: Pre-flight REA Audit
@@ -263,10 +265,13 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
   const stages: OneClickDefenseStageSummary[] = [
     {
       stage: "1-release-exposure-scan",
-      status: "passed",
-      headline: releaseExposure
-        ? `Inspected ${releaseExposure.filesInspected} file(s); ${releaseExposure.findings.length} raw source-map exposure finding(s) neutralized`
-        : "Binary/container target validated for direct shield injection",
+      status: releaseExposureError === undefined ? "passed" : "warn",
+      headline:
+        releaseExposureError !== undefined
+          ? `Release exposure scan could not run (${releaseExposureError}); the shield pipeline continues without an exposure report`
+          : releaseExposure
+            ? `Inspected ${releaseExposure.filesInspected} file(s); ${releaseExposure.findings.length} raw source-map exposure finding(s) neutralized`
+            : "Binary/container target validated for direct shield injection",
     },
     {
       stage: "2-preflight-rea-audit",
