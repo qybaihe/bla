@@ -983,14 +983,19 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     const res = protectNativeBinary(rawBin, { intensity, seed });
     writeProtectedOutput(absOutput, res.buffer);
     const passthrough = res.binarySectionsPatched === 0;
-    decoyFunctionsInjected = passthrough ? 0 : 24;
-    fakeCrossReferencesCreated = passthrough ? 0 : 48;
+    decoyFunctionsInjected = passthrough ? 0 : res.decoyFunctionIslandsInjected;
+    fakeCrossReferencesCreated =
+      passthrough || res.decoyFunctionIslandsInjected === 0
+        ? 0
+        : res.decoyFunctionIslandsInjected * 2;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.binarySectionsPatched;
     if (!passthrough) {
       counteredVectors.add("native-rust-auditable");
       counteredVectors.add("native-go-buildinfo");
-      counteredVectors.add("native-decompiler-pseudocode");
+      if (res.decoyFunctionIslandsInjected > 0) {
+        counteredVectors.add("native-decompiler-pseudocode");
+      }
       counteredVectors.add("electron-fuses-inspection");
       counteredVectors.add("flutter-dart-aot-snapshot");
     }
