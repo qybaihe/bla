@@ -162,10 +162,29 @@ export function isCommandResolvable(
   return false;
 }
 
-function probeLocalMcpHandshake(
+/**
+ * Budget for the MCP `initialize` probe. A cold Node start plus a loaded machine
+ * used to miss the older 8s budget and report a healthy setup as unhealthy, so
+ * the default is generous and can be overridden per call or via
+ * `BLA_DOCTOR_HANDSHAKE_TIMEOUT_MS`.
+ */
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+
+export function resolveHandshakeTimeoutMs(explicit?: number): number {
+  if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) {
+    return Math.floor(explicit);
+  }
+  const fromEnv = Number(process.env.BLA_DOCTOR_HANDSHAKE_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return Math.floor(fromEnv);
+  }
+  return DEFAULT_HANDSHAKE_TIMEOUT_MS;
+}
+
+export function probeLocalMcpHandshake(
   command: string,
   args: readonly string[],
-  timeoutMs: number = 8000,
+  timeoutMs: number = DEFAULT_HANDSHAKE_TIMEOUT_MS,
 ): boolean {
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
@@ -424,7 +443,11 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     let handshakeStatus: DoctorHandshakeStatus = "not_checked";
     let handshakeVerified = false;
     if (options.verifyHandshake && configured && commandResolvable && command !== null) {
-      handshakeVerified = probeLocalMcpHandshake(command, args, options.handshakeTimeoutMs ?? 8000);
+      handshakeVerified = probeLocalMcpHandshake(
+        command,
+        args,
+        resolveHandshakeTimeoutMs(options.handshakeTimeoutMs),
+      );
       handshakeStatus = handshakeVerified ? "verified" : "failed";
       if (!handshakeVerified) {
         clientIssues.push(`MCP stdio initialize handshake failed for ${c.displayName}`);
