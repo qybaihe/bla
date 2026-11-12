@@ -630,10 +630,13 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       }
 
       case "lint": {
-        const target = parsed.positionals[0] ?? ".";
+        const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
+        const target = parsed.positionals[0] ?? loaded.config.input ?? ".";
         const report = scanPackagingGates({
           directory: resolve(target),
-          intensity: (parsed.intensity as "stealth" | "balanced" | "maximum" | "bankrupt") ?? "bankrupt",
+          intensity: argv.includes("--intensity")
+            ? parsed.intensity
+            : (loaded.config.intensity ?? "bankrupt"),
           allowPlaintextSeal: parsed.allowPlaintextSeal,
           allowWasmClearParamCarriers: parsed.allowWasmClearParamCarriers,
           allowJsAesUnwrap: parsed.allowJsAesUnwrap,
