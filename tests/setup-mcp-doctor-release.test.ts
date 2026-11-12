@@ -43,6 +43,64 @@ import {
 
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 
+interface CliRun {
+  readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Async CLI runner for the release smoke checks. `spawnSync` blocks the whole
+ * vitest worker for the duration of a cold Node start (measured at ~65s across
+ * the packed-tarball checks), which is what made the worker miss RPC
+ * heartbeats. The child is killed at `timeoutMs`; the caller then sees a
+ * non-zero status instead of a hung promise.
+ */
+function runCli(
+  command: string,
+  args: readonly string[],
+  options: {
+    readonly input?: string;
+    readonly timeoutMs?: number;
+    readonly env?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<CliRun> {
+  return new Promise<CliRun>((resolveRun) => {
+    const child = spawn(command, [...args], {
+      env: options.env ?? process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer =
+      options.timeoutMs !== undefined
+        ? setTimeout(() => {
+            if (!settled) child.kill();
+          }, options.timeoutMs)
+        : undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolveRun({ status, signal, stdout, stderr });
+    };
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (err) => {
+      stderr += String(err);
+      finish(null, null);
+    });
+    child.on("close", (status, signal) => finish(status, signal));
+    child.stdin?.end(options.input ?? "");
+  });
+}
+
 const tempDirs: string[] = [];
 
 function makeTempDir(prefix: string = "bla-issue-8-12-"): string {
@@ -907,7 +965,7 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
     expect(retryPlan.shouldPublishAlias).toBe(true);
   });
 
-  it.skipIf(!isNodeSqliteAvailable())("packs both bla-agents and bla-shield tarballs and verifies exports, 3 bin entrypoints, and read-only doctor in clean temp dirs", () => {
+  it.skipIf(!isNodeSqliteAvailable())("packs both bla-agents and bla-shield tarballs and verifies exports, 3 bin entrypoints, and read-only doctor in clean temp dirs", async () => {
     const outDir = makeTempDir("bla-release-pack-");
     const packed = packDualReleaseTarballs(process.cwd(), outDir);
 
@@ -963,44 +1021,38 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
       expect(existsSync(join(pkgRoot, bundlerEntry))).toBe(true);
       expect(existsSync(join(pkgRoot, pkgManifest.exports["./bundler"]!.types))).toBe(true);
 
-      // Verify read-only `doctor --json` and MCP `initialize` against unpacked dist/cli.js.
-      // A cold Node start from an unpacked tarball can exceed 5s on a loaded machine,
-      // which made this smoke test fail intermittently; use a realistic budget.
+      // Verify read-only `doctor --json` and MCP `initialize` against unpacked
+      // dist/cli.js. These run through the async runner: the previous spawnSync
+      // calls blocked this worker for up to 20s each, which is what made the
+      // worker miss vitest RPC heartbeats.
       const packedCliTimeoutMs = 20_000;
-      const docRun = spawnSync(
-        process.execPath,
-        [join(pkgRoot, "dist/cli.js"), "doctor", "--json"],
-        {
-          encoding: "utf8",
-          timeout: packedCliTimeoutMs,
-          env: {
-            ...process.env,
-            HOME: unpackDir,
-            USERPROFILE: unpackDir,
-            APPDATA: join(unpackDir, "AppData", "Roaming"),
-          },
+      const docRun = await runCli(process.execPath, [join(pkgRoot, "dist/cli.js"), "doctor", "--json"], {
+        timeoutMs: packedCliTimeoutMs,
+        env: {
+          ...process.env,
+          HOME: unpackDir,
+          USERPROFILE: unpackDir,
+          APPDATA: join(unpackDir, "AppData", "Roaming"),
         },
-      );
+      });
       expect(docRun.status).toBe(0);
       const docJson = JSON.parse(docRun.stdout) as { blaVersion: string; healthy: boolean };
       expect(docJson.blaVersion).toBe(BLA_IDENTITY.version);
       expect(docJson.healthy).toBe(true);
 
       // Verify MCP initialize against unpacked dist/cli.js. Retry once on a
-      // transient spawn timeout so a slow cold start does not fail the suite.
+      // transient cold-start timeout so a slow machine does not fail the suite.
       const mcpCli = join(pkgRoot, "dist/cli.js");
       const mcpInput =
         JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n";
-      let mcpInit = spawnSync(process.execPath, [mcpCli, "mcp"], {
+      let mcpInit = await runCli(process.execPath, [mcpCli, "mcp"], {
         input: mcpInput,
-        encoding: "utf8",
-        timeout: packedCliTimeoutMs,
+        timeoutMs: packedCliTimeoutMs,
       });
       if (!mcpInit.stdout.includes('"protocolVersion"')) {
-        mcpInit = spawnSync(process.execPath, [mcpCli, "mcp"], {
+        mcpInit = await runCli(process.execPath, [mcpCli, "mcp"], {
           input: mcpInput,
-          encoding: "utf8",
-          timeout: packedCliTimeoutMs,
+          timeoutMs: packedCliTimeoutMs,
         });
       }
       expect(
@@ -1008,5 +1060,7 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
         `MCP initialize returned no response (status=${mcpInit.status}, signal=${mcpInit.signal}, stderr=${(mcpInit.stderr || "").slice(0, 500)})`,
       ).toContain('"protocolVersion":"2024-11-05"');
     }
-  });
+    // Packing both tarballs and cold-starting the unpacked CLI is legitimately
+    // slow; the async runner means vitest can actually enforce this budget.
+  }, 240_000);
 });
