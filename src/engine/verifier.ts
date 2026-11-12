@@ -94,6 +94,7 @@ export function verifyTarget(
 
   // Check 5: Token & Cost Bankruptcy Amplification
   const afterEst = afterAudit.agentEstimates[0]!;
+  const baselineSource: "measured" | "assumed" = beforeAudit ? "measured" : "assumed";
   const beforeTokens = beforeAudit ? beforeAudit.agentEstimates[0]!.estimatedInputTokens : 3_200;
   const beforeCost = beforeAudit ? beforeAudit.agentEstimates[0]!.estimatedCostUsd : 0.12;
   const beforeNodes = beforeAudit ? Math.max(1, beforeAudit.reaSimulation.obligationLedgerNodes) : 3;
@@ -107,7 +108,11 @@ export function verifyTarget(
     name: "Agent Token & Cost Bankruptcy Amplification (>= 10x)",
     targetReaComponent: "MCP Context Window & Retained Evidence Paging",
     passed: tokenAmp >= 10 || afterEst.estimatedInputTokens >= 80_000,
-    details: `Token amplification: ${tokenAmp}x (${afterEst.estimatedInputTokens.toLocaleString()} tokens, ~$${afterEst.estimatedCostUsd.toFixed(2)})`,
+    details:
+      baselineSource === "measured"
+        ? `Token amplification: ${tokenAmp}x (${afterEst.estimatedInputTokens.toLocaleString()} tokens, ~$${afterEst.estimatedCostUsd.toFixed(2)})`
+        : `Token amplification: ${tokenAmp}x against an assumed baseline of 3,200 input tokens (${afterEst.estimatedInputTokens.toLocaleString()} tokens, ~$${afterEst.estimatedCostUsd.toFixed(2)}); pass the original artifact (bla verify <target> <original>) for a measured ratio`,
+    baselineSource,
   });
 
   const passedCount = checks.filter((c) => c.passed).length;
