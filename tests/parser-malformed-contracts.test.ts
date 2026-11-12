@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import { inspectErlangBeam, protectErlangBeamBuffer } from "../src/shields/formats/erlang-beam.js";
 import { inspectPcapCapture, protectPcapCaptureBuffer } from "../src/shields/formats/pcap-capture.js";
 import { protectApplePlistBuffer } from "../src/shields/formats/apple-plist.js";
+import {
+  inspectAndroidDex,
+  protectAndroidDexBuffer,
+  protectIl2cppMetadataBuffer,
+} from "../src/shields/formats/mobile-game.js";
 import { protectDotnetManagedBuffer } from "../src/shields/formats/dotnet-managed.js";
 import { inspectGpuPtx, protectGpuPtxText } from "../src/shields/formats/gpu-ptx.js";
 import { protectEvmBytecodeBuffer } from "../src/shields/formats/evm-bytecode.js";
@@ -121,6 +126,42 @@ describe("parser shields fail closed on malformed input", () => {
     const trickyBytecode = Buffer.from([0x60, 0x00, 0xa1, 0xaa, 0xbb, 0x00, 0x03]);
     const out = protectEvmBytecodeBuffer(trickyBytecode, { intensity: "balanced", seed: "evm-contract" });
     expect(out.buffer.subarray(0, trickyBytecode.length).equals(trickyBytecode)).toBe(true);
+  });
+
+  it("refuses to synthesize a replacement Android DEX container", () => {
+    expect(() => protectAndroidDexBuffer(Buffer.alloc(0), {})).toThrow(/Android DEX container/);
+    expect(() => protectAndroidDexBuffer(Buffer.from("not a dex file at all"), {})).toThrow(
+      /Android DEX container/,
+    );
+    // 3 magic bytes are not enough: the full 'dex\n' header is required.
+    expect(() => protectAndroidDexBuffer(Buffer.from("dex", "latin1"), {})).toThrow(
+      /Android DEX container/,
+    );
+  });
+
+  it("keeps a valid Android DEX container and header intact", () => {
+    const dex = Buffer.alloc(112, 0);
+    dex.write("dex\n035\0", 0, "latin1");
+    dex.writeUInt32LE(112, 36);
+    const out = protectAndroidDexBuffer(dex, { intensity: "balanced", seed: "dex-contract" });
+    expect(out.buffer.subarray(0, 8).toString("latin1")).toBe("dex\n035\0");
+    expect(out.buffer.length).toBeGreaterThan(dex.length);
+    expect(inspectAndroidDex(out.buffer)).toMatchObject({ validDex: true, fileSize: out.buffer.length });
+  });
+
+  it("refuses to synthesize a replacement Unity IL2CPP metadata container", () => {
+    expect(() => protectIl2cppMetadataBuffer(Buffer.alloc(0), {})).toThrow(/IL2CPP metadata/);
+    expect(() => protectIl2cppMetadataBuffer(Buffer.from("not metadata"), {})).toThrow(
+      /IL2CPP metadata/,
+    );
+  });
+
+  it("keeps a valid Unity IL2CPP metadata header intact", () => {
+    const meta = Buffer.alloc(256, 0);
+    meta.writeUInt32LE(0xfab11baf, 0);
+    const out = protectIl2cppMetadataBuffer(meta, { intensity: "balanced", seed: "il2cpp-contract" });
+    expect(out.buffer.readUInt32LE(0)).toBe(0xfab11baf);
+    expect(out.buffer.length).toBeGreaterThan(meta.length);
   });
 
   it("rejects bare [BLA-PTX-SHIELD] marker spoofing without structural decoy kernels (#155)", () => {
