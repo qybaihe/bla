@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,6 +58,28 @@ module.exports = { unlock };
     expect(mod.unlock("DemoV8-AegisKey!")).toBe(
       "FLAG{bla_v8_aegis_demo_fixture_not_the_real_prize}",
     );
+  });
+
+  it("refuses to write through a hardlinked output path inside outDir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-enc-link-"));
+    const outDir = join(dir, "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(dir, "license.cjs"),
+      `module.exports.flag = "FLAG{hardlink_target_must_survive}";\n`,
+    );
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "PRECIOUS-ORIGINAL");
+    try {
+      linkSync(victim, join(outDir, "license.cjs"));
+    } catch {
+      return; // hardlinks unsupported on this filesystem
+    }
+
+    const report = encryptStrings({ path: dir, seed: "link-test", outDir });
+    expect(report.status).toBe("error");
+    expect(report.error ?? "").toMatch(/symlink or hardlinked/);
+    expect(readFileSync(victim, "utf8")).toBe("PRECIOUS-ORIGINAL");
   });
 
   it("same seed is reproducible; different seed differs", () => {

@@ -19,10 +19,10 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { SeededPrng } from "../core/prng.js";
+import { writeFileAtomicSync } from "./protector.js";
 import {
   classifySensitiveLiteral,
   extractStringLiterals,
@@ -535,7 +535,12 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
       let written = false;
       if (result.encrypted.length > 0 && !options.dryRun) {
         if (outDir) mkdirSync(dirname(outPath), { recursive: true });
-        writeFileSync(outPath, result.code, "utf8");
+        // Same atomic, link-guarded writer the rest of the engine uses: an
+        // outDir copy must not follow a planted symlink/hardlink, while the
+        // in-place rewrite of the caller's own file keeps that opt-in.
+        writeFileAtomicSync(outPath, result.code, "utf8", {
+          allowLinkWriteThrough: outDir === null,
+        });
         written = true;
       }
 
