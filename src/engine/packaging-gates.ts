@@ -534,7 +534,7 @@ export function scanPackagingGates(
   };
 }
 
-function filterBlockingFindings(
+export function filterBlockingFindings(
   findings: readonly PackagingGateFinding[],
   intensity: ProtectionIntensity,
   allow: PackagingGatesAllowOptions,
@@ -601,8 +601,12 @@ function filterBlockingFindings(
           allow.allowMissingBindRuntime !== true &&
           f.shouldRefuseBankrupt
         );
-      default:
-        return false;
+      default: {
+        // Fail closed: a gate id added to `PackagingGateId` without a refusal
+        // decision here must not silently become advisory-only.
+        const unhandled: never = f.gate;
+        throw new Error(`Unhandled packaging gate: ${String(unhandled)}`);
+      }
     }
   });
 }
