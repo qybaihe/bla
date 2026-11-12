@@ -491,6 +491,30 @@ export function protectGgufBuffer(
     kvEntries.push(Buffer.concat(frames));
   }
 
+  // Everything the protection appends before the tensor region shifts that
+  // region by a constant offset. That shift must stay a multiple of the tensor
+  // alignment (`general.alignment`, 32 by default), otherwise a conformant
+  // loader aligns past the real tensor-data start and reads the wrong bytes.
+  const tensorAlignment = 32;
+  const appendedKvBytes = kvEntries.reduce((sum, entry) => sum + entry.length, 0);
+  const shiftRemainder = appendedKvBytes % tensorAlignment;
+  if (trailingTensorSlice.length > 0 && shiftRemainder !== 0) {
+    const padKey = "enclave.alignment.pad";
+    if (!parsed || !parsed.existingKeys.has(padKey)) {
+      const keyBytes = encodeGgufString(padKey);
+      const valueOverhead = 4 + 8; // value type (u32) + string length (u64)
+      const target = tensorAlignment - shiftRemainder;
+      const valueLength =
+        (target - ((keyBytes.length + valueOverhead) % tensorAlignment) + tensorAlignment) %
+        tensorAlignment;
+      const valueType = Buffer.alloc(4);
+      valueType.writeUInt32LE(8, 0); // GGUF string
+      kvEntries.push(
+        Buffer.concat([keyBytes, valueType, encodeGgufString("p".repeat(valueLength))]),
+      );
+    }
+  }
+
   const header = Buffer.alloc(24);
   header.write("GGUF", 0, "ascii");
   header.writeUInt32LE(parsed ? parsed.version : 3, 4);
