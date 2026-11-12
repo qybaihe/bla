@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Honesty: `.pyc` marshal-note is host-verify only.** `protectTarget` no longer records `ReaAttackVectorId` `pyc-sidecar-entangle` for planting a TYPE_ASCII trailer. `importlib` ignores post-root trailers, so strip or sibling delete still execute; host `verifyPycSidecarMarshalNote` remains the offline check. An import-time hook is still TBD (same class as the WASM JS-loader). Enabling the note now annotates defenseScore gap `pyc-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
+
 ## [3.2.5] — 2026-11-11
 
 Patch extending opt-in `sidecarEntangle` to **CPython `.pyc` marshal trailer notes**, plus Counter-REA limit catalog hygiene for NativeAOT and IL2CPP v108.
