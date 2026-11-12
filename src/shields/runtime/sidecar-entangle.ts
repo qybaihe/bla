@@ -14,7 +14,9 @@
  * re-measures members via Electron's fs-patched `readFileSync`; CPython `.pyc`
  * appends a TYPE_ASCII marshal trailer note (`__blaPycSidecarDigest=…`) verified
  * by `verifyPycSidecarMarshalNote` (importlib ignores post-root trailers — see
- * `docs/design/sidecar-entry-entanglement.md`).
+ * `docs/design/sidecar-entry-entanglement.md`); GGUF plants a STRING metadata
+ * KV note (`bla.sidecar.v1`) verified by `verifyGgufSidecarMetadataNote`, with
+ * alignment-safe rewrite so tensor bytes stay bit-exact.
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
@@ -39,6 +41,12 @@ import {
   stripWasmCustomSectionByName,
 } from "../formats/wasm.js";
 import { unpackAsarBuffer } from "../formats/asar.js";
+import {
+  encodeGgufStringKv,
+  parseGgufLayout,
+  readGgufStringKv,
+  rebuildGguf,
+} from "../formats/gguf-layout.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -86,7 +94,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -101,6 +109,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   if (/\.pyc$/.test(lower)) return "pyc-marshal-note";
   if (/\.wasm$/.test(lower)) return "wasm-custom-section";
   if (/\.asar$/.test(lower)) return "asar-archive-note";
+  if (/\.gguf$/.test(lower)) return "gguf-metadata-note";
   return "unspecified";
 }
 
@@ -2263,6 +2272,347 @@ export function verifyPycSidecarMarshalNote(
   };
 }
 
+
+
+// ---------------------------------------------------------------------------
+// GGUF STRING metadata note (alignment-safe)
+// ---------------------------------------------------------------------------
+
+/** Metadata KV key planted inside the GGUF header. */
+export const GGUF_SIDECAR_METADATA_KEY = "bla.sidecar.v1" as const;
+export const GGUF_SIDECAR_METADATA_KIND = "gguf-sidecar-metadata" as const;
+
+export interface GgufSidecarMetadataNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof GGUF_SIDECAR_METADATA_KIND;
+  readonly key: typeof GGUF_SIDECAR_METADATA_KEY;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarGgufInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  /** Offline expected digest (from computeSidecarBindingDigest). */
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarGgufInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof GGUF_SIDECAR_METADATA_KIND;
+  readonly key: typeof GGUF_SIDECAR_METADATA_KEY;
+  readonly noteJson: string;
+  readonly note: GgufSidecarMetadataNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Fully encoded STRING-typed GGUF KV record ready to append. */
+  readonly kvRecord: Buffer;
+}
+
+/**
+ * Build a GGUF STRING metadata KV (`bla.sidecar.v1`) that carries the sidecar
+ * binding note. Tensor bytes, tensor infos, and relative tensor offsets stay
+ * untouched when the entry is rewritten via `rebuildGguf` (alignment-safe).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarGgufMetadataNote(
+  options: SidecarGgufInjectOptions,
+): SidecarGgufInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: GgufSidecarMetadataNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: GGUF_SIDECAR_METADATA_KIND,
+    key: GGUF_SIDECAR_METADATA_KEY,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = JSON.stringify(note);
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: GGUF_SIDECAR_METADATA_KIND,
+    key: GGUF_SIDECAR_METADATA_KEY,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    kvRecord: encodeGgufStringKv(GGUF_SIDECAR_METADATA_KEY, noteJson),
+  };
+}
+
+export interface SidecarGgufBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarGgufInjectResult;
+  /** GGUF bytes with the bla.sidecar.v1 STRING KV planted (tensors bit-exact). */
+  readonly bytes: Buffer;
+}
+
+/**
+ * Plan + bind for a GGUF entry: compute the offline digest from in-memory
+ * sidecar bytes and return a `bound` plan plus the rewritten GGUF with a
+ * `bla.sidecar.v1` STRING metadata note. Uses sidecars-mode digest so planting
+ * the note does not invalidate H. Tensor bytes stay bit-exact via
+ * alignment-safe rebuild.
+ */
+export function bindGgufSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarGgufBindResult {
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const entryBuf = Buffer.from(options.entryBytes);
+  const layout = parseGgufLayout(entryBuf);
+  if (!layout) {
+    throw new Error("entryBytes is not a valid GGUF v2/v3 container");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarGgufMetadataNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  // Drop any prior note so re-bind is idempotent, then append the fresh one.
+  const bytes = rebuildGguf(entryBuf, layout, {
+    dropKeys: new Set([GGUF_SIDECAR_METADATA_KEY]),
+    appendKvs: [inject.kvRecord],
+  });
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "gguf-metadata-note",
+    status: "bound",
+    note: "Bound — GGUF bla.sidecar.v1 STRING metadata note planted; ship sidecars alongside and verify via verifyGgufSidecarMetadataNote. Host verify fails closed on strip/alter; GGUF loaders ignore unknown STRING KVs (no process-start fail until a load-time hook lands). Tensor bytes stay bit-exact.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + GGUF entry bytes, produce
+ * the strip⇒fail-bound entry. Returns null when there are no sidecars to bind.
+ */
+export function entangleGgufEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarGgufBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindGgufSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface GgufSidecarVerifyOptions {
+  /** Full GGUF bytes (header + KVs + tensor infos + data). */
+  readonly entryBytes: Uint8Array;
+  /**
+   * Absolute directory used to resolve relative sidecar paths from the note.
+   * Required when note.sidecarPaths are relative and not supplied in-memory.
+   */
+  readonly baseDir?: string;
+  /** Optional in-memory sidecar bytes keyed by pathLabel (overrides disk read). */
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface GgufSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: GgufSidecarMetadataNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+/**
+ * Extract the `bla.sidecar.v1` STRING metadata note from a GGUF buffer.
+ * Returns null when the key is absent or the value is not a well-formed note.
+ */
+export function extractGgufSidecarMetadataNote(
+  entryBytes: Uint8Array,
+): GgufSidecarMetadataNote | null {
+  const layout = parseGgufLayout(entryBytes);
+  if (!layout) return null;
+  const jsonText = readGgufStringKv(entryBytes, layout, GGUF_SIDECAR_METADATA_KEY);
+  if (jsonText === null) return null;
+  try {
+    const parsed = JSON.parse(jsonText) as GgufSidecarMetadataNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== GGUF_SIDECAR_METADATA_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return null;
+    }
+    return {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: GGUF_SIDECAR_METADATA_KIND,
+      key: GGUF_SIDECAR_METADATA_KEY,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove a previously planted GGUF sidecar metadata note (idempotent).
+ * Tensor bytes stay bit-exact via alignment-safe rebuild.
+ */
+export function stripGgufSidecarMetadataNote(entryBytes: Uint8Array): Buffer {
+  const layout = parseGgufLayout(entryBytes);
+  if (!layout) return Buffer.from(entryBytes);
+  if (!layout.kvs.some((kv) => kv.key === GGUF_SIDECAR_METADATA_KEY)) {
+    return Buffer.from(entryBytes);
+  }
+  return rebuildGguf(entryBytes, layout, {
+    dropKeys: new Set([GGUF_SIDECAR_METADATA_KEY]),
+  });
+}
+
+/**
+ * Host-side strip⇒fail check for GGUF metadata notes: extract the STRING KV
+ * note, re-hash sibling sidecar bytes with the same layout as
+ * `computeSidecarBindingDigest` (sidecars mode), and compare to the embedded
+ * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY — for tests, loaders, and harden post-pass verification.
+ * GGUF loaders ignore unknown STRING KVs, so strip does not break load until
+ * a load-time hook lands (same honesty bar as .pyc marshal trailer).
+ */
+export function verifyGgufSidecarMetadataNote(
+  options: GgufSidecarVerifyOptions,
+): GgufSidecarVerifyResult {
+  const note = extractGgufSidecarMetadataNote(options.entryBytes);
+  if (!note) {
+    return { ok: false, reason: "gguf sidecar metadata note missing" };
+  }
+
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = options.sidecarBytes?.[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      return {
+        ok: false,
+        reason: `sidecar ${label} not supplied and no baseDir to read`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        return {
+          ok: false,
+          reason: `sidecar ${label} missing on disk`,
+          note,
+          expectedHex: note.digest,
+          softFold: note.softFold,
+        };
+      }
+      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      return {
+        ok: false,
+        reason: `sidecar ${label} unreadable`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+  }
+
+  const measured = computeSidecarBindingDigest(
+    {
+      pathLabel: note.entryPath,
+      bytes: options.entryBytes,
+    },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+  if (measured.hex !== note.digest) {
+    return {
+      ok: false,
+      reason: "gguf sidecar digest mismatch",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+  return {
+    ok: true,
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: note.softFold,
+  };
+}
 
 /** Test/helper: strip the sidecar note section from a WASM binary. */
 export function stripWasmSidecarCustomSection(bytes: Uint8Array): Buffer {

@@ -1,3 +1,4 @@
+import { parseGgufLayout, rebuildGguf } from "./gguf-layout.js";
 import { REA_INTERNAL_LIMITS } from "../../identity.js";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
@@ -149,7 +150,8 @@ export function inspectModelBuffer(bytes: Buffer): ModelInspectionSummary {
     const textLatin1 = bytes.toString("latin1");
     const blaProtected =
       textLatin1.includes("enclave.delegation") ||
-      textLatin1.includes("BLA-MODEL-SHIELD");
+      textLatin1.includes("BLA-MODEL-SHIELD") ||
+      textLatin1.includes("bla.sidecar.v1");
     return {
       validModel: true,
       format: "gguf",
@@ -489,6 +491,22 @@ export function protectGgufBuffer(
     leafUint32.writeUInt32LE(0xdeadbeef, 0);
     frames.push(leafUint32);
     kvEntries.push(Buffer.concat(frames));
+  }
+
+  // Real models carry tensors whose `offset` fields are RELATIVE to an
+  // aligned data section. Splicing KV bytes in front of the tensor infos
+  // without re-padding shifts that section and silently corrupts every
+  // weight. Route tensor-bearing inputs through the alignment-safe rewriter,
+  // which keeps tensor infos + data byte-exact and recomputes only padding.
+  const layout = parsed && parsed.tensorCount > 0n ? parseGgufLayout(bytes) : null;
+  if (layout) {
+    return {
+      buffer: rebuildGguf(bytes, layout, { appendKvs: kvEntries }),
+      chaffPayloadsEmbedded: chaffPayloads.length,
+      triggeredMetadataNestingBreaker: true,
+      canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
+      diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
+    };
   }
 
   const header = Buffer.alloc(24);

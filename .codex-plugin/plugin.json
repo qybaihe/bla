@@ -1,6 +1,6 @@
 {
   "name": "bla",
-  "version": "3.2.5",
+  "version": "3.2.6",
   "description": "Teaches coding agents the BLA Agent-Driven Hardening playbook: when to harden, audit, weave decoys, and verify Counter-REA defenses via the bla MCP tools and CLI.",
   "author": {
     "name": "BLA Contributors",
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "BLA",
     "shortDescription": "Harden software against AI reverse-engineering agents with BLA",
-    "longDescription": "BLA (Blind LLM Agents) is a Counter-REA Blue Defense toolkit. This plugin teaches coding agents the Agent-Driven Hardening playbook in `.agents/skills/blind-llm-agents/SKILL.md`: when to call `bla_harden` / `bla_defend`, how to run packaging-gate lint (`bla_lint`), weave domain-plausible shadow business logic from `bla_weave_plan`, and verify with `bla_verify_weave` / `bla_verify`.\n\nUse it when hardening your own software against AI reverse-engineering agents (REA / WorkBuddy-class), auditing release exposure, exhausting attacker token budgets, or one-click defending a project. It points agents at the existing BLA MCP tools and CLI — not at inventing new MCP surfaces. Defensive use only.",
+    "longDescription": "BLA (Blind LLM Agents) is a Counter-REA Blue Defense toolkit. This plugin teaches coding agents the Agent-Driven Hardening playbook in `.agents/skills/blind-llm-agents/SKILL.md`: when to call `bla_harden` / `bla_defend`, how to run packaging-gate lint (`bla_lint`), weave domain-plausible shadow business logic from `bla_weave_plan`, and verify with `bla_verify_weave` / `bla_verify`.\n\nUse it when hardening your own software against AI reverse-engineering agents (REA / WorkBuddy-class), auditing release exposure, exhausting attacker token budgets, or one-click defending a project. It points agents at the existing BLA MCP tools and CLI \u2014 not at inventing new MCP surfaces. Defensive use only.",
     "developerName": "BLA Contributors",
     "category": "Developer Tools",
     "capabilities": [

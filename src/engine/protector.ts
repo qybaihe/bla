@@ -99,6 +99,7 @@ import {
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePycEntryWithSidecars,
+  entangleGgufEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
@@ -303,6 +304,41 @@ function applySidecarEntangleToPyc(
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: pycBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarEntangleToGguf(
+  ggufBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: ggufBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: ggufBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: ggufBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleGgufEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: ggufBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: ggufBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
 }
 
@@ -1067,7 +1103,19 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "model-gguf") {
     const rawModel = readFileSync(absInput);
     const res = protectGgufBuffer(rawModel, { intensity, seed });
-    writeProtectedOutput(absOutput, res.buffer);
+    let finalGguf = res.buffer;
+    {
+      const entangled = applySidecarEntangleToGguf(finalGguf, options, absOutput, seed);
+      finalGguf = entangled.buffer;
+      if (entangled.applied) {
+        sidecarEntangleApplied = true;
+        // Host-verify STRING KV only: GGUF loaders ignore unknown metadata
+        // keys, so strip / sibling delete still load. Do not record
+        // gguf-sidecar-entangle until a load-time hook lands (same honesty
+        // bar as .pyc marshal trailer / ASAR archive-note-only).
+      }
+    }
+    writeProtectedOutput(absOutput, finalGguf);
     decoyFunctionsInjected = 16;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.triggeredMetadataNestingBreaker ? 2 : 1;

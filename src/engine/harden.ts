@@ -44,6 +44,7 @@ import {
   entangleBunEntryWithSidecars,
   entangleJsEntryWithSidecars,
   entanglePycEntryWithSidecars,
+  entangleGgufEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
@@ -1171,6 +1172,48 @@ export function hardenProject(
           if (sidecars.length > 0) {
             const entryBytes = readFileSync(entryAbs);
             const bound = entanglePycEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+                allowLinkWriteThrough: false,
+              });
+            }
+          }
+        }
+      }
+
+      // GGUF STRING-metadata entanglement only when no JS/Python/WASM/.pyc
+      // entry was bound — bla.sidecar.v1 KV measured against FINAL siblings;
+      // GGUF loaders ignore unknown STRING keys (tensor bytes stay bit-exact).
+      const ggufLike = summaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "model-gguf" ||
+            /\.gguf$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      const ggufEntry =
+        !jsEntry && !pyEntry && !wasmEntry && !pycEntry
+          ? ggufLike[0]
+          : undefined;
+      if (ggufEntry) {
+        const entryAbs = join(outputRoot, ggufEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === ggufEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entangleGgufEntryWithSidecars({
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,

@@ -6,13 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.6] — 2026-11-13
+
+Patch extending opt-in `sidecarEntangle` to **GGUF STRING metadata notes** (alignment-safe), fixing tensor-corrupting KV splices in `protectGgufBuffer`, and shipping the already-landed ELF64 mapped `.enclave` PT_LOAD honesty work.
+
 ### Added
+- **Sidecar GGUF metadata-note (`generateSidecarGgufMetadataNote` / `bindGgufSidecarEntanglement` / `entangleGgufEntryWithSidecars` / `verifyGgufSidecarMetadataNote` / `extractGgufSidecarMetadataNote` / `stripGgufSidecarMetadataNote`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` GGUF post-pass plant a `bla.sidecar.v1` STRING metadata KV. GGUF loaders ignore unknown STRING keys, so tensor load stays runtime-equivalent. Host-side verify re-hashes sibling sidecars (sidecars-mode digest). Vector `gguf-sidecar-entangle` reserved but **not recorded** until a load-time hook lands. Default still OFF.
+- **Alignment-safe GGUF layout rewriter (`src/shields/formats/gguf-layout.ts`):** `parseGgufLayout` / `rebuildGguf` keep tensor infos + tensor-data byte-exact and recompute only the `align(endOfTensorInfos, general.alignment)` pad so relative tensor offsets stay valid.
+- **defenseScore honesty:** `model-gguf` joins `SIDECAR_ENTANGLE_FORMATS`; enabling the host-only note annotates `gguf-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
 - **ELF64 `.so` Mapped `PT_LOAD` `.enclave` Section Hardening (`src/shields/formats/native.ts`, closes #176):** Upgrades ELF64 shared-library (`ET_DYN` on `x86_64` / `aarch64`) post-link hardening from an unmapped EOF trailer to injecting a mapped `PT_LOAD` (`PF_R | PF_X`, strict `W^X`) segment and `.enclave` (`SHT_PROGBITS`, `SHF_ALLOC | SHF_EXECINSTR`) section containing ABI-valid 16-byte aligned System V AMD64 / AArch64 function islands, Itanium C++ ABI RTTI symbols (`_ZTS...`), and POSIX OpenSSL/PKCS#11/SGX dynamic dispatch strings while relocating `e_phoff`/`PT_PHDR` into the mapped segment so `head -c <origLen>` truncation invalidates the ELF layout.
 
 ### Fixed
+- **`protectGgufBuffer` tensor corruption:** previously spliced decoy KV bytes in front of tensor infos without re-padding the data section, so every relative tensor offset resolved to the wrong bytes while the file still "parsed". Now routes tensor-bearing inputs through `rebuildGguf` (verified bit-exact against the reference `gguf` Python reader).
 - **Post-link Native `defenseScore` Honesty & Trailer Marker Hygiene (`src/engine/defense-score-honesty.ts`, `src/engine/verifier.ts`, `src/shields/formats/go-flutter-exhaustion.ts`, `src/shields/formats/native.ts`, #176):** Soft-caps post-link native `defenseScore` at `78` (`native-postlink-cfg-untouched`, pointing agents to compile-time `bla_emit_headers`) and `68` when trailer-only (`native-trailer-unmapped`), replaces the 1 MiB `'A'` Go buildinfo filler with realistic `dep github.com/...` module lines, and strips self-identifying `[BLA-*]` / `[COGNITIVE_ARMOR_INTERLOCK:*]` banners from native outputs.
 - **Honesty: `.pyc` marshal-note is host-verify only.** `protectTarget` no longer records `ReaAttackVectorId` `pyc-sidecar-entangle` for planting a TYPE_ASCII trailer. `importlib` ignores post-root trailers, so strip or sibling delete still execute; host `verifyPycSidecarMarshalNote` remains the offline check. An import-time hook is still TBD (same class as the WASM JS-loader). Enabling the note now annotates defenseScore gap `pyc-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
 - **CrackMe v9 `seal.json` DELETE fail-closed (red 2026-11-10):** `loadSeal()` now throws `integrity check failed: seal.json missing` on absence instead of letting ENOENT soft-fold to `[license] DENIED` (indistinguishable from a wrong key). Skill B principle: pinned sibling digests must fail-closed on absence. Fixture/cleartext tests cover the invariant; published `challenge/v9/hardened` still needs a release-secret rebuild to absorb the host fix.
+
+### Notes
+- REA tip `a8527d43b` (+31 since `0909d89c9`): UnityFS/PE/ELF declared-bounds enforcement, process-capture ownership, setup/MCP catalog + Cline client, release/CI — **no new 1:1 trip-able densify constants**.
 
 ## [3.2.5] — 2026-11-11
 

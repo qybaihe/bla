@@ -19,6 +19,7 @@ export type DefenseScoreGapId =
   | "self-seal-not-enabled"
   | "sidecar-entangle-not-enabled"
   | "pyc-sidecar-host-verify-only"
+  | "gguf-sidecar-host-verify-only"
   | "numeric-template-hygiene-partial"
   | "native-postlink-cfg-untouched"
   | "native-trailer-unmapped";
@@ -74,6 +75,7 @@ const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
   "wasm",
   "python-source",
   "python-pyc",
+  "model-gguf",
   "native-elf",
   "native-macho",
   "native-pe",
@@ -114,7 +116,7 @@ export function collectDefenseScoreGaps(
     gaps.push({
       id: "sidecar-entangle-not-enabled",
       summary:
-        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun companion, or a .pyc import-time hook); a host-only .pyc marshal trailer does not count. Default remains OFF (issue #40 / DESIGN).",
+        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun companion, .pyc import-time hook, or GGUF load-time hook); a host-only .pyc marshal trailer or GGUF STRING KV does not count. Default remains OFF (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }
@@ -126,6 +128,16 @@ export function collectDefenseScoreGaps(
       id: "pyc-sidecar-host-verify-only",
       summary:
         "sidecarEntangle planted a .pyc TYPE_ASCII marshal trailer verified only by host verifyPycSidecarMarshalNote; importlib still runs after strip or sibling delete. Import-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // GGUF STRING KV is host-verify only (loaders ignore unknown metadata keys).
+  if (input.detectedFormat === "model-gguf" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "gguf-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a GGUF bla.sidecar.v1 STRING metadata note verified only by host verifyGgufSidecarMetadataNote; GGUF loaders still load after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

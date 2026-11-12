@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 3.2.5 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 3.2.6 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tagged releases (`git tag bla-agents-<version>`) plus GitHub Releases. The release workflow can also publish the packed tarball to npm with provenance when `NPM_TOKEN`/OIDC is configured; a release cut may intentionally skip the npm step (see `CHANGELOG.md`).
 
