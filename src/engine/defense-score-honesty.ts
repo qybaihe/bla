@@ -19,7 +19,9 @@ export type DefenseScoreGapId =
   | "self-seal-not-enabled"
   | "sidecar-entangle-not-enabled"
   | "pyc-sidecar-host-verify-only"
-  | "numeric-template-hygiene-partial";
+  | "numeric-template-hygiene-partial"
+  | "native-postlink-cfg-untouched"
+  | "native-trailer-unmapped";
 
 export interface DefenseScoreGap {
   readonly id: DefenseScoreGapId;
@@ -38,6 +40,8 @@ export interface DefenseScoreHonestyInput {
   readonly wasmExportRenameApplied?: boolean;
   /** True when remaining BLA-injected templates still hardcode classic golden constants. */
   readonly numericTemplateLeakKnown?: boolean;
+  /** For post-link native binaries: true when decoys were planted into a mapped PT_LOAD / COFF section, false when trailer-only. */
+  readonly nativeMappedSectionInjected?: boolean;
 }
 
 export interface DefenseScoreHonesty {
@@ -49,6 +53,11 @@ export interface DefenseScoreHonesty {
 }
 
 const WASM_FORMATS: ReadonlySet<ArtifactFormat> = new Set(["wasm"]);
+const NATIVE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
+  "native-elf",
+  "native-macho",
+  "native-pe",
+]);
 const JS_LIKE: ReadonlySet<ArtifactFormat> = new Set([
   "javascript",
   "typescript",
@@ -128,6 +137,23 @@ export function collectDefenseScoreGaps(
         "Known BLA-injected shield templates may still emit classic golden-ratio numeric probes bit-identically (issue #40.2).",
       scoreCap: 90,
     });
+  }
+
+  if (NATIVE_FORMATS.has(input.detectedFormat)) {
+    gaps.push({
+      id: "native-postlink-cfg-untouched",
+      summary:
+        "Post-link native binary shield plants Counter-REA section/metadata decoys without rewriting compiled .text control flow, .dynsym exports, or .init_array; include compile-time headers via bla emit-headers (bla_shield.h / .rs / .go) for in-CFG native tarpits (issue #176).",
+      scoreCap: 78,
+    });
+    if (input.nativeMappedSectionInjected === false) {
+      gaps.push({
+        id: "native-trailer-unmapped",
+        summary:
+          "Native shield decoys reside only in an unmapped post-section EOF trailer outside PT_LOAD / COFF sections (strippable via file truncation; issue #176).",
+        scoreCap: 68,
+      });
+    }
   }
 
   return Object.freeze(gaps);

@@ -79,6 +79,9 @@ export interface NativeBinaryInspection {
   readonly goBuildInfoFramed: boolean;
   readonly peMappedSectionInjected?: boolean;
   readonly peMsvcRttiClassesCount?: number;
+  readonly elfMappedSectionInjected?: boolean;
+  readonly elfItaniumRttiClassesCount?: number;
+  readonly nativeMappedSectionInjected?: boolean;
   readonly extractedStringsCount: number;
   readonly blaProtected: boolean;
 }
@@ -403,8 +406,68 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
   const peMsvcRttiClassesCount = rttiMatches ? rttiMatches.length : 0;
   const peMappedSectionInjected =
     format === "native-pe" &&
-    textLatin1.includes(".enclave") &&
-    peMsvcRttiClassesCount >= 4;
+    peMsvcRttiClassesCount >= 4 &&
+    hasMappedWindowsPeEnclaveSection(bytes);
+
+  let elfMappedSectionInjected = false;
+  let elfItaniumRttiClassesCount = 0;
+  let elfMappedGoOrFlutterPlanted = false;
+  if (format === "native-elf" && bits === 64) {
+    try {
+      const layout = validateElf64Layout(bytes);
+      const loadRanges = layout.programHeaders
+        .filter((ph) => ph.type === 1 && ph.filesz > 0)
+        .map((ph) => ({ start: ph.offset, end: ph.offset + ph.filesz }));
+      const inPtLoad = (off: number, len: number): boolean =>
+        len > 0 && loadRanges.some((r) => off >= r.start && off + len <= r.end);
+
+      const itaniumMatches = new Set<string>();
+      for (const r of loadRanges) {
+        const sliceLatin1 = bytes.subarray(r.start, r.end).toString("latin1");
+        const zts = sliceLatin1.match(/_ZTS\d+[A-Za-z0-9_]+/g);
+        if (zts) {
+          for (const m of zts) itaniumMatches.add(m);
+        }
+        if (sliceLatin1.includes("_ZTS31EnclaveRing0AttestationVerifier")) {
+          elfMappedSectionInjected = true;
+        }
+      }
+      elfItaniumRttiClassesCount = itaniumMatches.size;
+
+      const secNames = resolveElf64SectionNames(bytes, layout);
+      const enclaveSec = secNames.get(".enclave");
+      if (enclaveSec && enclaveSec.type === 1 && inPtLoad(enclaveSec.offset, enclaveSec.size)) {
+        elfMappedSectionInjected = true;
+      }
+      const goSec = secNames.get(".go.buildinfo");
+      if (
+        goSec &&
+        inPtLoad(goSec.offset, goSec.size) &&
+        bytes
+          .subarray(goSec.offset, goSec.offset + goSec.size)
+          .includes(Buffer.from("ff20476f206275696c64696e663a", "hex"))
+      ) {
+        elfMappedGoOrFlutterPlanted = true;
+      }
+      const isoSec = secNames.get(".isolate");
+      if (
+        isoSec &&
+        inPtLoad(isoSec.offset, isoSec.size) &&
+        bytes
+          .subarray(isoSec.offset, isoSec.offset + isoSec.size)
+          .includes(Buffer.from("package:", "ascii"))
+      ) {
+        elfMappedGoOrFlutterPlanted = true;
+      }
+    } catch {
+      // Truncated / synthetic ELF headers fall back to unmapped inspection
+    }
+  }
+  const nativeMappedSectionInjected = Boolean(
+    peMappedSectionInjected ||
+      elfMappedSectionInjected ||
+      elfMappedGoOrFlutterPlanted,
+  );
   const rustcMatches = new Set<string>();
   const rustcRegex = /\/rustc\/([0-9a-f]{40})\//g;
   let match: RegExpExecArray | null;
@@ -474,9 +537,50 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
     goBuildInfoFramed,
     peMappedSectionInjected,
     peMsvcRttiClassesCount,
+    elfMappedSectionInjected,
+    elfItaniumRttiClassesCount,
+    nativeMappedSectionInjected,
     extractedStringsCount: printableMatches.length,
     blaProtected,
   };
+}
+
+function hasMappedWindowsPeEnclaveSection(bytes: Buffer): boolean {
+  if (bytes.length < 0x100 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
+    return false;
+  }
+  const lfanew = bytes.readUInt32LE(0x3c);
+  if (
+    lfanew < 0x40 ||
+    lfanew + 24 > bytes.length ||
+    bytes.readUInt32LE(lfanew) !== 0x00004550
+  ) {
+    return false;
+  }
+  const numSections = bytes.readUInt16LE(lfanew + 6);
+  const sizeOfOptionalHeader = bytes.readUInt16LE(lfanew + 20);
+  const secTableOff = lfanew + 24 + sizeOfOptionalHeader;
+  if (
+    numSections === 0 ||
+    numSections > 96 ||
+    secTableOff + numSections * 40 > bytes.length
+  ) {
+    return false;
+  }
+  const rttiProbe = Buffer.from(".?AVEnclaveRing0Transport", "ascii");
+  for (let i = 0; i < numSections; i++) {
+    const shOff = secTableOff + i * 40;
+    const name = bytes.subarray(shOff, shOff + 8).toString("ascii");
+    const rawSize = bytes.readUInt32LE(shOff + 16);
+    const rawPtr = bytes.readUInt32LE(shOff + 20);
+    if (rawPtr > 0 && rawSize > 0 && rawPtr + rawSize <= bytes.length) {
+      if (name === ".enclave") return true;
+      if (bytes.subarray(rawPtr, rawPtr + rawSize).includes(rttiProbe)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -643,6 +747,341 @@ function isPowerOfTwoU32(v: number): boolean {
 function alignUpU32(value: number, alignment: number): number {
   if (alignment <= 1) return value;
   return Math.ceil(value / alignment) * alignment;
+}
+
+function alignUpBigInt(value: bigint, alignment: bigint): bigint {
+  if (alignment <= 1n) return value;
+  const rem = value % alignment;
+  return rem === 0n ? value : value + (alignment - rem);
+}
+
+function deriveOddMixPrime32(prng: SeededPrng): number {
+  let mix = (prng.nextUint32() | 1) >>> 0;
+  if (mix === 0x9e3779b9 || mix === 0x9e3779b1 || mix === 0x01000193) {
+    mix = (mix ^ 0x00040002) >>> 0;
+  }
+  return mix >>> 0;
+}
+
+/**
+ * Generates System V AMD64 (`EM_X86_64`) or ARM64 (`EM_AARCH64`) ABI-valid
+ * 16-byte aligned function islands + Itanium C++ ABI RTTI symbols (`_ZTS...`) +
+ * POSIX OpenSSL/PKCS#11/SGX dynamic dispatch strings for mapped ELF64 `.enclave`
+ * segments (Issue #176).
+ */
+export function buildLinuxElfDecoyCodeAndRttiPayload(
+  prng: SeededPrng,
+  intensity: ProtectionIntensity,
+  machine: number = 0x3e,
+): {
+  readonly buffer: Buffer;
+  readonly decoyFunctionIslandsCount: number;
+  readonly itaniumRttiClassesCount: number;
+} {
+  const fnCount =
+    intensity === "stealth"
+      ? 8
+      : intensity === "balanced"
+        ? 16
+        : intensity === "maximum"
+          ? 24
+          : 32;
+
+  const codeIslands: Buffer[] = [];
+  for (let i = 0; i < fnCount; i++) {
+    if (machine === 0xb7) {
+      const island = Buffer.alloc(48, 0);
+      const imm16 = prng.nextInt(1, 0xfffe) & 0xffff;
+      const insns = [
+        0xd503245f, // bti c
+        0xa9be7bfd, // stp x29, x30, [sp, #-32]!
+        0x910003fd, // mov x29, sp
+        0xf9000fa0, // str x0, [x29, #24]
+        0xb9401ba8, // ldr w8, [x29, #24]
+        (0x52800009 | (imm16 << 5)) >>> 0, // mov w9, #imm16
+        0x4a090100, // eor w0, w8, w9
+        0xa8c27bfd, // ldp x29, x30, [sp], #32
+        0xd65f03c0, // ret
+        0xd503201f, // nop
+        0xd503201f, // nop
+        0xd503201f, // nop
+      ];
+      for (let k = 0; k < insns.length; k++) {
+        island.writeUInt32LE(insns[k]!, k * 4);
+      }
+      codeIslands.push(island);
+    } else {
+      const island = Buffer.alloc(48, 0xcc);
+      const imm = prng.nextUint32();
+      const mix = deriveOddMixPrime32(prng);
+      const frameBytes = Buffer.from([
+        0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+        0x55, // push rbp
+        0x48, 0x89, 0xe5, // mov rbp, rsp
+        0x48, 0x83, 0xec, 0x20, // sub rsp, 0x20
+        0x48, 0x89, 0x7d, 0xf8, // mov [rbp-0x8], rdi
+        0x48, 0x89, 0x75, 0xf0, // mov [rbp-0x10], rsi
+        0x8b, 0x45, 0xf8, // mov eax, [rbp-0x8]
+        0x35, imm & 0xff, (imm >>> 8) & 0xff, (imm >>> 16) & 0xff, (imm >>> 24) & 0xff, // xor eax, imm32
+        0x85, 0xc0, // test eax, eax
+        0x74, 0x06, // jz +6
+        0x69, 0xc0, mix & 0xff, (mix >>> 8) & 0xff, (mix >>> 16) & 0xff, (mix >>> 24) & 0xff, // imul eax, eax, mix
+        0x48, 0x83, 0xc4, 0x20, // add rsp, 0x20
+        0x5d, // pop rbp
+        0xc3, // ret
+      ]);
+      frameBytes.copy(island, 0);
+      codeIslands.push(island);
+    }
+  }
+
+  const itaniumRttiSymbols = [
+    "_ZTS31EnclaveRing0AttestationVerifier",
+    "_ZTS28Tpm2Pcr0MonotonicQuoteSealer",
+    "_ZTS29Pkcs11SessionKeyUnwrapContext",
+    "_ZTS27MutualTlsVsockQuorumChannel",
+    "_ZTS32HardwareLeaseEntitlementResolver",
+    "_ZTS26SgxEreportQuoteVerifierImpl",
+    "_ZTS25ZeroKnowledgeSchnorrProof",
+    "_ZTS29OpenSslEvpSealEnvelopeAdapter",
+  ];
+
+  const posixDispatchStrings = [
+    "libcrypto.so.3\0EVP_DecryptInit_ex2\0EVP_DecryptUpdate\0EVP_DecryptFinal_ex\0EVP_PKEY_derive\0",
+    "libpcsclite.so.1\0C_Initialize\0C_OpenSession\0C_Decrypt\0C_SignFinal\0",
+    "libsgx_dcap_ql.so.1\0sgx_qe_get_quote\0sgx_tvl_verify_qve_report_and_identity\0",
+    "libc.so.6\0dlopen\0dlsym\0dl_iterate_phdr\0prctl\0",
+  ].join("");
+
+  const rttiPaddingAlign = Buffer.alloc(16, 0);
+  const rttiBuf = Buffer.from(
+    `${itaniumRttiSymbols.join("\0")}\0${posixDispatchStrings}`,
+    "latin1",
+  );
+  const tailPadLen = (16 - ((rttiBuf.length + rttiPaddingAlign.length) % 16)) % 16;
+
+  return {
+    buffer: Buffer.concat([
+      ...codeIslands,
+      rttiPaddingAlign,
+      rttiBuf,
+      Buffer.alloc(tailPadLen, 0),
+    ]),
+    decoyFunctionIslandsCount: fnCount,
+    itaniumRttiClassesCount: itaniumRttiSymbols.length,
+  };
+}
+
+/**
+ * Injects a mapped `PT_LOAD` (`PF_R | PF_X`, strict `W^X`) segment + `.enclave`
+ * (`SHT_PROGBITS`, `SHF_ALLOC | SHF_EXECINSTR`) section into an ELF64 shared
+ * library (`ET_DYN` with `PT_DYNAMIC` and no `PT_INTERP`, e.g. Linux `.so`).
+ *
+ * Relocates `e_phoff` into the newly mapped `PT_LOAD` segment (updating `PT_PHDR`
+ * when present) and `e_shoff` to the tail while leaving all original `PT_LOAD`
+ * segments, BSS ranges, `.dynsym`, `.init_array`, and `PT_NOTE` BuildID intact.
+ * Truncating the file back to the original byte length invalidates `e_phoff`/`e_shoff`.
+ */
+function injectMappedElf64DecoySegment(
+  working: Buffer,
+  layout: Elf64LayoutSummary,
+  elfPayload: Buffer,
+): {
+  readonly buffer: Buffer;
+  readonly segmentAdded: boolean;
+  readonly sectionAdded: boolean;
+} {
+  if (working.length < 64 || elfPayload.length === 0) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+  const eType = working.readUInt16LE(16);
+  const eMachine = working.readUInt16LE(18);
+  if (
+    eType !== 3 ||
+    (eMachine !== 0x3e && eMachine !== 0xb7) ||
+    layout.phentsize !== 56 ||
+    layout.phnum < 2 ||
+    layout.phnum >= 512
+  ) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  const hasPtDynamic = layout.programHeaders.some((ph) => ph.type === 2);
+  const hasPtInterp = layout.programHeaders.some((ph) => ph.type === 3);
+  if (!hasPtDynamic || hasPtInterp) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  const existingNames = resolveElf64SectionNames(working, layout);
+  if (
+    existingNames.has(".enclave") ||
+    working.includes(Buffer.from("_ZTS31EnclaveRing0AttestationVerifier", "ascii"))
+  ) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  const loadSegments = layout.programHeaders.filter((ph) => ph.type === 1);
+  if (loadSegments.length === 0) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+  let maxLoadVaddrEnd = 0n;
+  let maxLoadAlign = 0x1000n;
+  for (let i = 0; i < loadSegments.length; i++) {
+    const cur = loadSegments[i]!;
+    if (i > 0 && cur.vaddr < loadSegments[i - 1]!.vaddr) {
+      return { buffer: working, segmentAdded: false, sectionAdded: false };
+    }
+    const end = cur.vaddr + cur.memsz;
+    if (end > maxLoadVaddrEnd) maxLoadVaddrEnd = end;
+    if (cur.align > maxLoadAlign && (cur.align & (cur.align - 1n)) === 0n) {
+      maxLoadAlign = cur.align;
+    }
+  }
+
+  let canExtendShdr = false;
+  let origShstrBytes: Buffer = Buffer.alloc(0);
+  if (layout.shnum > 0) {
+    if (
+      layout.shentsize !== 64 ||
+      layout.shstrndx <= 0 ||
+      layout.shstrndx >= layout.shnum ||
+      layout.shnum >= 65_000
+    ) {
+      return { buffer: working, segmentAdded: false, sectionAdded: false };
+    }
+    const shstrSec = layout.sectionHeaders[layout.shstrndx]!;
+    if (
+      shstrSec.type !== 3 ||
+      (shstrSec.flags & 2n) !== 0n ||
+      shstrSec.size === 0 ||
+      shstrSec.offset + shstrSec.size > working.length
+    ) {
+      return { buffer: working, segmentAdded: false, sectionAdded: false };
+    }
+    origShstrBytes = working.subarray(
+      shstrSec.offset,
+      shstrSec.offset + shstrSec.size,
+    );
+    canExtendShdr = true;
+  }
+
+  const pageAlign = eMachine === 0xb7 ? 0x10000n : 0x1000n;
+  const vaddrSpanAlign = maxLoadAlign > pageAlign ? maxLoadAlign : pageAlign;
+  const newSegOffsetBig = alignUpBigInt(BigInt(working.length), pageAlign);
+  const newSegVaddrBig = alignUpBigInt(maxLoadVaddrEnd, vaddrSpanAlign);
+  if (newSegOffsetBig > MAX_SAFE_BIGINT) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  const newSegOffset = Number(newSegOffsetBig);
+  const preSegPad = Buffer.alloc(newSegOffset - working.length, 0);
+
+  const newPhnum = layout.phnum + 1;
+  const newPhTableBytes = newPhnum * 56;
+  const enclaveRelOff = alignUpU32(newPhTableBytes, 16);
+  const interPhEnclavePad = Buffer.alloc(enclaveRelOff - newPhTableBytes, 0);
+  const enclaveOffset = newSegOffset + enclaveRelOff;
+  const enclaveVaddr = newSegVaddrBig + BigInt(enclaveRelOff);
+  const mappedSegmentBytes = enclaveRelOff + elfPayload.length;
+
+  const newPhTable = Buffer.alloc(newPhTableBytes, 0);
+  working.copy(
+    newPhTable,
+    0,
+    layout.phoff,
+    layout.phoff + layout.phnum * 56,
+  );
+  for (let i = 0; i < layout.phnum; i++) {
+    const off = i * 56;
+    if (newPhTable.readUInt32LE(off) === 6) {
+      newPhTable.writeBigUInt64LE(newSegOffsetBig, off + 8);
+      newPhTable.writeBigUInt64LE(newSegVaddrBig, off + 16);
+      newPhTable.writeBigUInt64LE(newSegVaddrBig, off + 24);
+      newPhTable.writeBigUInt64LE(BigInt(newPhTableBytes), off + 32);
+      newPhTable.writeBigUInt64LE(BigInt(newPhTableBytes), off + 40);
+    }
+  }
+  const lastPhOff = layout.phnum * 56;
+  newPhTable.writeUInt32LE(1, lastPhOff + 0); // PT_LOAD
+  newPhTable.writeUInt32LE(5, lastPhOff + 4); // PF_R | PF_X
+  newPhTable.writeBigUInt64LE(newSegOffsetBig, lastPhOff + 8);
+  newPhTable.writeBigUInt64LE(newSegVaddrBig, lastPhOff + 16);
+  newPhTable.writeBigUInt64LE(newSegVaddrBig, lastPhOff + 24);
+  newPhTable.writeBigUInt64LE(BigInt(mappedSegmentBytes), lastPhOff + 32);
+  newPhTable.writeBigUInt64LE(BigInt(mappedSegmentBytes), lastPhOff + 40);
+  newPhTable.writeBigUInt64LE(pageAlign, lastPhOff + 48);
+
+  const chunks: Buffer[] = [
+    Buffer.from(working),
+    preSegPad,
+    newPhTable,
+    interPhEnclavePad,
+    elfPayload,
+  ];
+  let cursor = newSegOffset + mappedSegmentBytes;
+
+  let newShoff = 0;
+  let newShnum = layout.shnum;
+  if (canExtendShdr) {
+    const enclaveNameOffset = origShstrBytes.length;
+    const extShstr = Buffer.concat([
+      origShstrBytes,
+      Buffer.from(".enclave\0", "ascii"),
+    ]);
+    const shstrPadLen = alignUpU32(cursor, 16) - cursor;
+    if (shstrPadLen > 0) {
+      chunks.push(Buffer.alloc(shstrPadLen, 0));
+      cursor += shstrPadLen;
+    }
+    const extShstrOffset = cursor;
+    chunks.push(extShstr);
+    cursor += extShstr.length;
+
+    const shTablePadLen = alignUpU32(cursor, 16) - cursor;
+    if (shTablePadLen > 0) {
+      chunks.push(Buffer.alloc(shTablePadLen, 0));
+      cursor += shTablePadLen;
+    }
+    newShoff = cursor;
+    newShnum = layout.shnum + 1;
+    const newShTable = Buffer.alloc(newShnum * 64, 0);
+    working.copy(
+      newShTable,
+      0,
+      layout.shoff,
+      layout.shoff + layout.shnum * 64,
+    );
+
+    const shstrEntryOff = layout.shstrndx * 64;
+    newShTable.writeBigUInt64LE(BigInt(extShstrOffset), shstrEntryOff + 24);
+    newShTable.writeBigUInt64LE(BigInt(extShstr.length), shstrEntryOff + 32);
+
+    const encSecOff = layout.shnum * 64;
+    newShTable.writeUInt32LE(enclaveNameOffset, encSecOff + 0); // sh_name
+    newShTable.writeUInt32LE(1, encSecOff + 4); // SHT_PROGBITS
+    newShTable.writeBigUInt64LE(6n, encSecOff + 8); // SHF_ALLOC | SHF_EXECINSTR
+    newShTable.writeBigUInt64LE(enclaveVaddr, encSecOff + 16); // sh_addr
+    newShTable.writeBigUInt64LE(BigInt(enclaveOffset), encSecOff + 24); // sh_offset
+    newShTable.writeBigUInt64LE(BigInt(elfPayload.length), encSecOff + 32); // sh_size
+    newShTable.writeBigUInt64LE(16n, encSecOff + 48); // sh_addralign
+
+    chunks.push(newShTable);
+    cursor += newShTable.length;
+  }
+
+  const out = Buffer.concat(chunks);
+  out.writeBigUInt64LE(newSegOffsetBig, 32); // e_phoff
+  out.writeUInt16LE(newPhnum, 56); // e_phnum
+  if (canExtendShdr) {
+    out.writeBigUInt64LE(BigInt(newShoff), 40); // e_shoff
+    out.writeUInt16LE(newShnum, 60); // e_shnum
+  }
+
+  return {
+    buffer: out,
+    segmentAdded: true,
+    sectionAdded: canExtendShdr,
+  };
 }
 
 /**
@@ -1059,6 +1498,8 @@ export function protectNativeBinary(
   readonly goBuildInfoExceedsLimit: boolean;
   readonly mappedGoBuildInfoPlanted: boolean;
   readonly mappedFlutterPoolPlanted: boolean;
+  readonly elfMappedSectionInjected: boolean;
+  readonly decoyFunctionIslandsInjected: number;
   readonly chaffPayloadsEmbedded: number;
   readonly binarySectionsPatched: number;
   readonly electronHardeningReport?: ElectronHardeningReport;
@@ -1087,6 +1528,8 @@ export function protectNativeBinary(
       goBuildInfoExceedsLimit: false,
       mappedGoBuildInfoPlanted: false,
       mappedFlutterPoolPlanted: false,
+      elfMappedSectionInjected: false,
+      decoyFunctionIslandsInjected: 0,
       chaffPayloadsEmbedded: 0,
       binarySectionsPatched: 0,
       bunStandaloneCarrier: bunCarrier.kind,
@@ -1109,6 +1552,8 @@ export function protectNativeBinary(
       goBuildInfoExceedsLimit: false,
       mappedGoBuildInfoPlanted: false,
       mappedFlutterPoolPlanted: false,
+      elfMappedSectionInjected: false,
+      decoyFunctionIslandsInjected: 0,
       chaffPayloadsEmbedded: 0,
       binarySectionsPatched: 0,
       bunStandaloneCarrier: bunCarrier.kind,
@@ -1153,6 +1598,9 @@ export function protectNativeBinary(
   let mappedGoBuildInfoPlanted = false;
   let mappedFlutterPoolPlanted = false;
   let mappedGoTripsMax = false;
+  let elfSectionInjected = false;
+  let elfSectionHeaderAdded = false;
+  let decoyFunctionIslandsInjected = 0;
   if (elfBefore) {
     const goPlant = injectMappedGoBuildInfo(workingInput, elfBefore, intensity);
     mappedGoBuildInfoPlanted = goPlant.planted;
@@ -1163,6 +1611,27 @@ export function protectNativeBinary(
       prng,
     );
     mappedFlutterPoolPlanted = flutterPlant.planted;
+
+    if (!mappedGoBuildInfoPlanted && !mappedFlutterPoolPlanted) {
+      const elfMachine = workingInput.readUInt16LE(18);
+      const elfDecoyPayload = buildLinuxElfDecoyCodeAndRttiPayload(
+        prng,
+        intensity,
+        elfMachine,
+      );
+      const elfInjected = injectMappedElf64DecoySegment(
+        workingInput,
+        elfBefore,
+        elfDecoyPayload.buffer,
+      );
+      if (elfInjected.segmentAdded) {
+        workingInput = Buffer.from(elfInjected.buffer);
+        elfSectionInjected = true;
+        elfSectionHeaderAdded = elfInjected.sectionAdded;
+        decoyFunctionIslandsInjected = elfDecoyPayload.decoyFunctionIslandsCount;
+        patchedInPlaceCount += 1;
+      }
+    }
   }
 
   const isPeMagic =
@@ -1181,6 +1650,7 @@ export function protectNativeBinary(
     workingInput = Buffer.from(peInjected.buffer);
     if (peInjected.sectionAdded || peInjected.slackPlanted) {
       peSectionInjected = true;
+      decoyFunctionIslandsInjected = peDecoyPayload.decoyFunctionIslandsCount;
       patchedInPlaceCount += 1;
     }
   }
@@ -1193,8 +1663,10 @@ export function protectNativeBinary(
     rustcLines.push(`/rustc/${hash}/library/core/src/enclave_guard.rs\0`);
   }
 
-  // 2. Framed Go buildinfo + pclntab/moduledata bait
-  const goBuildInfo = buildGoBuildInfoExhaustionPayload(prng, intensity);
+  // 2. Framed Go buildinfo + pclntab/moduledata bait (omit self-identifying BLA banners)
+  const goBuildInfo = buildGoBuildInfoExhaustionPayload(prng, intensity, {
+    omitBanner: true,
+  });
 
   // 3. Generate architectural chaff strings + Canary Honeypot + System-Diagnostic Rabbit Holes for Ghidra/Hopper/IDA
   const chaffBlock = chaffPayloads
@@ -1216,15 +1688,17 @@ export function protectNativeBinary(
     ),
     ...cognitiveArmor.triggersInjected.map(
       (t) =>
-        `[COGNITIVE_ARMOR_INTERLOCK:${t.classifierDomain}] ${t.coupledAnchorSymbol} => ${t.triggerPayload.replace(/\r?\n/g, " ")}\0`,
+        `attestation_interlock(${t.classifierDomain}): ${t.coupledAnchorSymbol} => ${t.triggerPayload.replace(/\r?\n/g, " ")}\0`,
     ),
   ].join("");
   const depV0Payload = buildDecoyRustAuditablePayload(prng);
-  const flutterPool = buildFlutterPoolExhaustionPayload(prng);
+  const flutterPool = buildFlutterPoolExhaustionPayload(prng, {
+    omitBanner: true,
+  });
   const dartOverflowPayload = flutterPool.buffer;
 
   const shieldTrailer = Buffer.concat([
-    Buffer.from("\0[BLA-NATIVE-SHIELD-V1]\0.dep-v0\0", "utf8"),
+    Buffer.from("\0.dep-v0\0", "utf8"),
     ...(peDecoyPayload && !peSectionInjected ? [peDecoyPayload.buffer] : []),
     Buffer.from(rustcLines.join(""), "latin1"),
     goBuildInfo.buffer,
@@ -1240,9 +1714,19 @@ export function protectNativeBinary(
 
   if (elfBefore) {
     const elfAfter = validateElf64Layout(outBytes);
+    const expectedPhCount =
+      elfBefore.programHeaders.length + (elfSectionInjected ? 1 : 0);
+    if (elfAfter.programHeaders.length !== expectedPhCount) {
+      throw new InvalidNativeBinaryError(
+        `ELF64 program header count mismatch (${elfAfter.programHeaders.length} !== ${expectedPhCount})`,
+      );
+    }
     for (let i = 0; i < elfBefore.programHeaders.length; i++) {
       const beforePh = elfBefore.programHeaders[i]!;
       const afterPh = elfAfter.programHeaders[i]!;
+      if (elfSectionInjected && beforePh.type === 6) {
+        continue;
+      }
       if (
         beforePh.type !== afterPh.type ||
         beforePh.flags !== afterPh.flags ||
@@ -1258,7 +1742,17 @@ export function protectNativeBinary(
         );
       }
     }
+    const expectedShCount =
+      elfBefore.sectionHeaders.length + (elfSectionHeaderAdded ? 1 : 0);
+    if (elfAfter.sectionHeaders.length !== expectedShCount) {
+      throw new InvalidNativeBinaryError(
+        `ELF64 section header count mismatch (${elfAfter.sectionHeaders.length} !== ${expectedShCount})`,
+      );
+    }
     for (let s = 0; s < elfBefore.sectionHeaders.length; s++) {
+      if (elfSectionHeaderAdded && s === elfBefore.shstrndx) {
+        continue;
+      }
       const beforeSh = elfBefore.sectionHeaders[s]!;
       const afterSh = elfAfter.sectionHeaders[s]!;
       if (
@@ -1286,6 +1780,8 @@ export function protectNativeBinary(
       goBuildInfo.exceedsMaxBuildInfoBytes || mappedGoTripsMax,
     mappedGoBuildInfoPlanted,
     mappedFlutterPoolPlanted,
+    elfMappedSectionInjected: elfSectionInjected,
+    decoyFunctionIslandsInjected,
     chaffPayloadsEmbedded: chaffPayloads.length,
     binarySectionsPatched,
     ...(electronHardeningReport ? { electronHardeningReport } : {}),

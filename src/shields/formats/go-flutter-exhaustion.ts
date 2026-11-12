@@ -17,10 +17,52 @@ const GO_MAGIC = Buffer.from("ff20476f206275696c64696e663a", "hex");
 const MODULE_START = Buffer.from("3077af0c9274080241e1c107e6d618e6", "hex");
 const MODULE_END = Buffer.from("f932433186182072008242104116d8f2", "hex");
 
+const GO_DECOY_MODULE_ORGS = [
+  "cloudflare/circl",
+  "FiloSottile/age",
+  "go-jose/go-jose/v4",
+  "golang-jwt/jwt/v5",
+  "google/go-sev-guest",
+  "google/go-tdx-guest",
+  "hashicorp/vault/sdk",
+  "klauspost/compress",
+  "miekg/pkcs11",
+  "oasisprotocol/curve25519-voi",
+  "smallstep/certificates",
+  "spiffe/go-spiffe/v2",
+  "zitadel/oidc/v3",
+  "aws/aws-nitro-enclaves-nsm-api",
+  "confidential-containers/attestation",
+  "sigstore/cosign/v2",
+] as const;
+
+function buildSyntheticGoDepTable(prng: SeededPrng, minBytes: number): Buffer {
+  const cohortDigests = Array.from({ length: 32 }, () =>
+    Buffer.from(prng.hex(64), "hex").toString("base64"),
+  );
+  const cohortSubpkgs = Array.from({ length: 32 }, (_, idx) =>
+    `${GO_DECOY_MODULE_ORGS[idx % GO_DECOY_MODULE_ORGS.length]}/sub_${prng.hex(3)}`,
+  );
+  const lines: string[] = [];
+  let totalLen = 0;
+  let i = 0;
+  while (totalLen < minBytes) {
+    const slot = i & 31;
+    const minor = (i >>> 5) & 31;
+    const patch = i & 63;
+    const line = `dep\tgithub.com/${cohortSubpkgs[slot]}/pkg${i.toString(36)}\tv1.${minor}.${patch}\th1:${cohortDigests[slot]}\n`;
+    lines.push(line);
+    totalLen += line.length;
+    i++;
+  }
+  return Buffer.from(lines.join(""), "utf8");
+}
+
 /**
  * Framed Go buildinfo (magic `\xff Go buildinf:` + inline encoding) with
  * MODULE_START/END wrapping, plus `.gopclntab` / `runtime.moduledata` bait.
- * Bankrupt/maximum pad the module past `MAX_BUILD_INFO_BYTES` (1 MiB).
+ * Bankrupt/maximum pad the module past `MAX_BUILD_INFO_BYTES` (1 MiB) using
+ * realistic Go module dependency lines rather than constant-byte padding.
  *
  * Trailer placement poisons whole-file scanners. Prefer
  * {@link buildMappedGoBuildInfoPlant} inside a real `.go.buildinfo` section /
@@ -29,6 +71,7 @@ const MODULE_END = Buffer.from("f932433186182072008242104116d8f2", "hex");
 export function buildGoBuildInfoExhaustionPayload(
   prng: SeededPrng,
   intensity: ProtectionIntensity = "balanced",
+  options: { readonly omitBanner?: boolean } = {},
 ): {
   readonly buffer: Buffer;
   readonly exceedsMaxBuildInfoBytes: boolean;
@@ -39,12 +82,13 @@ export function buildGoBuildInfoExhaustionPayload(
   const version = Buffer.from("go1.22.5", "utf8");
   const canaryLines = [
     "path\tgithub.com/tee-enclave/zero-trust-shim\n",
-    `mod\tgithub.com/tee-enclave/zero-trust-shim\tv4.2.0\th1:${prng.hex(32)}=\n`,
-    `dep\tgithub.com/intel-sgx/enclave-sdk-go\tv2.14.0\th1:${prng.hex(32)}=\n`,
-    `dep\tgithub.com/google/go-tpm-tools\tv0.4.4\th1:${prng.hex(32)}=\n`,
+    `mod\tgithub.com/tee-enclave/zero-trust-shim\tv4.2.0\th1:${Buffer.from(prng.hex(64), "hex").toString("base64")}\n`,
+    `dep\tgithub.com/intel-sgx/enclave-sdk-go\tv2.14.0\th1:${Buffer.from(prng.hex(64), "hex").toString("base64")}\n`,
+    `dep\tgithub.com/google/go-tpm-tools\tv0.4.4\th1:${Buffer.from(prng.hex(64), "hex").toString("base64")}\n`,
     "build\t-compiler=gc\n",
     "build\tCGO_ENABLED=1\n",
-    `build\tBLA_CANARY=${prng.hex(16)}\n`,
+    "build\t-trimpath=true\n",
+    `build\tvcs.revision=${prng.hex(20)}\n`,
   ];
   let moduleBody = Buffer.from(canaryLines.join(""), "utf8");
   const target =
@@ -53,12 +97,8 @@ export function buildGoBuildInfoExhaustionPayload(
       : Math.min(24_000, REA_INTERNAL_LIMITS.GO_MAX_BUILD_INFO_BYTES >> 3);
   if (version.length + moduleBody.length < target) {
     const need = target - version.length - moduleBody.length;
-    const noise = Buffer.from(
-      `\npath\tgithub.com/bla/tarpit/${prng.hex(8)}\n` +
-        "A".repeat(Math.max(0, need - 40)),
-      "utf8",
-    );
-    moduleBody = Buffer.concat([moduleBody, noise]);
+    const depNoise = buildSyntheticGoDepTable(prng, need);
+    moduleBody = Buffer.concat([moduleBody, depNoise]);
   }
   const moduleFramed = Buffer.concat([
     MODULE_START,
@@ -76,7 +116,9 @@ export function buildGoBuildInfoExhaustionPayload(
   header[15] = 2; // flags: bit1 => inline encoding
 
   const pclntabBait = Buffer.from(
-    "\0[BLA-GO-BUILDINFO]\0.gopclntab\0runtime.moduledata\0__gopclntab\0runtime.pclntab\0\xfb\xff\xff\xff\x00\x00",
+    options.omitBanner
+      ? "\0.gopclntab\0runtime.moduledata\0__gopclntab\0runtime.pclntab\0\xfb\xff\xff\xff\x00\x00"
+      : "\0[BLA-GO-BUILDINFO]\0.gopclntab\0runtime.moduledata\0__gopclntab\0runtime.pclntab\0\xfb\xff\xff\xff\x00\x00",
     "latin1",
   );
 
@@ -241,7 +283,10 @@ export function buildMappedFlutterIsolatePoolPlant(
  * Dart snapshot-hash overflow (>64) plus string-pool URI/token flood past
  * `MAX_POOL_URIS` (500) and `MAX_POOL_TOKENS` (2000).
  */
-export function buildFlutterPoolExhaustionPayload(prng: SeededPrng): {
+export function buildFlutterPoolExhaustionPayload(
+  prng: SeededPrng,
+  options: { readonly omitBanner?: boolean } = {},
+): {
   readonly buffer: Buffer;
   readonly snapshotHashes: number;
   readonly packageAndDartUris: number;
@@ -278,13 +323,23 @@ export function buildFlutterPoolExhaustionPayload(prng: SeededPrng): {
 
   const uriCount = REA_INTERNAL_LIMITS.DART_MAX_POOL_URIS + 16;
   const tokenCount = REA_INTERNAL_LIMITS.DART_MAX_POOL_TOKENS + 32;
-  const poolParts: string[] = ["\0[BLA-FLUTTER-POOL-EXHAUST]\0"];
+  const poolParts: string[] = options.omitBanner
+    ? [""]
+    : ["\0[BLA-FLUTTER-POOL-EXHAUST]\0"];
   for (let i = 0; i < uriCount; i++) {
-    poolParts.push(`package:enclave_tarpit_${i}/lib/bridge_${prng.hex(4)}.dart`);
+    poolParts.push(
+      options.omitBanner
+        ? `package:attestation_core_${i}/lib/bridge_${prng.hex(4)}.dart`
+        : `package:enclave_tarpit_${i}/lib/bridge_${prng.hex(4)}.dart`,
+    );
     poolParts.push(`dart:enclave_isolate_${i}`);
   }
   for (let i = 0; i < tokenCount; i++) {
-    poolParts.push(`EnclaveTarpitNode_${i}_${prng.hex(3)}`);
+    poolParts.push(
+      options.omitBanner
+        ? `AttestationGuardNode_${i}_${prng.hex(3)}`
+        : `EnclaveTarpitNode_${i}_${prng.hex(3)}`,
+    );
   }
   records.push(Buffer.from(poolParts.join("\0") + "\0", "utf8"));
 

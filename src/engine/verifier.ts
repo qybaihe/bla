@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
   VerificationAgentAction,
@@ -10,6 +11,7 @@ import {
   applyDefenseScoreHonesty,
   DEFENSE_SCORE_DISCLAIMER,
 } from "./defense-score-honesty.js";
+import { inspectNativeBinary } from "../shields/formats/native.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
@@ -117,12 +119,30 @@ export function verifyTarget(
       (passedCount / checks.length) * 70 + Math.max(0, (100 - afterAudit.exposureScore) * 0.3),
     ),
   );
+  const isNativeFormat =
+    afterAudit.detectedFormat === "native-elf" ||
+    afterAudit.detectedFormat === "native-macho" ||
+    afterAudit.detectedFormat === "native-pe";
+  let nativeMappedSectionInjected: boolean | undefined;
+  if (isNativeFormat) {
+    try {
+      nativeMappedSectionInjected = Boolean(
+        inspectNativeBinary(readFileSync(absTarget)).nativeMappedSectionInjected,
+      );
+    } catch {
+      nativeMappedSectionInjected = false;
+    }
+  }
+
   const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
     detectedFormat: afterAudit.detectedFormat,
     selfSealEnabled: options.selfSealEnabled === true,
     sidecarEntangleEnabled: options.sidecarEntangleEnabled === true,
     wasmExportRenameApplied: options.wasmExportRenameApplied === true,
     numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,
+    ...(nativeMappedSectionInjected !== undefined
+      ? { nativeMappedSectionInjected }
+      : {}),
   });
 
   const agentActions: VerificationAgentAction[] = [];
@@ -172,6 +192,19 @@ export function verifyTarget(
         recommendedMcpTool: "bla_defend",
         recommendedArgs: {
           input_path: originalPath ? resolve(originalPath) : absTarget,
+          intensity: "bankrupt",
+        },
+      });
+    } else if (gap.id === "native-postlink-cfg-untouched") {
+      agentActions.push({
+        id: "compile-with-bla-headers",
+        priority: "medium",
+        reason: gap.summary,
+        instruction:
+          "Generate compile-time C/C++/Rust/Go defense headers via bla_emit_headers and include them before compiling/linking the native binary so decoy tarpit functions and xrefs live inside .text.",
+        recommendedMcpTool: "bla_emit_headers",
+        recommendedArgs: {
+          language: "c",
           intensity: "bankrupt",
         },
       });

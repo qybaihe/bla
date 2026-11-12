@@ -953,6 +953,9 @@ export function auditTarget(targetPath: string): AuditReport {
       if (nat.peMappedSectionInjected) {
         limits.push("pe-mapped-enclave-section-rtti");
       }
+      if (nat.elfMappedSectionInjected) {
+        limits.push("elf-mapped-enclave-section-rtti");
+      }
       if (hasBunSidecar) {
         limits.push("bun-standalone-sidecar-decoy-graph");
         limits.push("eof-carrier-integrity-preserved");
@@ -967,13 +970,16 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: isNativeProtected ? 36_000 : 1_450,
         estimatedCostUsd: isNativeProtected ? 2.9 : 0.08,
         reason: nat.blaProtected
-          ? `Protected by BLA Native Shield (${nat.rustcCommitHashesCount} rustc commits > 64, ${nat.electronFuseSentinelsCount} fuse sentinels > 32, ${nat.dartSnapshotHashesCount} Dart snapshots > 64${nat.peMappedSectionInjected ? `, ${nat.peMsvcRttiClassesCount ?? 8} PE RTTI classes` : ""})`
+          ? `Protected by BLA Native Shield (${nat.rustcCommitHashesCount} rustc commits > 64, ${nat.electronFuseSentinelsCount} fuse sentinels > 32, ${nat.dartSnapshotHashesCount} Dart snapshots > 64${nat.peMappedSectionInjected ? `, ${nat.peMsvcRttiClassesCount ?? 8} PE RTTI classes` : ""}${nat.elfMappedSectionInjected ? `, ${nat.elfItaniumRttiClassesCount ?? 8} ELF mapped RTTI classes` : ""})`
           : hasBunSidecar
             ? "Protected by BLA Sidecar Bun Standalone Decoy Graph while preserving byte-exact code-signature / EOF carrier integrity"
             : "Native binary metadata, sections, and strings directly inspectable by REA",
       });
+      const rttiBonus =
+        (nat.peMsvcRttiClassesCount ?? 0) +
+        (nat.elfItaniumRttiClassesCount ?? 0);
       const nativeDecoys = isNativeProtected
-        ? 24 + (nat.peMsvcRttiClassesCount ?? 0)
+        ? (nat.nativeMappedSectionInjected ? 24 : 8) + rttiBonus
         : 0;
       sim = {
         ...sim,
