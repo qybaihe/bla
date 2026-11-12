@@ -12,6 +12,8 @@ export interface ModelInspectionSummary {
   readonly metadataCount: number;
   readonly exceedsReaNestingLimit: boolean;
   readonly blaProtected: boolean;
+  /** GGUF only: the tensor data section starts where a loader will look for it. */
+  readonly tensorDataAligned?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -145,20 +147,40 @@ export function inspectModelBuffer(bytes: Buffer): ModelInspectionSummary {
     bytes[2] === 0x55 &&
     bytes[3] === 0x46
   ) {
-    const tensorCount = Number(bytes.readBigUInt64LE(8));
-    const metadataCount = Number(bytes.readBigUInt64LE(16));
     const textLatin1 = bytes.toString("latin1");
     const blaProtected =
       textLatin1.includes("enclave.delegation") ||
       textLatin1.includes("BLA-MODEL-SHIELD") ||
       textLatin1.includes("bla.sidecar.v1");
+    const exceedsReaNestingLimit = textLatin1.includes("enclave.nesting.breaker");
+    // Four magic bytes are not a model. Walk the container with the same parser
+    // the protection path uses, so a header whose counts do not describe a real
+    // KV chain and tensor table is not reported as a valid model.
+    const layout = parseGgufLayout(bytes);
+    if (layout === null) {
+      return {
+        validModel: false,
+        format: "gguf",
+        tensorCount: 0,
+        metadataCount: 0,
+        exceedsReaNestingLimit,
+        blaProtected,
+      };
+    }
+    // Bytes between the tensor-info records and the aligned data offset are
+    // padding, so they must be zeros. Real weights sitting there mean the data
+    // section does not start where a loader will look for it.
+    const tensorDataAligned =
+      !layout.hasDataRegion ||
+      bytes.subarray(layout.tensorInfoEnd, layout.dataStart).every((byte) => byte === 0);
     return {
       validModel: true,
       format: "gguf",
-      tensorCount,
-      metadataCount,
-      exceedsReaNestingLimit: textLatin1.includes("enclave.nesting.breaker"),
+      tensorCount: Number(layout.tensorCount),
+      metadataCount: Number(layout.kvCount),
+      exceedsReaNestingLimit,
       blaProtected,
+      tensorDataAligned,
     };
   }
 
