@@ -1,0 +1,44 @@
+{
+  "name": "bla",
+  "version": "3.2.5",
+  "description": "Teaches coding agents the BLA Agent-Driven Hardening playbook: when to harden, audit, weave decoys, and verify Counter-REA defenses via the bla MCP tools and CLI.",
+  "author": {
+    "name": "BLA Contributors",
+    "url": "https://bla.tools"
+  },
+  "homepage": "https://bla.tools",
+  "repository": "https://github.com/qybaihe/bla",
+  "license": "MIT",
+  "keywords": [
+    "bla",
+    "counter-rea",
+    "llm-security",
+    "adversarial-defense",
+    "mcp",
+    "coding-agents"
+  ],
+  "skills": [
+    "./.agents/skills/blind-llm-agents"
+  ],
+  "interface": {
+    "displayName": "BLA",
+    "shortDescription": "Harden software against AI reverse-engineering agents with BLA",
+    "longDescription": "BLA (Blind LLM Agents) is a Counter-REA Blue Defense toolkit. This plugin teaches coding agents the Agent-Driven Hardening playbook in `.agents/skills/blind-llm-agents/SKILL.md`: when to call `bla_harden` / `bla_defend`, how to run packaging-gate lint (`bla_lint`), weave domain-plausible shadow business logic from `bla_weave_plan`, and verify with `bla_verify_weave` / `bla_verify`.\n\nUse it when hardening your own software against AI reverse-engineering agents (REA / WorkBuddy-class), auditing release exposure, exhausting attacker token budgets, or one-click defending a project. It points agents at the existing BLA MCP tools and CLI — not at inventing new MCP surfaces. Defensive use only.",
+    "developerName": "BLA Contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Agent-driven Counter-REA hardening",
+      "Packaging-gate lint and weave verification",
+      "MCP / CLI defense workflow"
+    ],
+    "websiteURL": "https://bla.tools",
+    "defaultPrompt": [
+      "Harden this project against AI reverse-engineering agents with BLA",
+      "Audit this release for Counter-REA exposure and packaging gates",
+      "Weave domain-plausible decoys then verify with bla_verify_weave"
+    ],
+    "brandColor": "#3b82f6",
+    "composerIcon": "./assets/logo.svg",
+    "logo": "./assets/logo.svg"
+  }
+}

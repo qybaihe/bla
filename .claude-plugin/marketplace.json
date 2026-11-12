@@ -1,0 +1,37 @@
+{
+  "name": "bla",
+  "description": "The BLA agent skill — Counter-REA hardening via bla MCP/CLI",
+  "owner": {
+    "name": "BLA Contributors",
+    "url": "https://bla.tools"
+  },
+  "plugins": [
+    {
+      "name": "bla",
+      "displayName": "BLA",
+      "description": "Teaches coding agents the BLA Agent-Driven Hardening playbook: harden, audit, weave decoys, and verify Counter-REA defenses via the bla MCP tools and CLI. Use when protecting your own software against AI reverse-engineering agents.",
+      "source": "./",
+      "strict": false,
+      "version": "3.2.5",
+      "author": {
+        "name": "BLA Contributors",
+        "url": "https://bla.tools"
+      },
+      "homepage": "https://bla.tools",
+      "repository": "https://github.com/qybaihe/bla",
+      "license": "MIT",
+      "keywords": [
+        "bla",
+        "counter-rea",
+        "llm-security",
+        "adversarial-defense",
+        "mcp",
+        "coding-agents"
+      ],
+      "category": "development",
+      "skills": [
+        "./.agents/skills/blind-llm-agents"
+      ]
+    }
+  ]
+}
