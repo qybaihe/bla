@@ -39,6 +39,7 @@ describe("bla lint intensity contract", () => {
   it("honors an explicit --intensity balanced opt-out", async () => {
     const dir = createLintTarget();
     expect(await runCli(["lint", dir, "--intensity", "balanced"])).toBe(0);
+    expect(await runCli(["lint", dir, "--intensity=balanced"])).toBe(0);
   });
 
   it("honors .blarc intensity instead of hardcoding a parser default", async () => {

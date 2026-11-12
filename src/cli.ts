@@ -543,7 +543,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       case "harden": {
         const loaded = loadBlaConfig(process.cwd(), parsed.configPath);
         const directory = parsed.positionals[0] ?? loaded.config.input ?? process.cwd();
-        const explicitIntensity = argv.includes("--intensity")
+        const explicitIntensity = argv.some(
+          (a) => a === "--intensity" || a.startsWith("--intensity="),
+        )
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
         // Dry-run must write zero bytes: skip seed persistence into .blarc.
@@ -616,7 +618,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.error("Error: Missing <target> path for `bla defend <target>`.");
           return 1;
         }
-        const explicitIntensity = argv.includes("--intensity")
+        const explicitIntensity = argv.some(
+          (a) => a === "--intensity" || a.startsWith("--intensity="),
+        )
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
         const resolved = resolveProjectSeed(process.cwd(), parsed.seed, parsed.configPath);
@@ -687,7 +691,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const target = parsed.positionals[0] ?? loaded.config.input ?? ".";
         const report = scanPackagingGates({
           directory: resolve(target),
-          intensity: argv.includes("--intensity")
+          intensity: argv.some((a) => a === "--intensity" || a.startsWith("--intensity="))
             ? parsed.intensity
             : (loaded.config.intensity ?? "bankrupt"),
           allowPlaintextSeal: parsed.allowPlaintextSeal,
@@ -961,7 +965,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             ? { outputPath: (parsed.output ?? loaded.config.output)! }
             : {}),
           inPlace: parsed.inPlace,
-          intensity: argv.includes("--intensity")
+          intensity: argv.some((a) => a === "--intensity" || a.startsWith("--intensity="))
             ? parsed.intensity
             : (loaded.config.intensity ?? parsed.intensity),
           seed: resolved.seed,
