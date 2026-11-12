@@ -594,6 +594,23 @@ export function appendWasmCustomSection(
  * 2. Multiple `@custom` architectural chaff sections (`"bla.enclave.manifest"`, `"producers"`, `"dylink.0"`)
  * while keeping the WASM module 100% valid and executable by V8 / WebAssembly runtimes.
  */
+/**
+ * Custom sections a linker or the host runtime needs to load the module:
+ * `dylink.0`/`linking`/`reloc.*` for dynamically linked modules (Emscripten side
+ * modules) and `target_features` for feature negotiation. Debug/metadata
+ * sections such as `name` and `producers` are still stripped.
+ */
+const LINKING_CRITICAL_CUSTOM_SECTIONS: ReadonlySet<string> = new Set([
+  "dylink.0",
+  "dylink",
+  "linking",
+  "target_features",
+]);
+
+export function isLinkingCriticalCustomSection(name: string): boolean {
+  return LINKING_CRITICAL_CUSTOM_SECTIONS.has(name) || name.startsWith("reloc.");
+}
+
 export function protectWasmBinary(
   bytes: Buffer,
   options: {
@@ -675,7 +692,19 @@ export function protectWasmBinary(
     if (sectionEnd > bytes.length) break;
 
     if (sectionId === 0) {
-      // strip original custom/debug
+      // Strip original custom/debug sections, but keep the ones a linker or the
+      // host runtime needs: dropping dylink/linking/reloc breaks dynamically
+      // linked modules, and target_features breaks host feature negotiation.
+      const payload = bytes.subarray(nextOffset, sectionEnd);
+      let keepCustom = false;
+      try {
+        const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
+        const customName = payload.subarray(nameStart, nameStart + nameLen).toString("utf8");
+        keepCustom = isLinkingCriticalCustomSection(customName);
+      } catch {
+        keepCustom = false;
+      }
+      if (keepCustom) keptChunks.push(Buffer.from(bytes.subarray(sectionStart, sectionEnd)));
     } else if (sectionId === 7) {
       let payload = bytes.subarray(nextOffset, sectionEnd);
       // Issue #40.3: optional rename of non-public / internal exports first.
