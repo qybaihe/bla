@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -28,6 +29,8 @@ const REQUIRED_ASSETS = [
   "schemas/defense-manifest-v1.json",
   "schemas/bla.config.v1.json",
 ];
+
+const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de"];
 
 function extractIds(html) {
   const ids = new Set();
@@ -69,11 +72,87 @@ function extractLocalRefs(html) {
   return refs;
 }
 
+function extractI18nKeys(html) {
+  const keys = new Set();
+  const re = /\bdata-i18n(?:-html)?\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    keys.add(m[1] ?? m[2]);
+  }
+  return keys;
+}
+
+/**
+ * Every HTML page under the site root, repo-relative with POSIX separators.
+ * A page added later is verified automatically instead of silently skipped.
+ */
+function discoverHtmlPages(absRoot) {
+  const pages = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".html")) {
+        pages.push(full.slice(absRoot.length + 1).replaceAll("\\", "/"));
+      }
+    }
+  };
+  if (existsSync(absRoot)) walk(absRoot);
+  return pages.sort();
+}
+
+function loadI18nDictionary(absRoot) {
+  const i18nPath = resolve(absRoot, "assets/i18n.js");
+  if (!existsSync(i18nPath)) return null;
+  try {
+    const sandbox = { window: {} };
+    runInNewContext(readFileSync(i18nPath, "utf8"), sandbox, { timeout: 1000 });
+    const dict = sandbox.window?.BLA_I18N;
+    return dict !== null && typeof dict === "object" ? dict : null;
+  } catch {
+    return null;
+  }
+}
+
+function computeI18nCoverage(dict, usedKeys, errors) {
+  const en = dict.en ?? {};
+  const englishKeys = Object.keys(en);
+  for (const key of usedKeys) {
+    if (!englishKeys.includes(key)) {
+      errors.push(`assets/i18n.js: data-i18n key '${key}' has no English string`);
+    }
+  }
+  const locales = {};
+  for (const locale of SUPPORTED_LOCALES) {
+    const table = dict[locale];
+    if (table === null || typeof table !== "object") {
+      errors.push(`assets/i18n.js: locale '${locale}' is missing`);
+      locales[locale] = { keys: 0, missingFromEnglish: englishKeys.length };
+      continue;
+    }
+    locales[locale] = {
+      keys: Object.keys(table).length,
+      missingFromEnglish: englishKeys.filter((key) => !(key in table)).length,
+    };
+  }
+  return {
+    referenceLocale: "en",
+    referenceKeys: englishKeys.length,
+    locales,
+  };
+}
+
 /**
  * Verify all static website HTML pages, assets, CSP headers, and internal links/anchors.
  *
  * @param {string} [websiteRoot]
- * @returns {{ ok: boolean, pagesChecked: number, linksChecked: number, errors: string[] }}
+ * @returns {{
+ *   ok: boolean,
+ *   pagesChecked: number,
+ *   linksChecked: number,
+ *   errors: string[],
+ *   i18nCoverage: { referenceLocale: string, referenceKeys: number, locales: Record<string, { keys: number, missingFromEnglish: number }> } | null,
+ * }}
  */
 export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website")) {
   const absRoot = resolve(websiteRoot);
@@ -90,8 +169,12 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
 
   const pageCache = new Map();
   const idCache = new Map();
+  const usedI18nKeys = new Set();
 
-  for (const rel of REQUIRED_HTML_PAGES) {
+  const discovered = discoverHtmlPages(absRoot);
+  const pageList = [...new Set([...REQUIRED_HTML_PAGES, ...discovered])].sort();
+
+  for (const rel of pageList) {
     const full = resolve(absRoot, rel);
     if (!existsSync(full) || !statSync(full).isFile()) {
       errors.push(`Missing required HTML page: ${rel}`);
@@ -100,9 +183,10 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     const html = readFileSync(full, "utf8");
     pageCache.set(full, html);
     idCache.set(full, extractIds(html));
+    for (const key of extractI18nKeys(html)) usedI18nKeys.add(key);
   }
 
-  for (const rel of REQUIRED_HTML_PAGES) {
+  for (const rel of pageList) {
     const full = resolve(absRoot, rel);
     const html = pageCache.get(full);
     if (html === undefined) continue;
@@ -196,6 +280,12 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     }
   }
 
+  const i18nDict = loadI18nDictionary(absRoot);
+  let i18nCoverage = null;
+  if (i18nDict !== null) {
+    i18nCoverage = computeI18nCoverage(i18nDict, usedI18nKeys, errors);
+  }
+
   const i18nPath = resolve(absRoot, "assets/i18n.js");
   if (existsSync(i18nPath)) {
     const i18n = readFileSync(i18nPath, "utf8");
@@ -270,6 +360,7 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     pagesChecked,
     linksChecked,
     errors,
+    i18nCoverage,
   };
 }
 
@@ -288,4 +379,12 @@ if (isDirectRun) {
   console.log(
     `Verified ${res.pagesChecked} website HTML pages and ${res.linksChecked} internal links/assets.`,
   );
+  if (res.i18nCoverage !== null) {
+    const summary = Object.entries(res.i18nCoverage.locales)
+      .map(([locale, counts]) => `${locale} ${counts.keys}`)
+      .join(", ");
+    console.log(
+      `i18n coverage against ${res.i18nCoverage.referenceLocale} (${res.i18nCoverage.referenceKeys} keys): ${summary}. Missing keys fall back to English at runtime.`,
+    );
+  }
 }
