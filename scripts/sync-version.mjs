@@ -87,20 +87,26 @@ for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
   }
 }
 
-const statePath = resolve(root, "STATE.md");
-try {
-  const stateText = readFileSync(statePath, "utf8");
-  const nextState = stateText.replace(
-    /\*\*Version:\*\*\s*[0-9]+\.[0-9]+\.[0-9]+/,
-    `**Version:** ${version}`,
-  );
-  if (nextState !== stateText) {
-    writeFileSync(statePath, nextState, "utf8");
-    console.log(`Synced STATE.md version -> ${version}`);
-  } else {
-    console.log(`STATE.md version already at ${version}`);
+// Human-facing version surfaces outside the badge/docs pair. A partial bump
+// used to leave STATE.md and the shipped agent skill advertising an older
+// release; keep them in lockstep with package.json.
+for (const rel of ["STATE.md", ".agents/skills/blind-llm-agents/SKILL.md"]) {
+  const docPath = resolve(root, rel);
+  try {
+    const docText = readFileSync(docPath, "utf8");
+    const next =
+      rel === "STATE.md"
+        ? docText.replace(
+            /^(\*\*Version:\*\*\s*)[0-9]+\.[0-9]+\.[0-9]+/m,
+            `$1${version}`,
+          )
+        : docText.replace(/(\n\s{2}version:\s*")[^"]+(")/, `$1${version}$2`);
+    if (next !== docText) {
+      writeFileSync(docPath, next, "utf8");
+      console.log(`Synced ${rel} version -> ${version}`);
+    }
+  } catch (err) {
+    console.warn(`Skipped ${rel}: ${err instanceof Error ? err.message : String(err)}`);
   }
-} catch {
-  // ignore missing STATE.md
 }
 

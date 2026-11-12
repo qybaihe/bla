@@ -14,7 +14,7 @@
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.5-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
-[![MCP Server](https://img.shields.io/badge/MCP-25_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
+[![MCP Server](https://img.shields.io/badge/MCP-31_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/Formats-19%2B_Artifacts-0284c7?style=for-the-badge)](#format-coverage)
 [![Counter-REA](https://img.shields.io/badge/Counter--REA-Empirically_Verified-1d4ed8?style=for-the-badge)](#empirical-results-vs-real-rea)
 [![MIT License](https://img.shields.io/badge/License-MIT-38bdf8?style=for-the-badge)](LICENSE)
@@ -302,7 +302,7 @@ No. BLA is strictly a **Blue Team defensive tool** that hardens **your own** bui
 
 - [⚖️ DISCLAIMER.md](DISCLAIMER.md) — Defensive use & own-software policy
 - [🚀 Installation & Agent Setup](docs/installation.md)
-- [🛠️ CLI & 25-Tool MCP Catalog](docs/cli-and-mcp.md)
+- [🛠️ CLI & 31-Tool MCP Catalog](docs/cli-and-mcp.md)
 - [🤖 One-Click Agent Defense (Skill-First)](docs/one-click-agent-defense.md)
 - [🧬 Weave-Decoy & Source Surgery MCP](docs/weave-decoy-mcp.md)
 - [🔬 Empirical REA Validation Report](docs/redteam/empirical-rea-validation.md)

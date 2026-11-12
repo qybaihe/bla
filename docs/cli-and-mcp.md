@@ -15,7 +15,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | `npx bla-agents audit <target>` | Pre-flight 16-vector REA vulnerability & token-cost audit. |
 | `npx bla-agents protect <target> [-o <out>] [--weave-decoys]` | Injects BLA's Resource-Exhaustion and Model-Misjudgment shield (`stealth`, `balanced`, `maximum`, `bankrupt`). Opt-in `--weave-decoys` for structural Python customer-def weave. |
 | `npx bla-agents verify <target> [original]` | Verifies Counter-REA invariants and calculates token/cost amplification. |
-| `npx bla-agents benchmark` | Runs the 8-target Counter-REA Showcase Benchmark suite. |
+| `npx bla-agents benchmark` | Runs the 14-target Counter-REA Showcase Benchmark suite. |
 | `npx bla-agents emit-headers --lang <c\|rust\|go>` | Emits compile-time native defense headers (`bla_shield.h`, `bla_shield.rs`, `bla_shield.go`). |
 | `npx bla-agents doctor` | Checks readiness of all BLA protection engines and agent MCP registrations. |
 
@@ -51,8 +51,10 @@ manifest.
 
 - `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `allow_wasm_clear_params`, `allow_stable_panel_derive`, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false, `output_directory` optional). The report carries `dryRun`, `truncated`, `maxArtifacts`, `wouldOverwrite`, and `outputDirectory`.
 - `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`, `offset`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts, offset, nextOffset? }`. When `truncated`, pass `nextOffset` as the next `offset` to page 64+ trees without losing the tail. Writes nothing.
+- `bla_init`: Writes a starter `bla.config.json` with a fresh per-project seed (`directory`, `overwrite` default false) so zero-argument `bla defend` has a config. Writes one file only.
 - `bla_defend`: Full Counter-REA pipeline on a known path (`input_path`, `output_path`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `seed`, `in_place` default false, `confirm_overwrite` default false).
 - `bla_audit`: Pre-flight REA exposure and token-economics audit (`path`).
+- `bla_inspect_release`: Read-only local source-map and symbol exposure scan (`path`, optional `max_files`, `max_total_bytes`) — same engine as CLI `bla inspect-release`. Reports counts only; never prints embedded source or writes to the target.
 - `bla_protect`: Granular shield injection (`input_path`, `output_path`, `intensity`, `seed`, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `in_place` default false, `honey_source_maps` default true, `confirm_overwrite` default false).
 - `bla_verify`: Counter-REA invariant verification (`target_path`, `original_path`, optional honesty metadata `self_seal_enabled` / `wasm_export_rename_applied` / `numeric_template_leak_known` so `defenseScore` soft-caps match what protect actually ran; optional `summary_path` / `run_id` to correlate with a prior harden summary).
 - `bla_lint`: **DEFAULT** packaging-footgun project scan (`directory`, `intensity`, allow_* flags) → `bla-packaging-gates/v1` (findings + blocking + honestyNote). Prefer over calling eight separate lints. Same engines as CLI `bla lint`.
@@ -64,12 +66,16 @@ manifest.
 - `bla_lint_js_wasm_hydrate_dump`: Read-only JS←WASM hydrate param-dump lint (`path`) — memory.buffer + salt/rounds/cipher after hydrate; same engine as CLI `bla lint-js-wasm-hydrate-dump`. Prefer in-WASM ARX+certify.
 - `bla_lint_wasm_xor_mask_sidecar`: Read-only WASM XOR-mask sidecar lint (`path`) — masked entitlement pack beside plaintext 32-byte mask in WASM data; bankrupt refuses unless `allow_wasm_xor_mask_sidecar`, `allow_wasm_seal_xor_known_plaintext`.
 - `bla_lint_wasm_seal_xor_known_plaintext`: Read-only seal.revision XOR known-plaintext lint (`path`, optional `seal_path`) — bankrupt refuses unless `allow_wasm_seal_xor_known_plaintext`.
+- `bla_lint_integrity_coverage`: Read-only `bla-integrity-coverage/v1` matrix evaluation (`path`, optional `allow_single_point_integrity`) — discovers `integrity-coverage.json` and refuses uncovered nodes, un-covered checkers, and missing hashes at bankrupt.
+- `bla_lint_plaintext_secrets`: Read-only plaintext secret lint (`path`, optional `allow_plaintext_string`) for `FLAG{...}`, high-entropy tokens, PEM headers, and derive key names in `panel.html` / `license.cjs` — same engine as `bla_encrypt_strings`' post-lint.
 - `bla_run_lookup`: Read-only harden-run correlation (`summary_path`, optional `run_id`). Summaries are **unsigned**; missing/mismatched id is an error.
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`.
-- `bla_benchmark`: Runs the 8-target showcase benchmark suite.
+- `bla_polymorph_report`: Compare two hardened directories (`dir_a`, `dir_b`, optional thresholds) and report structural drift (export-name Jaccard, export-order Kendall-tau, byte-diff ratio, identifier overlap, aggregate `driftScore`). Drift is a stability signal, not a cracking-resistance proof.
+- `bla_benchmark`: Runs the 14-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor.
+- `bla_encrypt_strings`: Encrypt sensitive literals in `panel.html` / `license.cjs` with a seed-derived XOR keystream plus a runtime decrypt stub (`path`, `seed`, optional `out_dir`, `include_urls`, `dry_run`). Raises static-grep cost only — not white-box AES.
 - `bla_lint_bind_scope`: Read-only lint for `bla-bind-scope/v1` (refuses non-public / hidden fields / missing runtime check).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).
 - `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist + AST `surgicalWorkorder` with `entryFunctions`, `sharedStateSlots`, `branchCandidates`, and `agentRewriteRecipe`; no crack/RE).
