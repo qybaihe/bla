@@ -42,6 +42,21 @@ import { unpackAsarBuffer } from "../formats/asar.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
+export type SidecarJsCarrier = "module" | "script" | "commonjs";
+
+/**
+ * The strip=>fail preamble is a CommonJS body (`require`, `__dirname`). Under
+ * import-based module scope those names are undefined, so a prepended preamble
+ * makes the protected entry throw at load. Refuse instead of shipping it.
+ */
+export function assertSidecarJsCarrierSupported(carrier?: SidecarJsCarrier): void {
+  if (carrier === "module") {
+    throw new Error(
+      "sidecarEntangle cannot protect an ES module entry: the strip=>fail preamble uses CommonJS require()/__dirname, which are undefined under module scope. Disable sidecarEntangle for this target or protect a CommonJS entry.",
+    );
+  }
+}
+
 export interface SidecarEntanglePlanOptions {
   readonly entryPath: string;
   readonly sidecarPaths: readonly string[];
@@ -55,6 +70,11 @@ export interface SidecarEntanglePlanOptions {
   readonly fileBytes?: Readonly<Record<string, Buffer | string>>;
   /** Absolute directory used to resolve relative paths when reading hashes. */
   readonly baseDir?: string;
+  /**
+   * Module carrier of the entry being bound. `"module"` is refused: the
+   * preamble cannot run under ESM scope (see `assertSidecarJsCarrierSupported`).
+   */
+  readonly carrier?: SidecarJsCarrier;
 }
 
 export interface SidecarEntanglePlan {
@@ -380,6 +400,7 @@ export function bindSidecarEntanglement(
     readonly entrySource?: string;
   },
 ): SidecarJsBindResult {
+  assertSidecarJsCarrierSupported(options.carrier);
   const plan = planSidecarEntanglement(options);
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
@@ -431,6 +452,7 @@ export function entangleJsEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  readonly carrier?: SidecarJsCarrier;
 }): SidecarJsBindResult | null {
   if (options.sidecars.length === 0) return null;
   return bindSidecarEntanglement({
@@ -438,6 +460,7 @@ export function entangleJsEntryWithSidecars(options: {
     sidecarPaths: options.sidecars.map((s) => s.pathLabel),
     seedTag: options.seedTag,
     softFold: options.softFold,
+    carrier: options.carrier,
     entryBytes: new TextEncoder().encode(options.entrySource),
     sidecarBytes: options.sidecars.map((s) => s.bytes),
     entrySource: options.entrySource,

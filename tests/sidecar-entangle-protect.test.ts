@@ -83,6 +83,30 @@ describe("sidecar entangle protectTarget wiring", () => {
     }
   });
 
+  it("refuses ES module entries instead of writing a broken CommonJS preamble", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-esm-"));
+    try {
+      const entry = join(dir, "main.mjs");
+      writeFileSync(entry, "export const v = 99;\n", "utf8");
+      writeFileSync(join(dir, "sib-for-out.mjs"), "sidecar-bytes\n", "utf8");
+      const out = join(dir, "main.out.mjs");
+      expect(() =>
+        protectTarget({
+          inputPath: entry,
+          outputPath: out,
+          intensity: "balanced",
+          seed: "esm-sidecar-test",
+          honeySourceMaps: false,
+          sidecarEntangle: true,
+          sidecarEntanglePaths: ["sib-for-out.mjs"],
+        }),
+      ).toThrow(/ES module entry/);
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("digest is order-sensitive across sidecars", () => {
     const entry = { pathLabel: "main.js", bytes: enc("x") };
     const fwd = computeSidecarBindingDigest(entry, [
