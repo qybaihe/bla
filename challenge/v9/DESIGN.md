@@ -17,7 +17,7 @@ Sovereign is a polyglot (JS + WASM + HTML + Python) entitlement unlock:
 | Dimension | CrackMe v8 (Aegis — 2.0) | CrackMe v9 (Sovereign — 3.0) |
 |---|---|---|
 | Pipeline | Single-step `bla harden --self-seal` | Full **4-Stage BLA 3.0 Playbook** (`bla_lint` → `bla_weave_plan` → `bla_verify_weave` → `bla_harden`) |
-| `seal.json` sidecar coverage | Uncovered data sidecar (v8 residual) | **Closed**: `license.cjs` pins `EXPECTED_SEAL_SHA256` at runtime; tampering with `seal.json` hard-fails |
+| `seal.json` sidecar coverage | Uncovered data sidecar (v8 residual) | **Closed** (source): `license.cjs` pins `EXPECTED_SEAL_SHA256`; tamper **and delete** hard-fail (`integrity check failed`). Published hardened predating 2026-11-10 still soft-folds DELETE→DENIED until release rebuild |
 | Cross-format entanglement | `selfSeal: true` only | `selfSeal: true` + **`sidecarEntangle: true`** + **`weaveDecoys: true`** across JS, WASM, HTML, and Python (`policy.py`) |
 | Structural weave verification | None | Enforced **100/100 (`weaveScore: 100`)** via `bla_verify_weave` both pre-harden and post-harden |
 | Entry self-digest verification | Soft / post-hoc | Enforced `integrityCoverageSelfVerified: true` in `SEAL.json` |

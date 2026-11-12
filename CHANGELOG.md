@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Honesty: `.pyc` marshal-note is host-verify only.** `protectTarget` no longer records `ReaAttackVectorId` `pyc-sidecar-entangle` for planting a TYPE_ASCII trailer. `importlib` ignores post-root trailers, so strip or sibling delete still execute; host `verifyPycSidecarMarshalNote` remains the offline check. An import-time hook is still TBD (same class as the WASM JS-loader). Enabling the note now annotates defenseScore gap `pyc-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
+- **CrackMe v9 `seal.json` DELETE fail-closed (red 2026-11-10):** `loadSeal()` now throws `integrity check failed: seal.json missing` on absence instead of letting ENOENT soft-fold to `[license] DENIED` (indistinguishable from a wrong key). Skill B principle: pinned sibling digests must fail-closed on absence. Fixture/cleartext tests cover the invariant; published `challenge/v9/hardened` still needs a release-secret rebuild to absorb the host fix.
 
 ## [3.2.5] — 2026-11-11
 
@@ -20,7 +21,6 @@ Patch extending opt-in `sidecarEntangle` to **CPython `.pyc` marshal trailer not
 
 ### Notes
 - REA tip `0909d89c9` (+402 since `b2f3dc81f`): settings/limit plumbing, NativeAOT budget ownership, IL2CPP v108 bounded string sample, `audit_release_exposure` (#8525) — **no new 1:1 trip-able densify constants**. IL2CPP v108 samples 16×128 B strings; NativeAOT budgets pre-existed and were only re-owned per operation.
-
 ## [3.2.4] — 2026-11-10
 
 Patch completing opt-in ASAR sidecar entanglement with an **in-archive Electron main JS preamble** that re-measures decoy members via fs-patched `readFileSync` (strip⇒fail at process start, not only host verify).

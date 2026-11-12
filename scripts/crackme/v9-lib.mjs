@@ -176,7 +176,14 @@ function verifyEpochCheckpoint(inputDigest) {
 
 function loadSeal() {
   const jsonPath = path.join(__dirname, "seal.json");
-  const rawBytes = fs.readFileSync(jsonPath);
+  let rawBytes;
+  try {
+    rawBytes = fs.readFileSync(jsonPath);
+  } catch (_err) {
+    // Absence must hard-fail like digest mismatch — never soft-fold to DENIED
+    // (verifyLicenseGate only rethrows /integrity/; ENOENT would otherwise look like a wrong key).
+    throw new Error("integrity check failed: seal.json missing");
+  }
   if (sha256(rawBytes) !== EXPECTED_SEAL_SHA256) {
     throw new Error("integrity check failed: seal.json digest mismatch");
   }
