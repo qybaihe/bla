@@ -950,7 +950,11 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalPyc = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
-        counteredVectors.add("pyc-sidecar-entangle");
+        // Host-verify trailer only: importlib ignores post-root TYPE_ASCII
+        // notes, so strip / sibling delete still execute. Do not record
+        // pyc-sidecar-entangle until an import-time hook lands (paper
+        // coverage otherwise; same honesty bar as ASAR's process-start
+        // preamble before asar-sidecar-entangle is claimed).
       }
     }
     writeProtectedOutput(absOutput, finalPyc);

@@ -2018,7 +2018,7 @@ export function bindPycSidecarEntanglement(
     ...plan,
     entryHookKind: "pyc-marshal-note",
     status: "bound",
-    note: "Bound — .pyc TYPE_ASCII marshal trailer note planted; ship sidecars alongside and verify via verifyPycSidecarMarshalNote. Strip/alter fails closed. importlib ignores the trailer.",
+    note: "Bound — .pyc TYPE_ASCII marshal trailer note planted; ship sidecars alongside and verify via verifyPycSidecarMarshalNote. Host verify fails closed on strip/alter; importlib ignores the trailer (no process-start fail until an import-time hook lands).",
   };
   return {
     plan: boundPlan,
