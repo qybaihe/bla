@@ -18,6 +18,7 @@ export type DefenseScoreGapId =
   | "wasm-export-rename-pending"
   | "self-seal-not-enabled"
   | "sidecar-entangle-not-enabled"
+  | "pyc-sidecar-host-verify-only"
   | "numeric-template-hygiene-partial";
 
 export interface DefenseScoreGap {
@@ -104,7 +105,18 @@ export function collectDefenseScoreGaps(
     gaps.push({
       id: "sidecar-entangle-not-enabled",
       summary:
-        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun .bla-sidecar.v1.json companion, or .pyc marshal note); default remains OFF (issue #40 / DESIGN).",
+        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun companion, or a .pyc import-time hook); a host-only .pyc marshal trailer does not count. Default remains OFF (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // .pyc marshal trailer is host-verify only (importlib ignores it). Enabling
+  // sidecarEntangle must not clear the process-start strip⇒fail gap.
+  if (input.detectedFormat === "python-pyc" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "pyc-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a .pyc TYPE_ASCII marshal trailer verified only by host verifyPycSidecarMarshalNote; importlib still runs after strip or sibling delete. Import-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

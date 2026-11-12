@@ -121,6 +121,7 @@ Also: do **not** ship a stable public WASM ABI without explicit `wasm_preserve_e
 - Integrity checkers must be interleaved and mutually covering (coverage matrix `bla-integrity-coverage/v1`); single-point self-seal is refuse-worthy. Lint with `bla_lint_integrity_coverage`.
 - Optional bind-scope (domain/date) is a **public** license contract (`bla_bind_scope` → `bind-scope.json` + `BLA_BIND_SCOPE_CHECK`). Default OFF. Never a covert backdoor — `public:true` mandatory; lint with `bla_lint_bind_scope`.
 - Coverage claims must be real, not paper: an entry may only count as covering itself when its runtime check hard-fails on its own bytes (canonical self-digest, finalized at write). Check `integrityCoverageSelfVerified` on the harden report; when false the matrix drops self edges and refuses. Keep host-trust values (e.g. certificate digests) inside a covered artifact — unhardened data sidecars like `seal.json` are not covered.
+- A countered strip⇒fail sidecar vector (`asar-sidecar-entangle`, or `pyc-sidecar-entangle` once it exists at import time) may be recorded only when the entry hook hard-fails at process start or import. A host-only verifier (for example `verifyPycSidecarMarshalNote` on a `.pyc` TYPE_ASCII trailer that `importlib` ignores) is a binding note, not coverage: do not list the vector, and do not treat enabling it as closing the `sidecar-entangle-not-enabled` defenseScore gap (annotate `pyc-sidecar-host-verify-only` instead).
 
 Held across R8–R12 (NO PRIZE). Keep in gate design; do **not** invent packaging refuse lints for these:
 

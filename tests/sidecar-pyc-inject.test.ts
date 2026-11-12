@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -209,7 +210,8 @@ describe("sidecar .pyc marshal-note strip⇒fail", () => {
         sidecarEntanglePaths: ["honey.txt"],
       });
       expect(on.sidecarEntangle).toBe(true);
-      expect(on.counteredReaVectors).toContain("pyc-sidecar-entangle");
+      // Host-verify only: do not claim the process-start strip⇒fail vector.
+      expect(on.counteredReaVectors).not.toContain("pyc-sidecar-entangle");
       const outBytes = readFileSync(outPyc);
       const note = extractPycSidecarMarshalNote(outBytes);
       expect(note).not.toBeNull();
@@ -220,6 +222,25 @@ describe("sidecar .pyc marshal-note strip⇒fail", () => {
         baseDir: dir,
       });
       expect(verified.ok).toBe(true);
+
+      // Residual: importlib still executes after trailer strip or sibling delete.
+      const stripped = stripPycSidecarMarshalNote(outBytes);
+      expect(extractPycSidecarMarshalNote(stripped)).toBeNull();
+      expect(importPycResult(stripped)).toBe(5);
+      expect(
+        verifyPycSidecarMarshalNote({
+          entryBytes: stripped,
+          baseDir: dir,
+        }).ok,
+      ).toBe(false);
+      unlinkSync(join(dir, "honey.txt"));
+      expect(importPycResult(outBytes)).toBe(5);
+      const afterDelete = verifyPycSidecarMarshalNote({
+        entryBytes: outBytes,
+        baseDir: dir,
+      });
+      expect(afterDelete.ok).toBe(false);
+      expect(afterDelete.reason).toMatch(/missing/i);
 
       // Honey from protectPythonPycBuffer still present alongside the note.
       const honey = protectPythonPycBuffer(entry, {
