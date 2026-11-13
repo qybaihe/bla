@@ -60,7 +60,7 @@ Commodity hardware, sibling REA, Node 24.22.1 + Wabt 1.0.42 + tshark:
 
 ## Benchmark (internal estimates)
 
-14-target Counter-REA showcase: **~612.5×** token amplification, **~292.2×** cost, **100%** runtime-equivalent. Numbers are **internal model estimates**, not empirical REA process measurements. Do not cite as red-team proof.
+14-target Counter-REA showcase: **~1,068.7×** token amplification, **~503.5×** cost, **100%** runtime-equivalent. Numbers are **internal model estimates**, not empirical REA process measurements. Do not cite as red-team proof.
 
 ## Dogfood (local user journey)
 
