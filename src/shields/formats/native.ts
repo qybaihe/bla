@@ -308,21 +308,20 @@ export function validateElf64Layout(bytes: Buffer): Elf64LayoutSummary {
       });
     }
 
-    // Verify no two non-empty file-backed sections overlap in file range
-    const fileBackedSections = sectionHeaders.filter(
-      (sec) => sec.index >= 1 && sec.type !== 0 && sec.type !== 8 && sec.size > 0,
-    );
-    for (let i = 0; i < fileBackedSections.length; i++) {
-      const a = fileBackedSections[i]!;
-      const aEnd = a.offset + a.size;
-      for (let j = i + 1; j < fileBackedSections.length; j++) {
-        const b = fileBackedSections[j]!;
-        const bEnd = b.offset + b.size;
-        if (a.offset < bEnd && b.offset < aEnd) {
-          throw new InvalidNativeBinaryError(
-            `ELF64 sections ${a.index} and ${b.index} have overlapping file ranges`,
-          );
-        }
+    // Verify no two non-empty file-backed sections overlap in file range.
+    // Sort once and compare neighbours: the previous pairwise scan was O(n^2)
+    // and kept a max-section-count ELF (~65k sections) busy for ~18s per call,
+    // and validateElf64Layout runs several times per protection pass.
+    const fileBackedSections = sectionHeaders
+      .filter((sec) => sec.index >= 1 && sec.type !== 0 && sec.type !== 8 && sec.size > 0)
+      .sort((a, b) => a.offset - b.offset || a.size - b.size);
+    for (let i = 1; i < fileBackedSections.length; i++) {
+      const prev = fileBackedSections[i - 1]!;
+      const cur = fileBackedSections[i]!;
+      if (prev.offset + prev.size > cur.offset) {
+        throw new InvalidNativeBinaryError(
+          `ELF64 sections ${prev.index} and ${cur.index} have overlapping file ranges`,
+        );
       }
     }
   }
