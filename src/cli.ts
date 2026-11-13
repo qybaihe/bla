@@ -31,6 +31,7 @@ import {
   formatPackagingGatesReport,
 } from "./engine/packaging-gates.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
+import { verifySidecarTarget } from "./engine/verify-sidecar.js";
 import {
   emitCompileTimeNativeHeader,
   type NativeHeaderLanguage,
@@ -86,6 +87,7 @@ Commands:
   benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
   emit-headers                Generate compile-time C/C++, Rust, or Go defense headers
   verify-manifest <file>      Verify a signed .bla-manifest.json (exit 2 when invalid)
+  verify-sidecar <entry>      Offline strip⇒fail sidecar check (exit 2 when invalid or runtime-only)
   doctor                      Check readiness of BLA engines & agent registrations
   update                      Update global bla-shield installation & print setup refresh instructions
   uninstall                   Remove BLA MCP configuration & skill files
@@ -93,6 +95,7 @@ Commands:
 
 Options:
   -o, --output <path>         Output file or directory path (for protect / emit-headers)
+  --base-dir <path>           Base directory for resolving relative sidecar paths (verify-sidecar)
   --in-place                  Overwrite input target in-place (for protect)
   --intensity <preset>        stealth | balanced | maximum | bankrupt
                             (harden/defend default: bankrupt; protect default: balanced)
@@ -138,6 +141,7 @@ interface ParsedCliArgs {
   readonly manifestKey?: string;
   readonly publicKey?: string;
   readonly artifactPath?: string;
+  readonly baseDir?: string;
   readonly requirePinnedKey: boolean;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
@@ -192,6 +196,7 @@ const CLI_VALUE_FLAGS = new Set<string>([
   "--client",
   "--wasm-preserve-exports",
   "--self-seal-sibling-glob",
+  "--base-dir",
 ]);
 
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
@@ -207,6 +212,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let manifestKey: string | undefined;
   let publicKey: string | undefined;
   let artifactPath: string | undefined;
+  let baseDir: string | undefined;
   let requirePinnedKey = false;
   let llmDirectives = false;
   let weaveDecoys = false;
@@ -297,6 +303,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       const value = expandedArgs[++i];
       if (value === undefined) argErrors.push("--artifact requires a value");
       else artifactPath = value;
+    } else if (arg === "--base-dir") {
+      const value = expandedArgs[++i];
+      if (value === undefined) argErrors.push("--base-dir requires a value");
+      else baseDir = value;
     } else if (arg === "--require-pinned-key") {
       requirePinnedKey = true;
     } else if (arg === "--llm-directives") {
@@ -440,6 +450,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     ...(manifestKey !== undefined ? { manifestKey } : {}),
     ...(publicKey !== undefined ? { publicKey } : {}),
     ...(artifactPath !== undefined ? { artifactPath } : {}),
+    ...(baseDir !== undefined ? { baseDir } : {}),
     requirePinnedKey,
     llmDirectives,
     weaveDecoys,
@@ -1146,6 +1157,25 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(`${result.ok ? "VALID" : "INVALID"}: ${result.reason}`);
+        }
+        return result.ok ? 0 : 2;
+      }
+
+      case "verify-sidecar": {
+        const target = parsed.positionals[0];
+        if (!target) {
+          console.error(
+            "Error: Missing <entry> path for `bla verify-sidecar <entry> [--base-dir <dir>] [--json]`.",
+          );
+          return 1;
+        }
+        const result = verifySidecarTarget(target, parsed.baseDir);
+        if (parsed.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(
+            `${result.ok ? "VALID" : "INVALID"}: [${result.verifier}] ${result.reason}`,
+          );
         }
         return result.ok ? 0 : 2;
       }
