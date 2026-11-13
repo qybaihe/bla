@@ -27,6 +27,7 @@ import type {
 } from "../core/types.js";
 import { generateChaffPayloads } from "../shields/chaff/chaff-generator.js";
 import { transformJavaScriptWithBlaShield } from "../shields/javascript/ast-shield.js";
+import { refineJsCarrierForRuntimePaths } from "../shields/javascript/node-runtime-carrier.js";
 import { generateHoneySourceMap } from "../shields/formats/sourcemap.js";
 import { packAsarBuffer, unpackAsarBuffer, validateAsarProtectionInput, type VirtualAsarFile } from "../shields/formats/asar.js";
 import { planAsarHeaderAmplification } from "../shields/exhaustion/asar-header-amplifier.js";
@@ -635,7 +636,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         options,
         absOutput,
         seed,
-        transformed.carrierType,
+        refineJsCarrierForRuntimePaths(transformed.carrierType, [absOutput, absInput]),
       );
       finalCode = entangled.code;
       if (entangled.applied) sidecarEntangleApplied = true;
