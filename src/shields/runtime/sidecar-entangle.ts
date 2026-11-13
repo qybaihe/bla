@@ -136,6 +136,29 @@ function isCheckerHost(path: string): boolean {
 }
 
 /**
+ * Fill `fileBytes` from the bytes a binder is about to bind so the coverage
+ * plan reflects reality instead of reporting missing hashes for sidecars whose
+ * bytes are already in hand.
+ */
+function withBoundFileBytes<
+  T extends SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+>(options: T): T {
+  const fileBytes: Record<string, Uint8Array | string> = {
+    ...(options.fileBytes ?? {}),
+    [options.entryPath]: options.entryBytes,
+  };
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  for (let i = 0; i < sidecars.length; i += 1) {
+    const bytes = options.sidecarBytes[i];
+    if (bytes !== undefined) fileBytes[sidecars[i]!] = bytes;
+  }
+  return { ...options, fileBytes };
+}
+
+/**
  * Plan interleaved sidecar↔entry entanglement as a coverage matrix.
  * Reads optional on-disk bytes to finalize hashes when `baseDir` + paths exist.
  */
@@ -439,7 +462,7 @@ export function bindSidecarEntanglement(
   },
 ): SidecarJsBindResult {
   assertSidecarJsCarrierSupported(options.carrier);
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -641,7 +664,7 @@ export function bindPythonSidecarEntanglement(
     readonly entrySource?: string;
   },
 ): SidecarPythonBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -821,7 +844,7 @@ export function bindWasmSidecarEntanglement(
     readonly sidecarBytes: readonly Uint8Array[];
   },
 ): SidecarWasmBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -1142,7 +1165,7 @@ export function bindBunSidecarEntanglement(
     readonly sidecarBytes: readonly Uint8Array[];
   },
 ): SidecarBunBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -1449,7 +1472,7 @@ export function bindAsarSidecarEntanglement(
     readonly sidecarBytes: readonly Uint8Array[];
   },
 ): SidecarAsarBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -2050,7 +2073,7 @@ export function bindPycSidecarEntanglement(
     readonly sidecarBytes: readonly Uint8Array[];
   },
 ): SidecarPycBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -2413,7 +2436,7 @@ export function bindGgufSidecarEntanglement(
     readonly sidecarBytes: readonly Uint8Array[];
   },
 ): SidecarGgufBindResult {
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
@@ -2759,7 +2782,7 @@ export function bindSafetensorsSidecarEntanglement(
 ): SidecarSafetensorsBindResult {
   const rawBuf = Buffer.from(options.entryBytes);
   const { header, tensorData } = validateSafetensorsBuffer(rawBuf);
-  const plan = planSidecarEntanglement(options);
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
   if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
     throw new Error("sidecarBytes length must match sidecarPaths length");
   }
