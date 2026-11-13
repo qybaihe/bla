@@ -10,6 +10,17 @@ const lockPath = resolve(root, "package-lock.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
 const version = String(pkg.version);
 
+// Refuse to propagate a malformed version: the regex rewrites below would
+// silently corrupt identity.ts, SEAL labels, badges, and marketplace manifests.
+const SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+if (!SEMVER_PATTERN.test(version)) {
+  console.error(
+    `sync-version: package.json version "${version}" is not valid semver; refusing to sync any files.`,
+  );
+  process.exit(1);
+}
+
 const identityText = readFileSync(identityPath, "utf8");
 const updated = identityText.replace(
   /version:\s*"[^"]+"/,
