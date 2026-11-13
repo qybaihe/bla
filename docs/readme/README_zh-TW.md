@@ -76,7 +76,7 @@ npx -y bla-agents@latest protect /absolute/path/to/app -o /absolute/path/to/app.
 # 3. Verify Counter-REA resistance
 npx -y bla-agents@latest verify /absolute/path/to/app.shielded /absolute/path/to/app
 
-# 4. Run 8-target Counter-REA benchmark
+# 4. Run 14-target Counter-REA benchmark
 npx -y bla-agents@latest benchmark
 
 # 5. Emit compile-time C/C++, Rust, or Go defense headers

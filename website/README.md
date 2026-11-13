@@ -11,7 +11,7 @@ Official website and interactive Counter-REA defense labs for **[BLA: Blind LLM 
   - **Interactive Lab 02 — Token Bankruptcy Calculator**: Select any of the 8 target formats, BLA intensity (`stealth`, `balanced`, `maximum`, `bankrupt`), and attacker LLM (`Claude Opus 4`, `OpenAI o3`, `Claude Sonnet 4`).
   - **Instant Bilingual Switcher (`English` / `简体中文`)** & **Dark / Light Theme Switcher**.
 - `/get-started/` ([`get-started/index.html`](./get-started/index.html)): Step-by-step agent registration, stage-by-stage natural-language prompts, CLI reference, and Vite/Webpack/Rollup/esbuild bundler integration.
-- `/showcase/` ([`showcase/index.html`](./showcase/index.html)): 8-target Counter-REA benchmark suite and deep-dive case studies (Notion Electron IPC, DX-Ball Sound-Pan, Native ELF64 / SQLite3 / Safetensors).
+- `/showcase/` ([`showcase/index.html`](./showcase/index.html)): 14-target Counter-REA benchmark suite and deep-dive case studies (Notion Electron IPC, DX-Ball Sound-Pan, Native ELF64 / SQLite3 / Safetensors).
 - `/guides/` ([`guides/index.html`](./guides/index.html)): Format-by-format defense workflows across all 19 supported artifact types.
 - `/faq/` ([`faq/index.html`](./faq/index.html)): Frequently asked questions and troubleshooting (`bla doctor`, `bla update`).
 - `/enterprise/` ([`enterprise/index.html`](./enterprise/index.html)): Enterprise hardening engagement — assess, custom harden, verify; public contact `qybaihe@gmail.com`; pricing confirmed by email.
