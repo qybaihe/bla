@@ -68,4 +68,55 @@ module.exports = { check };
     expect(report.findings.some((f) => f.gate === "lane-independence")).toBe(true);
     expect(report.shouldRefuseBankrupt).toBe(true);
   });
+
+  it("panel-derive: every recorded finding carries a truthful refuseMessage", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-pg-panel-msg-"));
+    writeFileSync(
+      join(dir, "local-only.js"),
+      `function deriveLocal(k) { return k; }\nconsole.log(deriveLocal("x"));\n`,
+    );
+    writeFileSync(
+      join(dir, "stable-only.js"),
+      `globalThis.__vaultPanelDerive_r3 = (s) => s;\nexport function use(sb) { return sb.__vaultPanelDerive_r3("x"); }\n`,
+    );
+    const report = scanPackagingGates({ directory: dir, intensity: "bankrupt" });
+    const panelFindings = report.findings.filter((f) => f.gate === "panel-derive");
+    expect(panelFindings.length).toBeGreaterThanOrEqual(2);
+
+    // Recorded panel-derive findings must all carry remediation text.
+    for (const f of panelFindings) {
+      expect(f.refuseMessage, `missing refuseMessage for ${f.path}`).toBeTruthy();
+    }
+
+    // Local-only and stable-only findings are rewrite findings, not blockers:
+    // they must not claim a refusal that filterBlockingFindings will not honor.
+    const localOnly = panelFindings.find((f) =>
+      f.relativePath.includes("local-only"),
+    )!;
+    expect(localOnly.shouldRefuseBankrupt).toBe(false);
+    expect(localOnly.refuseMessage).not.toContain("Refusing bankrupt");
+    expect(localOnly.refuseMessage).toContain("deriveLocal");
+
+    const stableOnly = panelFindings.find((f) =>
+      f.relativePath.includes("stable-only"),
+    )!;
+    expect(stableOnly.shouldRefuseBankrupt).toBe(false);
+    expect(stableOnly.refuseMessage).not.toContain("Refusing bankrupt");
+    expect(stableOnly.refuseMessage).toContain("__vaultPanelDerive_r3");
+  });
+
+  it("panel-derive: offline oracle keeps its refusal message", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-pg-panel-oracle-"));
+    writeFileSync(
+      join(dir, "oracle.js"),
+      `function deriveLocal(k) { return k; }\nconst panelTokenSha256 = "a".repeat(64);\nif (panelTokenSha256) console.log(deriveLocal("x"));\n`,
+    );
+    const report = scanPackagingGates({ directory: dir, intensity: "bankrupt" });
+    const oracle = report.findings.find(
+      (f) => f.gate === "panel-derive" && f.shouldRefuseBankrupt,
+    );
+    expect(oracle).toBeDefined();
+    expect(oracle!.refuseMessage).toContain("Refusing bankrupt");
+    expect(oracle!.refuseMessage).toContain("panel offline oracle");
+  });
 });

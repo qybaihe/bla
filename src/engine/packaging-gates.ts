@@ -414,10 +414,7 @@ export function scanPackagingGates(
       path: r.path,
       relativePath: relPath(absDir, r.path),
       shouldRefuseBankrupt: r.shouldRefuseBankrupt,
-      refuseMessage:
-        r.shouldRefuseBankrupt || r.stableSymbols.length > 0
-          ? panelDeriveRefuseMessage(r, r.path)
-          : undefined,
+      refuseMessage: refuse ? panelDeriveRefuseMessage(r, r.path) : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
     });
