@@ -52,6 +52,7 @@ import {
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
 import { detectJsCarrierForSource } from "../shields/javascript/ast-shield.js";
+import { refineJsCarrierForRuntimePaths } from "../shields/javascript/node-runtime-carrier.js";
 import {
   finalizeSelfSealSelfDigest,
   verifySelfSealSelfDigest,
@@ -1055,7 +1056,10 @@ export function hardenProject(
               entrySource,
               sidecars,
               seedTag: String(options.seed ?? runId),
-              carrier: detectJsCarrierForSource(entrySource, entryAbs),
+              carrier: refineJsCarrierForRuntimePaths(
+                detectJsCarrierForSource(entrySource, entryAbs),
+                [entryAbs, jsEntry.inputPath],
+              ),
             });
             if (bound) {
               const finalized = finalizeSelfSealSelfDigest(bound.code);

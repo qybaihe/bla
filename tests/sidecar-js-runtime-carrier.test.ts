@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -83,6 +83,61 @@ describe("sidecar entangle: module-only syntax is an ES module carrier", () => {
       const stripped = runNode(out);
       expect(stripped.status).not.toBe(0);
       expect(stripped.stdout).not.toContain("RESULT 5");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('sidecar entangle: package.json "type": "module" decides a .js carrier', () => {
+  const plain = 'import("node:path").then((p) => console.log("RESULT", p.sep.length + 4));\n';
+
+  it("resolves the nearest package.json type like Node", async () => {
+    const { resolveNodePackageModuleType } = await import(
+      "../src/shields/javascript/node-runtime-carrier.js"
+    );
+    const dir = mkdtempSync(join(tmpdir(), "bla-pkgtype-"));
+    try {
+      writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf8");
+      const nested = join(dir, "cjs");
+      mkdirSync(nested);
+      writeFileSync(join(nested, "package.json"), "{}\n", "utf8");
+      expect(resolveNodePackageModuleType(join(dir, "a.js"))).toBe("module");
+      expect(resolveNodePackageModuleType(join(nested, "b.js"))).toBe("commonjs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a .js entry under a type:module package (no import/export syntax)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-pkgtype-"));
+    try {
+      writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf8");
+      const { out, run } = protectWithSidecar(dir, "app.js", plain);
+      expect(run).toThrow(/ES module entry/);
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("protects the same entry without sidecarEntangle and it still runs as ESM", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-pkgtype-off-"));
+    try {
+      writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf8");
+      const entry = join(dir, "app.js");
+      writeFileSync(entry, plain, "utf8");
+      const out = join(dir, "out-app.js");
+      protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "esm-runtime-carrier",
+        honeySourceMaps: false,
+      });
+      const r = runNode(out);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("RESULT 5");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
