@@ -12,7 +12,7 @@
       "description": "Teaches coding agents the BLA Agent-Driven Hardening playbook: harden, audit, weave decoys, and verify Counter-REA defenses via the bla MCP tools and CLI. Use when protecting your own software against AI reverse-engineering agents.",
       "source": "./",
       "strict": false,
-      "version": "3.3.0",
+      "version": "3.3.1",
       "author": {
         "name": "BLA Contributors",
         "url": "https://bla.tools"

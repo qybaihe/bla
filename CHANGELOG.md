@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.1] — 2026-11-13
+
+Patch extending opt-in `sidecarEntangle` to **Android DEX string-pool notes** (host-verify), cataloguing REA #10227's 255-dimension admission cap, and shipping the already-landed post-3.3.0 work (parameterized MBA substitutions, multi-round hypothesis-revision decoys, release-hygiene packaging gate, `verify-sidecar` CLI, technical SEO).
+
 ### Added
 - **Sidecar DEX string-pool note (`generateSidecarDexStringPoolNote` / `bindDexSidecarEntanglement` / `entangleDexEntryWithSidecars` / `verifyDexSidecarStringPoolNote` / `extractDexSidecarStringPoolNote` / `stripDexSidecarStringPoolNote`, `src/shields/formats/dex-layout.ts`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` DEX post-pass plant an unreferenced sort-last `bla.sidecar.v1=` string in the official DEX string pool. Existing string indices and instruction bytes stay unchanged; Adler32 / SHA-1 are recomputed; `protectAndroidDexBuffer` trailers are preserved. Host-side verify re-hashes sibling sidecars (sidecars-mode digest). Vector `dex-sidecar-entangle` reserved but **not recorded** until a load-time hook lands. Default still OFF.
 - **defenseScore honesty:** `android-dex` joins `SIDECAR_ENTANGLE_FORMATS`; enabling the host-only note annotates `dex-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
@@ -14,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-Round Hypothesis-Revision Decoys & Adversarial-Auditor Attention Sinks (`src/shields/deception/hypothesis-revision-decoy.ts`, `src/shields/deception/index.ts`):** Adds two-stage live `primaryLure -> revisedFallback` lures (returning non-crashing, schema-valid plausible-wrong envelopes to trap post-revision confidence bias and static-vs-dynamic Evidence Arbitrators) plus masked-buffer zeroizing attention sinks that saturate isolated Adversarial Auditor token budgets.
 - **Release Environment Hygiene Packaging Gate (`src/engine/release-hygiene-lint.ts`, `src/engine/packaging-gates.ts`, `src/engine/harden.ts`):** Refuses `bankrupt`/`maximum` project hardening when residual `SOLUTION.txt`/`writeup.md` notes, populated `.env` secrets, SSH/PEM private keys, or unstripped `.pdb`/`.dSYM`/`.dwp` debug symbol artifacts are left inside the shipping tree (`--allow-release-hygiene-leak` / `allow_release_hygiene_leak` lab escape).
 - **Technical SEO & AI-Search (GEO) Discoverability (`website/`, `scripts/verify-website.mjs`, `package.json`):** Adds `robots.txt`, multilingual `hreflang` `sitemap.xml`, `llms.txt` & `llms-full.txt`, `site.webmanifest`, `1200x630` raster `social-card.png`, canonical URLs across all 7 pages, OpenGraph/Twitter `summary_large_image` cards, Schema.org JSON-LD (`SoftwareApplication`, `SoftwareSourceCode`, `HowTo`, `FAQPage`, `TechArticle`, `Service`, `BreadcrumbList`), and automated SEO regression checks in `verify-website.mjs`.
+
+
+### Notes
+- REA tip `3cb75d46b` (+41 since `a8527d43b`): analyzer correctness, inventory retention, ownership unexports, schema/validation fixes. **No new 1:1 trip-able densify constants.** The one new format bound is DEX array dimensions = 255 (`dexTypes.ts`, REA #10227) — catalogued as `REA_INTERNAL_LIMITS.DEX_ARRAY_DIMENSIONS`; not a densify trip target because planting 256-dimension types would emit invalid DEX.
 
 ## [3.3.0] — 2026-11-13
 
