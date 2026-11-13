@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
 import {
   initBlaConfig,
@@ -13,7 +13,8 @@ import { buildSarifReport } from "./core/sarif.js";
 import { verifyManifestFile } from "./core/manifest-verify.js";
 import type { ProtectionIntensity } from "./core/types.js";
 import { auditTarget } from "./engine/auditor.js";
-import { protectTarget, writeFileAtomicSync } from "./engine/protector.js";
+import { protectTarget, resolveProtectOutputPath, writeFileAtomicSync } from "./engine/protector.js";
+import { expandSiblingGlobs } from "./core/sibling-globs.js";
 import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
@@ -104,6 +105,7 @@ Options:
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
+  --self-seal-sibling-glob <a,b>  Comma-separated globs (cwd-relative) expanded into self-seal sibling paths; requires --self-seal (protect only)
   --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for CommonJS & ESM JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40); OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
@@ -140,6 +142,7 @@ interface ParsedCliArgs {
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  readonly selfSealSiblingGlobs: readonly string[];
   readonly sidecarEntangle: boolean;
   readonly requireAgentWeave: boolean;
   readonly wasmPreserveExports: readonly string[];
@@ -187,6 +190,7 @@ const CLI_VALUE_FLAGS = new Set<string>([
   "--artifact",
   "--client",
   "--wasm-preserve-exports",
+  "--self-seal-sibling-glob",
 ]);
 
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
@@ -206,6 +210,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
+  let selfSealSiblingGlobs: string[] = [];
   let sidecarEntangle = false;
   let requireAgentWeave = false;
   let wasmPreserveExports: string[] = [];
@@ -298,6 +303,20 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg === "--self-seal-sibling-glob") {
+      const value = expandedArgs[++i];
+      if (value === undefined) {
+        argErrors.push("--self-seal-sibling-glob requires a value");
+      } else {
+        const patterns = value
+          .split(",")
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
+        if (patterns.length === 0) {
+          argErrors.push("--self-seal-sibling-glob requires at least one pattern");
+        }
+        selfSealSiblingGlobs.push(...patterns);
+      }
     } else if (arg === "--sidecar-entangle") {
       sidecarEntangle = true;
     } else if (arg === "--require-agent-weave") {
@@ -395,6 +414,15 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     }
   }
 
+  if (selfSealSiblingGlobs.length > 0) {
+    if (!selfSeal) {
+      argErrors.push("--self-seal-sibling-glob requires --self-seal");
+    }
+    if (command !== "protect") {
+      argErrors.push("--self-seal-sibling-glob is only supported for the protect command");
+    }
+  }
+
   return {
     command,
     positionals,
@@ -412,6 +440,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     llmDirectives,
     weaveDecoys,
     selfSeal,
+    selfSealSiblingGlobs,
     sidecarEntangle,
     requireAgentWeave,
     wasmPreserveExports,
@@ -440,6 +469,32 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     help,
     version,
   };
+}
+
+/**
+ * Expand cwd-relative sibling globs into paths relative to the protected
+ * output's directory (what the shipped self-seal preamble resolves at runtime).
+ * Exported for tests.
+ */
+export function resolveSelfSealSiblingPaths(options: {
+  readonly root: string;
+  readonly globs: readonly string[];
+  readonly targetPath: string;
+  readonly outputPath?: string;
+  readonly inPlace?: boolean;
+}): string[] {
+  if (options.globs.length === 0) return [];
+  const absTarget = resolve(options.targetPath);
+  const absOutput = resolveProtectOutputPath(
+    absTarget,
+    options.outputPath,
+    options.inPlace === true,
+  );
+  const base = dirname(absOutput);
+  return expandSiblingGlobs(options.root, options.globs)
+    .filter((abs) => abs !== absOutput && abs !== absTarget)
+    .map((abs) => relative(base, abs).split(sep).join("/"))
+    .filter((rel) => rel.length > 0 && rel !== ".");
 }
 
 /** Merge CLI and .blarc WASM export preservation lists without duplicates. */
@@ -979,6 +1034,17 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...(parsed.selfSealSiblingGlobs.length > 0
+            ? {
+                selfSealSiblingPaths: resolveSelfSealSiblingPaths({
+                  root: process.cwd(),
+                  globs: parsed.selfSealSiblingGlobs,
+                  targetPath: target,
+                  outputPath: parsed.output ?? loaded.config.output,
+                  inPlace: parsed.inPlace,
+                }),
+              }
+            : {}),
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
