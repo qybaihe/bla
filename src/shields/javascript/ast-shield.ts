@@ -209,6 +209,17 @@ export function inferJsCarrierFromPath(filename?: string): JsCarrierType {
 }
 
 /**
+ * Module-only syntax without a static import/export: top-level `await` or
+ * `import.meta`. Under `sourceType: "unambiguous"` Babel flips
+ * `program.sourceType` to "module" for these, and Node (syntax detection, or
+ * any ESM loader) evaluates such a file as an ES module — `require` /
+ * `__dirname` are undefined there, so it must not be treated as a script.
+ */
+function hasModuleOnlySyntax(program: t.Program): boolean {
+  return program.sourceType === "module";
+}
+
+/**
  * Re-detect the runtime carrier of an already-transformed entry (e.g. a
  * protected output read back by a post-pass) using the same rules the shield
  * applies to its own input.
@@ -238,7 +249,9 @@ export function detectJsCarrierForSource(
         t.isExportDefaultDeclaration(stmt) ||
         t.isExportAllDeclaration(stmt),
     );
-    if (requested === "module" || hasEsmNodes) return "module";
+    if (requested === "module" || hasEsmNodes || hasModuleOnlySyntax(ast.program)) {
+      return "module";
+    }
     return requested === "commonjs" ? "commonjs" : "script";
   } catch {
     return requested === "module" ? "module" : requested === "commonjs" ? "commonjs" : "script";
@@ -1139,7 +1152,7 @@ export function transformJavaScriptWithBlaShield(
   });
 
   const effectiveCarrier: "module" | "script" | "commonjs" =
-    requestedCarrier === "module" || hasEsmNodes
+    requestedCarrier === "module" || hasEsmNodes || hasModuleOnlySyntax(ast.program)
       ? "module"
       : requestedCarrier === "commonjs" || usesCjsAst
         ? "commonjs"
