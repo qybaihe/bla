@@ -36,6 +36,7 @@ export const BLA_IDENTITY = Object.freeze({
  * - `src/domain/firmware/uf2.ts` (`UF2_BLOCK_BYTES`, `UF2_MAX_REGIONS`, REA #8230)
  * - `src/domain/native/nativeAotPe.ts` (`NATIVE_AOT_MAX_*`, REA #10067/#10094)
  * - `src/il2cpp/Il2cppMetadataV108.ts` + `Il2cppMetadataProvider.ts` (REA #9925)
+ * - `src/domain/android/dexTypes.ts` (`dexTypeSchema` 255-dimension cap, REA #10227)
  */
 export const REA_INTERNAL_LIMITS = Object.freeze({
   /** Maximum distinct alternatives retained in one normalized primitive value (`SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT`). */
@@ -230,4 +231,12 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   IL2CPP_V108_SAMPLE_STRINGS: 16,
   IL2CPP_V108_SAMPLE_BYTES: 128,
   IL2CPP_V108_SCAN_BATCH_BYTES: 65_536,
+  /**
+   * DEX type/prototype descriptor admission (`dexTypes.ts`, REA #10227).
+   * Official Dalvik/ART array-dimension ceiling is 255; REA now rejects
+   * 256-dimension JNI descriptors at schema admission. Honesty catalog only —
+   * not a densify trip target: planting 256-dimension types would emit
+   * invalid DEX and break the protected runtime.
+   */
+  DEX_ARRAY_DIMENSIONS: 255,
 });

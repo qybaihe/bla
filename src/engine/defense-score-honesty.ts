@@ -21,6 +21,7 @@ export type DefenseScoreGapId =
   | "pyc-sidecar-host-verify-only"
   | "gguf-sidecar-host-verify-only"
   | "safetensors-sidecar-host-verify-only"
+  | "dex-sidecar-host-verify-only"
   | "wasm-sidecar-host-verify-only"
   | "numeric-template-hygiene-partial"
   | "native-postlink-cfg-untouched"
@@ -79,6 +80,7 @@ const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
   "python-pyc",
   "model-gguf",
   "model-safetensors",
+  "android-dex",
   "native-elf",
   "native-macho",
   "native-pe",
@@ -151,6 +153,16 @@ export function collectDefenseScoreGaps(
       id: "safetensors-sidecar-host-verify-only",
       summary:
         "sidecarEntangle planted a Safetensors __metadata__ bla.sidecar.v1 note verified only by host verifySafetensorsSidecarMetadataNote; Safetensors loaders still load tensors after strip or sibling delete (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // DEX string-pool note is host-verify only (ART/Dalvik ignore unreferenced strings).
+  if (input.detectedFormat === "android-dex" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "dex-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a DEX bla.sidecar.v1 string-pool note verified only by host verifyDexSidecarStringPoolNote; ART/Dalvik still load after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

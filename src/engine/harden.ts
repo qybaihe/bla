@@ -49,6 +49,7 @@ import {
   entanglePycEntryWithSidecars,
   entangleGgufEntryWithSidecars,
   entangleSafetensorsEntryWithSidecars,
+  entangleDexEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
@@ -1324,6 +1325,50 @@ export function hardenProject(
           if (sidecars.length > 0) {
             const entryBytes = readFileSync(entryAbs);
             const bound = entangleSafetensorsEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+                allowLinkWriteThrough: false,
+              });
+            }
+          }
+        }
+      }
+
+
+      // DEX string-pool entanglement only when no JS/Python/WASM/.pyc/GGUF/
+      // Safetensors entry was bound — bla.sidecar.v1 sort-last pool string
+      // measured against FINAL siblings; existing string indices + insn bytes
+      // stay unchanged.
+      const dexLike = summaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "android-dex" ||
+            /\.dex$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      const dexEntry =
+        !jsEntry && !pyEntry && !wasmEntry && !pycEntry && !ggufEntry && !safetensorsEntry
+          ? dexLike[0]
+          : undefined;
+      if (dexEntry) {
+        const entryAbs = join(outputRoot, dexEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === dexEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entangleDexEntryWithSidecars({
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,

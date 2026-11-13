@@ -51,6 +51,14 @@ import {
   buildSafetensorsBuffer,
   validateSafetensorsBuffer,
 } from "../formats/model.js";
+import {
+  DEX_SIDECAR_STRING_KEY,
+  chooseSortLastDexString,
+  dropDexSidecarStrings,
+  parseDexLayout,
+  rebuildDex,
+  stripDexSidecarPrefix,
+} from "../formats/dex-layout.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -102,7 +110,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "safetensors-metadata-note" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "safetensors-metadata-note" | "dex-string-pool-note" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -119,6 +127,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   if (/\.asar$/.test(lower)) return "asar-archive-note";
   if (/\.gguf$/.test(lower)) return "gguf-metadata-note";
   if (/\.safetensors$/.test(lower)) return "safetensors-metadata-note";
+  if (/\.dex$/.test(lower)) return "dex-string-pool-note";
   return "unspecified";
 }
 
@@ -2934,6 +2943,320 @@ export function verifySafetensorsSidecarMetadataNote(
     return {
       ok: false,
       reason: "safetensors sidecar digest mismatch",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+  return {
+    ok: true,
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: note.softFold,
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// DEX string-pool sidecar note (host-verify; existing string indices + insn
+// bytes stay unchanged; official DEX remains loader-valid)
+// ---------------------------------------------------------------------------
+
+export const DEX_SIDECAR_METADATA_KEY = "bla.sidecar.v1" as const;
+export const DEX_SIDECAR_METADATA_KIND = "dex-string-pool-note" as const;
+
+export interface DexSidecarMetadataNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof DEX_SIDECAR_METADATA_KIND;
+  readonly key: typeof DEX_SIDECAR_METADATA_KEY;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarDexInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarDexInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof DEX_SIDECAR_METADATA_KIND;
+  readonly key: typeof DEX_SIDECAR_METADATA_KEY;
+  readonly noteJson: string;
+  readonly note: DexSidecarMetadataNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+  /** Pool string body (before sort-last U+FFFF prefix). */
+  readonly stringBody: string;
+}
+
+/**
+ * Build a DEX string-pool note (`bla.sidecar.v1=<json>`) that carries the
+ * sidecar binding digest. The note is planted as an unreferenced, sort-last
+ * string so existing string indices and instruction bytes stay unchanged.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarDexStringPoolNote(
+  options: SidecarDexInjectOptions,
+): SidecarDexInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: DexSidecarMetadataNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: DEX_SIDECAR_METADATA_KIND,
+    key: DEX_SIDECAR_METADATA_KEY,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = JSON.stringify(note);
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: DEX_SIDECAR_METADATA_KIND,
+    key: DEX_SIDECAR_METADATA_KEY,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+    stringBody: `${DEX_SIDECAR_STRING_KEY}${noteJson}`,
+  };
+}
+
+export interface SidecarDexBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarDexInjectResult;
+  readonly bytes: Buffer;
+}
+
+/**
+ * Plan + bind for a DEX entry: compute the offline digest from in-memory
+ * sidecar bytes and return a bound plan plus the rewritten DEX with an
+ * unreferenced sort-last string-pool note. Uses sidecars-mode digest so
+ * planting the note does not invalidate H. Existing string indices and
+ * instruction bytes stay unchanged.
+ */
+export function bindDexSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarDexBindResult {
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const stripped = dropDexSidecarStrings(options.entryBytes);
+  if (!stripped) {
+    throw new Error("entryBytes is not a structurally rewritable DEX container");
+  }
+  const layout = parseDexLayout(stripped);
+  if (!layout) {
+    throw new Error("entryBytes is not a structurally rewritable DEX container");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarDexStringPoolNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const chosen = chooseSortLastDexString(
+    layout.strings.map((s) => s.text),
+    inject.stringBody,
+  );
+  const bytes = rebuildDex(layout, { appendStrings: [chosen] });
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "dex-string-pool-note",
+    status: "bound",
+    note: "Bound — DEX bla.sidecar.v1 string-pool note planted; ship sidecars alongside and verify via verifyDexSidecarStringPoolNote. Host verify fails closed on strip/alter; ART/Dalvik ignore the unreferenced string (no process-start fail until a load-time hook lands). Existing string indices and instruction bytes stay unchanged.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + DEX entry bytes, produce
+ * the strip⇒fail-bound entry. Returns null when there are no sidecars to bind
+ * or when the DEX is not structurally rewritable (header-only stubs).
+ */
+export function entangleDexEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarDexBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  if (!parseDexLayout(options.entryBytes)) {
+    return null;
+  }
+  return bindDexSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface DexSidecarVerifyOptions {
+  readonly entryBytes: Uint8Array;
+  readonly baseDir?: string;
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface DexSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: DexSidecarMetadataNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+function parseDexSidecarNoteJson(jsonText: string): DexSidecarMetadataNote | null {
+  try {
+    const parsed = JSON.parse(jsonText) as DexSidecarMetadataNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== DEX_SIDECAR_METADATA_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return null;
+    }
+    return {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: DEX_SIDECAR_METADATA_KIND,
+      key: DEX_SIDECAR_METADATA_KEY,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the `bla.sidecar.v1=` string-pool note from a DEX buffer.
+ * Returns null when the note is absent or not well-formed.
+ */
+export function extractDexSidecarStringPoolNote(
+  entryBytes: Uint8Array,
+): DexSidecarMetadataNote | null {
+  const layout = parseDexLayout(entryBytes);
+  if (!layout) return null;
+  for (let i = layout.strings.length - 1; i >= 0; i--) {
+    const body = stripDexSidecarPrefix(layout.strings[i]!.text);
+    if (body === null) continue;
+    const note = parseDexSidecarNoteJson(body);
+    if (note) return note;
+  }
+  return null;
+}
+
+/**
+ * Remove a previously planted DEX sidecar string-pool note (idempotent).
+ * Existing string indices and instruction bytes stay unchanged.
+ */
+export function stripDexSidecarStringPoolNote(entryBytes: Uint8Array): Buffer {
+  return dropDexSidecarStrings(entryBytes) ?? Buffer.from(entryBytes);
+}
+
+/**
+ * Host-side strip⇒fail check for DEX string-pool notes: extract the note,
+ * re-hash sibling sidecar bytes with the same layout as
+ * `computeSidecarBindingDigest` (sidecars mode), and compare to the embedded
+ * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY. ART/Dalvik ignore the unreferenced pool string, so strip
+ * does not break load until a load-time hook lands (same honesty bar as
+ * GGUF / Safetensors / .pyc host-verify notes).
+ */
+export function verifyDexSidecarStringPoolNote(
+  options: DexSidecarVerifyOptions,
+): DexSidecarVerifyResult {
+  const note = extractDexSidecarStringPoolNote(options.entryBytes);
+  if (!note) {
+    return { ok: false, reason: "dex sidecar string-pool note missing" };
+  }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "fail",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
+  }
+  const measured = computeSidecarBindingDigest(
+    { pathLabel: note.entryPath, bytes: options.entryBytes },
+    collected.parts,
+    note.seedTag,
+    "sidecars",
+  );
+  if (measured.hex !== note.digest) {
+    return {
+      ok: false,
+      reason: "dex sidecar digest mismatch",
       note,
       expectedHex: note.digest,
       measuredHex: measured.hex,

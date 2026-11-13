@@ -8,6 +8,7 @@ import {
   verifyGgufSidecarMetadataNote,
   verifyPycSidecarMarshalNote,
   verifySafetensorsSidecarMetadataNote,
+  verifyDexSidecarStringPoolNote,
   verifyWasmSidecarCustomSection,
 } from "../shields/runtime/sidecar-entangle.js";
 
@@ -18,6 +19,7 @@ export type SidecarVerifierKind =
   | "pyc-marshal-note"
   | "gguf-metadata-note"
   | "safetensors-metadata-note"
+  | "dex-string-pool-note"
   | "runtime-only"
   | "entry-missing";
 
@@ -152,6 +154,22 @@ export function verifySidecarTarget(
         result.ok
           ? "safetensors metadata note intact"
           : (result.reason ?? "safetensors sidecar verification failed"),
+        { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
+      );
+    }
+    case "android-dex": {
+      const result = verifyDexSidecarStringPoolNote({
+        entryBytes: bytes,
+        baseDir: dir,
+      });
+      return report(
+        result.ok,
+        abs,
+        format,
+        "dex-string-pool-note",
+        result.ok
+          ? "dex string-pool note intact"
+          : (result.reason ?? "dex sidecar verification failed"),
         { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
       );
     }

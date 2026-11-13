@@ -98,6 +98,23 @@ describe("Issue #40.6: defenseScore honesty", () => {
     expect(hostOnly.cappedScore).toBe(93);
   });
 
+  it("keeps a DEX host-only string-pool note from closing the strip⇒fail gap", () => {
+    const off = applyDefenseScoreHonesty(99, {
+      detectedFormat: "android-dex",
+      sidecarEntangleEnabled: false,
+    });
+    expect(off.gaps.map((g) => g.id)).toContain("sidecar-entangle-not-enabled");
+    expect(off.cappedScore).toBe(93);
+
+    const hostOnly = applyDefenseScoreHonesty(99, {
+      detectedFormat: "android-dex",
+      sidecarEntangleEnabled: true,
+    });
+    expect(hostOnly.gaps.map((g) => g.id)).toContain("dex-sidecar-host-verify-only");
+    expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
+    expect(hostOnly.cappedScore).toBe(93);
+  });
+
   it("does not raise a low raw score when gaps apply", () => {
     const honesty = applyDefenseScoreHonesty(40, {
       detectedFormat: "wasm",

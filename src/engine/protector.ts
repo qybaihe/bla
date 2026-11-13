@@ -102,6 +102,7 @@ import {
   entanglePycEntryWithSidecars,
   entangleGgufEntryWithSidecars,
   entangleSafetensorsEntryWithSidecars,
+  entangleDexEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
@@ -378,6 +379,42 @@ function applySidecarEntangleToSafetensors(
   if (!bound) return { buffer: safetensorsBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
 }
+
+function applySidecarEntangleToDex(
+  dexBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: dexBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: dexBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: dexBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleDexEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: dexBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: dexBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
+}
+
 
 function applyPanelDeriveRewrite(
   source: string,
@@ -1175,7 +1212,18 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "android-dex") {
     const rawDex = readFileSync(absInput);
     const res = protectAndroidDexBuffer(rawDex, { intensity, seed });
-    writeProtectedOutput(absOutput, res.buffer);
+    let finalDex = res.buffer;
+    {
+      const entangled = applySidecarEntangleToDex(finalDex, options, absOutput, seed);
+      finalDex = entangled.buffer;
+      if (entangled.applied) {
+        sidecarEntangleApplied = true;
+        // Host-verify string-pool note only: ART/Dalvik ignore the
+        // unreferenced pool string, so strip / sibling delete still load.
+        // Do not record dex-sidecar-entangle until a load-time hook lands.
+      }
+    }
+    writeProtectedOutput(absOutput, finalDex);
     decoyFunctionsInjected = res.decoyClassesInjected;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = 3; // file_size + SHA1 signature + Adler32 checksum
