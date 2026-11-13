@@ -294,6 +294,8 @@ export interface VerificationCheck {
   readonly targetReaComponent: string;
   readonly passed: boolean;
   readonly details: string;
+  /** Where a before/after metric's baseline came from; absent when not applicable. */
+  readonly baselineSource?: "measured" | "assumed";
 }
 
 /** Soft-cap annotation when known product gaps still apply (issue #40.6). */
