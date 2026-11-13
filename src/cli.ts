@@ -100,6 +100,7 @@ Options:
   --sign-manifest             Ed25519-sign the emitted manifest (implies --manifest; requires --manifest-key)
   --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest
   --public-key <path>         Trusted ed25519 public key PEM for verify-manifest
+  --require-pinned-key        verify-manifest: exit 2 unless --public-key authenticated the manifest
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
@@ -135,6 +136,7 @@ interface ParsedCliArgs {
   readonly manifestKey?: string;
   readonly publicKey?: string;
   readonly artifactPath?: string;
+  readonly requirePinnedKey: boolean;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
@@ -200,6 +202,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let manifestKey: string | undefined;
   let publicKey: string | undefined;
   let artifactPath: string | undefined;
+  let requirePinnedKey = false;
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
@@ -287,6 +290,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       const value = expandedArgs[++i];
       if (value === undefined) argErrors.push("--artifact requires a value");
       else artifactPath = value;
+    } else if (arg === "--require-pinned-key") {
+      requirePinnedKey = true;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -403,6 +408,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     ...(manifestKey !== undefined ? { manifestKey } : {}),
     ...(publicKey !== undefined ? { publicKey } : {}),
     ...(artifactPath !== undefined ? { artifactPath } : {}),
+    requirePinnedKey,
     llmDirectives,
     weaveDecoys,
     selfSeal,
@@ -1054,10 +1060,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       case "verify-manifest": {
         const target = parsed.positionals[0];
         if (!target) {
-          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>] [--artifact <path>]`.");
+          console.error("Error: Missing <manifest> path for `bla verify-manifest <manifest> [--public-key <pem>] [--require-pinned-key] [--artifact <path>]`.");
           return 1;
         }
-        const result = verifyManifestFile(target, parsed.publicKey, parsed.artifactPath);
+        const result = verifyManifestFile(target, parsed.publicKey, parsed.artifactPath, {
+          requirePinnedKey: parsed.requirePinnedKey,
+        });
         if (parsed.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {

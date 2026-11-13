@@ -36,6 +36,7 @@ export function verifyManifestFile(
   manifestPath: string,
   publicKeyPath?: string,
   artifactPath?: string,
+  options: { readonly requirePinnedKey?: boolean } = {},
 ): ManifestVerifyResult {
   const absManifest = resolve(manifestPath);
   let manifest: Record<string, unknown>;
@@ -123,6 +124,17 @@ export function verifyManifestFile(
       pinned,
       artifactVerified: false,
       reason: "signature invalid",
+    };
+  }
+
+  if (options.requirePinnedKey === true && !pinned) {
+    return {
+      ok: false,
+      signed: true,
+      pinned: false,
+      artifactVerified: false,
+      reason:
+        "manifest signature is not authenticated: a pinned public key is required (pass --public-key <pem>)",
     };
   }
 
