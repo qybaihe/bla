@@ -89,7 +89,7 @@ describe("Canary + system-diagnostic coverage on remaining formats", () => {
     const res = protectJvmClassBuffer(cls, { intensity: "balanced", seed: "jvm-structural" });
     expect(res.mode).toBe("structural");
     expect(res.constantPoolEntriesAdded).toBeGreaterThan(0);
-    expect(res.customAttributesAdded).toBe(1);
+    expect(res.customAttributesAdded).toBe(0);
   });
 
   it("embeds canary decoys into ZIP members and recursively hardens nested DEX", () => {

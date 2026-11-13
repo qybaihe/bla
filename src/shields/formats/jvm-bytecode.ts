@@ -62,8 +62,11 @@ function measureConstantPoolEntry(buf: Buffer, offset: number): { size: number; 
 /**
  * Protects a Java / Kotlin JVM `.class` bytecode buffer (`0xCAFEBABE`).
  * - Parses the JVM constant pool if structurally complete and appends valid `CONSTANT_Utf8`
- *   decoy enclave descriptors + a custom JVM §4.7.1 class attribute (`BlaEnclaveDelegation`).
- * - Preserves 100% JVM verifier compatibility while polluting `javap`, CFR, Vineflower, and JADX.
+ *   decoy enclave descriptors to it, then appends a JSON decoy trailer *after* the class body.
+ *   No §4.7.1 class attribute is emitted: `attributes_count` and the attribute table are left
+ *   untouched, so `customAttributesAdded` stays 0 (same rule as the trailer-only path).
+ * - Keeps the class structure itself verifier-compatible while polluting `javap`, CFR,
+ *   Vineflower, and JADX with unreferenced constant-pool decoys and tail bytes.
  */
 export function protectJvmClassBuffer(
   rawBuffer: Buffer,
@@ -149,7 +152,9 @@ export function protectJvmClassBuffer(
           buffer: Buffer.concat([headerAndOldCp, ...newCpBuffers, bodyAfterCp, attrPayload]),
           mode: "structural",
           constantPoolEntriesAdded: newCpBuffers.length,
-          customAttributesAdded: 1,
+          // The decoy corpus lives in the constant pool + the tail after the
+          // class body; no class attribute is added to the attribute table.
+          customAttributesAdded: 0,
           chaffPayloadsEmbedded: chaff.length,
           canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
           diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
