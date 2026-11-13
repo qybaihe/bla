@@ -1,6 +1,6 @@
 {
   "name": "bla",
-  "version": "3.2.6",
+  "version": "3.3.0",
   "description": "Teaches coding agents the BLA Agent-Driven Hardening playbook: when to harden, audit, weave decoys, and verify Counter-REA defenses via the bla MCP tools and CLI.",
   "author": {
     "name": "BLA Contributors",
