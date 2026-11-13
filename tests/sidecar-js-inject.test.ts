@@ -76,6 +76,27 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
     expect(bound.code.startsWith(bound.inject.preamble)).toBe(true);
   });
 
+  it("bind plans coverage from the bytes actually bound (ready, no missing hashes)", () => {
+    const entryBytes = new TextEncoder().encode("module.exports = { ok: true };\n");
+    const sibBytes = new TextEncoder().encode("sidecar-payload\n");
+    const bound = bindSidecarEntanglement({
+      entryPath: "main.js",
+      sidecarPaths: ["sib.js"],
+      seedTag: "inject-test-v1",
+      entryBytes,
+      sidecarBytes: [sibBytes],
+    });
+    expect(bound.plan.coverageEvaluation.ok).toBe(true);
+    expect(bound.plan.coverageEvaluation.missingHashNodes).toEqual([]);
+    expect(bound.plan.coverageEvaluation.shouldRefuseBankrupt).toBe(false);
+    expect(bound.plan.coverageMatrix.expectedSha256["main.js"]).toMatch(
+      /^[0-9a-f]{64}$/i,
+    );
+    expect(bound.plan.coverageMatrix.expectedSha256["sib.js"]).toMatch(
+      /^[0-9a-f]{64}$/i,
+    );
+  });
+
   it("emits an ESM-safe createRequire(import.meta.url) preamble for an ES module carrier", () => {
     const bound = bindSidecarEntanglement({
       entryPath: "main.mjs",
