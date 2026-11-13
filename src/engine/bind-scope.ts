@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { writeFileAtomicSync } from "./protector.js";
 
 export const BIND_SCOPE_SCHEMA = "bla-bind-scope/v1" as const;
 export const BIND_SCOPE_FILE_NAME = "bind-scope.json" as const;
@@ -603,14 +604,14 @@ export function applyBindScope(
   const rewritten = injectRuntimeIntoEntry(original, snippet);
 
   if (!options.dryRun) {
-    mkdirSync(dirname(contractPath), { recursive: true });
-    writeFileSync(
+    // Same atomic, link-guarded writer the rest of the engine uses: a crash must
+    // not leave a truncated contract or entry copy behind.
+    writeFileAtomicSync(
       contractPath,
       JSON.stringify(validated.contract, null, 2) + "\n",
       "utf8",
     );
-    mkdirSync(dirname(entryOut), { recursive: true });
-    writeFileSync(entryOut, rewritten, "utf8");
+    writeFileAtomicSync(entryOut, rewritten, "utf8");
   }
 
   // Dry-run synthesizes lint against the in-memory rewrite (no disk read).
