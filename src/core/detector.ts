@@ -168,7 +168,12 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   // 12. CPython `.pyc` bytecode (magic bytes 0x0d 0x0a at offset 2..3)
   if (
     ext === ".pyc" ||
-    (header.length >= 16 && header[2] === 0x0d && header[3] === 0x0a)
+    (header.length >= 16 &&
+      header[2] === 0x0d &&
+      header[3] === 0x0a &&
+      header.readUInt16LE(0) >= 3000 &&
+      header.readUInt16LE(0) < 4000 &&
+      header.readUInt32LE(4) <= 3)
   ) {
     return "python-pyc";
   }
