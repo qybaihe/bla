@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
 import {
@@ -13,7 +13,7 @@ import { buildSarifReport } from "./core/sarif.js";
 import { verifyManifestFile } from "./core/manifest-verify.js";
 import type { ProtectionIntensity } from "./core/types.js";
 import { auditTarget } from "./engine/auditor.js";
-import { protectTarget } from "./engine/protector.js";
+import { protectTarget, writeFileAtomicSync } from "./engine/protector.js";
 import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
 import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
@@ -1037,7 +1037,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         });
         if (parsed.output) {
           const outPath = resolve(parsed.output);
-          writeFileSync(outPath, emitted.content, "utf8");
+          writeFileAtomicSync(outPath, emitted.content, "utf8");
           if (parsed.json) {
             console.log(JSON.stringify({ ...emitted, outputPath: outPath }, null, 2));
           } else {
