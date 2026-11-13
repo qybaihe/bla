@@ -308,9 +308,9 @@ export function panelDeriveRefuseMessage(
   }
   const syms = [...report.stableSymbols, ...report.localDeriveSymbols].join(", ");
   return (
-    `Refusing bankrupt harden/protect: stable panel-derive ABI at ${filePath}` +
+    `Bankrupt protect rewrites stable panel-derive ABI at ${filePath}` +
     (syms ? ` [${syms}]` : "") +
-    `. Rename the helper or allow protect to rewrite it. ` +
+    `. Rename the helper or let protect rewrite it. ` +
     `To keep the stable ABI (lab only), pass allowStablePanelDeriveAbi / --allow-stable-panel-derive / allow_stable_panel_derive:true.`
   );
 }
