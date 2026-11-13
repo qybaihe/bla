@@ -1,6 +1,11 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import {
+  deriveParameterizedMbaParams,
+  formatCParameterizedMbaExpr,
+  generateUnsignedMbaOpaqueFalseC,
+} from "../tarpit/mba-substitutions.js";
 
 export type NativeHeaderLanguage = "c" | "rust" | "go";
 
@@ -129,15 +134,17 @@ export function emitCompileTimeNativeHeader(
       const next2 = (i + 3) % decoyCount;
       const k = prng.nextInt(0x1000, 0xffff);
       const mix = deriveMixConstant(prng);
+      const mbaInit = formatCParameterizedMbaExpr("^", "seed", `0x${k.toString(16)}u`, prng);
+      const mbaPred = generateUnsignedMbaOpaqueFalseC(prng, "acc ^ seed");
       const chaffSym = chaffPayloads[i % chaffPayloads.length]!.symbolName;
       lines.push(`BLA_NOINLINE static uint32_t ${tarpitStem}_${i}(uint32_t seed, int depth) {`);
       lines.push(`    const char* _anchor_str = (const char*)enclave_keep_data_table[(seed + ${i}u) % ${dataTableCount}u];`);
-      lines.push(`    uint32_t acc = seed ^ 0x${k.toString(16)}u ^ (uint32_t)(unsigned char)${chaffSym}[0] ^ (uint32_t)(unsigned char)_anchor_str[0];`);
+      lines.push(`    uint32_t acc = ${mbaInit} ^ (uint32_t)(unsigned char)${chaffSym}[0] ^ (uint32_t)(unsigned char)_anchor_str[0];`);
       lines.push(`    for (int r = 0; r < 4; ++r) {`);
       lines.push(`        acc = (acc * 0x${mix.toString(16)}u) ^ (acc >> 13) ^ (uint32_t)r;`);
       lines.push(`        ${shadowHeapName}[(${i} * 4 + r) & 31] ^= acc;`);
       lines.push(`    }`);
-      lines.push(`    if (depth > 0 && ((7u * (seed | 3u) * (seed | 3u) - 1u) == (seed ^ 5u) * (seed ^ 5u))) {`);
+      lines.push(`    if (depth > 0 && ${mbaPred}) {`);
       lines.push(`        enclave_tarpit_fn_t _fn_ptr = enclave_keep_fn_table[(seed ^ (uint32_t)depth) % ${decoyCount}u];`);
       lines.push(`        return ${tarpitStem}_${next1}(acc, depth - 1) ^ ${tarpitStem}_${next2}(acc ^ 0x5Au, depth - 1) ^ _fn_ptr(acc, depth - 1);`);
       lines.push(`    }`);
@@ -191,13 +198,16 @@ export function emitCompileTimeNativeHeader(
       const next2 = (i + 2) % decoyCount;
       const k = prng.nextInt(0x1000, 0xffff);
       const mix = deriveMixConstant(prng);
+      const mba = deriveParameterizedMbaParams(prng);
+      const predSalt = prng.nextUint32() >>> 0;
       lines.push(`#[inline(never)]`);
       lines.push(`pub fn enclave_tarpit_${i}(seed: u32, depth: u32) -> u32 {`);
-      lines.push(`    let mut acc = seed ^ 0x${k.toString(16)};`);
+      lines.push(`    let mut acc = 0x${mba.mInv.toString(16)}u32.wrapping_mul(0x${mba.m.toString(16)}u32.wrapping_mul(seed | 0x${k.toString(16)}u32).wrapping_sub(0x${mba.m.toString(16)}u32.wrapping_mul(seed & 0x${k.toString(16)}u32)).wrapping_add(0x${mba.c.toString(16)}u32)).wrapping_add(0x${mba.d.toString(16)}u32);`);
       lines.push(`    for r in 0..4u32 {`);
       lines.push(`        acc = acc.wrapping_mul(0x${mix.toString(16)}) ^ (acc >> 13) ^ r;`);
       lines.push(`    }`);
-      lines.push(`    if depth > 0 && ((seed | 1).wrapping_mul(seed | 2) & 1) == 1 {`);
+      lines.push(`    let u = acc ^ seed ^ 0x${predSalt.toString(16)}u32;`);
+      lines.push(`    if depth > 0 && (u | u.wrapping_sub(1)) < (u ^ u.wrapping_sub(1)) {`);
       lines.push(`        return enclave_tarpit_${next1}(acc, depth - 1) ^ enclave_tarpit_${next2}(acc ^ 0x5A, depth - 1);`);
       lines.push(`    }`);
       lines.push(`    std::hint::black_box(acc)`);
@@ -234,14 +244,18 @@ export function emitCompileTimeNativeHeader(
     const next2 = (i + 2) % decoyCount;
     const k = prng.nextInt(0x1000, 0xffff);
     const mix = deriveMixConstant(prng);
+    const mba = deriveParameterizedMbaParams(prng);
+    const predSalt = prng.nextUint32() >>> 0;
     lines.push(`//go:noinline`);
     lines.push(`func EnclaveTarpit${i}(seed uint32, depth int) uint32 {`);
-    lines.push(`\tacc := seed ^ 0x${k.toString(16)} ^ uint32(len(EnclaveManifests[0]))`);
+    lines.push(`\tmbaSeed := uint32(0x${mba.mInv.toString(16)})*(uint32(0x${mba.m.toString(16)})*(seed|0x${k.toString(16)})-uint32(0x${mba.m.toString(16)})*(seed&0x${k.toString(16)})+uint32(0x${mba.c.toString(16)})) + uint32(0x${mba.d.toString(16)})`);
+    lines.push(`\tacc := mbaSeed ^ uint32(len(EnclaveManifests[0]))`);
     lines.push(`\tfor r := uint32(0); r < 4; r++ {`);
     lines.push(`\t\tacc = (acc * 0x${mix.toString(16)}) ^ (acc >> 13) ^ r`);
     lines.push(`\t\tShadowHeapSlots[(${i}*4+int(r))&15] ^= acc`);
     lines.push(`\t}`);
-    lines.push(`\tif depth > 0 && (((seed|1)*((seed|1)+1))&1) == 1 {`);
+    lines.push(`\tu := acc ^ seed ^ uint32(0x${predSalt.toString(16)})`);
+    lines.push(`\tif depth > 0 && (u|(u-1)) < (u^(u-1)) {`);
     lines.push(`\t\treturn EnclaveTarpit${next1}(acc, depth-1) ^ EnclaveTarpit${next2}(acc^0x5A, depth-1)`);
     lines.push(`\t}`);
     lines.push(`\treturn acc`);

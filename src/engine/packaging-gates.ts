@@ -76,6 +76,12 @@ import {
   intensityEnforcesBindScopeRefusal,
   type BindScopeLintReport,
 } from "./bind-scope.js";
+import {
+  discoverAndLintReleaseHygiene,
+  intensityEnforcesReleaseHygieneRefusal,
+  releaseHygieneRefuseMessage,
+  type ReleaseHygieneFileReport,
+} from "./release-hygiene-lint.js";
 
 export const PACKAGING_GATES_SCHEMA = "bla-packaging-gates/v1" as const;
 
@@ -90,7 +96,8 @@ export type PackagingGateId =
   | "panel-derive"
   | "plaintext-secret"
   | "integrity-coverage"
-  | "bind-scope";
+  | "bind-scope"
+  | "release-hygiene";
 
 export interface PackagingGateFinding {
   readonly gate: PackagingGateId;
@@ -130,6 +137,8 @@ export interface PackagingGatesAllowOptions {
   readonly allowSinglePointIntegrity?: boolean;
   /** Lab escape: allow bind-scope contract without runtime check / non-public fields. */
   readonly allowMissingBindRuntime?: boolean;
+  /** Lab escape: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. */
+  readonly allowReleaseHygieneLeak?: boolean;
 }
 
 export interface PackagingGatesScanOptions extends PackagingGatesAllowOptions {
@@ -170,6 +179,7 @@ export interface PackagingGatesReport {
     readonly plaintextSecrets: readonly PlaintextSecretReport[];
     readonly integrityCoverage: readonly IntegrityCoverageFileReport[];
     readonly bindScope: readonly BindScopeLintReport[];
+    readonly releaseHygiene: readonly ReleaseHygieneFileReport[];
   };
 }
 
@@ -194,6 +204,7 @@ function emptyCounts(): Record<PackagingGateId, number> {
     "plaintext-secret": 0,
     "integrity-coverage": 0,
     "bind-scope": 0,
+    "release-hygiene": 0,
   };
 }
 
@@ -265,6 +276,11 @@ function buildGateRemediationMeta(
         recommendedMcpTool: "bla_bind_scope",
         sourceRefactorRecipe: `Ensure \`${rel}\` sets \`"public": true\`, valid ISO dates / domain globs, and inject \`BLA_BIND_SCOPE_CHECK\` into the entry module via MCP \`bla_bind_scope\`.`,
       };
+    case "release-hygiene":
+      return {
+        owner: "agent-source-refactor",
+        sourceRefactorRecipe: `Delete or exclude leaked environment artifact \`${rel}\` (SOLUTION/writeup notes, populated \`.env\`, SSH/PEM private keys, or \`.pdb\`/\`.dSYM\`/\`.dwp\` debug databases) from the release directory before hardening.`,
+      };
   }
 }
 
@@ -296,6 +312,7 @@ export function scanPackagingGates(
   });
   const integrityCoverage = discoverAndLintIntegrityCoverage(absDir);
   const bindScope = discoverAndLintBindScope(absDir);
+  const releaseHygiene = discoverAndLintReleaseHygiene(absDir);
 
   const findings: PackagingGateFinding[] = [];
   const counts = emptyCounts();
@@ -467,6 +484,21 @@ export function scanPackagingGates(
       findingCount: r.reasons.length,
     });
   }
+  for (const r of releaseHygiene) {
+    if (r.findings.length === 0 && !r.shouldRefuseBankrupt) continue;
+    counts["release-hygiene"] += 1;
+    findings.push({
+      gate: "release-hygiene",
+      path: r.path,
+      relativePath: relPath(absDir, r.path),
+      shouldRefuseBankrupt: r.shouldRefuseBankrupt,
+      refuseMessage: r.shouldRefuseBankrupt
+        ? releaseHygieneRefuseMessage(r, r.path)
+        : undefined,
+      oneLineAdvice: r.oneLineAdvice,
+      findingCount: r.findings.length,
+    });
+  }
 
   const enrichedFindings: PackagingGateFinding[] = findings.map((f) => {
     const meta = buildGateRemediationMeta(f.gate, f.relativePath);
@@ -530,6 +562,7 @@ export function scanPackagingGates(
       plaintextSecrets,
       integrityCoverage,
       bindScope,
+      releaseHygiene,
     },
   };
 }
@@ -601,6 +634,12 @@ export function filterBlockingFindings(
           allow.allowMissingBindRuntime !== true &&
           f.shouldRefuseBankrupt
         );
+      case "release-hygiene":
+        return (
+          intensityEnforcesReleaseHygieneRefusal(intensity) &&
+          allow.allowReleaseHygieneLeak !== true &&
+          f.shouldRefuseBankrupt
+        );
       default: {
         // Fail closed: a gate id added to `PackagingGateId` without a refusal
         // decision here must not silently become advisory-only.
@@ -625,6 +664,7 @@ export function evaluateHardenProjectPackagingBlocks(
   readonly blockingJsHydrateDump: readonly JsWasmHydrateDumpReport[];
   readonly blockingWasmXorMask: readonly WasmXorMaskSidecarReport[];
   readonly blockingWasmSealXor: readonly WasmSealXorKnownPlaintextReport[];
+  readonly blockingReleaseHygiene: readonly ReleaseHygieneFileReport[];
 } {
   // Harden project-level: do not include protect-time gates in the scan used
   // for the early refuse path (preserves prior semantics).
@@ -662,6 +702,11 @@ export function evaluateHardenProjectPackagingBlocks(
     options.allowWasmSealXorKnownPlaintext !== true
       ? report.details.wasmSealXor.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  const blockingReleaseHygiene =
+    intensityEnforcesReleaseHygieneRefusal(intensity) &&
+    options.allowReleaseHygieneLeak !== true
+      ? report.details.releaseHygiene.filter((r) => r.shouldRefuseBankrupt)
+      : [];
   return {
     report,
     blockingSeals,
@@ -670,6 +715,7 @@ export function evaluateHardenProjectPackagingBlocks(
     blockingJsHydrateDump,
     blockingWasmXorMask,
     blockingWasmSealXor,
+    blockingReleaseHygiene,
   };
 }
 

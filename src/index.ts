@@ -331,6 +331,26 @@ export {
   type ReleaseExposureReport,
   type ReleaseExposureFinding,
 } from "./core/release-exposure.js";
+export {
+  modInverseUint32,
+  deriveParameterizedMbaParams,
+  buildParameterizedMbaBinaryAst,
+  formatCParameterizedMbaExpr,
+  generateUnsignedMbaOpaqueTrueJs,
+  generateUnsignedMbaOpaqueFalseJs,
+  generateUnsignedMbaOpaqueFalseC,
+  type MbaBitwiseOp,
+  type ParameterizedMbaParams,
+} from "./shields/tarpit/mba-substitutions.js";
+export {
+  lintReleaseHygieneFile,
+  discoverAndLintReleaseHygiene,
+  intensityEnforcesReleaseHygieneRefusal,
+  releaseHygieneRefuseMessage,
+  type ReleaseHygieneLeakKind,
+  type ReleaseHygieneFinding,
+  type ReleaseHygieneFileReport,
+} from "./engine/release-hygiene-lint.js";
 
 export {
   inspectErlangBeam,

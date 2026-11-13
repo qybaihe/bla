@@ -51,6 +51,11 @@ import {
   type CognitiveArmorTriggerEntry,
   type CognitiveArmorTriggerResult,
 } from "./cognitive-armor-trigger.js";
+import {
+  generateHypothesisRevisionDecoy,
+  type HypothesisRevisionChainEntry,
+  type HypothesisRevisionDecoyResult,
+} from "./hypothesis-revision-decoy.js";
 
 export {
   generateShadowBusinessLogic,
@@ -64,6 +69,7 @@ export {
   generateCanaryHoneypot,
   generateSystemDiagnosticDecoy,
   generateCognitiveArmorTrigger,
+  generateHypothesisRevisionDecoy,
   computeContainmentCorpusDigest,
   ALIGNMENT_CANARY_GUID,
   ALIGNMENT_EVAL_CANARY_GUID,
@@ -82,6 +88,8 @@ export {
   type SystemDiagnosticDecoyResult,
   type CognitiveArmorTriggerEntry,
   type CognitiveArmorTriggerResult,
+  type HypothesisRevisionChainEntry,
+  type HypothesisRevisionDecoyResult,
 };
 
 export interface CounterReaDeceptionSuiteResult {
@@ -94,6 +102,7 @@ export interface CounterReaDeceptionSuiteResult {
   readonly canaryHoneypot: CanaryHoneypotResult;
   readonly systemDiagnostics: SystemDiagnosticDecoyResult;
   readonly cognitiveArmor: CognitiveArmorTriggerResult;
+  readonly hypothesisRevision: HypothesisRevisionDecoyResult;
   readonly totalDeceptionNodesInjected: number;
 }
 
@@ -118,6 +127,7 @@ export function generateCounterReaDeceptionSuite(
   const canaryHoneypot = generateCanaryHoneypot(prng, intensity);
   const systemDiagnostics = generateSystemDiagnosticDecoy(prng, intensity);
   const cognitiveArmor = generateCognitiveArmorTrigger(prng, intensity);
+  const hypothesisRevision = generateHypothesisRevisionDecoy(prng, intensity);
 
   const combinedJsCode = [
     shadowLogic.code,
@@ -131,6 +141,7 @@ export function generateCounterReaDeceptionSuite(
     canaryHoneypot.code,
     systemDiagnostics.code,
     cognitiveArmor.code,
+    hypothesisRevision.code,
   ].join("\n\n");
 
   const totalDeceptionNodesInjected =
@@ -144,7 +155,9 @@ export function generateCounterReaDeceptionSuite(
     crashDecoy.decoyCrashSignalsEmbedded.length +
     canaryHoneypot.syntheticCanaryTokens.length +
     systemDiagnostics.diagnosticsInjected.length +
-    cognitiveArmor.triggersInjected.length;
+    cognitiveArmor.triggersInjected.length +
+    hypothesisRevision.revisionChains.length +
+    hypothesisRevision.auditorAttentionSinks.length;
 
   return {
     combinedJsCode,
@@ -156,6 +169,7 @@ export function generateCounterReaDeceptionSuite(
     canaryHoneypot,
     systemDiagnostics,
     cognitiveArmor,
+    hypothesisRevision,
     totalDeceptionNodesInjected,
   };
 }
