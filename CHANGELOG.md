@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`sidecarEntangle` no longer breaks ES module `.js` entries (red 2026-11-13):** carrier detection only looked at static import/export and the `.mjs`/`.cjs` extension, so a `.js` entry using top-level `await` / `import.meta`, or any `.js` under a `package.json` `"type": "module"`, received the CommonJS strip⇒fail preamble and the *intact* protected artifact threw `integrity binding mismatch` (protect and `bla harden --sidecar-entangle`). The shield now treats Babel's unambiguous `program.sourceType === "module"` as a module carrier, and `refineJsCarrierForRuntimePaths` / `resolveNodePackageModuleType` (nearest `package.json`, as in Node) apply to the output and input locations, so the existing ES-module refusal fires instead. No change when `sidecarEntangle` is off.
+
 ## [3.2.6] — 2026-11-13
 
 Patch extending opt-in `sidecarEntangle` to **GGUF STRING metadata notes** (alignment-safe), fixing tensor-corrupting KV splices in `protectGgufBuffer`, and shipping the already-landed ELF64 mapped `.enclave` PT_LOAD honesty work.
