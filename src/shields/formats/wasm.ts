@@ -48,6 +48,24 @@ function decodeUnsignedLeb128(buf: Buffer, startOffset: number): { value: number
   throw new Error("Truncated LEB128 integer in WASM binary");
 }
 
+/**
+ * Non-throwing variant of {@link decodeUnsignedLeb128} for defensive section
+ * walks. Returns null on a truncated / invalid LEB128 (e.g. a section-id byte
+ * with no following size field) so callers documented as defensive — which
+ * guard a truncated section *body* but decoded the section *size* header
+ * outside that guard — never throw on hostile / corrupt input.
+ */
+function tryDecodeUnsignedLeb128(
+  buf: Buffer,
+  startOffset: number,
+): { value: number; nextOffset: number } | null {
+  try {
+    return decodeUnsignedLeb128(buf, startOffset);
+  } catch {
+    return null;
+  }
+}
+
 function encodeWasmName(str: string): Buffer {
   const utf8 = Buffer.from(str, "utf8");
   return Buffer.concat([encodeUnsignedLeb128(utf8.length), utf8]);
@@ -304,7 +322,9 @@ function collectExportedFuncIndices(bytes: Buffer): number[] {
   let exportEntries: WasmExportEntry[] | null = null;
   while (offset < bytes.length) {
     const sectionId = bytes[offset++]!;
-    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) break; // truncated section-size header → stop defensively
+    const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) break;
     const payload = bytes.subarray(nextOffset, sectionEnd);
@@ -426,7 +446,9 @@ export function inspectWasmBinary(bytes: Buffer): WasmInspectionSummary {
 
   while (offset < bytes.length) {
     const sectionId = bytes[offset++]!;
-    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) break; // truncated section-size header → stop defensively
+    const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) break;
     sectionCount++;
@@ -507,7 +529,9 @@ export function readWasmCustomSectionContent(
   let offset = 8;
   while (offset < bytes.length) {
     const sectionId = bytes[offset++]!;
-    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) break; // truncated section-size header → stop defensively
+    const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) break;
     if (sectionId === 0) {
@@ -549,7 +573,13 @@ export function stripWasmCustomSectionByName(
   while (offset < bytes.length) {
     const sectionStart = offset;
     const sectionId = bytes[offset++]!;
-    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) {
+      // Truncated section-size header → keep the malformed tail verbatim.
+      out.push(Buffer.from(bytes.subarray(sectionStart)));
+      break;
+    }
+    const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) {
       out.push(Buffer.from(bytes.subarray(sectionStart)));
@@ -687,7 +717,9 @@ export function protectWasmBinary(
   while (offset < bytes.length) {
     const sectionStart = offset;
     const sectionId = bytes[offset++]!;
-    const { value: sectionSize, nextOffset } = decodeUnsignedLeb128(bytes, offset);
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) break; // truncated section-size header → stop defensively
+    const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > bytes.length) break;
 
