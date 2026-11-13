@@ -484,6 +484,12 @@ export function auditTarget(targetPath: string): AuditReport {
           walkDir(full, depth + 1);
           continue;
         }
+        // Only audit regular files that live in this tree: a symlink here would
+        // pull content from outside the audited root into the report.
+        if (!entry.isFile()) {
+          skippedFiles++;
+          continue;
+        }
         let stat: Stats;
         try {
           stat = statSync(full);
