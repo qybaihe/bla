@@ -87,6 +87,27 @@ for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
   }
 }
 
+// Keep plugin marketplace manifests in lockstep with package.json.
+for (const rel of [
+  ".claude-plugin/marketplace.json",
+  ".codex-plugin/plugin.json",
+]) {
+  const pluginPath = resolve(root, rel);
+  try {
+    const pluginText = readFileSync(pluginPath, "utf8");
+    const next = pluginText.replace(
+      /"version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"/g,
+      `"version": "${version}"`,
+    );
+    if (next !== pluginText) {
+      writeFileSync(pluginPath, next, "utf8");
+      console.log(`Synced ${rel} version -> ${version}`);
+    }
+  } catch (err) {
+    console.warn(`Skipped ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // Human-facing version surfaces outside the badge/docs pair. A partial bump
 // used to leave STATE.md and the shipped agent skill advertising an older
 // release; keep them in lockstep with package.json.

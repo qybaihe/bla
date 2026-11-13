@@ -47,21 +47,29 @@ import {
   readGgufStringKv,
   rebuildGguf,
 } from "../formats/gguf-layout.js";
+import {
+  buildSafetensorsBuffer,
+  validateSafetensorsBuffer,
+} from "../formats/model.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
 export type SidecarJsCarrier = "module" | "script" | "commonjs";
 
 /**
- * The strip=>fail preamble is a CommonJS body (`require`, `__dirname`). Under
- * import-based module scope those names are undefined, so a prepended preamble
- * makes the protected entry throw at load. Refuse instead of shipping it.
+ * Validate `carrier` for JS sidecar entanglement. Both CommonJS/script and ES
+ * module (`"module"`) carriers are supported: `"module"` emits an ESM-safe
+ * preamble backed by `import { createRequire } from "node:module"` +
+ * `import.meta.url`, while CommonJS/script emits the classic synchronous IIFE.
  */
 export function assertSidecarJsCarrierSupported(carrier?: SidecarJsCarrier): void {
-  if (carrier === "module") {
-    throw new Error(
-      "sidecarEntangle cannot protect an ES module entry: the strip=>fail preamble uses CommonJS require()/__dirname, which are undefined under module scope. Disable sidecarEntangle for this target or protect a CommonJS entry.",
-    );
+  if (
+    carrier !== undefined &&
+    carrier !== "module" &&
+    carrier !== "script" &&
+    carrier !== "commonjs"
+  ) {
+    throw new Error(`Unsupported sidecar JS carrier: ${String(carrier)}`);
   }
 }
 
@@ -94,7 +102,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "safetensors-metadata-note" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -110,6 +118,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   if (/\.wasm$/.test(lower)) return "wasm-custom-section";
   if (/\.asar$/.test(lower)) return "asar-archive-note";
   if (/\.gguf$/.test(lower)) return "gguf-metadata-note";
+  if (/\.safetensors$/.test(lower)) return "safetensors-metadata-note";
   return "unspecified";
 }
 
@@ -290,6 +299,8 @@ export interface SidecarJsInjectOptions {
    * (caller entangles with opaque seed). When false (default), throw on mismatch.
    */
   readonly softFold?: boolean;
+  /** Runtime JS carrier (`"module"` emits an ESM-native `createRequire(import.meta.url)` preamble). */
+  readonly carrier?: SidecarJsCarrier;
 }
 
 export interface SidecarJsInjectResult {
@@ -324,15 +335,33 @@ export function generateSidecarJsPreamble(
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
   const seedLiteral = JSON.stringify(seedTag);
+  const isEsm = options.carrier === "module";
+  const reqHelperAlias = `__blaSidecarReq_${expectedHex.slice(0, 8)}`;
 
   const lines: string[] = [];
+  if (isEsm) {
+    lines.push(`import { createRequire as ${reqHelperAlias} } from "node:module";`);
+  }
   lines.push(`(function(){`);
   lines.push(`  var __expected = ${JSON.stringify(expectedHex)};`);
   lines.push(`  var ${bindingName} = 0;`);
   lines.push(`  try {`);
-  lines.push(`    var _c = require("node:crypto");`);
-  lines.push(`    var _fs = require("node:fs");`);
-  lines.push(`    var _path = require("node:path");`);
+  if (isEsm) {
+    lines.push(`    var _req = ${reqHelperAlias}(import.meta.url);`);
+    lines.push(`    var _c = _req("node:crypto");`);
+    lines.push(`    var _fs = _req("node:fs");`);
+    lines.push(`    var _path = _req("node:path");`);
+    lines.push(
+      `    var _baseDir = _path.dirname(_req("node:url").fileURLToPath(import.meta.url));`,
+    );
+  } else {
+    lines.push(`    var _c = require("node:crypto");`);
+    lines.push(`    var _fs = require("node:fs");`);
+    lines.push(`    var _path = require("node:path");`);
+    lines.push(
+      `    var _baseDir = (typeof __dirname === "string" ? __dirname : null);`,
+    );
+  }
   lines.push(`    var h = _c.createHash("sha256");`);
   lines.push(`    var entryLabel = ${entryLiteral};`);
   lines.push(`    h.update(entryLabel);`);
@@ -342,7 +371,7 @@ export function generateSidecarJsPreamble(
   lines.push(`      var sp = sidecars[i];`);
   lines.push(`      var spAbs = sp;`);
   lines.push(
-    `      if (!_path.isAbsolute(spAbs) && typeof __dirname === "string") spAbs = _path.join(__dirname, sp);`,
+    `      if (!_path.isAbsolute(spAbs) && typeof _baseDir === "string") spAbs = _path.join(_baseDir, sp);`,
   );
   lines.push(`      h.update(sp);`);
   lines.push(`      h.update(String.fromCharCode(0));`);
@@ -429,13 +458,15 @@ export function bindSidecarEntanglement(
     seedTag: plan.seedTag,
     expectedHex: digest.hex,
     softFold: plan.softFold,
+    carrier: options.carrier,
   });
   const entrySource =
     options.entrySource ?? new TextDecoder().decode(options.entryBytes);
   const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
   const shebang = shebangMatch ? shebangMatch[0] : "";
   const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
-  const strictMatch = afterShebang.match(/^["']use strict["'];?\r?\n/);
+  const isEsm = options.carrier === "module";
+  const strictMatch = !isEsm ? afterShebang.match(/^["']use strict["'];?\r?\n/) : null;
   const strict = strictMatch ? strictMatch[0] : "";
   const body = strict ? afterShebang.slice(strict.length) : afterShebang;
   const boundPlan: SidecarEntanglePlan = {
@@ -2617,4 +2648,312 @@ export function verifyGgufSidecarMetadataNote(
 /** Test/helper: strip the sidecar note section from a WASM binary. */
 export function stripWasmSidecarCustomSection(bytes: Uint8Array): Buffer {
   return stripWasmCustomSectionByName(Buffer.from(bytes), WASM_SIDECAR_SECTION_NAME);
+}
+
+// ---------------------------------------------------------------------------
+// Safetensors __metadata__ Sidecar Note (host-verify; tensor bytes bit-exact)
+// ---------------------------------------------------------------------------
+
+export const SAFETENSORS_SIDECAR_METADATA_KEY = "bla.sidecar.v1" as const;
+export const SAFETENSORS_SIDECAR_METADATA_KIND = "bla-safetensors-sidecar-v1" as const;
+
+export interface SafetensorsSidecarMetadataNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof SAFETENSORS_SIDECAR_METADATA_KIND;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag: string;
+  readonly digestAlgorithm: "sha256";
+  readonly digestMode: "sidecars";
+  readonly digest: string;
+  readonly u32: number;
+  readonly softFold: boolean;
+}
+
+export interface SidecarSafetensorsInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarSafetensorsInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly metadataKey: typeof SAFETENSORS_SIDECAR_METADATA_KEY;
+  readonly metadataValue: string;
+  readonly note: SafetensorsSidecarMetadataNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+}
+
+export function generateSidecarSafetensorsMetadataNote(
+  options: SidecarSafetensorsInjectOptions,
+): SidecarSafetensorsInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: SafetensorsSidecarMetadataNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: SAFETENSORS_SIDECAR_METADATA_KIND,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    seedTag,
+    digestAlgorithm: "sha256",
+    digestMode: "sidecars",
+    digest: expectedHex,
+    u32: expectedU32,
+    softFold,
+  };
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    metadataKey: SAFETENSORS_SIDECAR_METADATA_KEY,
+    metadataValue: JSON.stringify(note),
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+  };
+}
+
+export interface SidecarSafetensorsBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarSafetensorsInjectResult;
+  readonly bytes: Buffer;
+}
+
+export function stripSafetensorsSidecarMetadataNote(bytes: Uint8Array): Buffer {
+  const buf = Buffer.from(bytes);
+  const { header, tensorData } = validateSafetensorsBuffer(buf);
+  const nextHeader: Record<string, unknown> = { ...header };
+  if (
+    typeof nextHeader.__metadata__ === "object" &&
+    nextHeader.__metadata__ !== null &&
+    !Array.isArray(nextHeader.__metadata__)
+  ) {
+    const meta = { ...(nextHeader.__metadata__ as Record<string, string>) };
+    delete meta[SAFETENSORS_SIDECAR_METADATA_KEY];
+    if (Object.keys(meta).length === 0) {
+      delete nextHeader.__metadata__;
+    } else {
+      nextHeader.__metadata__ = meta;
+    }
+  }
+  return buildSafetensorsBuffer(nextHeader, tensorData);
+}
+
+export function bindSafetensorsSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarSafetensorsBindResult {
+  const rawBuf = Buffer.from(options.entryBytes);
+  const { header, tensorData } = validateSafetensorsBuffer(rawBuf);
+  const plan = planSidecarEntanglement(options);
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarSafetensorsMetadataNote({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const nextHeader: Record<string, unknown> = { ...header };
+  const nextMeta =
+    typeof nextHeader.__metadata__ === "object" &&
+    nextHeader.__metadata__ !== null &&
+    !Array.isArray(nextHeader.__metadata__)
+      ? { ...(nextHeader.__metadata__ as Record<string, string>) }
+      : {};
+  nextMeta[SAFETENSORS_SIDECAR_METADATA_KEY] = inject.metadataValue;
+  nextHeader.__metadata__ = nextMeta;
+  const outBytes = buildSafetensorsBuffer(nextHeader, tensorData);
+  validateSafetensorsBuffer(outBytes);
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "safetensors-metadata-note",
+    status: "bound",
+    note: "Bound — Safetensors __metadata__ bla.sidecar.v1 note planted (tensor bytes bit-exact); verify via verifySafetensorsSidecarMetadataNote.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes: outBytes,
+  };
+}
+
+export function entangleSafetensorsEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarSafetensorsBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  return bindSafetensorsSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export function extractSafetensorsSidecarMetadataNote(
+  entryBytes: Uint8Array,
+): SafetensorsSidecarMetadataNote | null {
+  try {
+    const { header } = validateSafetensorsBuffer(Buffer.from(entryBytes));
+    const meta = header.__metadata__;
+    if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+    const raw = (meta as Record<string, unknown>)[SAFETENSORS_SIDECAR_METADATA_KEY];
+    if (typeof raw !== "string" || raw.length === 0) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const rec = parsed as Record<string, unknown>;
+    if (
+      rec.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      rec.kind !== SAFETENSORS_SIDECAR_METADATA_KIND ||
+      typeof rec.entryPath !== "string" ||
+      !Array.isArray(rec.sidecarPaths) ||
+      !rec.sidecarPaths.every((p) => typeof p === "string") ||
+      typeof rec.seedTag !== "string" ||
+      rec.digestAlgorithm !== "sha256" ||
+      rec.digestMode !== "sidecars" ||
+      typeof rec.digest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(rec.digest) ||
+      typeof rec.u32 !== "number" ||
+      typeof rec.softFold !== "boolean"
+    ) {
+      return null;
+    }
+    return {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: SAFETENSORS_SIDECAR_METADATA_KIND,
+      entryPath: rec.entryPath,
+      sidecarPaths: rec.sidecarPaths as string[],
+      seedTag: rec.seedTag,
+      digestAlgorithm: "sha256",
+      digestMode: "sidecars",
+      digest: rec.digest,
+      u32: rec.u32,
+      softFold: rec.softFold,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface SafetensorsSidecarVerifyOptions {
+  readonly entryBytes: Uint8Array;
+  readonly baseDir?: string;
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface SafetensorsSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: SafetensorsSidecarMetadataNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+export function verifySafetensorsSidecarMetadataNote(
+  options: SafetensorsSidecarVerifyOptions,
+): SafetensorsSidecarVerifyResult {
+  const note = extractSafetensorsSidecarMetadataNote(options.entryBytes);
+  if (!note) {
+    return { ok: false, reason: "safetensors sidecar metadata note missing" };
+  }
+  const sidecarParts: SidecarBindingPart[] = [];
+  for (const label of note.sidecarPaths) {
+    const override = options.sidecarBytes?.[label];
+    if (override) {
+      sidecarParts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      return {
+        ok: false,
+        reason: `sidecar ${label} not supplied and no baseDir to read`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        return {
+          ok: false,
+          reason: `sidecar ${label} missing on disk`,
+          note,
+          expectedHex: note.digest,
+          softFold: note.softFold,
+        };
+      }
+      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      return {
+        ok: false,
+        reason: `sidecar ${label} unreadable`,
+        note,
+        expectedHex: note.digest,
+        softFold: note.softFold,
+      };
+    }
+  }
+  const measured = computeSidecarBindingDigest(
+    { pathLabel: note.entryPath, bytes: options.entryBytes },
+    sidecarParts,
+    note.seedTag,
+    "sidecars",
+  );
+  if (measured.hex !== note.digest) {
+    return {
+      ok: false,
+      reason: "safetensors sidecar digest mismatch",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+  return {
+    ok: true,
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: note.softFold,
+  };
 }

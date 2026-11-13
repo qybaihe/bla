@@ -76,17 +76,18 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
     expect(bound.code.startsWith(bound.inject.preamble)).toBe(true);
   });
 
-  it("refuses an ES module carrier instead of emitting a CommonJS preamble", () => {
-    expect(() =>
-      bindSidecarEntanglement({
-        entryPath: "main.mjs",
-        sidecarPaths: ["sib.js"],
-        seedTag: "esm-test",
-        entryBytes: new TextEncoder().encode("export const v = 1;\n"),
-        sidecarBytes: [new TextEncoder().encode("sidecar-payload\n")],
-        carrier: "module",
-      }),
-    ).toThrow(/ES module entry/);
+  it("emits an ESM-safe createRequire(import.meta.url) preamble for an ES module carrier", () => {
+    const bound = bindSidecarEntanglement({
+      entryPath: "main.mjs",
+      sidecarPaths: ["sib.js"],
+      seedTag: "esm-test",
+      entryBytes: new TextEncoder().encode("export const v = 1;\n"),
+      sidecarBytes: [new TextEncoder().encode("sidecar-payload\n")],
+      carrier: "module",
+    });
+    expect(bound.code).toContain('from "node:module"');
+    expect(bound.code).toContain("import.meta.url");
+    expect(bound.code).not.toContain('require("node:crypto")');
   });
 
   it("runtime: intact sidecars pass; stripped sidecar fails closed", () => {

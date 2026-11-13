@@ -7,7 +7,12 @@ import { fileURLToPath } from "node:url";
 import { getDatabaseSyncClass } from "../core/sqlite-runtime.js";
 import { BLA_IDENTITY, REA_INTERNAL_LIMITS } from "../identity.js";
 import { protectZipOrApkBuffer } from "../shields/formats/archive.js";
+import { generateAndroidR8Counter } from "../shields/formats/android-r8.js";
 import { packAsarBuffer } from "../shields/formats/asar.js";
+import { protectErlangBeamBuffer } from "../shields/formats/erlang-beam.js";
+import { protectEvmBytecodeBuffer } from "../shields/formats/evm-bytecode.js";
+import { protectAndroidDexBuffer } from "../shields/formats/mobile-game.js";
+import { protectGgufBuffer, protectSafetensorsBuffer } from "../shields/formats/model.js";
 import { protectNativeBinary } from "../shields/formats/native.js";
 import { protectPythonSource } from "../shields/formats/python.js";
 import { protectWasmBinary } from "../shields/formats/wasm.js";
@@ -89,6 +94,10 @@ export interface DoctorDiagnosticReport {
     readonly nativeElfMachoPeShield: EngineHealthStatus;
     readonly zipApkArchiveShield: EngineHealthStatus;
     readonly sqliteRuntime: EngineHealthStatus;
+    readonly aiModelShield: EngineHealthStatus;
+    readonly erlangBeamShield: EngineHealthStatus;
+    readonly evmBytecodeShield: EngineHealthStatus;
+    readonly androidDexR8Shield: EngineHealthStatus;
     readonly astParser: EngineHealthStatus;
     readonly asarPacker: EngineHealthStatus;
     readonly wasmLeb128: EngineHealthStatus;
@@ -299,6 +308,20 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
 
   const zipApkArchiveShield: EngineHealthStatus =
     typeof protectZipOrApkBuffer === "function" ? "ready" : "unavailable";
+  const aiModelShield: EngineHealthStatus =
+    typeof protectSafetensorsBuffer === "function" &&
+    typeof protectGgufBuffer === "function"
+      ? "ready"
+      : "unavailable";
+  const erlangBeamShield: EngineHealthStatus =
+    typeof protectErlangBeamBuffer === "function" ? "ready" : "unavailable";
+  const evmBytecodeShield: EngineHealthStatus =
+    typeof protectEvmBytecodeBuffer === "function" ? "ready" : "unavailable";
+  const androidDexR8Shield: EngineHealthStatus =
+    typeof protectAndroidDexBuffer === "function" &&
+    typeof generateAndroidR8Counter === "function"
+      ? "ready"
+      : "unavailable";
 
   let sqliteRuntime: EngineHealthStatus = "ready";
   if (typeof sqliteOverride === "boolean") {
@@ -322,6 +345,10 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
     nativeElfMachoPeShield,
     zipApkArchiveShield,
     sqliteRuntime,
+    aiModelShield,
+    erlangBeamShield,
+    evmBytecodeShield,
+    androidDexR8Shield,
     astParser: javascriptAstShield,
     asarPacker: electronAsarPacker,
     wasmLeb128: wasmBinaryShield,
