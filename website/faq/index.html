@@ -4,9 +4,106 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
-    <title>FAQ — BLA (bla-agents)</title>
+    <title>FAQ — AI Reverse-Engineering Defense, Performance &amp; Security Boundaries | BLA</title>
+    <meta
+      name="description"
+      content="Frequently asked questions about BLA (bla-agents): zero hot-path performance overhead, one-command MCP/CLI hardening, GGUF/Safetensors bit-exact tensor preservation, and honest client-side security boundaries."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#040814" />
+    <link rel="canonical" href="https://bla.tools/faq/" />
+    <link rel="alternate" hreflang="en" href="https://bla.tools/faq/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://bla.tools/faq/?lang=zh-CN" />
+    <link rel="alternate" hreflang="zh-TW" href="https://bla.tools/faq/?lang=zh-TW" />
+    <link rel="alternate" hreflang="ja" href="https://bla.tools/faq/?lang=ja" />
+    <link rel="alternate" hreflang="ko" href="https://bla.tools/faq/?lang=ko" />
+    <link rel="alternate" hreflang="es" href="https://bla.tools/faq/?lang=es" />
+    <link rel="alternate" hreflang="fr" href="https://bla.tools/faq/?lang=fr" />
+    <link rel="alternate" hreflang="de" href="https://bla.tools/faq/?lang=de" />
+    <link rel="alternate" hreflang="x-default" href="https://bla.tools/faq/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:url" content="https://bla.tools/faq/" />
+    <meta property="og:title" content="FAQ — BLA (bla-agents) AI Reverse-Engineering Defense" />
+    <meta
+      property="og:description"
+      content="Answers on runtime equivalence, performance overhead, GGUF/DEX binary integrity, one-step hardening, and BLA's Honesty Red Line."
+    />
+    <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="BLA Frequently Asked Questions" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FAQ — BLA (bla-agents) Blue Defense Shield" />
+    <meta
+      name="twitter:description"
+      content="Common questions on protecting binaries, Electron apps, JS/WASM, and AI models against automated AI reverse engineering."
+    />
+    <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="apple-touch-icon" href="../assets/logo.png" />
+    <link rel="manifest" href="../site.webmanifest" />
     <link rel="stylesheet" href="../assets/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Overview", "item": "https://bla.tools/" },
+              { "@type": "ListItem", "position": 2, "name": "FAQ", "item": "https://bla.tools/faq/" }
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "Why does BLA use a Blue theme?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "In security engineering, offensive and reverse-engineering tools represent Red Team workflows, while defensive protection tools represent Blue Team workflows. BLA (bla-agents) focuses on auditing exposure and protecting release artifacts against automated AI reverse-engineering agents."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does BLA affect runtime performance or change program output?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Static budget guards and call-graph labyrinths are placed behind O(1) mathematical invariants inside unreachable branches, and parameterized MBA substitutions preserve exact 32-bit semantics so hot-path output remains 100% equivalent."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How do I run the full protection workflow in one step?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Run npx bla-agents@latest harden . from your terminal, or ask your connected coding agent (Claude Code, Cursor, Codex, Windsurf, Gemini CLI) to call the bla_harden MCP tool. It executes release exposure checks, packaging lints, protection, and verification."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does BLA preserve existing GGUF/Safetensors model tensors and Android DEX checksums?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. BLA preserves all original Safetensors and GGUF v2/v3 tensor slices bit-exact while appending aligned metadata, and Android DEX protection recomputes both the 20-byte SHA-1 signature and Adler32 checksum."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What are BLA's honest security limits?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "BLA raises automated reverse-engineering cost and plants multi-layer decoys; it is not a replacement for server-side authentication, authorization, or secret storage. Never embed real private keys or master secrets in client binaries."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <noscript>

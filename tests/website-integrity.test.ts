@@ -102,4 +102,20 @@ describe("website static verification", () => {
     );
     expect(res.i18nCoverage!.referenceKeys).toBe(1);
   });
+
+  it("flags missing SEO metadata, canonical/sitemap drift, or malformed JSON-LD", () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "sitemap.xml"), "<urlset><url><loc>https://bla.tools/</loc></url></urlset>", "utf8");
+    writeFileSync(
+      join(dir, "index.html"),
+      '<!doctype html><html><head><link rel="canonical" href="https://bla.tools/unlisted/" /><script type="application/ld+json">{bad json}</script></head><body></body></html>',
+      "utf8",
+    );
+    const res = verifyWebsiteDirectory(dir);
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.includes("missing or too-short <meta name=\"description\">"))).toBe(true);
+    expect(res.errors.some((e) => e.includes("missing from sitemap.xml"))).toBe(true);
+    expect(res.errors.some((e) => e.includes("invalid JSON-LD syntax"))).toBe(true);
+  });
 });

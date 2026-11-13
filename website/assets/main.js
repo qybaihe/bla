@@ -88,6 +88,21 @@ function applyLanguage(lang) {
     select.value = lang;
   }
 
+  const canonicalEl = document.querySelector('link[rel="canonical"]');
+  if (canonicalEl) {
+    const baseHref = (canonicalEl.getAttribute("data-base-canonical") || canonicalEl.getAttribute("href") || "").split("?")[0];
+    if (baseHref) {
+      canonicalEl.setAttribute("data-base-canonical", baseHref);
+      const queryLang = new URLSearchParams(window.location.search).get("lang");
+      canonicalEl.setAttribute(
+        "href",
+        queryLang && queryLang !== "en" && lang === queryLang
+          ? `${baseHref}?lang=${encodeURIComponent(lang)}`
+          : baseHref,
+      );
+    }
+  }
+
   window.BLA_CURRENT_LANG = lang;
   window.dispatchEvent(new CustomEvent("bla:langchange", { detail: { lang } }));
 }

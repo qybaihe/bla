@@ -1,0 +1,37 @@
+# BLA (`bla-agents`) — Blind LLM Agents
+
+> Open-source adversarial Blue Defense MCP server, CLI, and bundler plugin toolkit engineered to protect software release artifacts against AI reverse-engineering agents (such as `morluto/rea`, Ghidra/IDA/Hopper MCP workflows, and autonomous coding agents). MIT licensed.
+
+BLA shifts reverse-engineering economics via surgical token exhaustion, parameterized Mixed Boolean-Arithmetic (MBA) instruction substitution, shadow business-logic entanglement, and runtime integrity bindings (`selfSeal` + `sidecarEntangle`) — while preserving 100% runtime equivalence.
+
+## Quick Start
+
+```bash
+# Register BLA's MCP server & skill across Claude Code, Cursor, Codex, Windsurf, Gemini CLI, or Antigravity
+npx bla-agents@latest setup -y
+
+# Auto-discover and harden build artifacts in one command
+npx bla-agents@latest harden .
+
+# Verify defense invariants or run the 14-target showcase benchmark
+npx bla-agents@latest verify ./dist
+npx bla-agents@latest benchmark
+```
+
+## Key Pages
+
+- [Overview](https://bla.tools/): Architecture, Counter-REA defense pipeline, supported formats, and live repository status.
+- [Get Started](https://bla.tools/get-started/): One-command MCP setup, CLI reference (`harden`, `defend`, `audit`, `lint`, `protect`, `verify`, `emit-headers`), and Vite/Rollup/Webpack/esbuild bundler plugins.
+- [Benchmarks](https://bla.tools/showcase/): Reproducible 14-target Counter-REA Showcase Benchmark results (~1,000x+ aggregate token amplification, 100% runtime equivalence).
+- [Technical Guides](https://bla.tools/guides/): Deep-dive guides on Electron ASAR/IPC protection, WebAssembly & native ELF/Mach-O/PE hardening, Python/SQLite/GGUF/Safetensors shields, and Agent-Driven Weave (`bla_weave_plan` / `bla_verify_weave`).
+- [Public CrackMe Lab](https://bla.tools/crackme/): Public verifiable CrackMe challenges (`challenge/v6`–`v9`) with cryptographic `SEAL.json` commitments.
+- [FAQ & Honesty Boundaries](https://bla.tools/faq/): Performance impact, supported formats, and BLA's strict Honesty Red Line (what client-side hardening solves vs. server-side authorization).
+- [Enterprise Hardening](https://bla.tools/enterprise/): Custom adversarial assessment, CI/CD integration, and enterprise hardening engagements.
+
+## Technical Reference & Schemas
+
+- [Full LLM Technical Reference](https://bla.tools/llms-full.txt)
+- [GitHub Repository (`qybaihe/bla`)](https://github.com/qybaihe/bla)
+- [npm Package (`bla-agents`)](https://www.npmjs.com/package/bla-agents)
+- [Configuration JSON Schema (`bla.config.v1.json`)](https://bla.tools/schemas/bla.config.v1.json)
+- [Signed Defense Manifest Schema (`defense-manifest-v1.json`)](https://bla.tools/schemas/defense-manifest-v1.json)

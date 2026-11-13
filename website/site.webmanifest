@@ -1,0 +1,26 @@
+{
+  "name": "BLA (bla-agents) — Blind LLM Agents",
+  "short_name": "BLA Shield",
+  "description": "Open-source adversarial Blue Defense MCP server and CLI protecting binaries, Electron apps, JS/TS, Python, WebAssembly, SQLite, AI models, and Android DEX against AI reverse-engineering agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040814",
+  "theme_color": "#040814",
+  "icons": [
+    {
+      "src": "/assets/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -4,15 +4,98 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
-    <title>BLA (bla-agents) — Blind LLM Agents · Blue Defense Shield</title>
+    <title>BLA (bla-agents) — Protect Software Against AI Reverse-Engineering Agents (REA)</title>
     <meta
       name="description"
-      content="BLA (Blind LLM Agents) is the open-source Blue Defense MCP and CLI built to protect software artifacts against automated AI reverse-engineering workflows."
+      content="BLA (Blind LLM Agents) is the open-source Blue Defense MCP server, CLI, and bundler plugin that protects JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE binaries, SQLite, AI models (GGUF/Safetensors), and Android DEX against AI reverse-engineering agents like REA."
     />
-    <meta property="og:title" content="BLA: Blind LLM Agents — Blue Defense Shield" />
-    <meta property="og:image" content="assets/logo.png" />
+    <meta
+      name="keywords"
+      content="BLA, bla-agents, Blind LLM Agents, AI reverse engineering defense, anti-REA, morluto rea countermeasure, code obfuscation, Electron ASAR protection, WebAssembly protection, binary protection, Ghidra MCP defense, MBA obfuscation, Claude Code MCP, Cursor MCP"
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#040814" />
+    <link rel="canonical" href="https://bla.tools/" />
+    <link rel="alternate" hreflang="en" href="https://bla.tools/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://bla.tools/?lang=zh-CN" />
+    <link rel="alternate" hreflang="zh-TW" href="https://bla.tools/?lang=zh-TW" />
+    <link rel="alternate" hreflang="ja" href="https://bla.tools/?lang=ja" />
+    <link rel="alternate" hreflang="ko" href="https://bla.tools/?lang=ko" />
+    <link rel="alternate" hreflang="es" href="https://bla.tools/?lang=es" />
+    <link rel="alternate" hreflang="fr" href="https://bla.tools/?lang=fr" />
+    <link rel="alternate" hreflang="de" href="https://bla.tools/?lang=de" />
+    <link rel="alternate" hreflang="x-default" href="https://bla.tools/" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="https://bla.tools/" />
+    <meta property="og:title" content="BLA (bla-agents) — Adversarial Blue Defense Against AI Reverse Engineering" />
+    <meta
+      property="og:description"
+      content="Open-source Counter-REA MCP server &amp; CLI protecting 26 software artifact formats via token exhaustion, parameterized MBA substitutions, shadow logic weave, and runtime integrity bindings."
+    />
+    <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="BLA: Blind LLM Agents — Protect software artifacts against AI reverse-engineering agents" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="BLA (bla-agents) — Protect Software Against AI Reverse-Engineering Agents" />
+    <meta
+      name="twitter:description"
+      content="Open-source Blue Defense MCP &amp; CLI for JS/TS, Electron ASAR, WASM, Python, Native Binaries, SQLite, GGUF/Safetensors, and Android DEX."
+    />
+    <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <meta name="twitter:image:alt" content="BLA: Blind LLM Agents — Open-Source Blue Defense MCP &amp; CLI" />
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
     <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="apple-touch-icon" href="assets/logo.png" />
+    <link rel="manifest" href="site.webmanifest" />
     <link rel="stylesheet" href="assets/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://bla.tools/#website",
+            "url": "https://bla.tools/",
+            "name": "BLA (bla-agents) — Blind LLM Agents",
+            "description": "Open-source Blue Defense MCP server, CLI, and bundler plugin protecting software artifacts against AI reverse-engineering agents.",
+            "inLanguage": ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de"]
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://bla.tools/#software",
+            "name": "BLA (bla-agents)",
+            "alternateName": ["Blind LLM Agents", "bla-shield"],
+            "applicationCategory": "DeveloperApplication",
+            "applicationSubCategory": "SecurityApplication",
+            "operatingSystem": "Linux, macOS, Windows",
+            "url": "https://bla.tools/",
+            "downloadUrl": "https://www.npmjs.com/package/bla-agents",
+            "license": "https://opensource.org/licenses/MIT",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "description": "Adversarial Blue Defense MCP server and CLI engineered to protect 26 software artifact formats (JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE, SQLite, GGUF/Safetensors, Android DEX) against AI reverse-engineering agents like REA."
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "https://bla.tools/#source",
+            "name": "qybaihe/bla",
+            "codeRepository": "https://github.com/qybaihe/bla",
+            "programmingLanguage": "TypeScript",
+            "runtimePlatform": "Node.js",
+            "license": "https://opensource.org/licenses/MIT",
+            "targetProduct": { "@id": "https://bla.tools/#software" }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <noscript>
