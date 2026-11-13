@@ -227,22 +227,22 @@ npx bla-agents benchmark
 
 > **Note:** Token and USD columns below are **internal estimates** derived from BLA's catalog of REA limits to illustrate relative amplification across formats — for actual process-level REA errors, see the [Empirical Results](#empirical-results-vs-real-rea) table above.
 
-**Aggregate Showcase Result:** **~639.5×** token amplification · **~304.4×** cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. This result is limited to the benchmark fixtures.
+**Aggregate Showcase Result:** **~1,068.7×** token amplification · **~503.5×** cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. This result is limited to the benchmark fixtures.
 
 | Target Artifact | Unprotected Baseline (est.) | BLA Protected (est.) | Token Multiplier | Runtime Equivalence |
 | :--- | :--- | :--- | ---: | :---: |
-| **DX-Ball sound-pan (`.js`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 13.5M tok · $212.82 · `LIMITED` | **2,822.7×** | ✅ 100% |
-| **Notion Electron clipboard (`.asar`)** | 98/100 · 9,132 tok · $0.34 | 2/100 · 23.1M tok · $358.28 · `LIMITED` | **2,532.3×** | ✅ 100% |
-| **Enterprise license validator (`.ts`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 13.5M tok · $212.82 · `LIMITED` | **2,822.7×** | ✅ 100% |
-| **NVIDIA PTX compute kernel (`.ptx`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 2.40M tok · $39.29 · `LIMITED` | **500.2×** | ✅ 100% |
+| **DX-Ball sound-pan (`.js`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 15.2M tok · $238.02 · `LIMITED` | **3,172.7×** | ✅ 100% |
+| **Notion Electron clipboard (`.asar`)** | 98/100 · 9,132 tok · $0.34 | 2/100 · 23.1M tok · $358.57 · `LIMITED` | **2,532.3×** | ✅ 100% |
+| **Enterprise license validator (`.ts`)** | 87/100 · 4,800 tok · $0.20 | 2/100 · 15.2M tok · $238.02 · `LIMITED` | **3,172.7×** | ✅ 100% |
+| **NVIDIA PTX compute kernel (`.ptx`)** | 81/100 · 4,800 tok · $0.20 | 7/100 · 23.1M tok · $358.20 · `LIMITED` | **4,814×** | ✅ 100% |
 | **Erlang BEAM module (`.beam`)** | 81/100 · 8,900 tok · $0.34 | 5/100 · 3.86M tok · $62.08 · `LIMITED` | **433.2×** | ✅ 100% |
 | **WASM crypto kernel (`.wasm`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 1.83M tok · $30.23 · `LIMITED` | **381.5×** | ✅ 100% |
 | **Edge AI Safetensors (`.safetensors`)** | 81/100 · 4,800 tok · $0.20 | 6/100 · 1.81M tok · $29.90 · `LIMITED` | **376.8×** | ✅ 100% |
-| **libpcap network capture (`.pcap`)** | 81/100 · 4,800 tok · $0.20 | 8/100 · 1.60M tok · $26.58 · `LIMITED` | **333.2×** | ✅ 100% |
-| **Android Dalvik bytecode (`.dex`)** | 81/100 · 8,900 tok · $0.34 | 7/100 · 2.79M tok · $45.11 · `LIMITED` | **313.2×** | ✅ 100% |
+| **libpcap network capture (`.pcap`)** | 81/100 · 4,800 tok · $0.20 | 7/100 · 23.1M tok · $359.27 · `LIMITED` | **4,817.7×** | ✅ 100% |
+| **Android Dalvik bytecode (`.dex`)** | 81/100 · 8,900 tok · $0.34 | 7/100 · 13.4M tok · $209.39 · `LIMITED` | **1,510.5×** | ✅ 100% |
 | **EVM Solidity metadata (`.bin`)** | 81/100 · 6,440 tok · $0.26 | 6/100 · 1.78M tok · $29.40 · `LIMITED` | **276.3×** | ✅ 100% |
-| **.NET managed assembly (`.dll`)** | 81/100 · 8,900 tok · $0.34 | 6/100 · 2.45M tok · $39.96 · `LIMITED` | **274.8×** | ✅ 100% |
-| **Apple binary plist (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 9/100 · 1.36M tok · $22.96 · `LIMITED` | **211.8×** | ✅ 100% |
+| **.NET managed assembly (`.dll`)** | 81/100 · 8,900 tok · $0.34 | 6/100 · 2.01M tok · $33.22 · `LIMITED` | **226.3×** | ✅ 100% |
+| **Apple binary plist (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 8/100 · 1.79M tok · $29.54 · `LIMITED` | **277.6×** | ✅ 100% |
 | **SQLite entitlement DB (`.sqlite`)** | 81/100 · 10,568 tok · $0.29 | 7/100 · 1.71M tok · $28.39 · `LIMITED` | **162.1×** | ✅ 100% |
 | **Native ELF64 (Rust/Go/Fuse/Dart)** | 81/100 · 35,222 tok · $0.73 | 2/100 · 3.72M tok · $60.03 · `LIMITED` | **105.6×** | ✅ 100% |
 
