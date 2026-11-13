@@ -72,7 +72,8 @@ export function generateObligationLedgerFlood(
 
   stmts.push(
     `function obligationFlood_${tag}(_seed = 0) {`,
-    `  const _never = ((_seed * (_seed + 1)) & 1) === 1;`,
+    `  const _u = ((_seed ^ 0x27d4eb2f) >>> 0);`,
+    `  const _never = ((_u | ((_u - 1) >>> 0)) >>> 0) < ((_u ^ ((_u - 1) >>> 0)) >>> 0);`,
     `  if (!_never) return _seed ^ 0x${prng.hex(4)};`,
     `  const _g = typeof globalThis !== "undefined" ? globalThis : {};`,
   );

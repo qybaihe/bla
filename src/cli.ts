@@ -155,6 +155,7 @@ interface ParsedCliArgs {
   readonly allowPlaintextString: boolean;
   readonly allowSinglePointIntegrity: boolean;
   readonly allowMissingBindRuntime: boolean;
+  readonly allowReleaseHygieneLeak: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -220,6 +221,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowPlaintextString = false;
   let allowSinglePointIntegrity = false;
   let allowMissingBindRuntime = false;
+  let allowReleaseHygieneLeak = false;
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
@@ -326,6 +328,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowSinglePointIntegrity = true;
     } else if (arg === "--allow-missing-bind-runtime") {
       allowMissingBindRuntime = true;
+    } else if (arg === "--allow-release-hygiene-leak") {
+      allowReleaseHygieneLeak = true;
     } else if (arg === "--wasm-preserve-exports") {
       const value = expandedArgs[++i];
       if (value === undefined) {
@@ -427,6 +431,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allowPlaintextString,
     allowSinglePointIntegrity,
     allowMissingBindRuntime,
+    allowReleaseHygieneLeak,
     lang,
     clients,
     allDetected,
@@ -604,6 +609,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmSealXorKnownPlaintext:
             parsed.allowWasmSealXorKnownPlaintext ||
             loaded.config.allowWasmSealXorKnownPlaintext === true,
+          allowReleaseHygieneLeak: parsed.allowReleaseHygieneLeak,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -709,6 +715,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowPlaintextString: parsed.allowPlaintextString,
           allowSinglePointIntegrity: parsed.allowSinglePointIntegrity,
           allowMissingBindRuntime: parsed.allowMissingBindRuntime,
+          allowReleaseHygieneLeak: parsed.allowReleaseHygieneLeak,
           allowLaneIndependentGates: parsed.allowLaneIndependentGates,
           allowPanelOfflineOracle: parsed.allowPanelOfflineOracle,
           allowStablePanelDeriveAbi: parsed.allowStablePanelDeriveAbi,
@@ -729,6 +736,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             plaintextSecrets: report.details.plaintextSecrets.length,
             integrityCoverage: report.details.integrityCoverage.length,
             bindScope: report.details.bindScope.length,
+            releaseHygiene: report.details.releaseHygiene.length,
           } }, null, 2));
         } else {
           console.log(formatPackagingGatesReport(report));

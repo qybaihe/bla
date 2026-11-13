@@ -7,6 +7,10 @@ import { SeededPrng } from "../../core/prng.js";
 import { assertNoForbiddenMarkers } from "../../core/identifiers.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import {
+  buildParameterizedMbaBinaryAst,
+  deriveParameterizedMbaParams,
+} from "../tarpit/mba-substitutions.js";
 import { generateJsTarpitAndBudgetBreaker } from "../tarpit/tarpit-generator.js";
 import { generateRuntimeDeceptionSnippet } from "../runtime/runtime-shield.js";
 import {
@@ -343,27 +347,69 @@ function buildCombinatorialStringAst(
   }
 
   const terms: t.Expression[] = chunks.map((realChunk, idx) => {
-    const useOddSq = idx % 3 === 1;
-    const k = useOddSq ? prng.nextInt(1, 31) * 4 : (prng.nextInt(3, 125) | 1);
     const decoyChunk =
       realChunk.length > 0 ? prng.hex(realChunk.length) : prng.hex(2);
-    const seededOr = t.binaryExpression(
-      useOddSq ? "^" : "|",
-      t.identifier(seedIdentifierName),
-      t.numericLiteral(k),
-    );
-    const rhs = useOddSq
-      ? t.cloneNode(seededOr)
-      : t.binaryExpression("+", t.cloneNode(seededOr), t.numericLiteral(1));
-    const imulCall = t.callExpression(
-      t.memberExpression(t.identifier("Math"), t.identifier("imul")),
-      [seededOr, rhs],
-    );
-    const mask = useOddSq ? 7 : 1;
-    const trueVal = useOddSq ? 1 : 0;
-    const falseVal = useOddSq ? 0 : 1;
-    const bitAnd = t.binaryExpression("&", imulCall, t.numericLiteral(mask));
-    const cond = t.binaryExpression("===", bitAnd, t.numericLiteral(trueVal));
+    const mode = idx % 3;
+    let cond: t.Expression;
+    let invertedCond: t.Expression;
+
+    if (mode === 1) {
+      // Cognitive-Armor odd-bit entanglement: ((Math.imul(seed ^ 4*k, seed ^ 4*k) & 7) === 1)
+      const k = prng.nextInt(1, 31) * 4;
+      const seededXor = t.binaryExpression(
+        "^",
+        t.identifier(seedIdentifierName),
+        t.numericLiteral(k),
+      );
+      const imulCall = t.callExpression(
+        t.memberExpression(t.identifier("Math"), t.identifier("imul")),
+        [seededXor, t.cloneNode(seededXor)],
+      );
+      const bitAnd = t.binaryExpression("&", imulCall, t.numericLiteral(7));
+      cond = t.binaryExpression("===", bitAnd, t.numericLiteral(1));
+      invertedCond = t.binaryExpression("===", t.cloneNode(bitAnd, true), t.numericLiteral(0));
+    } else if (mode === 0) {
+      // Unsigned-domain MBA inequality: ((u | (u - 1)) >>> 0) >= ((u ^ (u - 1)) >>> 0)
+      const k = prng.nextUint32() >>> 0;
+      const u = t.binaryExpression(
+        ">>>",
+        t.binaryExpression("^", t.identifier(seedIdentifierName), t.numericLiteral(k)),
+        t.numericLiteral(0),
+      );
+      const uMinus1 = t.binaryExpression(
+        ">>>",
+        t.binaryExpression("-", t.cloneNode(u, true), t.numericLiteral(1)),
+        t.numericLiteral(0),
+      );
+      const lhs = t.binaryExpression(
+        ">>>",
+        t.binaryExpression("|", t.cloneNode(u, true), t.cloneNode(uMinus1, true)),
+        t.numericLiteral(0),
+      );
+      const rhs = t.binaryExpression(
+        ">>>",
+        t.binaryExpression("^", u, uMinus1),
+        t.numericLiteral(0),
+      );
+      cond = t.binaryExpression(">=", lhs, rhs);
+      invertedCond = t.binaryExpression("<", t.cloneNode(lhs, true), t.cloneNode(rhs, true));
+    } else {
+      // Parameterized affine MBA identity over Z_{2^32}: mbaAdd(seed, k) === ((seed + k) | 0)
+      const k = prng.nextInt(3, 125) | 1;
+      const mbaExpr = buildParameterizedMbaBinaryAst(
+        "+",
+        t.identifier(seedIdentifierName),
+        t.numericLiteral(k),
+        prng,
+      );
+      const plainExpr = t.binaryExpression(
+        "|",
+        t.binaryExpression("+", t.identifier(seedIdentifierName), t.numericLiteral(k)),
+        t.numericLiteral(0),
+      );
+      cond = t.binaryExpression("===", mbaExpr, plainExpr);
+      invertedCond = t.binaryExpression("!==", t.cloneNode(mbaExpr, true), t.cloneNode(plainExpr, true));
+    }
 
     // Alternate polarity on odd indices so static heuristics see both true/false arms used
     if (idx % 2 === 0) {
@@ -373,11 +419,6 @@ function buildCombinatorialStringAst(
         t.stringLiteral(decoyChunk),
       );
     } else {
-      const invertedCond = t.binaryExpression(
-        "===",
-        bitAnd,
-        t.numericLiteral(falseVal),
-      );
       return t.conditionalExpression(
         invertedCond,
         t.stringLiteral(decoyChunk),
@@ -457,11 +498,35 @@ function buildOpaqueIntegerAst(
     abs <= 1 ? 1 : prng.nextInt(1, Math.min(0xffff, Math.max(1, abs - 1)));
   const left = value > 0 ? value - split : value + split;
   const right = value > 0 ? split : -split;
-  const sum = t.binaryExpression(
-    "+",
-    toNumericExpr(left),
-    toNumericExpr(right),
-  );
+  let sum: t.Expression;
+  if (Number.isInteger(value) && value >= -0x7fffffff && value <= 0x7fffffff) {
+    sum = buildParameterizedMbaBinaryAst(
+      "+",
+      toNumericExpr(left),
+      toNumericExpr(right),
+      prng,
+    );
+  } else if (Number.isInteger(value) && value > 0x7fffffff && value <= 0xffffffff) {
+    const xorLeft = (value ^ split) >>> 0;
+    sum = t.binaryExpression(
+      ">>>",
+      buildParameterizedMbaBinaryAst(
+        "^",
+        t.numericLiteral(xorLeft),
+        t.numericLiteral(split >>> 0),
+        prng,
+      ),
+      t.numericLiteral(0),
+    );
+  } else {
+    sum = t.binaryExpression(
+      "+",
+      toNumericExpr(left),
+      toNumericExpr(right),
+    );
+  }
+  // Keep `deriveParameterizedMbaParams` imported for parity checks
+  void deriveParameterizedMbaParams;
   const decoy = value ^ (prng.nextInt(1, 0x7fff) | 1);
   if (prng.nextInt(0, 1) === 0) {
     return t.conditionalExpression(
@@ -870,6 +935,71 @@ export function transformJavaScriptWithBlaShield(
       }
     }
   };
+
+  // Pre-pass: Parameterized MBA Instruction Substitution on user 32-bit bitwise ops
+  // (`a ^ b`, `a | b`, `a & b`) when program has no BigInt bindings/literals.
+  if (intensity === "maximum" || intensity === "bankrupt") {
+    let hasBigInt = false;
+    let hasShadowedMath = false;
+    traverse(ast, {
+      BigIntLiteral(path) {
+        hasBigInt = true;
+        path.stop();
+      },
+      Identifier(path) {
+        if (path.node.name === "BigInt") {
+          hasBigInt = true;
+          path.stop();
+        }
+      },
+      Scope(path) {
+        if (Object.hasOwn(path.scope.bindings, "Math")) {
+          hasShadowedMath = true;
+          path.stop();
+        }
+      },
+    });
+    if (!hasBigInt && !hasShadowedMath) {
+      let mbaSubstitutedCount = 0;
+      const mbaGeneratedNodes = new WeakSet<t.Node>();
+      const isAtomicMbaOperand = (node: t.Node): node is t.Expression =>
+        (t.isIdentifier(node) && !RENAME_RESERVED.has(node.name)) ||
+        (t.isNumericLiteral(node) &&
+          Number.isInteger(node.value) &&
+          node.value >= 0 &&
+          node.value <= 0xffffffff);
+
+      traverse(ast, {
+        BinaryExpression(path) {
+          if (mbaSubstitutedCount >= 32) return;
+          if (mbaGeneratedNodes.has(path.node)) {
+            path.skip();
+            return;
+          }
+          if (
+            (loader === "ts" || loader === "tsx") &&
+            isInsideTsConstAssertion(path)
+          ) {
+            return;
+          }
+          if (path.findParent((p) => p.isTSType())) return;
+          const op = path.node.operator;
+          if (op !== "^" && op !== "|" && op !== "&") return;
+          const { left, right } = path.node;
+          if (!isAtomicMbaOperand(left) || !isAtomicMbaOperand(right)) return;
+          if (!t.isIdentifier(left) && !t.isIdentifier(right)) return;
+          // Preserve idiomatic `(x | 0)` ToInt32 coercions as outer wrappers
+          if (op === "|" && t.isNumericLiteral(right) && right.value === 0) return;
+
+          const replacement = buildParameterizedMbaBinaryAst(op, left, right, prng);
+          mbaGeneratedNodes.add(replacement);
+          path.replaceWith(replacement);
+          path.skip();
+          mbaSubstitutedCount += 1;
+        },
+      });
+    }
+  }
 
   traverse(ast, {
     ImportDeclaration(path) {
@@ -1419,7 +1549,8 @@ export function transformJavaScriptWithBlaShield(
     `function ${decoyIpcFnName}(_ipcMain, _ipcRenderer, _router) {`,
   );
   mirageLines.push(
-    `  if (((Math.imul(${seedVarName} | 11, (${seedVarName} | 11) + 1) & 1) === 1)) {`,
+    `  const _uIpc = ((${seedVarName} ^ 0x5bd1e995) >>> 0);`,
+    `  if ((((_uIpc | ((_uIpc - 1) >>> 0)) >>> 0) < ((_uIpc ^ ((_uIpc - 1) >>> 0)) >>> 0))) {`,
   );
   for (const ch of channelsToMirror) {
     // Register duplicate ambiguous literal channels on both ipcMain and ipcRenderer

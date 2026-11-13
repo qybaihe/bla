@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Parameterized Affine MBA Instruction Substitution & Unsigned-Domain MBA Predicates (`src/shields/tarpit/mba-substitutions.ts`, `src/shields/tarpit/opaque-predicates.ts`, `src/shields/javascript/ast-shield.ts`, `src/shields/formats/headers.ts`, `src/shields/exhaustion/`):** Replaces textbook `x*(x+1)&1` parity predicates (recognized 0-shot by frontier LLMs) and canonical rule-table MBA expressions with Newton-Raphson $Z_{2^{32}}$ parameterized affine MBA substitutions (`mInv * (m*(a^b) + 2m*(a&b) + c) + d`) and unsigned-domain inequalities (`((u | (u - 1)) >>> 0) >= ((u ^ (u - 1)) >>> 0)`), applied across JS/TS numeric & bitwise AST nodes and C/Rust/Go compile-time native headers.
+- **Multi-Round Hypothesis-Revision Decoys & Adversarial-Auditor Attention Sinks (`src/shields/deception/hypothesis-revision-decoy.ts`, `src/shields/deception/index.ts`):** Adds two-stage live `primaryLure -> revisedFallback` lures (returning non-crashing, schema-valid plausible-wrong envelopes to trap post-revision confidence bias and static-vs-dynamic Evidence Arbitrators) plus masked-buffer zeroizing attention sinks that saturate isolated Adversarial Auditor token budgets.
+- **Release Environment Hygiene Packaging Gate (`src/engine/release-hygiene-lint.ts`, `src/engine/packaging-gates.ts`, `src/engine/harden.ts`):** Refuses `bankrupt`/`maximum` project hardening when residual `SOLUTION.txt`/`writeup.md` notes, populated `.env` secrets, SSH/PEM private keys, or unstripped `.pdb`/`.dSYM`/`.dwp` debug symbol artifacts are left inside the shipping tree (`--allow-release-hygiene-leak` / `allow_release_hygiene_leak` lab escape).
+
 ## [3.3.0] — 2026-11-13
 
 Minor release shipping **ES module native `selfSeal` + `sidecarEntangle` runtime strip⇒fail**, **Safetensors `__metadata__` sidecar binding & `defenseScore` honesty parity**, **full `bla doctor` subsystem probes & honest status reporting**, **reproducible seeded showcase benchmarks**, and **extensionless `.pyc` detection hardening**.

@@ -579,6 +579,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
         },
+        allow_release_hygiene_leak: {
+          type: "boolean",
+          description:
+            "Lab escape: allow bankrupt/maximum harden despite leaked SOLUTION/writeup notes, populated .env secrets, SSH/PEM private keys, or unstripped .pdb/.dSYM/.dwp debug databases. Default false — refuse.",
+        },
         seed: {
           type: "string",
           description: "Optional deterministic seed; when omitted, BLA mints an ephemeral random seed (prefer project .blarc via CLI)",
@@ -846,6 +851,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         allow_missing_bind_runtime: {
           type: "boolean",
           description: "Treat missing/narrow bind runtime scope as non-blocking (lab only)",
+        },
+        allow_release_hygiene_leak: {
+          type: "boolean",
+          description:
+            "Treat leaked SOLUTION/writeup notes, populated .env secrets, private keys, or .pdb/.dSYM/.dwp debug symbols as non-blocking (lab only)",
         },
       },
       additionalProperties: false,
@@ -1548,6 +1558,9 @@ function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesRep
     ...(args.allow_missing_bind_runtime === true
       ? { allowMissingBindRuntime: true }
       : {}),
+    ...(args.allow_release_hygiene_leak === true
+      ? { allowReleaseHygieneLeak: true }
+      : {}),
   });
 }
 
@@ -2147,6 +2160,9 @@ export async function handleMcpRequest(
                   : {}),
                 ...(args.allow_wasm_seal_xor_known_plaintext === true
                   ? { allowWasmSealXorKnownPlaintext: true }
+                  : {}),
+                ...(args.allow_release_hygiene_leak === true
+                  ? { allowReleaseHygieneLeak: true }
                   : {}),
                 ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
                 signal: abortCtl.signal,

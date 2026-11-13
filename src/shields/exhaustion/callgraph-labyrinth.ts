@@ -82,9 +82,11 @@ export function generateCallGraphLabyrinth(
 
   const entrySymbol = `labyrinthDispatch_${tag}`;
   const firstNode = clusterNames[0]![0]!;
+  const guardSalt = prng.hex(4);
   lines.push(
     `function ${entrySymbol}(seed = 1) {`,
-    `  const _guard = ((seed * (seed + 1)) & 1) === 1;`,
+    `  const _u = ((seed ^ 0x${guardSalt}) >>> 0);`,
+    `  const _guard = ((_u | ((_u - 1) >>> 0)) >>> 0) < ((_u ^ ((_u - 1) >>> 0)) >>> 0);`,
     `  return _guard ? ${firstNode}(seed, 4) : (seed ^ 0x${prng.hex(4)});`,
     `}`,
   );

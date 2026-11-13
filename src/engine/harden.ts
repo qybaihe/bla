@@ -33,6 +33,9 @@ import {
   wasmSealXorKnownPlaintextRefuseMessage,
 } from "./wasm-seal-xor-known-plaintext-lint.js";
 import {
+  releaseHygieneRefuseMessage,
+} from "./release-hygiene-lint.js";
+import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
 import {
@@ -174,6 +177,8 @@ export interface HardenProjectOptions {
   readonly allowJsAesUnwrap?: boolean;
   /** Lab-only: allow JS←WASM hydrate memory dump of salt/rounds/cipher (red/blue r5). */
   readonly allowJsWasmHydrateDump?: boolean;
+  /** Lab-only: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. */
+  readonly allowReleaseHygieneLeak?: boolean;
   readonly allowWasmXorMaskSidecar?: boolean;
   readonly allowWasmSealXorKnownPlaintext?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
@@ -542,6 +547,7 @@ export function hardenProject(
     allowJsWasmHydrateDump: options.allowJsWasmHydrateDump,
     allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
     allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
+    allowReleaseHygieneLeak: options.allowReleaseHygieneLeak,
   });
   const blockingSeals = packagingBlocks.blockingSeals;
   const blockingWasmParms = packagingBlocks.blockingWasmParms;
@@ -549,6 +555,7 @@ export function hardenProject(
   const blockingJsHydrateDump = packagingBlocks.blockingJsHydrateDump;
   const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
   const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
+  const blockingReleaseHygiene = packagingBlocks.blockingReleaseHygiene;
   let plannedOutputs = discovered.map((artifact) => {
     const outputPath = planArtifactOutputPath(artifact, outputRoot);
     return { artifact, outputPath, outputExisted: existsSync(outputPath) };
@@ -698,7 +705,15 @@ export function hardenProject(
     };
   }
 
-  if (blockingSeals.length > 0 || blockingWasmParms.length > 0 || blockingJsAes.length > 0 || blockingJsHydrateDump.length > 0 || blockingWasmXorMask.length > 0 || blockingWasmSealXor.length > 0) {
+  if (
+    blockingSeals.length > 0 ||
+    blockingWasmParms.length > 0 ||
+    blockingJsAes.length > 0 ||
+    blockingJsHydrateDump.length > 0 ||
+    blockingWasmXorMask.length > 0 ||
+    blockingWasmSealXor.length > 0 ||
+    blockingReleaseHygiene.length > 0
+  ) {
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -771,6 +786,18 @@ export function hardenProject(
       outputExisted: false,
       error: wasmSealXorKnownPlaintextRefuseMessage(r, r.path),
     }));
+    const releaseHygieneArtifacts = blockingReleaseHygiene.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "unknown" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: releaseHygieneRefuseMessage(r, r.path),
+    }));
     const blockParts: string[] = [];
     if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
     if (blockingWasmParms.length > 0) blockParts.push("clear WASM param carrier");
@@ -778,7 +805,16 @@ export function hardenProject(
     if (blockingJsHydrateDump.length > 0) blockParts.push("JS WASM hydrate param-dump");
     if (blockingWasmXorMask.length > 0) blockParts.push("WASM XOR-mask sidecar");
     if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
-    const blockedExtras = [...sealArtifacts, ...wasmArtifacts, ...jsAesArtifacts, ...jsHydrateDumpArtifacts, ...wasmXorMaskArtifacts, ...wasmSealXorArtifacts];
+    if (blockingReleaseHygiene.length > 0) blockParts.push("leaked release environment artifact");
+    const blockedExtras = [
+      ...sealArtifacts,
+      ...wasmArtifacts,
+      ...jsAesArtifacts,
+      ...jsHydrateDumpArtifacts,
+      ...wasmXorMaskArtifacts,
+      ...wasmSealXorArtifacts,
+      ...releaseHygieneArtifacts,
+    ];
     // Attribute the specific refusal to the artifact that triggered the gate;
     // every other planned artifact is skipped because the run was blocked.
     const refusalByPath = new Map(
