@@ -1030,7 +1030,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       }
 
       case "benchmark": {
-        const bench = await runShowcaseBenchmark();
+        const bench = await runShowcaseBenchmark(
+          parsed.seed !== undefined ? { seed: parsed.seed } : {},
+        );
         if (parsed.json) console.log(JSON.stringify(bench, null, 2));
         else console.log(formatBenchmarkReport(bench));
         return 0;

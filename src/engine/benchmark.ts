@@ -272,10 +272,23 @@ function runElectronAsarClipboardHarness(
 }
 
 /**
- * Runs the Counter-REA Showcase Benchmark (`bla benchmark`), including BEAM/EVM/PCAP/PTX.
+ * Fixed seed for the showcase run. Without it every run mints a fresh project
+ * seed (`generateProjectSeed`), so the emitted decoys — and therefore the
+ * reported token/cost amplification — change from one run to the next.
  */
-export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
+const BENCHMARK_SHOWCASE_SEED = "bla-benchmark-showcase-v1";
+
+/**
+ * Runs the Counter-REA Showcase Benchmark (`bla benchmark`), including BEAM/EVM/PCAP/PTX.
+ *
+ * `seed` overrides the fixed showcase seed; the default keeps the published
+ * aggregate reproducible so it can be guarded by a test.
+ */
+export async function runShowcaseBenchmark(
+  options: { readonly seed?: string } = {},
+): Promise<BenchmarkReport> {
   const tempDir = mkdtempSync(join(tmpdir(), "bla-benchmark-"));
+  const seed = options.seed ?? BENCHMARK_SHOWCASE_SEED;
   const cases: ShowcaseCaseResult[] = [];
 
   try {
@@ -284,7 +297,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const srcPath = join(tempDir, "dx-ball-sound-pan.js");
       const outPath = join(tempDir, "dx-ball-sound-pan.shielded.js");
       writeFileSync(srcPath, DX_BALL_SOURCE, "utf8");
-      const res = protectTarget({ inputPath: srcPath, outputPath: outPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: srcPath, outputPath: outPath, intensity: "bankrupt", seed });
 
       const origExports = runCommonJsModule(DX_BALL_SOURCE) as {
         calculateSoundPan: (px: number, bx: number, w: number) => number;
@@ -316,7 +329,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         { relativePath: "main.js", content: Buffer.from(NOTION_MAIN_SOURCE, "utf8") },
       ]);
       writeFileSync(asarPath, rawAsar);
-      const res = protectTarget({ inputPath: asarPath, outputPath: outAsarPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: asarPath, outputPath: outAsarPath, intensity: "bankrupt", seed });
 
       const unpacked = unpackAsarBuffer(readFileSync(outAsarPath));
       const virtualMap = new Map<string, Buffer>();
@@ -360,7 +373,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const srcPath = join(tempDir, "license-validator.js");
       const outPath = join(tempDir, "license-validator.shielded.js");
       writeFileSync(srcPath, LICENSE_VALIDATOR_SOURCE, "utf8");
-      const res = protectTarget({ inputPath: srcPath, outputPath: outPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: srcPath, outputPath: outPath, intensity: "bankrupt", seed });
 
       const origExports = runCommonJsModule(LICENSE_VALIDATOR_SOURCE) as {
         computeLicenseChecksum: (k: string, p: string) => number;
@@ -389,7 +402,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const outWasmPath = join(tempDir, "crypto-core.shielded.wasm");
       const rawWasm = buildSampleWasmModule();
       writeFileSync(wasmPath, rawWasm);
-      const res = protectTarget({ inputPath: wasmPath, outputPath: outWasmPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: wasmPath, outputPath: outWasmPath, intensity: "bankrupt", seed });
 
       const protWasmBytes = readFileSync(outWasmPath);
       const validWasm = WebAssembly.validate(protWasmBytes);
@@ -421,7 +434,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const outElfPath = join(tempDir, "enclave-daemon.shielded.elf");
       const origElf = buildSampleElf64Binary();
       writeFileSync(elfPath, origElf);
-      const res = protectTarget({ inputPath: elfPath, outputPath: outElfPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: elfPath, outputPath: outElfPath, intensity: "bankrupt", seed });
       const protElf = readFileSync(outElfPath);
       const afterAudit = auditTarget(outElfPath);
       // Verify ELF64 header (magic, 64-bit class, machine, entry point, program header table) is preserved
@@ -442,7 +455,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       const dbPath = join(tempDir, "entitlements.sqlite");
       const outDbPath = join(tempDir, "entitlements.shielded.sqlite");
       writeFileSync(dbPath, buildSampleSqliteDatabase());
-      const res = protectTarget({ inputPath: dbPath, outputPath: outDbPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: dbPath, outputPath: outDbPath, intensity: "bankrupt", seed });
       const afterAudit = auditTarget(outDbPath);
 
       const DatabaseSync = getDatabaseSyncClass();
@@ -498,7 +511,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         tensorWeights,
       );
       writeFileSync(modelPath, rawModel);
-      const res = protectTarget({ inputPath: modelPath, outputPath: outModelPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: modelPath, outputPath: outModelPath, intensity: "bankrupt", seed });
       const afterAudit = auditTarget(outModelPath);
 
       const origParsed = validateSafetensorsBuffer(rawModel);
@@ -528,7 +541,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       baseDex.writeUInt32LE(0x12345678, 40);
       appDescriptor.copy(baseDex, 112);
       writeFileSync(dexPath, baseDex);
-      const res = protectTarget({ inputPath: dexPath, outputPath: outDexPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: dexPath, outputPath: outDexPath, intensity: "bankrupt", seed });
       const protDex = readFileSync(outDexPath);
       const dexInfo = inspectAndroidDex(protDex);
       const storedSha1 = protDex.subarray(12, 32);
@@ -554,7 +567,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         `</dict></plist>`,
       ].join("\n");
       writeFileSync(plistPath, origPlist, "utf8");
-      const res = protectTarget({ inputPath: plistPath, outputPath: outPlistPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: plistPath, outputPath: outPlistPath, intensity: "bankrupt", seed });
       const protPlist = readFileSync(outPlistPath, "utf8");
       const afterAudit = auditTarget(outPlistPath);
       const functionalOk =
@@ -580,7 +593,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       peClr.write("BSJB", 96, "ascii");
       clrMetadataSym.copy(peClr, 160);
       writeFileSync(dllPath, peClr);
-      const res = protectTarget({ inputPath: dllPath, outputPath: outDllPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: dllPath, outputPath: outDllPath, intensity: "bankrupt", seed });
       const protDll = readFileSync(outDllPath);
       const afterAudit = auditTarget(outDllPath);
       const functionalOk =
@@ -627,7 +640,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         codeChunk,
         expChunk,
       ]);
-      const seed = Buffer.concat([
+      const beamFixture = Buffer.concat([
         Buffer.from("FOR1", "latin1"),
         (() => {
           const b = Buffer.alloc(4);
@@ -636,8 +649,8 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         })(),
         form,
       ]);
-      writeFileSync(beamPath, seed);
-      const res = protectTarget({ inputPath: beamPath, outputPath: outBeamPath, intensity: "bankrupt" });
+      writeFileSync(beamPath, beamFixture);
+      const res = protectTarget({ inputPath: beamPath, outputPath: outBeamPath, intensity: "bankrupt", seed });
       const protBeam = readFileSync(outBeamPath);
       const beamInfo = inspectErlangBeam(protBeam);
       const afterAudit = auditTarget(outBeamPath);
@@ -663,7 +676,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         "hex",
       );
       writeFileSync(evmPath, origEvm);
-      const res = protectTarget({ inputPath: evmPath, outputPath: outEvmPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: evmPath, outputPath: outEvmPath, intensity: "bankrupt", seed });
       const protEvm = readFileSync(outEvmPath);
       const evmInfo = inspectEvmBytecode(protEvm);
       const afterAudit = auditTarget(outEvmPath);
@@ -696,7 +709,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
       recHdr.writeUInt32LE(appFrame.length, 12);
       const origPcap = Buffer.concat([hdr, recHdr, appFrame]);
       writeFileSync(pcapPath, origPcap);
-      const res = protectTarget({ inputPath: pcapPath, outputPath: outPcapPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: pcapPath, outputPath: outPcapPath, intensity: "bankrupt", seed });
       const protPcap = readFileSync(outPcapPath);
       const pcapInfo = inspectPcapCapture(protPcap);
       const afterAudit = auditTarget(outPcapPath);
@@ -730,7 +743,7 @@ export async function runShowcaseBenchmark(): Promise<BenchmarkReport> {
         ``,
       ].join("\n");
       writeFileSync(ptxPath, origPtx, "utf8");
-      const res = protectTarget({ inputPath: ptxPath, outputPath: outPtxPath, intensity: "bankrupt" });
+      const res = protectTarget({ inputPath: ptxPath, outputPath: outPtxPath, intensity: "bankrupt", seed });
       const protPtx = readFileSync(outPtxPath, "utf8");
       const ptxInfo = inspectGpuPtx(protPtx);
       const afterAudit = auditTarget(outPtxPath);
