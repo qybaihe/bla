@@ -5,7 +5,7 @@ export const BLA_IDENTITY = Object.freeze({
   packageAlias: "bla-shield",
   cliBinary: "bla",
   cliAlias: "bla-agents",
-  version: "3.2.6",
+  version: "3.3.0",
   slogan: "Poison -> Exhaust -> Hallucinate. Make Reverse Engineering Bankrupt Again.",
   counterpart: {
     name: "REA",

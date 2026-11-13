@@ -12,7 +12,7 @@
 
 **开源的 Counter-REA 蓝队防御 MCP 服务与 CLI 工具 —— 专为保护软件发布产物免受 AI 逆向分析代理（`morluto/rea`、自动化反编译与大模型逆向流水线）还原而设计，同时保持 100% 运行时等价。**
 
-[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.2.6-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
+[![npm version](https://img.shields.io/badge/npm-bla--agents_v3.3.0-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-25_项防御工具-0ea5e9?style=for-the-badge)](../cli-and-mcp.md)
 [![Formats](https://img.shields.io/badge/支持格式-19%2B_种构建产物-0284c7?style=for-the-badge)](#支持的产物格式与覆盖矩阵)
