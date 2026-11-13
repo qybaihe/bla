@@ -12,7 +12,11 @@ import { packAsarBuffer } from "../shields/formats/asar.js";
 import { protectErlangBeamBuffer } from "../shields/formats/erlang-beam.js";
 import { protectEvmBytecodeBuffer } from "../shields/formats/evm-bytecode.js";
 import { protectAndroidDexBuffer } from "../shields/formats/mobile-game.js";
-import { protectGgufBuffer, protectSafetensorsBuffer } from "../shields/formats/model.js";
+import {
+  buildSafetensorsBuffer,
+  protectGgufBuffer,
+  protectSafetensorsBuffer,
+} from "../shields/formats/model.js";
 import { protectNativeBinary } from "../shields/formats/native.js";
 import { protectPythonSource } from "../shields/formats/python.js";
 import { protectWasmBinary } from "../shields/formats/wasm.js";
@@ -93,11 +97,11 @@ export interface DoctorDiagnosticReport {
     readonly pythonPycMarshalShield: EngineHealthStatus;
     readonly nativeElfMachoPeShield: EngineHealthStatus;
     readonly zipApkArchiveShield: EngineHealthStatus;
-    readonly sqliteRuntime: EngineHealthStatus;
     readonly aiModelShield: EngineHealthStatus;
     readonly erlangBeamShield: EngineHealthStatus;
     readonly evmBytecodeShield: EngineHealthStatus;
     readonly androidDexR8Shield: EngineHealthStatus;
+    readonly sqliteRuntime: EngineHealthStatus;
     readonly astParser: EngineHealthStatus;
     readonly asarPacker: EngineHealthStatus;
     readonly wasmLeb128: EngineHealthStatus;
@@ -308,20 +312,74 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
 
   const zipApkArchiveShield: EngineHealthStatus =
     typeof protectZipOrApkBuffer === "function" ? "ready" : "unavailable";
-  const aiModelShield: EngineHealthStatus =
-    typeof protectSafetensorsBuffer === "function" &&
-    typeof protectGgufBuffer === "function"
-      ? "ready"
-      : "unavailable";
-  const erlangBeamShield: EngineHealthStatus =
-    typeof protectErlangBeamBuffer === "function" ? "ready" : "unavailable";
-  const evmBytecodeShield: EngineHealthStatus =
-    typeof protectEvmBytecodeBuffer === "function" ? "ready" : "unavailable";
   const androidDexR8Shield: EngineHealthStatus =
     typeof protectAndroidDexBuffer === "function" &&
     typeof generateAndroidR8Counter === "function"
       ? "ready"
       : "unavailable";
+
+  let aiModelShield: EngineHealthStatus = "ready";
+  try {
+    const safetensors = buildSafetensorsBuffer(
+      { w: { dtype: "F32", shape: [2], data_offsets: [0, 8] } },
+      Buffer.alloc(8, 0),
+    );
+    const stRes = protectSafetensorsBuffer(safetensors, {
+      intensity: "stealth",
+      seed: "doctor-probe",
+    });
+    const ggufRes = protectGgufBuffer(Buffer.alloc(0), {
+      intensity: "stealth",
+      seed: "doctor-probe",
+    });
+    if (stRes.buffer.byteLength === 0 || ggufRes.buffer.byteLength === 0) {
+      aiModelShield = "unavailable";
+    }
+  } catch {
+    aiModelShield = "unavailable";
+  }
+
+  let erlangBeamShield: EngineHealthStatus = "ready";
+  try {
+    const u32 = (n: number): Buffer => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32BE(n >>> 0);
+      return b;
+    };
+    const chunk = (name: string, payload: Buffer): Buffer =>
+      Buffer.concat([Buffer.from(name, "latin1"), u32(payload.length), payload]);
+    const atoms = ["bla_probe", "module_info"];
+    const atomBody = Buffer.concat([
+      u32(atoms.length),
+      ...atoms.map((a) => Buffer.concat([Buffer.from([a.length]), Buffer.from(a, "utf8")])),
+    ]);
+    const code = Buffer.concat([u32(16), u32(0), u32(169), u32(4), u32(2), Buffer.from("code")]);
+    const form = Buffer.concat([
+      Buffer.from("BEAM", "latin1"),
+      chunk("AtU8", atomBody),
+      chunk("Code", code),
+    ]);
+    const beam = Buffer.concat([Buffer.from("FOR1", "latin1"), u32(form.length), form]);
+    const res = protectErlangBeamBuffer(beam, { intensity: "stealth", seed: "doctor-probe" });
+    if (res.buffer.byteLength < beam.byteLength) {
+      erlangBeamShield = "unavailable";
+    }
+  } catch {
+    erlangBeamShield = "unavailable";
+  }
+
+  let evmBytecodeShield: EngineHealthStatus = "ready";
+  try {
+    const res = protectEvmBytecodeBuffer(Buffer.from([0x60, 0x00, 0x00]), {
+      intensity: "stealth",
+      seed: "doctor-probe",
+    });
+    if (res.buffer.byteLength < 3) {
+      evmBytecodeShield = "unavailable";
+    }
+  } catch {
+    evmBytecodeShield = "unavailable";
+  }
 
   let sqliteRuntime: EngineHealthStatus = "ready";
   if (typeof sqliteOverride === "boolean") {
@@ -344,11 +402,11 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
     pythonPycMarshalShield,
     nativeElfMachoPeShield,
     zipApkArchiveShield,
-    sqliteRuntime,
     aiModelShield,
     erlangBeamShield,
     evmBytecodeShield,
     androidDexR8Shield,
+    sqliteRuntime,
     astParser: javascriptAstShield,
     asarPacker: electronAsarPacker,
     wasmLeb128: wasmBinaryShield,

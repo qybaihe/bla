@@ -218,6 +218,10 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
     `  • Python (.py / CPython .pyc) Marshal Tarpit Shield:   ${ANSI.green}${doc.engines.pythonPycMarshalShield}${ANSI.reset}`,
     `  • Native Binary (ELF / Mach-O / PE) Section Shield:    ${ANSI.green}${doc.engines.nativeElfMachoPeShield}${ANSI.reset}`,
     `  • Archive (ZIP / Android APK) Enclave Shield:          ${ANSI.green}${doc.engines.zipApkArchiveShield}${ANSI.reset}`,
+    `  • AI Model (Safetensors / GGUF) Nesting Breaker:       ${ANSI.green}${doc.engines.aiModelShield}${ANSI.reset}`,
+    `  • Erlang BEAM Chunk & Atom Exhaustion Shield:          ${ANSI.green}${doc.engines.erlangBeamShield}${ANSI.reset}`,
+    `  • EVM Bytecode Interface-Budget Shield:                ${ANSI.green}${doc.engines.evmBytecodeShield}${ANSI.reset}`,
+    `  • SQLite Honey-Table & Trap-Column Runtime:            ${ANSI.green}${doc.engines.sqliteRuntime}${ANSI.reset}`,
     "",
     `${ANSI.bold}Detected Coding Agent Integrations:${ANSI.reset}`,
   ];
