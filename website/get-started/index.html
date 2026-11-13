@@ -4,9 +4,86 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
-    <title>Get Started — BLA (bla-agents)</title>
+    <title>Get Started with BLA (bla-agents) — MCP Setup, CLI &amp; Bundler Plugins</title>
+    <meta
+      name="description"
+      content="Install and configure BLA (bla-agents) in seconds: register the Counter-REA MCP server for Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, harden builds with npx bla-agents harden ., or add Vite/Webpack/esbuild plugins."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#040814" />
+    <link rel="canonical" href="https://bla.tools/get-started/" />
+    <link rel="alternate" hreflang="en" href="https://bla.tools/get-started/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://bla.tools/get-started/?lang=zh-CN" />
+    <link rel="alternate" hreflang="zh-TW" href="https://bla.tools/get-started/?lang=zh-TW" />
+    <link rel="alternate" hreflang="ja" href="https://bla.tools/get-started/?lang=ja" />
+    <link rel="alternate" hreflang="ko" href="https://bla.tools/get-started/?lang=ko" />
+    <link rel="alternate" hreflang="es" href="https://bla.tools/get-started/?lang=es" />
+    <link rel="alternate" hreflang="fr" href="https://bla.tools/get-started/?lang=fr" />
+    <link rel="alternate" hreflang="de" href="https://bla.tools/get-started/?lang=de" />
+    <link rel="alternate" hreflang="x-default" href="https://bla.tools/get-started/" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:url" content="https://bla.tools/get-started/" />
+    <meta property="og:title" content="Get Started with BLA (bla-agents) — MCP Setup, CLI &amp; Bundler Plugins" />
+    <meta
+      property="og:description"
+      content="One-command setup for Claude Code, Cursor, Codex &amp; Gemini CLI, plus CLI hardening workflows and Vite/Rollup/Webpack/esbuild integration."
+    />
+    <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Get Started with BLA (bla-agents)" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Get Started with BLA (bla-agents) — MCP Setup &amp; CLI" />
+    <meta
+      name="twitter:description"
+      content="Register BLA's MCP tools in one command and harden JS/TS, Electron, WASM, Python, and native binaries against AI reverse engineering."
+    />
+    <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="apple-touch-icon" href="../assets/logo.png" />
+    <link rel="manifest" href="../site.webmanifest" />
     <link rel="stylesheet" href="../assets/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Overview", "item": "https://bla.tools/" },
+              { "@type": "ListItem", "position": 2, "name": "Get Started", "item": "https://bla.tools/get-started/" }
+            ]
+          },
+          {
+            "@type": "HowTo",
+            "name": "How to Protect Software Artifacts Against AI Reverse Engineering with BLA",
+            "description": "Register BLA's MCP server with your coding agent and harden build outputs in three steps.",
+            "step": [
+              {
+                "@type": "HowToStep",
+                "position": 1,
+                "name": "Register MCP Server & Agent Skill",
+                "text": "Run npx bla-agents@latest setup -y to configure Claude Code, Cursor, Codex, Windsurf, or Gemini CLI."
+              },
+              {
+                "@type": "HowToStep",
+                "position": 2,
+                "name": "Audit & Lint Release Packaging",
+                "text": "Run npx bla-agents@latest lint . to check for source-map, plaintext secret, and debug-symbol leaks."
+              },
+              {
+                "@type": "HowToStep",
+                "position": 3,
+                "name": "Harden & Verify Artifacts",
+                "text": "Run npx bla-agents@latest harden . --weave-decoys --self-seal --sidecar-entangle to protect discovered artifacts and verify runtime equivalence."
+              }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <noscript>

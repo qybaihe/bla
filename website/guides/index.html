@@ -4,9 +4,67 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://ungh.cc https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
-    <title>Technical Guides — BLA (bla-agents)</title>
+    <title>Technical Defense Guides — Electron, WASM, Native Binaries, Python &amp; AI Models | BLA</title>
+    <meta
+      name="description"
+      content="Architecture and protection guides for BLA (bla-agents): harden Electron ASAR &amp; IPC, WebAssembly, ELF/Mach-O/PE native binaries, Python bytecode, SQLite, GGUF/Safetensors models, and Agent-Driven AST Weave."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#040814" />
+    <link rel="canonical" href="https://bla.tools/guides/" />
+    <link rel="alternate" hreflang="en" href="https://bla.tools/guides/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://bla.tools/guides/?lang=zh-CN" />
+    <link rel="alternate" hreflang="zh-TW" href="https://bla.tools/guides/?lang=zh-TW" />
+    <link rel="alternate" hreflang="ja" href="https://bla.tools/guides/?lang=ja" />
+    <link rel="alternate" hreflang="ko" href="https://bla.tools/guides/?lang=ko" />
+    <link rel="alternate" hreflang="es" href="https://bla.tools/guides/?lang=es" />
+    <link rel="alternate" hreflang="fr" href="https://bla.tools/guides/?lang=fr" />
+    <link rel="alternate" hreflang="de" href="https://bla.tools/guides/?lang=de" />
+    <link rel="alternate" hreflang="x-default" href="https://bla.tools/guides/" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:url" content="https://bla.tools/guides/" />
+    <meta property="og:title" content="Technical Defense Guides — Electron, WASM, Native &amp; AI Models | BLA" />
+    <meta
+      property="og:description"
+      content="Deep-dive protection guides covering parameterized MBA obfuscation, Agent-Driven Weave, compile-time C/Rust/Go headers, self-seal, and sidecar entanglement."
+    />
+    <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="BLA Technical Defense Guides" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Technical Defense Guides — BLA (bla-agents)" />
+    <meta
+      name="twitter:description"
+      content="Protect Electron ASAR, JS/TS, WASM, Python, ELF/Mach-O/PE binaries, SQLite, and GGUF/Safetensors models against AI reverse engineering."
+    />
+    <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
+    <link rel="apple-touch-icon" href="../assets/logo.png" />
+    <link rel="manifest" href="../site.webmanifest" />
     <link rel="stylesheet" href="../assets/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Overview", "item": "https://bla.tools/" },
+              { "@type": "ListItem", "position": 2, "name": "Guides", "item": "https://bla.tools/guides/" }
+            ]
+          },
+          {
+            "@type": "TechArticle",
+            "headline": "BLA Technical Defense & Format Hardening Guides",
+            "url": "https://bla.tools/guides/",
+            "description": "Technical reference for protecting multi-format software releases against MCP-driven reverse-engineering agents using BLA."
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <noscript>

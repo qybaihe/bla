@@ -11,33 +11,36 @@
     </linearGradient>
   </defs>
   <rect width="1200" height="630" fill="url(#bg)" />
-  <circle cx="980" cy="140" r="260" fill="#2563eb" opacity="0.14" />
-  <circle cx="200" cy="520" r="220" fill="#ef4444" opacity="0.09" />
+  <circle cx="980" cy="140" r="260" fill="#2563eb" opacity="0.16" />
+  <circle cx="200" cy="520" r="220" fill="#0ea5e9" opacity="0.10" />
 
-  <rect x="72" y="64" width="1056" height="502" rx="24" fill="#081126" stroke="#1e3a8a" stroke-width="2" />
-  <rect x="112" y="108" width="280" height="38" rx="19" fill="#0f234d" stroke="#3b82f6" stroke-width="1.2" />
-  <text x="252" y="132" text-anchor="middle" font-family="SFMono-Regular, Consolas, monospace" font-size="14" font-weight="700" fill="#93c5fd">
-    BL = BLUE SHIELD vs. RE = RED
+  <rect x="64" y="56" width="1072" height="518" rx="24" fill="#081126" stroke="#1e3a8a" stroke-width="2" />
+  <rect x="108" y="102" width="420" height="40" rx="20" fill="#0f234d" stroke="#3b82f6" stroke-width="1.4" />
+  <text x="318" y="128" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="15" font-weight="700" fill="#93c5fd">
+    OPEN-SOURCE BLUE DEFENSE MCP &amp; CLI · MIT
   </text>
 
-  <text x="112" y="220" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="68" font-weight="800" fill="#f8fafc">
+  <text x="108" y="216" font-family="Helvetica Neue, Arial, sans-serif" font-size="66" font-weight="800" fill="#f8fafc">
     BLA: Blind LLM Agents
   </text>
-  <text x="112" y="280" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28" font-weight="500" fill="#94a3b8">
-    Exhaust attacker compute. Induce model misjudgment. One-click defense.
+  <text x="108" y="274" font-family="Helvetica Neue, Arial, sans-serif" font-size="27" font-weight="500" fill="#cbd5e1">
+    Protect software artifacts against AI reverse-engineering agents (REA).
+  </text>
+  <text x="108" y="314" font-family="Helvetica Neue, Arial, sans-serif" font-size="22" font-weight="400" fill="#94a3b8">
+    JS/TS · Electron ASAR · WASM · Python · Native ELF/Mach-O/PE · SQLite · GGUF/Safetensors · DEX
   </text>
 
-  <rect x="112" y="330" width="540" height="68" rx="14" fill="#040917" stroke="#2563eb" stroke-width="1.5" />
-  <text x="140" y="372" font-family="SFMono-Regular, Consolas, monospace" font-size="22" font-weight="700" fill="#60a5fa">
-    $ npx bla-agents defend ./dist --manifest
+  <rect x="108" y="354" width="660" height="72" rx="14" fill="#040917" stroke="#2563eb" stroke-width="1.8" />
+  <text x="138" y="399" font-family="Menlo, Consolas, monospace" font-size="24" font-weight="700" fill="#60a5fa">
+    $ npx bla-agents@latest harden .
   </text>
 
-  <g transform="translate(112, 442)">
-    <text x="0" y="0" font-family="SFMono-Regular, Consolas, monospace" font-size="18" fill="#ef4444" font-weight="700">
-      REA (Red): 38s clone · $0.20
+  <g transform="translate(108, 482)">
+    <text x="0" y="0" font-family="Menlo, Consolas, monospace" font-size="19" fill="#38bdf8" font-weight="700">
+      26 Artifact Formats · 31 MCP Tools · ~1,000x+ Token Burn · 100% Runtime-Equivalent
     </text>
-    <text x="340" y="0" font-family="SFMono-Regular, Consolas, monospace" font-size="18" fill="#60a5fa" font-weight="700">
-      →  BLA (Blue): 38.4x Token Burn · Shadow Logic Misjudgment
+    <text x="0" y="38" font-family="Menlo, Consolas, monospace" font-size="17" fill="#64748b" font-weight="600">
+      https://bla.tools  ·  github.com/qybaihe/bla  ·  npm i -g bla-agents
     </text>
   </g>
 </svg>

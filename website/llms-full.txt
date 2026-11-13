@@ -1,0 +1,70 @@
+# BLA (`bla-agents`) — Complete Technical Reference for LLMs & Coding Agents
+
+- **Official Website**: https://bla.tools/
+- **GitHub Repository**: https://github.com/qybaihe/bla
+- **npm Package**: https://www.npmjs.com/package/bla-agents (aliases: `bla`, `bla-agents`, `bla-shield`)
+- **License**: MIT
+- **Node.js Runtime Floor**: `^22.23.4 || >=24.0.0` (uses built-in `node:sqlite` and `node:crypto` with minimal dependencies)
+
+## 1. What Problem BLA Solves
+
+Modern AI reverse-engineering agents (e.g., `morluto/rea`) connect LLMs to Ghidra, IDA Pro, Hopper, V8 Inspector/CDP, Frida, `node:sqlite`, and binary parsers over the Model Context Protocol (MCP). Standalone legacy obfuscation (such as single-pass control-flow flattening or textbook `x*(x+1)&1` opaque predicates) is routinely simplified by frontier reasoning models.
+
+**BLA (`bla-agents` — Blind LLM Agents)** is the defensive Blue Team counterpart:
+1. **Packaging Footgun Gates (`bla lint` / `bla_lint`)**: Fails closed before shipping if source maps, plaintext secrets, reversible seal sidecars, offline byte-by-byte verification oracles, `.env` / PEM keys, `SOLUTION.txt`, or unstripped `.pdb`/`.dSYM` debug symbols are present.
+2. **Surgical Resource Exhaustion**: Saturates static/dynamic analyzer budgets (`obligation-flooder`, strongly connected `callgraph-labyrinth`, BPE token amplification, CDP object-shape budget guards, Frida capture saturators).
+3. **Parameterized MBA & Multi-Layer Entanglement**: Applies Newton-Raphson parameterized affine Mixed Boolean-Arithmetic (MBA) instruction substitutions over Z_{2^32} and unsigned-domain MBA predicates, plus Agent-Driven Structural Weave (`bla_weave_plan` + `bla_verify_weave`) coupling business logic with shared mutable state.
+4. **Multi-Round Hypothesis-Revision Decoys**: Plants warm-executed, non-crashing shadow business logic and hardware-enclave delegation mirages that survive static-vs-dynamic evidence arbitration.
+5. **Runtime Self-Seal & Sidecar Entanglement (`--self-seal`, `--sidecar-entangle`)**: Enforces process-start canonical self-digest and sibling artifact SHA-256 verification across CommonJS, ES Modules (`.mjs` / `"type": "module"`), Python, Electron ASAR, and host-verifiable notes for WASM, `.pyc`, GGUF, Safetensors, and Bun standalone binaries.
+
+## 2. Supported Artifact Formats (26 Formats)
+
+- **Web, Node.js & Desktop**: JavaScript (CommonJS & ES Modules), TypeScript (`.ts`/`.tsx`), HTML bundles, Source Maps (`.map`), Electron `.asar` archives & Electron Fuses, Bun standalone executables.
+- **Native & Compile-Time Headers**: ELF64 executables & shared libraries (`.so` mapped `.enclave` `PT_LOAD` decoy islands + `W^X`), Mach-O / Universal FAT binaries, Windows PE32/PE32+ (`.exe`/`.dll`), Go/Flutter symbol & buildinfo shields, plus compile-time C/C++, Rust, and Go headers (`bla emit-headers --lang c|rust|go`).
+- **Virtual Machines & Bytecode**: WebAssembly (`.wasm`), Python source (`.py`) & CPython bytecode (`.pyc`), Android Dalvik (`.dex`), APK/AAB/IPA/JAR archives, Android binary `AndroidManifest.xml`, R8/ProGuard dictionaries, JVM `.class`, .NET CLR managed assemblies, Erlang/OTP `.beam`, EVM Solidity bytecode.
+- **Data, Firmware & Edge AI Models**: SQLite databases (`.sqlite`/`.db`), Safetensors (`.safetensors` — bit-exact tensor preservation), GGUF v2/v3 (`.gguf` — alignment-preserving metadata shield), Apple PropertyLists (`.plist`), UF2 firmware, NVIDIA PTX modules (`.ptx`), and `libpcap` captures (`.pcap`).
+
+## 3. Core CLI Commands
+
+```bash
+# 1. Auto-register MCP server & agent skill for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, Antigravity
+npx bla-agents setup --all-detected -y
+
+# 2. Recommended 4-stage Agent-Driven Hardening workflow
+npx bla-agents lint .
+npx bla-agents weave-plan ./src
+npx bla-agents verify-weave ./src
+npx bla-agents harden . --weave-decoys --self-seal --sidecar-entangle
+
+# 3. Single-target one-click defense + signed Ed25519 manifest
+npx bla-agents defend ./dist --manifest
+npx bla-agents verify-manifest ./dist/.bla-manifest.json --public-key pub.pem --require-pinned-key
+npx bla-agents verify-sidecar ./dist/core.wasm
+
+# 4. Compile-time C/Rust/Go headers for native builds
+npx bla-agents emit-headers --lang rust -o src/bla_shield.rs
+
+# 5. Environment & MCP readiness diagnostics
+npx bla-agents doctor
+```
+
+## 4. Bundler Integration (`bla-agents/bundler`)
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { blaVitePlugin } from "bla-agents/bundler";
+
+export default defineConfig({
+  plugins: [blaVitePlugin({ intensity: "balanced" })],
+});
+```
+
+Also exports `blaRollupPlugin`, `blaWebpackPlugin`, and `blaEsbuildPlugin`.
+
+## 5. Honesty Red Line (Security Boundaries)
+
+BLA enforces strict defense-score honesty (`src/engine/defense-score-honesty.ts`):
+- Client-side obfuscation and tarpits raise automated reverse-engineering cost and induce model misjudgment; they **never** replace server-side authentication, authorization, or secret custody.
+- Never ship real API keys, private keys, or master secrets inside client artifacts.
+- Post-link native binary shields and host-verified metadata notes (`wasm`, `pyc`, `gguf`, `safetensors`, `bun`) report honest score caps rather than claiming compile-time CFG rewriting or OS loader enforcement.

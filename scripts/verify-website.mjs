@@ -17,6 +17,11 @@ const REQUIRED_HTML_PAGES = [
 ];
 
 const REQUIRED_ASSETS = [
+  "robots.txt",
+  "sitemap.xml",
+  "llms.txt",
+  "llms-full.txt",
+  "site.webmanifest",
   "assets/styles.css",
   "assets/main.js",
   "assets/live-stats.mjs",
@@ -26,6 +31,7 @@ const REQUIRED_ASSETS = [
   "assets/favicon.png",
   "assets/favicon.svg",
   "assets/social-card.svg",
+  "assets/social-card.png",
   "schemas/defense-manifest-v1.json",
   "schemas/bla.config.v1.json",
 ];
@@ -170,6 +176,17 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
   const pageCache = new Map();
   const idCache = new Map();
   const usedI18nKeys = new Set();
+  const sitemapPath = resolve(absRoot, "sitemap.xml");
+  const sitemapXml = existsSync(sitemapPath) && statSync(sitemapPath).isFile()
+    ? readFileSync(sitemapPath, "utf8")
+    : "";
+  const robotsPath = resolve(absRoot, "robots.txt");
+  if (existsSync(robotsPath) && statSync(robotsPath).isFile()) {
+    const robotsTxt = readFileSync(robotsPath, "utf8");
+    if (!robotsTxt.includes("Sitemap: https://bla.tools/sitemap.xml")) {
+      errors.push("robots.txt: missing Sitemap: https://bla.tools/sitemap.xml directive");
+    }
+  }
 
   const discovered = discoverHtmlPages(absRoot);
   const pageList = [...new Set([...REQUIRED_HTML_PAGES, ...discovered])].sort();
@@ -243,6 +260,47 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     }
     if (!html.includes('class="nav-links"') || !html.includes('id="bla-lang-select"') || !html.includes('class="nav-cta"')) {
       errors.push(`${rel}: language switch, primary nav, or Star control is missing`);
+    }
+
+    // SEO & Structured Metadata Checks
+    if (!/<title>[^<]{10,}<\/title>/i.test(html)) {
+      errors.push(`${rel}: missing or too-short <title>`);
+    }
+    if (!/<meta\b[^>]*name=["']description["'][^>]*content=["'][^"']{40,}["']/i.test(html)) {
+      errors.push(`${rel}: missing or too-short <meta name="description">`);
+    }
+    const canonicalMatch = /<link\b[^>]*rel=["']canonical["'][^>]*href=["'](https:\/\/bla\.tools\/[^"']*)["']/i.exec(html);
+    if (!canonicalMatch) {
+      errors.push(`${rel}: missing <link rel="canonical" href="https://bla.tools/...">`);
+    } else if (sitemapXml && !sitemapXml.includes(`<loc>${canonicalMatch[1]}</loc>`)) {
+      errors.push(`${rel}: canonical URL '${canonicalMatch[1]}' is missing from sitemap.xml`);
+    }
+    if (!/<meta\b[^>]*property=["']og:title["'][^>]*content=["'][^"']+["']/i.test(html)) {
+      errors.push(`${rel}: missing OpenGraph og:title`);
+    }
+    if (!/<meta\b[^>]*property=["']og:description["'][^>]*content=["'][^"']+["']/i.test(html)) {
+      errors.push(`${rel}: missing OpenGraph og:description`);
+    }
+    if (!html.includes('property="og:image" content="https://bla.tools/assets/social-card.png"')) {
+      errors.push(`${rel}: og:image must reference https://bla.tools/assets/social-card.png`);
+    }
+    if (!/<meta\b[^>]*name=["']twitter:card["'][^>]*content=["']summary_large_image["']/i.test(html)) {
+      errors.push(`${rel}: missing twitter:card summary_large_image`);
+    }
+    const jsonLdMatches = [...html.matchAll(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/gi)];
+    if (jsonLdMatches.length === 0) {
+      errors.push(`${rel}: missing Schema.org JSON-LD (<script type="application/ld+json">)`);
+    } else {
+      for (const m of jsonLdMatches) {
+        try {
+          const parsed = JSON.parse(m[1]);
+          if (!parsed || parsed["@context"] !== "https://schema.org") {
+            errors.push(`${rel}: JSON-LD missing "@context": "https://schema.org"`);
+          }
+        } catch (err) {
+          errors.push(`${rel}: invalid JSON-LD syntax (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
     }
 
     const pageDir = dirname(full);
