@@ -16,12 +16,12 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { SeededPrng } from "../core/prng.js";
+import { walkBounded } from "../core/walk.js";
 import { writeFileAtomicSync } from "./protector.js";
 import {
   classifySensitiveLiteral,
@@ -92,34 +92,6 @@ const SKIP_DIR_NAMES = new Set([
 
 const SCAN_EXT = /\.(?:html?|[cm]?js|tsx?|mts|cts)$/i;
 
-function walkEncryptTargets(root: string, depth: number, out: string[]): void {
-  if (depth > 6 || out.length >= 48) return;
-  let entries;
-  try {
-    entries = readdirSync(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const ent of entries) {
-    if (out.length >= 48) break;
-    if (ent.name.startsWith(".") && ent.name !== ".fixture") continue;
-    const full = join(root, ent.name);
-    if (ent.isDirectory()) {
-      if (SKIP_DIR_NAMES.has(ent.name)) continue;
-      walkEncryptTargets(full, depth + 1, out);
-    } else if (ent.isFile() && SCAN_EXT.test(ent.name)) {
-      if (
-        /\.d\.ts$/i.test(ent.name) ||
-        /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name) ||
-        /\.(?:min|shielded)\.[cm]?js$/i.test(ent.name)
-      ) {
-        continue;
-      }
-      out.push(full);
-    }
-  }
-}
-
 function listTargets(pathIn: string): string[] {
   const abs = resolve(pathIn);
   if (!existsSync(abs)) return [];
@@ -130,7 +102,26 @@ function listTargets(pathIn: string): string[] {
     const p = join(abs, name);
     if (existsSync(p) && statSync(p).isFile()) out.push(p);
   }
-  walkEncryptTargets(abs, 0, out);
+  out.push(
+    ...walkBounded(abs, {
+      maxDepth: 6,
+      maxFiles: 48,
+      skipDirs: SKIP_DIR_NAMES,
+      skipHiddenDirs: true,
+      accept: (_full, name) => {
+        if (name.startsWith(".") && name !== ".fixture") return false;
+        if (!SCAN_EXT.test(name)) return false;
+        if (
+          /\.d\.ts$/i.test(name) ||
+          /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(name) ||
+          /\.(?:min|shielded)\.[cm]?js$/i.test(name)
+        ) {
+          return false;
+        }
+        return true;
+      },
+    }),
+  );
   return [...new Set(out)];
 }
 

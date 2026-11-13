@@ -20,8 +20,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { walkBounded } from "../core/walk.js";
 import type { ProtectionIntensity } from "../core/types.js";
 
 export const PLAINTEXT_SECRET_SCHEMA = "bla-plaintext-secret-lint/v1" as const;
@@ -267,36 +268,6 @@ export function lintPlaintextSecretsFile(
   });
 }
 
-function walkTargets(root: string, depth: number, out: string[]): void {
-  if (depth > MAX_WALK_DEPTH || out.length >= MAX_FILES) return;
-  let entries;
-  try {
-    entries = readdirSync(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const ent of entries) {
-    if (out.length >= MAX_FILES) return;
-    if (ent.name.startsWith(".") && ent.name !== ".fixture") continue;
-    const full = join(root, ent.name);
-    if (ent.isDirectory()) {
-      if (SKIP_DIR_NAMES.has(ent.name)) continue;
-      walkTargets(full, depth + 1, out);
-    } else if (ent.isFile()) {
-      if (TARGET_BASENAME.test(ent.name) || SCAN_EXT.test(ent.name)) {
-        // Prefer entitlement-shaped basenames; still accept other JS/HTML but
-        // only if basename matches target OR path contains panel/license/vault.
-        if (
-          TARGET_BASENAME.test(ent.name) ||
-          /(?:^|\/)(?:panel|license|vault)[^/]*$/i.test(ent.name)
-        ) {
-          out.push(full);
-        }
-      }
-    }
-  }
-}
-
 export function discoverAndLintPlaintextSecrets(
   directory: string,
   options: { readonly allowPlaintextString?: boolean } = {},
@@ -308,8 +279,22 @@ export function discoverAndLintPlaintextSecrets(
   if (st.isFile()) {
     return [lintPlaintextSecretsFile(abs, options)];
   }
-  const files: string[] = [];
-  walkTargets(abs, 0, files);
+  const files = walkBounded(abs, {
+    maxDepth: MAX_WALK_DEPTH,
+    maxFiles: MAX_FILES,
+    skipDirs: SKIP_DIR_NAMES,
+    skipHiddenDirs: true,
+    accept: (full, name) => {
+      if (name.startsWith(".") && name !== ".fixture") return false;
+      if (!TARGET_BASENAME.test(name) && !SCAN_EXT.test(name)) return false;
+      // Prefer entitlement-shaped basenames; still accept other JS/HTML but
+      // only if basename matches target OR the name starts with panel/license/vault.
+      return (
+        TARGET_BASENAME.test(name) ||
+        /(?:^|\/)(?:panel|license|vault)[^/]*$/i.test(name)
+      );
+    },
+  });
   for (const f of files) {
     try {
       reports.push(lintPlaintextSecretsFile(f, options));
