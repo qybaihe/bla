@@ -263,6 +263,73 @@ export interface SidecarBindingPart {
   readonly bytes: Uint8Array;
 }
 
+type SidecarPartsCollection =
+  | { readonly ok: true; readonly parts: SidecarBindingPart[] }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Shared sidecar-part resolution for the `verify*Sidecar*` host checks.
+ *
+ * - `missingPolicy: "marker"` hashes a `missing:<label>` stand-in so the
+ *   digest comparison fails closed (wasm/bun/asar).
+ * - `missingPolicy: "fail"` returns the first missing/unreadable label
+ *   (pyc/gguf/safetensors).
+ * - `requireBaseDir` (default true) fails when a label needs a disk read but
+ *   no `baseDir` was supplied; ASAR members never read the disk.
+ */
+function collectSidecarVerifyParts(options: {
+  readonly sidecarPaths: readonly string[];
+  readonly overrides?: Readonly<Record<string, Uint8Array>>;
+  readonly baseDir?: string;
+  readonly requireBaseDir?: boolean;
+  readonly missingPolicy: "marker" | "fail";
+}): SidecarPartsCollection {
+  const parts: SidecarBindingPart[] = [];
+  for (const label of options.sidecarPaths) {
+    const override = options.overrides?.[label];
+    if (override) {
+      parts.push({ pathLabel: label, bytes: override });
+      continue;
+    }
+    if (!options.baseDir) {
+      if (options.requireBaseDir !== false) {
+        return {
+          ok: false,
+          reason: `sidecar ${label} not supplied and no baseDir to read`,
+        };
+      }
+      parts.push({
+        pathLabel: label,
+        bytes: new TextEncoder().encode(`missing:${label}`),
+      });
+      continue;
+    }
+    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
+    try {
+      if (!existsSync(abs)) {
+        if (options.missingPolicy === "fail") {
+          return { ok: false, reason: `sidecar ${label} missing on disk` };
+        }
+        parts.push({
+          pathLabel: label,
+          bytes: new TextEncoder().encode(`missing:${label}`),
+        });
+        continue;
+      }
+      parts.push({ pathLabel: label, bytes: readFileSync(abs) });
+    } catch {
+      if (options.missingPolicy === "fail") {
+        return { ok: false, reason: `sidecar ${label} unreadable` };
+      }
+      parts.push({
+        pathLabel: label,
+        bytes: new TextEncoder().encode(`missing:${label}`),
+      });
+    }
+  }
+  return { ok: true, parts };
+}
+
 export interface SidecarBindingDigest {
   /** Full SHA-256 hex over entry‖sidecars‖seedTag (mode-dependent). */
   readonly hex: string;
@@ -983,39 +1050,23 @@ export function verifyWasmSidecarCustomSection(
     return { ok: false, reason: "bla.sidecar.v1 note is not valid JSON" };
   }
 
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = options.sidecarBytes?.[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    if (!options.baseDir) {
-      return {
-        ok: false,
-        reason: `sidecar ${label} not supplied and no baseDir to read`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
-    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
-    try {
-      if (!existsSync(abs)) {
-        sidecarParts.push({
-          pathLabel: label,
-          bytes: new TextEncoder().encode(`missing:${label}`),
-        });
-        continue;
-      }
-      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
-    } catch {
-      sidecarParts.push({
-        pathLabel: label,
-        bytes: new TextEncoder().encode(`missing:${label}`),
-      });
-    }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "marker",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
   }
+  const sidecarParts = collected.parts;
 
   const measured = computeSidecarBindingDigest(
     {
@@ -1289,39 +1340,23 @@ export function verifyBunSidecarCompanionNote(
     return { ok: false, reason: "bun companion note is not valid JSON" };
   }
 
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = options.sidecarBytes?.[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    if (!options.baseDir) {
-      return {
-        ok: false,
-        reason: `sidecar ${label} not supplied and no baseDir to read`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
-    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
-    try {
-      if (!existsSync(abs)) {
-        sidecarParts.push({
-          pathLabel: label,
-          bytes: new TextEncoder().encode(`missing:${label}`),
-        });
-        continue;
-      }
-      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
-    } catch {
-      sidecarParts.push({
-        pathLabel: label,
-        bytes: new TextEncoder().encode(`missing:${label}`),
-      });
-    }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "marker",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
   }
+  const sidecarParts = collected.parts;
 
   const measured = computeSidecarBindingDigest(
     {
@@ -1631,18 +1666,16 @@ export function verifyAsarSidecarArchiveNote(
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   const note = parsed.note;
 
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = members[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    sidecarParts.push({
-      pathLabel: label,
-      bytes: new TextEncoder().encode(`missing:${label}`),
-    });
+  const collectedParts = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: members,
+    missingPolicy: "marker",
+    requireBaseDir: false,
+  });
+  if (!collectedParts.ok) {
+    return { ok: false, reason: collectedParts.reason };
   }
+  const sidecarParts = collectedParts.parts;
 
   const measured = computeSidecarBindingDigest(
     {
@@ -2257,44 +2290,23 @@ export function verifyPycSidecarMarshalNote(
     return { ok: false, reason: "pyc sidecar marshal note missing" };
   }
 
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = options.sidecarBytes?.[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    if (!options.baseDir) {
-      return {
-        ok: false,
-        reason: `sidecar ${label} not supplied and no baseDir to read`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
-    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
-    try {
-      if (!existsSync(abs)) {
-        return {
-          ok: false,
-          reason: `sidecar ${label} missing on disk`,
-          note,
-          expectedHex: note.digest,
-          softFold: note.softFold,
-        };
-      }
-      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
-    } catch {
-      return {
-        ok: false,
-        reason: `sidecar ${label} unreadable`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "fail",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
   }
+  const sidecarParts = collected.parts;
 
   const measured = computeSidecarBindingDigest(
     {
@@ -2599,44 +2611,23 @@ export function verifyGgufSidecarMetadataNote(
     return { ok: false, reason: "gguf sidecar metadata note missing" };
   }
 
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = options.sidecarBytes?.[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    if (!options.baseDir) {
-      return {
-        ok: false,
-        reason: `sidecar ${label} not supplied and no baseDir to read`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
-    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
-    try {
-      if (!existsSync(abs)) {
-        return {
-          ok: false,
-          reason: `sidecar ${label} missing on disk`,
-          note,
-          expectedHex: note.digest,
-          softFold: note.softFold,
-        };
-      }
-      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
-    } catch {
-      return {
-        ok: false,
-        reason: `sidecar ${label} unreadable`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "fail",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
   }
+  const sidecarParts = collected.parts;
 
   const measured = computeSidecarBindingDigest(
     {
@@ -2916,44 +2907,23 @@ export function verifySafetensorsSidecarMetadataNote(
   if (!note) {
     return { ok: false, reason: "safetensors sidecar metadata note missing" };
   }
-  const sidecarParts: SidecarBindingPart[] = [];
-  for (const label of note.sidecarPaths) {
-    const override = options.sidecarBytes?.[label];
-    if (override) {
-      sidecarParts.push({ pathLabel: label, bytes: override });
-      continue;
-    }
-    if (!options.baseDir) {
-      return {
-        ok: false,
-        reason: `sidecar ${label} not supplied and no baseDir to read`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
-    const abs = isAbsolute(label) ? label : join(options.baseDir, label);
-    try {
-      if (!existsSync(abs)) {
-        return {
-          ok: false,
-          reason: `sidecar ${label} missing on disk`,
-          note,
-          expectedHex: note.digest,
-          softFold: note.softFold,
-        };
-      }
-      sidecarParts.push({ pathLabel: label, bytes: readFileSync(abs) });
-    } catch {
-      return {
-        ok: false,
-        reason: `sidecar ${label} unreadable`,
-        note,
-        expectedHex: note.digest,
-        softFold: note.softFold,
-      };
-    }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "fail",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
   }
+  const sidecarParts = collected.parts;
   const measured = computeSidecarBindingDigest(
     { pathLabel: note.entryPath, bytes: options.entryBytes },
     sidecarParts,
