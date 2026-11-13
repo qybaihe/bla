@@ -266,6 +266,14 @@ export function probeLocalMcpHandshake(
   }
 }
 
+const ENGINE_ALIAS_KEYS: ReadonlySet<string> = new Set([
+  "astParser",
+  "asarPacker",
+  "wasmLeb128",
+  "pythonMarshal",
+  "nativeBinary",
+]);
+
 function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines"] {
   let javascriptAstShield: EngineHealthStatus = "ready";
   try {
@@ -435,6 +443,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
   const globalIssues: string[] = [];
 
   for (const [engineName, status] of Object.entries(engines)) {
+    if (ENGINE_ALIAS_KEYS.has(engineName)) continue;
     if (status === "unavailable") {
       globalIssues.push(`Engine '${engineName}' is unavailable in current runtime (${process.version})`);
     }

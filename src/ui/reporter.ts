@@ -5,7 +5,7 @@ import type {
   ProtectionResult,
   VerificationReport,
 } from "../core/types.js";
-import type { DoctorDiagnosticReport } from "../setup/doctor.js";
+import type { DoctorDiagnosticReport, EngineHealthStatus } from "../setup/doctor.js";
 import type { SetupRunResult } from "../setup/setup.js";
 import type { OneClickDefenseReport } from "../engine/defender.js";
 
@@ -205,23 +205,35 @@ export function formatBenchmarkReport(bench: BenchmarkReport): string {
   return lines.join("\n");
 }
 
+function formatReadiness(status: DoctorDiagnosticReport["status"]): string {
+  if (status === "pass") return `${ANSI.green}HEALTHY${ANSI.reset}`;
+  if (status === "warn") return `${ANSI.yellow}HEALTHY WITH WARNINGS${ANSI.reset}`;
+  return `${ANSI.red}UNHEALTHY${ANSI.reset}`;
+}
+
+function formatEngineStatus(status: EngineHealthStatus): string {
+  if (status === "ready") return `${ANSI.green}${status}${ANSI.reset}`;
+  if (status === "degraded") return `${ANSI.yellow}${status}${ANSI.reset}`;
+  return `${ANSI.red}${status}${ANSI.reset}`;
+}
+
 export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
   const lines: string[] = [
     formatBanner(),
     "",
-    `${ANSI.bold}BLA Doctor Readiness:${ANSI.reset} ${ANSI.green}HEALTHY${ANSI.reset} (v${doc.blaVersion} on Node ${doc.nodeVersion}, ${doc.platform})`,
+    `${ANSI.bold}BLA Doctor Readiness:${ANSI.reset} ${formatReadiness(doc.status)} (v${doc.blaVersion} on Node ${doc.nodeVersion}, ${doc.platform})`,
     "",
     `${ANSI.bold}Protection Subsystems:${ANSI.reset}`,
-    `  • JavaScript/TypeScript AST & Semantic Budget Breaker: ${ANSI.green}${doc.engines.javascriptAstShield}${ANSI.reset}`,
-    `  • Electron .asar Unpacker & Integrity Repacker:        ${ANSI.green}${doc.engines.electronAsarPacker}${ANSI.reset}`,
-    `  • WebAssembly (.wasm) Custom & Name Section Shield:    ${ANSI.green}${doc.engines.wasmBinaryShield}${ANSI.reset}`,
-    `  • Python (.py / CPython .pyc) Marshal Tarpit Shield:   ${ANSI.green}${doc.engines.pythonPycMarshalShield}${ANSI.reset}`,
-    `  • Native Binary (ELF / Mach-O / PE) Section Shield:    ${ANSI.green}${doc.engines.nativeElfMachoPeShield}${ANSI.reset}`,
-    `  • Archive (ZIP / Android APK) Enclave Shield:          ${ANSI.green}${doc.engines.zipApkArchiveShield}${ANSI.reset}`,
-    `  • AI Model (Safetensors / GGUF) Nesting Breaker:       ${ANSI.green}${doc.engines.aiModelShield}${ANSI.reset}`,
-    `  • Erlang BEAM Chunk & Atom Exhaustion Shield:          ${ANSI.green}${doc.engines.erlangBeamShield}${ANSI.reset}`,
-    `  • EVM Bytecode Interface-Budget Shield:                ${ANSI.green}${doc.engines.evmBytecodeShield}${ANSI.reset}`,
-    `  • SQLite Honey-Table & Trap-Column Runtime:            ${ANSI.green}${doc.engines.sqliteRuntime}${ANSI.reset}`,
+    `  • JavaScript/TypeScript AST & Semantic Budget Breaker: ${formatEngineStatus(doc.engines.javascriptAstShield)}`,
+    `  • Electron .asar Unpacker & Integrity Repacker:        ${formatEngineStatus(doc.engines.electronAsarPacker)}`,
+    `  • WebAssembly (.wasm) Custom & Name Section Shield:    ${formatEngineStatus(doc.engines.wasmBinaryShield)}`,
+    `  • Python (.py / CPython .pyc) Marshal Tarpit Shield:   ${formatEngineStatus(doc.engines.pythonPycMarshalShield)}`,
+    `  • Native Binary (ELF / Mach-O / PE) Section Shield:    ${formatEngineStatus(doc.engines.nativeElfMachoPeShield)}`,
+    `  • Archive (ZIP / Android APK) Enclave Shield:          ${formatEngineStatus(doc.engines.zipApkArchiveShield)}`,
+    `  • AI Model (Safetensors / GGUF) Nesting Breaker:       ${formatEngineStatus(doc.engines.aiModelShield)}`,
+    `  • Erlang BEAM Chunk & Atom Exhaustion Shield:          ${formatEngineStatus(doc.engines.erlangBeamShield)}`,
+    `  • EVM Bytecode Interface-Budget Shield:                ${formatEngineStatus(doc.engines.evmBytecodeShield)}`,
+    `  • SQLite Honey-Table & Trap-Column Runtime:            ${formatEngineStatus(doc.engines.sqliteRuntime)}`,
     "",
     `${ANSI.bold}Detected Coding Agent Integrations:${ANSI.reset}`,
   ];
@@ -231,6 +243,13 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
     const mcp = c.mcpRegistered ? `${ANSI.green}MCP registered${ANSI.reset}` : `${ANSI.yellow}MCP not registered${ANSI.reset}`;
     const skill = c.skillInstalled ? `${ANSI.green}Skill installed${ANSI.reset}` : `${ANSI.dim}Skill not installed${ANSI.reset}`;
     lines.push(`  • ${c.displayName.padEnd(22)} (${c.id.padEnd(15)}) : ${det} | ${mcp} | ${skill}`);
+  }
+
+  if (doc.issues.length > 0) {
+    lines.push("", `${ANSI.bold}Issues (${doc.issues.length}):${ANSI.reset}`);
+    for (const issue of doc.issues) {
+      lines.push(`  • ${ANSI.red}${issue}${ANSI.reset}`);
+    }
   }
 
   return lines.join("\n");
