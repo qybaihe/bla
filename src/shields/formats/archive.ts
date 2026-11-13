@@ -309,12 +309,12 @@ export function protectZipOrApkBuffer(
   let membersHardened = 0;
   const outputFiles: { name: string; data: Buffer; storeOnly?: boolean }[] = existingEntries.map((e) => {
     const lower = e.name.toLowerCase();
-    if (lower.endsWith(".dex") || lower === "classes.dex" || /(?:^|\/)classes\d*\.dex$/.test(lower)) {
+    if (lower.endsWith(".dex")) {
       const protectedDex = protectAndroidDexBuffer(e.data, { intensity, seed: options.seed });
       membersHardened += 1;
       return { name: e.name, data: protectedDex.buffer };
     }
-    if (lower.endsWith("global-metadata.dat") || lower === "global-metadata.dat") {
+    if (lower.endsWith("global-metadata.dat")) {
       const protectedMeta = protectIl2cppMetadataBuffer(e.data, { intensity, seed: options.seed });
       membersHardened += 1;
       return { name: e.name, data: protectedMeta.buffer };
