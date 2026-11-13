@@ -20,12 +20,19 @@ export interface BoundedWalkOptions {
   readonly maxFileBytes?: number;
   /** Final filter; called only for regular files before they are pushed. */
   readonly accept?: (fullPath: string, name: string) => boolean;
+  /**
+   * Called when a directory listing or per-file stat fails. Without this
+   * callback those errors are still treated as an empty directory, so scans
+   * that must stay honest about incomplete inventories should pass a collector.
+   */
+  readonly onError?: (path: string, error: Error) => void;
 }
 
 /**
  * Bounded, symlink-safe directory walk shared by discovery and packaging lints.
  * Directory symlinks are not descended because `Dirent.isDirectory()` is false
- * for them, and read errors are treated as an empty directory.
+ * for them. Read errors are reported through `onError` when provided and
+ * otherwise treated as an empty directory.
  */
 export function walkBounded(root: string, options: BoundedWalkOptions): string[] {
   const out: string[] = [];
@@ -38,6 +45,7 @@ export function walkBounded(root: string, options: BoundedWalkOptions): string[]
     descendAtMaxDepth = true,
     maxFileBytes,
     accept,
+    onError,
   } = options;
 
   const visit = (dir: string, depth: number): void => {
@@ -45,7 +53,8 @@ export function walkBounded(root: string, options: BoundedWalkOptions): string[]
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      onError?.(dir, error as Error);
       return;
     }
     if (sortEntries) {
@@ -68,7 +77,8 @@ export function walkBounded(root: string, options: BoundedWalkOptions): string[]
           const stat = statSync(full);
           if (!stat.isFile()) continue;
           size = stat.size;
-        } catch {
+        } catch (error) {
+          onError?.(full, error as Error);
           continue;
         }
         if (size > maxFileBytes) continue;

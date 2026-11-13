@@ -274,6 +274,11 @@ export interface HardenProjectReport {
   /** Planned/actual outputs that already existed before this run. */
   readonly wouldOverwrite: readonly string[];
   /**
+   * Paths the discovery walk could not read (`path: CODE`). Present only when
+   * non-empty — a non-empty list means the discovered inventory may be incomplete.
+   */
+  readonly discoveryReadErrors?: readonly string[];
+  /**
    * Content-addressed id for this harden run (unsigned). Stable across identical
    * inputs/planned outputs; present even on dry-run so agents can correlate later.
    */
@@ -305,6 +310,11 @@ export interface HardenDiscoveryResult {
   readonly maxArtifacts: number;
   /** Zero-based index into the stable discovery order for this page. */
   readonly offset: number;
+  /**
+   * Directories/files the bounded walk could not read during this discovery
+   * pass (`path: CODE`). Non-empty means the inventory may be incomplete.
+   */
+  readonly readErrors: readonly string[];
   /**
    * When `truncated` is true, pass this as the next `offset` to retrieve the
    * following page without losing the tail (issue #75 paging). Absent when
@@ -356,7 +366,8 @@ function collectRootArtifacts(
   projectRoot: string,
   maxArtifacts: number,
   skipDirs: ReadonlySet<string>,
-  excludeDir?: string,
+  excludeDir: string | undefined,
+  readErrors: string[],
 ): DiscoveredArtifact[] {
   const formats = new Map<string, ArtifactFormat>();
   const files = walkBounded(root, {
@@ -366,6 +377,10 @@ function collectRootArtifacts(
     skipHiddenDirs: true,
     // Locale-independent name sort so offset paging is stable across platforms.
     sortEntries: true,
+    onError: (path, error) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      readErrors.push(`${path.split(sep).join("/")}: ${code ?? error.message}`);
+    },
     accept: (full, name) => {
       if (excludeDir && (full === excludeDir || full.startsWith(excludeDir + sep))) {
         return false;
@@ -419,7 +434,11 @@ export function discoverHardenTargets(
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const excludeDir = options.outputDirectory ? resolve(options.outputDirectory) : undefined;
   // Collect one past the page end so truncated/nextOffset stay honest.
-  const all = collectHardenableArtifacts(abs, offset + maxArtifacts + 1, excludeDir);
+  const { artifacts: all, readErrors } = collectHardenableArtifacts(
+    abs,
+    offset + maxArtifacts + 1,
+    excludeDir,
+  );
   const page = all.slice(offset, offset + maxArtifacts);
   const truncated = all.length > offset + maxArtifacts;
   return {
@@ -428,6 +447,7 @@ export function discoverHardenTargets(
     truncated,
     maxArtifacts,
     offset,
+    readErrors,
     ...(truncated ? { nextOffset: offset + page.length } : {}),
   };
 }
@@ -436,7 +456,7 @@ function collectHardenableArtifacts(
   abs: string,
   maxArtifacts: number,
   excludeDir?: string,
-): readonly DiscoveredArtifact[] {
+): { readonly artifacts: readonly DiscoveredArtifact[]; readonly readErrors: readonly string[] } {
   if (!existsSync(abs)) {
     throw new Error(`Path not found: ${abs}`);
   }
@@ -446,22 +466,26 @@ function collectHardenableArtifacts(
     if (!isProtectableFormat(format)) {
       throw new Error(`Unsupported artifact format at ${abs}`);
     }
-    return [{ path: abs, format, relativePath: basename(abs) }];
+    return {
+      artifacts: [{ path: abs, format, relativePath: basename(abs) }],
+      readErrors: [],
+    };
   }
   if (!stats.isDirectory()) {
     throw new Error(`Not a file or directory: ${abs}`);
   }
 
+  const readErrors: string[] = [];
   const found: DiscoveredArtifact[] = [];
   const { preferred, includeProjectRootSupplemental } = resolveSearchRoots(abs);
   for (const root of preferred) {
     const remaining = maxArtifacts - found.length;
     if (remaining <= 0) break;
-    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES, excludeDir));
+    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES, excludeDir, readErrors));
   }
   if (includeProjectRootSupplemental && found.length < maxArtifacts) {
     found.push(
-      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES, excludeDir),
+      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES, excludeDir, readErrors),
     );
   }
   // De-dupe by absolute path (cargo release may overlap target/)
@@ -472,7 +496,7 @@ function collectHardenableArtifacts(
     seen.add(item.path);
     unique.push(item);
   }
-  return unique;
+  return { artifacts: unique, readErrors };
 }
 
 /** Mirror-tree destination under the output root (pure; no filesystem writes). */
@@ -651,6 +675,9 @@ export function hardenProject(
     dryRun,
     truncated: discovery.truncated,
     maxArtifacts: discovery.maxArtifacts,
+    ...(discovery.readErrors.length > 0
+      ? { discoveryReadErrors: discovery.readErrors }
+      : {}),
     wouldOverwrite,
     runId,
   } as const;
@@ -1546,6 +1573,17 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
     lines.push(
       `  ⚠ discovery truncated at ${report.maxArtifacts} artifacts; more targets exist (raise maxArtifacts or harden a narrower directory)`,
     );
+  }
+  if (report.discoveryReadErrors && report.discoveryReadErrors.length > 0) {
+    lines.push(
+      `  ⚠ discovery read errors (${report.discoveryReadErrors.length}) — inventory may be incomplete:`,
+    );
+    for (const entry of report.discoveryReadErrors.slice(0, 5)) {
+      lines.push(`    - ${entry}`);
+    }
+    if (report.discoveryReadErrors.length > 5) {
+      lines.push(`    … ${report.discoveryReadErrors.length - 5} more`);
+    }
   }
   if (report.discoveredCount === 0) {
     lines.push(
