@@ -101,6 +101,7 @@ import {
   entangleJsEntryWithSidecars,
   entanglePycEntryWithSidecars,
   entangleGgufEntryWithSidecars,
+  entangleSafetensorsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
@@ -340,6 +341,41 @@ function applySidecarEntangleToGguf(
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: ggufBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarEntangleToSafetensors(
+  safetensorsBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: safetensorsBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: safetensorsBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: safetensorsBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleSafetensorsEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: safetensorsBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: safetensorsBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
 }
 
@@ -1097,7 +1133,22 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     counteredVectors.add("sqlite-database-inspection");
   } else if (format === "model-safetensors") {
     const res = safetensorsResult!;
-    writeProtectedOutput(absOutput, res.buffer);
+    let finalSafetensors = res.buffer;
+    {
+      const entangled = applySidecarEntangleToSafetensors(
+        finalSafetensors,
+        options,
+        absOutput,
+        seed,
+      );
+      finalSafetensors = entangled.buffer;
+      if (entangled.applied) {
+        sidecarEntangleApplied = true;
+        // Host-verify __metadata__ note only: Safetensors loaders ignore unknown
+        // __metadata__ keys, so strip / sibling delete still load.
+      }
+    }
+    writeProtectedOutput(absOutput, finalSafetensors);
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.triggeredJsonNestingBreaker ? 2 : 1;
     counteredVectors.add("model-artifact-inspection");

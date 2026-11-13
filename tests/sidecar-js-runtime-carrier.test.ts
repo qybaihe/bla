@@ -55,12 +55,19 @@ describe("sidecar entangle: module-only syntax is an ES module carrier", () => {
       ).toBe("module");
     });
 
-    it(`refuses a ${label} .js entry instead of shipping a broken preamble`, () => {
+    it(`binds a ${label} .js entry with an ESM-native preamble: intact runs, sidecar delete fails closed`, () => {
       const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-modsyntax-"));
       try {
+        writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf8");
         const { out, run } = protectWithSidecar(dir, "app.js", source);
-        expect(run).toThrow(/ES module entry/);
-        expect(existsSync(out)).toBe(false);
+        expect(run().sidecarEntangle).toBe(true);
+        const intact = runNode(out);
+        expect(intact.status).toBe(0);
+        expect(intact.stdout).toContain("RESULT 5");
+        rmSync(join(dir, "honey.txt"));
+        const stripped = runNode(out);
+        expect(stripped.status).not.toBe(0);
+        expect(stripped.stdout).not.toContain("RESULT 5");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -109,13 +116,19 @@ describe('sidecar entangle: package.json "type": "module" decides a .js carrier'
     }
   });
 
-  it("refuses a .js entry under a type:module package (no import/export syntax)", () => {
+  it("binds a .js entry under a type:module package with an ESM-native preamble (intact runs, sidecar delete fails closed)", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-pkgtype-"));
     try {
       writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf8");
       const { out, run } = protectWithSidecar(dir, "app.js", plain);
-      expect(run).toThrow(/ES module entry/);
-      expect(existsSync(out)).toBe(false);
+      expect(run().sidecarEntangle).toBe(true);
+      const intact = runNode(out);
+      expect(intact.status).toBe(0);
+      expect(intact.stdout).toContain("RESULT 5");
+      rmSync(join(dir, "honey.txt"));
+      const stripped = runNode(out);
+      expect(stripped.status).not.toBe(0);
+      expect(stripped.stdout).not.toContain("RESULT 5");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

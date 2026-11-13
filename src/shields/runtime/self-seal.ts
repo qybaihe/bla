@@ -174,6 +174,12 @@ export interface SelfSealOptions {
    * hardFailOnSiblingMismatch, else poison digest).
    */
   readonly selfDigestCheck?: boolean;
+  /**
+   * Optional ES module carrier bindings (`import { createRequire as <ident> } from "node:module"`
+   * + `const <urlIdent> = import.meta.url;`) injected by the caller when protecting ESM entries.
+   */
+  readonly esmRequireHelperIdent?: string;
+  readonly esmMetaUrlIdent?: string;
 }
 
 export interface SelfSealSnippet {
@@ -202,21 +208,38 @@ function emitMeasureFunction(
   hardFailOnSiblingMismatch: boolean,
   envFingerprint: boolean,
   selfDigestCheck: boolean,
+  esmRequireHelperIdent?: string,
+  esmMetaUrlIdent?: string,
 ): string[] {
   const lines: string[] = [];
   lines.push(`function ${helperName}() {`);
   lines.push(`  var digest = 0;`);
   lines.push(`  try {`);
-  lines.push(`    var _c = require("node:crypto");`);
-  lines.push(`    var _fs = require("node:fs");`);
-  lines.push(`    var _path = require("node:path");`);
-  lines.push(`    var h = _c.createHash("sha256");`);
-  lines.push(
-    `    var selfPath = (typeof __filename === "string" ? __filename : null);`,
-  );
-  lines.push(
-    `    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`,
-  );
+  if (esmRequireHelperIdent && esmMetaUrlIdent) {
+    lines.push(`    var _req = ${esmRequireHelperIdent}(${esmMetaUrlIdent});`);
+    lines.push(`    var _c = _req("node:crypto");`);
+    lines.push(`    var _fs = _req("node:fs");`);
+    lines.push(`    var _path = _req("node:path");`);
+    lines.push(`    var h = _c.createHash("sha256");`);
+    lines.push(
+      `    var selfPath = _req("node:url").fileURLToPath(${esmMetaUrlIdent});`,
+    );
+    lines.push(`    var baseDir = _path.dirname(selfPath);`);
+  } else {
+    lines.push(`    var _c = require("node:crypto");`);
+    lines.push(`    var _fs = require("node:fs");`);
+    lines.push(`    var _path = require("node:path");`);
+    lines.push(`    var h = _c.createHash("sha256");`);
+    lines.push(
+      `    var selfPath = (typeof __filename === "string" ? __filename : null);`,
+    );
+    lines.push(
+      `    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`,
+    );
+    lines.push(
+      `    var baseDir = (typeof __dirname === "string" ? __dirname : null);`,
+    );
+  }
   lines.push(`    var selfBuf = null;`);
   lines.push(
     `    if (selfPath) { try { selfBuf = _fs.readFileSync(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
@@ -248,7 +271,7 @@ function emitMeasureFunction(
   lines.push(`        var spKey = siblings[i];`);
   lines.push(`        var sp = spKey;`);
   lines.push(
-    `        if (!_path.isAbsolute(sp) && typeof __dirname === "string") sp = _path.join(__dirname, sp);`,
+    `        if (!_path.isAbsolute(sp) && typeof baseDir === "string") sp = _path.join(baseDir, sp);`,
   );
   lines.push(`        var sibBuf = _fs.readFileSync(sp);`);
   lines.push(
@@ -361,6 +384,8 @@ export function generateSelfSealSnippet(
         hardFailOnSiblingMismatch,
         envFingerprint,
         selfDigestCheck,
+        options.esmRequireHelperIdent,
+        options.esmMetaUrlIdent,
       ),
     );
   }

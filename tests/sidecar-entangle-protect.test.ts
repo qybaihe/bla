@@ -83,25 +83,30 @@ describe("sidecar entangle protectTarget wiring", () => {
     }
   });
 
-  it("refuses ES module entries instead of writing a broken CommonJS preamble", () => {
+  it("protects ES module (.mjs) entries with an ESM-native strip⇒fail preamble", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-sidecar-esm-"));
     try {
       const entry = join(dir, "main.mjs");
-      writeFileSync(entry, "export const v = 99;\n", "utf8");
+      writeFileSync(entry, 'export const v = 99;\nconsole.log("ESM_OK", v);\n', "utf8");
       writeFileSync(join(dir, "sib-for-out.mjs"), "sidecar-bytes\n", "utf8");
       const out = join(dir, "main.out.mjs");
-      expect(() =>
-        protectTarget({
-          inputPath: entry,
-          outputPath: out,
-          intensity: "balanced",
-          seed: "esm-sidecar-test",
-          honeySourceMaps: false,
-          sidecarEntangle: true,
-          sidecarEntanglePaths: ["sib-for-out.mjs"],
-        }),
-      ).toThrow(/ES module entry/);
-      expect(existsSync(out)).toBe(false);
+      const res = protectTarget({
+        inputPath: entry,
+        outputPath: out,
+        intensity: "balanced",
+        seed: "esm-sidecar-test",
+        honeySourceMaps: false,
+        sidecarEntangle: true,
+        sidecarEntanglePaths: ["sib-for-out.mjs"],
+      });
+      expect(res.sidecarEntangle).toBe(true);
+      expect(existsSync(out)).toBe(true);
+      const intact = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(intact.status).toBe(0);
+      expect(intact.stdout).toContain("ESM_OK 99");
+      rmSync(join(dir, "sib-for-out.mjs"));
+      const stripped = spawnSync(process.execPath, [out], { encoding: "utf8" });
+      expect(stripped.status).not.toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

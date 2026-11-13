@@ -1359,9 +1359,31 @@ export function transformJavaScriptWithBlaShield(
   mirageLines.push(deceptionSuite.cognitiveArmor.code);
   // Opt-in self-seal (issue #40.5): sibling-module + env fingerprint digest.
   const selfSealOpt = options.selfSeal;
+  let esmSelfSealReqIdent: string | undefined;
+  let esmSelfSealMetaUrlIdent: string | undefined;
   if (selfSealOpt) {
-    const sealOpts: SelfSealOptions =
+    if (effectiveCarrier === "module") {
+      esmSelfSealReqIdent = prng.identifier({
+        style: "camel",
+        hint: "resolveModuleRequire",
+        entropy: 4,
+      });
+      esmSelfSealMetaUrlIdent = prng.identifier({
+        style: "camel",
+        hint: "moduleEntryUrl",
+        entropy: 4,
+      });
+    }
+    const baseSealOpts: SelfSealOptions =
       selfSealOpt === true ? {} : selfSealOpt;
+    const sealOpts: SelfSealOptions =
+      esmSelfSealReqIdent && esmSelfSealMetaUrlIdent
+        ? {
+            ...baseSealOpts,
+            esmRequireHelperIdent: esmSelfSealReqIdent,
+            esmMetaUrlIdent: esmSelfSealMetaUrlIdent,
+          }
+        : baseSealOpts;
     const seal = generateSelfSealSnippet(prng, sealOpts);
     mirageLines.push(seal.code);
     selfSealEnabled = true;
@@ -1622,6 +1644,29 @@ export function transformJavaScriptWithBlaShield(
       : Math.min(4, sanitizedInjectedStatements.length);
   const topDecls = sanitizedInjectedStatements.slice(0, topEnd);
   const restInjected = sanitizedInjectedStatements.slice(topEnd);
+  if (esmSelfSealReqIdent && esmSelfSealMetaUrlIdent) {
+    const reqImportDecl = t.importDeclaration(
+      [
+        t.importSpecifier(
+          t.identifier(esmSelfSealReqIdent),
+          t.identifier("createRequire"),
+        ),
+      ],
+      t.stringLiteral("node:module"),
+    );
+    const metaUrlDecl = t.variableDeclaration("const", [
+      t.variableDeclarator(
+        t.identifier(esmSelfSealMetaUrlIdent),
+        t.memberExpression(
+          t.metaProperty(t.identifier("import"), t.identifier("meta")),
+          t.identifier("url"),
+        ),
+      ),
+    ]);
+    ast.program.body.unshift(reqImportDecl);
+    insertIndex += 1;
+    topDecls.unshift(metaUrlDecl);
+  }
   if (topDecls.length > 0) {
     ast.program.body.splice(insertIndex, 0, ...topDecls);
   }

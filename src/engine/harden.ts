@@ -45,6 +45,7 @@ import {
   entangleJsEntryWithSidecars,
   entanglePycEntryWithSidecars,
   entangleGgufEntryWithSidecars,
+  entangleSafetensorsEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
@@ -1218,6 +1219,48 @@ export function hardenProject(
           if (sidecars.length > 0) {
             const entryBytes = readFileSync(entryAbs);
             const bound = entangleGgufEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+                allowLinkWriteThrough: false,
+              });
+            }
+          }
+        }
+      }
+
+      // Safetensors __metadata__ entanglement only when no JS/Python/WASM/.pyc/GGUF
+      // entry was bound — bla.sidecar.v1 __metadata__ key measured against FINAL
+      // siblings; tensor bytes stay bit-exact.
+      const safetensorsLike = summaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "model-safetensors" ||
+            /\.safetensors$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      const safetensorsEntry =
+        !jsEntry && !pyEntry && !wasmEntry && !pycEntry && !ggufEntry
+          ? safetensorsLike[0]
+          : undefined;
+      if (safetensorsEntry) {
+        const entryAbs = join(outputRoot, safetensorsEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === safetensorsEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entangleSafetensorsEntryWithSidecars({
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,

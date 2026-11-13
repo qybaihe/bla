@@ -20,6 +20,8 @@ export type DefenseScoreGapId =
   | "sidecar-entangle-not-enabled"
   | "pyc-sidecar-host-verify-only"
   | "gguf-sidecar-host-verify-only"
+  | "safetensors-sidecar-host-verify-only"
+  | "wasm-sidecar-host-verify-only"
   | "numeric-template-hygiene-partial"
   | "native-postlink-cfg-untouched"
   | "native-trailer-unmapped";
@@ -76,6 +78,7 @@ const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
   "python-source",
   "python-pyc",
   "model-gguf",
+  "model-safetensors",
   "native-elf",
   "native-macho",
   "native-pe",
@@ -138,6 +141,26 @@ export function collectDefenseScoreGaps(
       id: "gguf-sidecar-host-verify-only",
       summary:
         "sidecarEntangle planted a GGUF bla.sidecar.v1 STRING metadata note verified only by host verifyGgufSidecarMetadataNote; GGUF loaders still load after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // Safetensors __metadata__ KV is host-verify only (loaders ignore unknown __metadata__ keys).
+  if (input.detectedFormat === "model-safetensors" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "safetensors-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a Safetensors __metadata__ bla.sidecar.v1 note verified only by host verifySafetensorsSidecarMetadataNote; Safetensors loaders still load tensors after strip or sibling delete (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // Standalone WASM custom-section is host-verify only until the host JS loader calls verifyWasmSidecarCustomSection.
+  if (input.detectedFormat === "wasm" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "wasm-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a WASM bla.sidecar.v1 custom section verified by host verifyWasmSidecarCustomSection; WebAssembly.instantiate ignores custom sections unless your JS/host loader enforces verification before instantiation (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }
