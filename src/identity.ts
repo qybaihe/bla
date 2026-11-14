@@ -212,12 +212,19 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   REGEX_MINIMUM_WORKER_HEAP_REQUEST_MIB: 7,
   /**
    * NativeAOT PE parser budgets (`src/domain/native/nativeAotPe.ts`).
-   * REA #10067/#10094 own these per-operation and retain frozen scan stops —
-   * constants pre-existed tip b2f3dc81f; catalogued for Counter-REA honesty.
+   * REA #10067/#10094 owned the per-operation ceilings. REA #4445
+   * (c8d5413d0, tip 1ba93b460) renamed `NATIVE_AOT_MAX_WORK_UNITS` to
+   * `NATIVE_AOT_BASE_WORK_UNITS` and scales work as
+   * `BASE + 8 * min(sourceBytes, MAX_SOURCE_BYTES)`, bounded by the
+   * source-byte ceiling. Honesty catalog update — a budget *relaxation*,
+   * not a new 1:1 densify trip target.
    */
   NATIVE_AOT_MAX_SOURCE_BYTES: 134_217_728,
   NATIVE_AOT_MAX_REPORT_BYTES: 4_194_304,
+  /** @deprecated REA renamed this to NATIVE_AOT_BASE_WORK_UNITS; kept as an alias. */
   NATIVE_AOT_MAX_WORK_UNITS: 67_108_864,
+  NATIVE_AOT_BASE_WORK_UNITS: 67_108_864,
+  NATIVE_AOT_WORK_UNITS_PER_SOURCE_BYTE: 8,
   NATIVE_AOT_MAX_WORKING_MEMORY_BYTES: 67_108_864,
   /**
    * IL2CPP metadata provider + v108 header/string observation
@@ -239,4 +246,14 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
    * invalid DEX and break the protected runtime.
    */
   DEX_ARRAY_DIMENSIONS: 255,
+  /**
+   * Android JNI native-inventory split facts (`ReaJadxBridge.java`,
+   * REA #9756 / 9943c1c8b). Report allowance only — more than 64 split
+   * types or 256-character names are classified unknown. Honesty catalog
+   * only; not a densify trip target: planting fake
+   * `android:requiredSplitTypes` would perturb Play Feature Delivery /
+   * split-install behavior of the protected APK.
+   */
+  ANDROID_NATIVE_SPLIT_TYPES: 64,
+  ANDROID_NATIVE_SPLIT_TYPE_CHARS: 256,
 });

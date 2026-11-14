@@ -9,6 +9,7 @@ import {
   verifyPycSidecarMarshalNote,
   verifySafetensorsSidecarMetadataNote,
   verifyDexSidecarStringPoolNote,
+  verifySqliteSidecarSchemaComment,
   verifyWasmSidecarCustomSection,
 } from "../shields/runtime/sidecar-entangle.js";
 
@@ -20,6 +21,7 @@ export type SidecarVerifierKind =
   | "gguf-metadata-note"
   | "safetensors-metadata-note"
   | "dex-string-pool-note"
+  | "sqlite-schema-comment"
   | "runtime-only"
   | "entry-missing";
 
@@ -170,6 +172,22 @@ export function verifySidecarTarget(
         result.ok
           ? "dex string-pool note intact"
           : (result.reason ?? "dex sidecar verification failed"),
+        { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
+      );
+    }
+    case "sqlite": {
+      const result = verifySqliteSidecarSchemaComment({
+        entryBytes: bytes,
+        baseDir: dir,
+      });
+      return report(
+        result.ok,
+        abs,
+        format,
+        "sqlite-schema-comment",
+        result.ok
+          ? "sqlite schema-comment note intact"
+          : (result.reason ?? "sqlite sidecar verification failed"),
         { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
       );
     }

@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sidecar SQLite schema-comment note (`generateSidecarSqliteSchemaComment` / `bindSqliteSidecarEntanglement` / `entangleSqliteEntryWithSidecars` / `verifySqliteSidecarSchemaComment` / `extractSqliteSidecarSchemaComment` / `stripSqliteSidecarSchemaComment`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` SQLite post-pass plant an unused `bla_sidecar_v1` VIEW (`SELECT '<json>' AS "bla.sidecar.v1" WHERE 0`) carrying the sidecar binding digest. User tables, rows, query results, WAL/FK behavior, and `application_id` / `user_version` stay unchanged. Host-side verify re-hashes sibling sidecars (sidecars-mode digest). Vector `sqlite-sidecar-entangle` reserved but **not recorded** until a load-time hook lands. Default still OFF.
+- **defenseScore honesty:** `sqlite` joins `SIDECAR_ENTANGLE_FORMATS`; enabling the host-only note annotates `sqlite-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
+- **`REA_INTERNAL_LIMITS` catalog hygiene:** `NATIVE_AOT_BASE_WORK_UNITS` + `NATIVE_AOT_WORK_UNITS_PER_SOURCE_BYTE` (REA #4445 — budget *relaxation*, not a new densify target); `ANDROID_NATIVE_SPLIT_TYPES` / `ANDROID_NATIVE_SPLIT_TYPE_CHARS` (REA #9756 — report allowance only; planting fake `requiredSplitTypes` would perturb split-install behavior).
+
 ## [3.3.1] — 2026-11-13
 
 Patch extending opt-in `sidecarEntangle` to **Android DEX string-pool notes** (host-verify), cataloguing REA #10227's 255-dimension admission cap, and shipping the already-landed post-3.3.0 work (parameterized MBA substitutions, multi-round hypothesis-revision decoys, release-hygiene packaging gate, `verify-sidecar` CLI, technical SEO).

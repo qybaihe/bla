@@ -103,6 +103,10 @@ function quoteIdentifier(id: string): string {
   return `"${id.replace(/"/g, '""')}"`;
 }
 
+function sqlStringLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function isHoneyTableName(name: string): boolean {
   return SQLITE_HONEY_TABLE_NAME_SET.has(name) || name.includes("enclave_");
 }
@@ -724,6 +728,232 @@ export function buildSampleSqliteDatabase(): Buffer {
     `);
     db.close();
     return readFileSync(dbPath);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Reserved unused VIEW that carries the opt-in sidecarEntangle schema
+ * comment / metadata note. Not a user table: `snapshotBusinessTables` and
+ * `inspectSqliteBuffer` only enumerate `type = 'table'`. The view has
+ * `WHERE 0` so `SELECT * FROM bla_sidecar_v1` returns no rows.
+ *
+ * DEFENSIVE ONLY. Opt-in. Never change user tables, rows, query results,
+ * WAL/FK behavior, or application_id / user_version.
+ */
+export const SQLITE_SIDECAR_VIEW_NAME = "bla_sidecar_v1" as const;
+export const SQLITE_SIDECAR_NOTE_COLUMN = "bla.sidecar.v1" as const;
+
+/** Read persistent SQLite identity pragmas from the 100-byte header. */
+export function readSqliteHeaderIdentity(bytes: Uint8Array): {
+  readonly userVersion: number;
+  readonly applicationId: number;
+  readonly writeVersion: number;
+  readonly readVersion: number;
+} {
+  const buf = Buffer.from(bytes);
+  return {
+    userVersion: buf.readUInt32BE(60),
+    applicationId: buf.readUInt32BE(68),
+    writeVersion: buf[18]!,
+    readVersion: buf[19]!,
+  };
+}
+
+function registerProtectFunctions(
+  db: InstanceType<ReturnType<typeof getDatabaseSyncClass>>,
+): void {
+  db.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
+    `ENCLAVE_SEALED:${String(blob ?? "")}`,
+  );
+}
+
+/**
+ * True when `bytes` is a standalone, integrity-checked SQLite 3 snapshot
+ * that can host a schema-comment sidecar note.
+ */
+export function canRewriteSqliteSidecar(bytes: Uint8Array): boolean {
+  try {
+    validateSqliteStandaloneBuffer(Buffer.from(bytes));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract the planted sidecar note JSON from the reserved `bla_sidecar_v1`
+ * view's sqlite_schema SQL (string literal on column `bla.sidecar.v1`).
+ * Returns null when the view is absent or the SQL is not well-formed.
+ */
+export function extractSqliteSidecarSchemaCommentJson(
+  bytes: Uint8Array,
+): string | null {
+  const buf = Buffer.from(bytes);
+  if (!hasValidSqlite3Header(buf)) return null;
+  const DatabaseSync = getDatabaseSyncClass();
+  const tempDir = mkdtempSync(join(tmpdir(), "bla-sqlite-sidecar-extract-"));
+  const dbPath = join(tempDir, "extract.sqlite");
+  try {
+    writeFileSync(dbPath, buf);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const row = db
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'view' AND name = ?",
+        )
+        .get(SQLITE_SIDECAR_VIEW_NAME) as { sql: string | null } | undefined;
+      const sql = row?.sql;
+      if (typeof sql !== "string" || sql.length === 0) return null;
+      return parseSqliteSidecarViewSql(sql);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Parse `CREATE VIEW bla_sidecar_v1 AS SELECT '<json>' AS "bla.sidecar.v1" WHERE 0`
+ * and un-escape the SQL string literal.
+ */
+export function parseSqliteSidecarViewSql(sql: string): string | null {
+  const marker = `AS ${quoteIdentifier(SQLITE_SIDECAR_NOTE_COLUMN)}`;
+  const selectIdx = sql.search(/SELECT\s+/i);
+  if (selectIdx < 0) return null;
+  const asIdx = sql.indexOf(marker, selectIdx);
+  if (asIdx < 0) return null;
+  // Walk backward from the AS marker over the closing quote of the literal.
+  let end = asIdx - 1;
+  while (end >= 0 && /\s/.test(sql[end]!)) end--;
+  if (end < 1 || sql[end] !== "'") return null;
+  // The literal started at the matching unescaped opening quote.
+  let start = end - 1;
+  while (start >= 0) {
+    if (sql[start] === "'") {
+      let quotes = 1;
+      let k = start;
+      while (k - 1 >= 0 && sql[k - 1] === "'") {
+        quotes++;
+        k--;
+      }
+      // An even run of quotes ending at `end` means they are all escapes;
+      // a lone (odd) quote at `start` is the opener.
+      if (quotes % 2 === 1) {
+        const raw = sql.slice(start + 1, end);
+        return raw.replace(/''/g, "'");
+      }
+      start = k - 1;
+      continue;
+    }
+    start--;
+  }
+  return null;
+}
+
+/**
+ * Plant (or replace) the reserved unused VIEW carrying `noteJson`.
+ * Business tables/rows, application_id, user_version, and journal-mode
+ * header bytes are verified unchanged. Does not VACUUM.
+ */
+export function plantSqliteSidecarSchemaComment(
+  bytes: Uint8Array,
+  noteJson: string,
+): Buffer {
+  const input = Buffer.from(bytes);
+  validateSqliteStandaloneBuffer(input);
+  const identityBefore = readSqliteHeaderIdentity(input);
+  const DatabaseSync = getDatabaseSyncClass();
+  const tempDir = mkdtempSync(join(tmpdir(), "bla-sqlite-sidecar-plant-"));
+  const dbPath = join(tempDir, "target.sqlite");
+  try {
+    writeFileSync(dbPath, input);
+    const db = new DatabaseSync(dbPath);
+    try {
+      registerProtectFunctions(db);
+      const before = snapshotBusinessTables(db);
+      db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
+      db.exec(
+        `CREATE VIEW ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)} AS SELECT ${sqlStringLiteral(noteJson)} AS ${quoteIdentifier(SQLITE_SIDECAR_NOTE_COLUMN)} WHERE 0`,
+      );
+      const after = snapshotBusinessTables(db);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        throw new SqliteWalConsistencyError(
+          "Post-sidecar business table digest mismatch; aborting output.",
+        );
+      }
+    } finally {
+      db.close();
+    }
+    const out = readFileSync(dbPath);
+    validateSqliteStandaloneBuffer(out);
+    const identityAfter = readSqliteHeaderIdentity(out);
+    if (
+      identityAfter.applicationId !== identityBefore.applicationId ||
+      identityAfter.userVersion !== identityBefore.userVersion ||
+      identityAfter.writeVersion !== identityBefore.writeVersion ||
+      identityAfter.readVersion !== identityBefore.readVersion
+    ) {
+      throw new SqliteWalConsistencyError(
+        "application_id, user_version, or journal-mode header changed while planting the sidecar note; aborting output.",
+      );
+    }
+    return out;
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Remove a previously planted sidecar schema-comment view (idempotent).
+ * When the view is absent, returns a copy of the input without opening
+ * a writer so byte-identical flag-off / already-stripped buffers stay put.
+ * Business tables/rows and identity pragmas are verified unchanged.
+ */
+export function stripSqliteSidecarSchemaComment(bytes: Uint8Array): Buffer {
+  const input = Buffer.from(bytes);
+  if (!hasValidSqlite3Header(input)) return Buffer.from(input);
+  if (extractSqliteSidecarSchemaCommentJson(input) === null) {
+    return Buffer.from(input);
+  }
+  const identityBefore = readSqliteHeaderIdentity(input);
+  const DatabaseSync = getDatabaseSyncClass();
+  const tempDir = mkdtempSync(join(tmpdir(), "bla-sqlite-sidecar-strip-"));
+  const dbPath = join(tempDir, "target.sqlite");
+  try {
+    writeFileSync(dbPath, input);
+    const db = new DatabaseSync(dbPath);
+    try {
+      registerProtectFunctions(db);
+      const before = snapshotBusinessTables(db);
+      db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
+      const after = snapshotBusinessTables(db);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        throw new SqliteWalConsistencyError(
+          "Post-strip business table digest mismatch; aborting output.",
+        );
+      }
+    } finally {
+      db.close();
+    }
+    const out = readFileSync(dbPath);
+    validateSqliteStandaloneBuffer(out);
+    const identityAfter = readSqliteHeaderIdentity(out);
+    if (
+      identityAfter.applicationId !== identityBefore.applicationId ||
+      identityAfter.userVersion !== identityBefore.userVersion ||
+      identityAfter.writeVersion !== identityBefore.writeVersion ||
+      identityAfter.readVersion !== identityBefore.readVersion
+    ) {
+      throw new SqliteWalConsistencyError(
+        "application_id, user_version, or journal-mode header changed while stripping the sidecar note; aborting output.",
+      );
+    }
+    return out;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

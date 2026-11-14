@@ -16,7 +16,12 @@
  * by `verifyPycSidecarMarshalNote` (importlib ignores post-root trailers — see
  * `docs/design/sidecar-entry-entanglement.md`); GGUF plants a STRING metadata
  * KV note (`bla.sidecar.v1`) verified by `verifyGgufSidecarMetadataNote`, with
- * alignment-safe rewrite so tensor bytes stay bit-exact.
+ * alignment-safe rewrite so tensor bytes stay bit-exact;
+ * SQLite plants a reserved unused VIEW (`bla_sidecar_v1`) whose SQL
+ * string literal / schema comment carries `bla.sidecar.v1` JSON, verified
+ * by `verifySqliteSidecarSchemaComment` (SQLite ignores the unused view —
+ * user tables, rows, query results, WAL/FK, and application_id/user_version
+ * stay unchanged; see `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
@@ -59,6 +64,14 @@ import {
   rebuildDex,
   stripDexSidecarPrefix,
 } from "../formats/dex-layout.js";
+import {
+  SQLITE_SIDECAR_NOTE_COLUMN,
+  SQLITE_SIDECAR_VIEW_NAME,
+  canRewriteSqliteSidecar,
+  extractSqliteSidecarSchemaCommentJson,
+  plantSqliteSidecarSchemaComment,
+  stripSqliteSidecarSchemaComment as dropSqliteSidecarSchemaView,
+} from "../formats/sqlite.js";
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -110,7 +123,7 @@ export interface SidecarEntanglePlan {
   readonly softFold: boolean;
   /** Offline binding id (hash of paths + seedTag) — not the runtime content digest. */
   readonly planId: string;
-  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "safetensors-metadata-note" | "dex-string-pool-note" | "unspecified";
+  readonly entryHookKind: "js-preamble" | "python-preamble" | "wasm-custom-section" | "bun-companion-note" | "asar-archive-note" | "pyc-marshal-note" | "gguf-metadata-note" | "safetensors-metadata-note" | "dex-string-pool-note" | "sqlite-schema-comment" | "unspecified";
   /** `ready` when coverage matrix satisfies refuse predicates; else `incomplete`. */
   readonly status: "ready" | "incomplete" | "bound";
   readonly note: string;
@@ -128,6 +141,7 @@ function guessHookKind(entryPath: string): SidecarEntanglePlan["entryHookKind"] 
   if (/\.gguf$/.test(lower)) return "gguf-metadata-note";
   if (/\.safetensors$/.test(lower)) return "safetensors-metadata-note";
   if (/\.dex$/.test(lower)) return "dex-string-pool-note";
+  if (/\.(sqlite|sqlite3|db)$/.test(lower)) return "sqlite-schema-comment";
   return "unspecified";
 }
 
@@ -3257,6 +3271,300 @@ export function verifyDexSidecarStringPoolNote(
     return {
       ok: false,
       reason: "dex sidecar digest mismatch",
+      note,
+      expectedHex: note.digest,
+      measuredHex: measured.hex,
+      measuredU32: measured.u32,
+      softFold: note.softFold,
+    };
+  }
+  return {
+    ok: true,
+    note,
+    expectedHex: note.digest,
+    measuredHex: measured.hex,
+    measuredU32: measured.u32,
+    softFold: note.softFold,
+  };
+}
+
+export const SQLITE_SIDECAR_METADATA_KEY = SQLITE_SIDECAR_NOTE_COLUMN;
+export const SQLITE_SIDECAR_METADATA_KIND = "sqlite-schema-comment" as const;
+export { SQLITE_SIDECAR_VIEW_NAME };
+
+export interface SqliteSidecarMetadataNote {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof SQLITE_SIDECAR_METADATA_KIND;
+  readonly key: typeof SQLITE_SIDECAR_METADATA_KEY;
+  readonly digest: string;
+  readonly seedTag: string;
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly softFold: boolean;
+  readonly mode: "sidecars";
+}
+
+export interface SidecarSqliteInjectOptions {
+  readonly entryPath: string;
+  readonly sidecarPaths: readonly string[];
+  readonly seedTag?: string;
+  readonly expectedHex: string;
+  readonly softFold?: boolean;
+}
+
+export interface SidecarSqliteInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly kind: typeof SQLITE_SIDECAR_METADATA_KIND;
+  readonly key: typeof SQLITE_SIDECAR_METADATA_KEY;
+  readonly noteJson: string;
+  readonly note: SqliteSidecarMetadataNote;
+  readonly expectedHex: string;
+  readonly expectedU32: number;
+  readonly softFold: boolean;
+  readonly sidecarCount: number;
+}
+
+/**
+ * Build a SQLite schema-comment / reserved-VIEW metadata note
+ * (`bla.sidecar.v1` JSON) that carries the sidecar binding digest.
+ * The note is planted as an unused `bla_sidecar_v1` VIEW (`SELECT … WHERE 0`)
+ * so user tables, rows, query results, WAL/FK behavior, and
+ * application_id / user_version stay unchanged.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarSqliteSchemaComment(
+  options: SidecarSqliteInjectOptions,
+): SidecarSqliteInjectResult {
+  const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
+  const seedTag = options.seedTag ?? "bla-sidecar-v1";
+  const softFold = options.softFold === true;
+  const expectedHex = options.expectedHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
+    throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const note: SqliteSidecarMetadataNote = {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: SQLITE_SIDECAR_METADATA_KIND,
+    key: SQLITE_SIDECAR_METADATA_KEY,
+    digest: expectedHex,
+    seedTag,
+    entryPath: options.entryPath,
+    sidecarPaths: sidecars,
+    softFold,
+    mode: "sidecars",
+  };
+  const noteJson = JSON.stringify(note);
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    kind: SQLITE_SIDECAR_METADATA_KIND,
+    key: SQLITE_SIDECAR_METADATA_KEY,
+    noteJson,
+    note,
+    expectedHex,
+    expectedU32,
+    softFold,
+    sidecarCount: sidecars.length,
+  };
+}
+
+export interface SidecarSqliteBindResult {
+  readonly plan: SidecarEntanglePlan;
+  readonly digest: SidecarBindingDigest;
+  readonly inject: SidecarSqliteInjectResult;
+  readonly bytes: Buffer;
+}
+
+/**
+ * Plan + bind for a SQLite entry: compute the offline digest from in-memory
+ * sidecar bytes and return a bound plan plus the rewritten DB with a
+ * reserved unused VIEW schema-comment note. Uses sidecars-mode digest so
+ * planting the note does not invalidate H. User tables, rows, query results,
+ * WAL/FK, and application_id / user_version stay unchanged.
+ */
+export function bindSqliteSidecarEntanglement(
+  options: SidecarEntanglePlanOptions & {
+    readonly entryBytes: Uint8Array;
+    readonly sidecarBytes: readonly Uint8Array[];
+  },
+): SidecarSqliteBindResult {
+  const plan = planSidecarEntanglement(withBoundFileBytes(options));
+  if (options.sidecarBytes.length !== plan.sidecarPaths.length) {
+    throw new Error("sidecarBytes length must match sidecarPaths length");
+  }
+  const stripped = dropSqliteSidecarSchemaView(options.entryBytes);
+  if (!canRewriteSqliteSidecar(stripped)) {
+    throw new Error("entryBytes is not a structurally rewritable SQLite database");
+  }
+  const digest = computeSidecarBindingDigest(
+    { pathLabel: options.entryPath, bytes: options.entryBytes },
+    plan.sidecarPaths.map((pathLabel, i) => ({
+      pathLabel,
+      bytes: options.sidecarBytes[i]!,
+    })),
+    plan.seedTag,
+    "sidecars",
+  );
+  const inject = generateSidecarSqliteSchemaComment({
+    entryPath: options.entryPath,
+    sidecarPaths: plan.sidecarPaths,
+    seedTag: plan.seedTag,
+    expectedHex: digest.hex,
+    softFold: plan.softFold,
+  });
+  const bytes = plantSqliteSidecarSchemaComment(stripped, inject.noteJson);
+  const boundPlan: SidecarEntanglePlan = {
+    ...plan,
+    entryHookKind: "sqlite-schema-comment",
+    status: "bound",
+    note: "Bound — SQLite bla.sidecar.v1 schema-comment view planted; ship sidecars alongside and verify via verifySqliteSidecarSchemaComment. Host verify fails closed on strip/alter; SQLite ignores the unused WHERE 0 view (no process-start fail until a load-time hook lands). User tables, rows, query results, WAL/FK, and application_id/user_version stay unchanged.",
+  };
+  return {
+    plan: boundPlan,
+    digest,
+    inject,
+    bytes,
+  };
+}
+
+/**
+ * Convenience: given final on-disk sidecar bytes + SQLite entry bytes, produce
+ * the strip⇒fail-bound database. Returns null when there are no sidecars to
+ * bind or when the buffer is not a standalone rewritable SQLite snapshot.
+ */
+export function entangleSqliteEntryWithSidecars(options: {
+  readonly entryPath: string;
+  readonly entryBytes: Uint8Array;
+  readonly sidecars: readonly SidecarBindingPart[];
+  readonly seedTag?: string;
+  readonly softFold?: boolean;
+}): SidecarSqliteBindResult | null {
+  if (options.sidecars.length === 0) return null;
+  if (!canRewriteSqliteSidecar(options.entryBytes)) {
+    return null;
+  }
+  return bindSqliteSidecarEntanglement({
+    entryPath: options.entryPath,
+    sidecarPaths: options.sidecars.map((s) => s.pathLabel),
+    seedTag: options.seedTag,
+    softFold: options.softFold,
+    entryBytes: options.entryBytes,
+    sidecarBytes: options.sidecars.map((s) => s.bytes),
+    fileBytes: Object.fromEntries(
+      options.sidecars.map((s) => [s.pathLabel, Buffer.from(s.bytes)]),
+    ),
+  });
+}
+
+export interface SqliteSidecarVerifyOptions {
+  readonly entryBytes: Uint8Array;
+  readonly baseDir?: string;
+  readonly sidecarBytes?: Readonly<Record<string, Uint8Array>>;
+}
+
+export interface SqliteSidecarVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly note?: SqliteSidecarMetadataNote;
+  readonly expectedHex?: string;
+  readonly measuredHex?: string;
+  readonly measuredU32?: number;
+  readonly softFold?: boolean;
+}
+
+function parseSqliteSidecarNoteJson(jsonText: string): SqliteSidecarMetadataNote | null {
+  try {
+    const parsed = JSON.parse(jsonText) as SqliteSidecarMetadataNote;
+    if (
+      parsed.schema !== SIDECAR_ENTANGLE_SCHEMA ||
+      parsed.kind !== SQLITE_SIDECAR_METADATA_KIND ||
+      typeof parsed.digest !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(parsed.digest)
+    ) {
+      return null;
+    }
+    return {
+      schema: SIDECAR_ENTANGLE_SCHEMA,
+      kind: SQLITE_SIDECAR_METADATA_KIND,
+      key: SQLITE_SIDECAR_METADATA_KEY,
+      digest: parsed.digest.toLowerCase(),
+      seedTag: typeof parsed.seedTag === "string" ? parsed.seedTag : "bla-sidecar-v1",
+      entryPath: typeof parsed.entryPath === "string" ? parsed.entryPath : "",
+      sidecarPaths: Array.isArray(parsed.sidecarPaths)
+        ? parsed.sidecarPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      softFold: parsed.softFold === true,
+      mode: "sidecars",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the `bla.sidecar.v1` schema-comment note from a SQLite buffer.
+ * Returns null when the reserved view is absent or not well-formed.
+ */
+export function extractSqliteSidecarSchemaComment(
+  entryBytes: Uint8Array,
+): SqliteSidecarMetadataNote | null {
+  const json = extractSqliteSidecarSchemaCommentJson(entryBytes);
+  if (json === null) return null;
+  return parseSqliteSidecarNoteJson(json);
+}
+
+/**
+ * Remove a previously planted SQLite sidecar schema-comment view (idempotent).
+ * User tables, rows, and identity pragmas stay unchanged.
+ */
+export function stripSqliteSidecarSchemaComment(entryBytes: Uint8Array): Buffer {
+  return dropSqliteSidecarSchemaView(entryBytes);
+}
+
+/**
+ * Host-side strip⇒fail check for SQLite schema-comment notes: extract the
+ * note, re-hash sibling sidecar bytes with the same layout as
+ * `computeSidecarBindingDigest` (sidecars mode), and compare to the embedded
+ * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
+ *
+ * DEFENSIVE ONLY. SQLite ignores the unused WHERE 0 view, so strip does not
+ * break load until a load-time hook lands (same honesty bar as DEX / GGUF /
+ * Safetensors / .pyc host-verify notes).
+ */
+export function verifySqliteSidecarSchemaComment(
+  options: SqliteSidecarVerifyOptions,
+): SqliteSidecarVerifyResult {
+  const note = extractSqliteSidecarSchemaComment(options.entryBytes);
+  if (!note) {
+    return { ok: false, reason: "sqlite sidecar schema-comment note missing" };
+  }
+  const collected = collectSidecarVerifyParts({
+    sidecarPaths: note.sidecarPaths,
+    overrides: options.sidecarBytes,
+    baseDir: options.baseDir,
+    requireBaseDir: true,
+    missingPolicy: "fail",
+  });
+  if (!collected.ok) {
+    return {
+      ok: false,
+      reason: collected.reason,
+      note,
+      expectedHex: note.digest,
+      softFold: note.softFold,
+    };
+  }
+  const measured = computeSidecarBindingDigest(
+    { pathLabel: note.entryPath, bytes: options.entryBytes },
+    collected.parts,
+    note.seedTag,
+    "sidecars",
+  );
+  if (measured.hex !== note.digest) {
+    return {
+      ok: false,
+      reason: "sqlite sidecar digest mismatch",
       note,
       expectedHex: note.digest,
       measuredHex: measured.hex,

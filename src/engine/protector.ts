@@ -103,6 +103,7 @@ import {
   entangleGgufEntryWithSidecars,
   entangleSafetensorsEntryWithSidecars,
   entangleDexEntryWithSidecars,
+  entangleSqliteEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
 } from "../shields/runtime/sidecar-entangle.js";
@@ -412,6 +413,41 @@ function applySidecarEntangleToDex(
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: dexBytes, applied: false };
+  return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarEntangleToSqlite(
+  sqliteBytes: Buffer,
+  options: ProtectionOptions,
+  absOutput: string,
+  seed: string,
+): { buffer: Buffer; applied: boolean } {
+  if (options.sidecarEntangle !== true) return { buffer: sqliteBytes, applied: false };
+  const paths = (options.sidecarEntanglePaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) return { buffer: sqliteBytes, applied: false };
+  const base = dirname(absOutput);
+  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!existsSync(abs)) continue;
+      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (sidecars.length === 0) return { buffer: sqliteBytes, applied: false };
+  const entryLabel = basename(absOutput);
+  const bound = entangleSqliteEntryWithSidecars({
+    entryPath: entryLabel,
+    entryBytes: sqliteBytes,
+    sidecars,
+    seedTag: String(seed),
+    softFold: options.sidecarEntangleSoftFold === true,
+  });
+  if (!bound) return { buffer: sqliteBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
 }
 
@@ -1163,7 +1199,18 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   } else if (format === "sqlite") {
     const rawDb = readFileSync(absInput);
     const res = protectSqliteBuffer(rawDb, { intensity, seed });
-    writeProtectedOutput(absOutput, res.buffer);
+    let finalSqlite = res.buffer;
+    {
+      const entangled = applySidecarEntangleToSqlite(finalSqlite, options, absOutput, seed);
+      finalSqlite = entangled.buffer;
+      if (entangled.applied) {
+        sidecarEntangleApplied = true;
+        // Host-verify schema-comment view only: SQLite ignores the unused
+        // WHERE 0 view, so strip / sibling delete still open. Do not record
+        // sqlite-sidecar-entangle until a load-time hook lands.
+      }
+    }
+    writeProtectedOutput(absOutput, finalSqlite);
     decoyFunctionsInjected = res.honeyTablesInjected * 5;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.honeyTablesInjected + res.generatedTrapColumnsAdded;

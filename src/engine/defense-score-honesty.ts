@@ -22,6 +22,7 @@ export type DefenseScoreGapId =
   | "gguf-sidecar-host-verify-only"
   | "safetensors-sidecar-host-verify-only"
   | "dex-sidecar-host-verify-only"
+  | "sqlite-sidecar-host-verify-only"
   | "wasm-sidecar-host-verify-only"
   | "numeric-template-hygiene-partial"
   | "native-postlink-cfg-untouched"
@@ -81,6 +82,7 @@ const SIDECAR_ENTANGLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set([
   "model-gguf",
   "model-safetensors",
   "android-dex",
+  "sqlite",
   "native-elf",
   "native-macho",
   "native-pe",
@@ -163,6 +165,16 @@ export function collectDefenseScoreGaps(
       id: "dex-sidecar-host-verify-only",
       summary:
         "sidecarEntangle planted a DEX bla.sidecar.v1 string-pool note verified only by host verifyDexSidecarStringPoolNote; ART/Dalvik still load after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // SQLite schema-comment view is host-verify only (SQLite ignores the unused WHERE 0 view).
+  if (input.detectedFormat === "sqlite" && input.sidecarEntangleEnabled === true) {
+    gaps.push({
+      id: "sqlite-sidecar-host-verify-only",
+      summary:
+        "sidecarEntangle planted a SQLite bla.sidecar.v1 schema-comment view verified only by host verifySqliteSidecarSchemaComment; SQLite still opens after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

@@ -1,5 +1,48 @@
 # BLA nightly development log
 
+## 2026-11-14 ~America/Los_Angeles / Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `3cb75d46b` → `1ba93b460` (**+199** commits). Dirty
+  `third_party/*` deletions were left untouched.
+- No new 1:1 trip-able densify constants that beat the queued SQLite
+  schema-comment sidecar increment.
+- Catalog-only / honesty notes (not implemented as new densify counters):
+  - REA #4445 (`c8d5413d0`): NativeAOT work budget renamed
+    `NATIVE_AOT_MAX_WORK_UNITS` → `NATIVE_AOT_BASE_WORK_UNITS` and scaled as
+    `BASE + 8 * min(sourceBytes, MAX_SOURCE_BYTES)`. Budget *relaxation*;
+    catalogued in `REA_INTERNAL_LIMITS`.
+  - REA #9756 (`9943c1c8b`): `NATIVE_SPLIT_TYPES = 64` /
+    `NATIVE_SPLIT_TYPE_CHARS = 256` report allowance. Planting fake
+    `android:requiredSplitTypes` would perturb split-install behavior —
+    not a densify trip target.
+  - GGUF empty innermost ARRAY now counts against existing
+    `MODEL_METADATA_NESTING = 32` (`d7c73923d`). BLA's 35-frame densify
+    already trips this bound.
+  - `feat(python): decode CPython 3.14 and 3.15 pyc code objects`
+    (`1d08253ff`, `PYTHON_PYC_SLICE_MAGIC = 3608`) — capability expansion,
+    not a budget/limit trip target.
+
+### Done tonight
+- SQLite schema-comment / reserved-VIEW sidecarEntangle strip⇒fail
+  (`generateSidecarSqliteSchemaComment` / `bindSqliteSidecarEntanglement` /
+  `entangleSqliteEntryWithSidecars` / `verifySqliteSidecarSchemaComment` /
+  `extractSqliteSidecarSchemaComment` / `stripSqliteSidecarSchemaComment`;
+  unused `bla_sidecar_v1` VIEW with `SELECT … AS "bla.sidecar.v1" WHERE 0`;
+  protect + harden SQLite post-pass; vector `sqlite-sidecar-entangle`
+  reserved, not recorded; defenseScore gap `sqlite-sidecar-host-verify-only`
+  soft-cap 93; default OFF via existing `sidecarEntangle`). User tables,
+  rows, query results, WAL/FK, and application_id / user_version stay
+  unchanged.
+- Gates: build OK, tests **891 passed / 4 skipped**, benchmark **14/14**
+  runtime-equivalent.
+
+### Next step (following night)
+1. Optional JS-loader `verifyWasmSidecarCustomSection` (host JS snippet for WASM loaders).
+2. `.pyc` import-time hook; GGUF / DEX / Safetensors / SQLite load-time hooks.
+3. MCP one-click polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-10 ~America/Los_Angeles (box) / Asia/Shanghai
 
 ### REA delta

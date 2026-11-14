@@ -59,6 +59,7 @@ export type ReaAttackVectorId =
   | "pyc-sidecar-entangle"
   | "gguf-sidecar-entangle"
   | "dex-sidecar-entangle"
+  | "sqlite-sidecar-entangle"
   | "erlang-beam-inspection"
   | "evm-bytecode-inspection"
   | "pcap-capture-inspection"

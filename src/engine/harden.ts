@@ -50,6 +50,7 @@ import {
   entangleGgufEntryWithSidecars,
   entangleSafetensorsEntryWithSidecars,
   entangleDexEntryWithSidecars,
+  entangleSqliteEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
   planSidecarEntanglement,
@@ -1369,6 +1370,55 @@ export function hardenProject(
           if (sidecars.length > 0) {
             const entryBytes = readFileSync(entryAbs);
             const bound = entangleDexEntryWithSidecars({
+              entryPath: basename(entryAbs),
+              entryBytes,
+              sidecars,
+              seedTag: String(options.seed ?? runId),
+            });
+            if (bound) {
+              writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+                allowLinkWriteThrough: false,
+              });
+            }
+          }
+        }
+      }
+
+      // SQLite schema-comment entanglement only when no JS/Python/WASM/.pyc/GGUF/
+      // Safetensors/DEX entry was bound — reserved unused bla_sidecar_v1 VIEW
+      // measured against FINAL siblings; user tables, rows, query results,
+      // WAL/FK, and application_id/user_version stay unchanged.
+      const sqliteLike = summaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "sqlite" ||
+            /\.(sqlite|sqlite3)$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      const sqliteEntry =
+        !jsEntry &&
+        !pyEntry &&
+        !wasmEntry &&
+        !pycEntry &&
+        !ggufEntry &&
+        !safetensorsEntry &&
+        !dexEntry
+          ? sqliteLike[0]
+          : undefined;
+      if (sqliteEntry) {
+        const entryAbs = join(outputRoot, sqliteEntry.relativePath);
+        if (existsSync(entryAbs)) {
+          const entryDir = dirname(entryAbs);
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of summaries) {
+            if (!s.success || s.relativePath === sqliteEntry.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            const rel = relative(entryDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          if (sidecars.length > 0) {
+            const entryBytes = readFileSync(entryAbs);
+            const bound = entangleSqliteEntryWithSidecars({
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
