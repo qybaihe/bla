@@ -6,10 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.2] — 2026-11-14
+
+Patch extending opt-in `sidecarEntangle` to **SQLite schema-comment / reserved-VIEW notes** (host-verify), and cataloguing REA #4445 NativeAOT work-budget scaling plus REA #9756 Android split-fact report allowances.
+
 ### Added
 - **Sidecar SQLite schema-comment note (`generateSidecarSqliteSchemaComment` / `bindSqliteSidecarEntanglement` / `entangleSqliteEntryWithSidecars` / `verifySqliteSidecarSchemaComment` / `extractSqliteSidecarSchemaComment` / `stripSqliteSidecarSchemaComment`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` SQLite post-pass plant an unused `bla_sidecar_v1` VIEW (`SELECT '<json>' AS "bla.sidecar.v1" WHERE 0`) carrying the sidecar binding digest. User tables, rows, query results, WAL/FK behavior, and `application_id` / `user_version` stay unchanged. Host-side verify re-hashes sibling sidecars (sidecars-mode digest). Vector `sqlite-sidecar-entangle` reserved but **not recorded** until a load-time hook lands. Default still OFF.
 - **defenseScore honesty:** `sqlite` joins `SIDECAR_ENTANGLE_FORMATS`; enabling the host-only note annotates `sqlite-sidecar-host-verify-only` (soft-cap 93) instead of clearing the process-start strip⇒fail gap.
 - **`REA_INTERNAL_LIMITS` catalog hygiene:** `NATIVE_AOT_BASE_WORK_UNITS` + `NATIVE_AOT_WORK_UNITS_PER_SOURCE_BYTE` (REA #4445 — budget *relaxation*, not a new densify target); `ANDROID_NATIVE_SPLIT_TYPES` / `ANDROID_NATIVE_SPLIT_TYPE_CHARS` (REA #9756 — report allowance only; planting fake `requiredSplitTypes` would perturb split-install behavior).
+
+### Notes
+- REA tip `1ba93b460` (+199 since `3cb75d46b`): NativeAOT work-budget scaling, Android split-fact report allowances, GGUF empty-array frame counting fix, CPython 3.14/3.15 pyc decode, plus analyzer/contract/test polish. **No new 1:1 trip-able densify constants.** Catalogued the NativeAOT scaling and split-fact ceilings; GGUF empty-frame fix is already covered by the existing 35-frame densify.
 
 ## [3.3.1] — 2026-11-13
 
