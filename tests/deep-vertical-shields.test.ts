@@ -180,7 +180,10 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     expect(afterSt.blaProtected).toBe(true);
 
     // GGUF v3 model shield
-    const protGguf = protectGgufBuffer(Buffer.alloc(0), {
+    const emptyGguf = Buffer.alloc(24, 0);
+    emptyGguf.write("GGUF", 0, "ascii");
+    emptyGguf.writeUInt32LE(3, 4);
+    const protGguf = protectGgufBuffer(emptyGguf, {
       intensity: "bankrupt",
       seed: "gguf-seed",
     });

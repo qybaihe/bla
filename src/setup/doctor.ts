@@ -336,7 +336,12 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
       intensity: "stealth",
       seed: "doctor-probe",
     });
-    const ggufRes = protectGgufBuffer(Buffer.alloc(0), {
+    // An empty buffer is not a valid probe anymore: protectGgufBuffer fails
+    // closed on non-GGUF input. Probe with a minimal valid v3 header instead.
+    const emptyGguf = Buffer.alloc(24, 0);
+    emptyGguf.write("GGUF", 0, "ascii");
+    emptyGguf.writeUInt32LE(3, 4);
+    const ggufRes = protectGgufBuffer(emptyGguf, {
       intensity: "stealth",
       seed: "doctor-probe",
     });

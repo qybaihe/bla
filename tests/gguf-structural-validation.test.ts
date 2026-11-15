@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inspectModelBuffer } from "../src/shields/formats/model.js";
+import { protectGgufBuffer, inspectModelBuffer } from "../src/shields/formats/model.js";
 import { parseGgufLayout } from "../src/shields/formats/gguf-layout.js";
 
 const ALIGNMENT = 32;
@@ -89,5 +89,31 @@ describe("GGUF inspection does not trust the magic alone", () => {
     const inspection = inspectModelBuffer(tagged);
     expect(inspection.validModel).toBe(false);
     expect(inspection.blaProtected).toBe(true);
+  });
+
+  it("refuses to replace a non-GGUF file with synthetic metadata", () => {
+    // A `.gguf` extension alone routes a file here, so the protection entry
+    // point must fail closed instead of emitting a container with no weights.
+    expect(() =>
+      protectGgufBuffer(Buffer.from("not a model at all"), {
+        intensity: "balanced",
+        seed: "gguf-fail-closed",
+      }),
+    ).toThrow(/not a parseable GGUF/);
+    expect(() =>
+      protectGgufBuffer(Buffer.alloc(0), {
+        intensity: "balanced",
+        seed: "gguf-fail-closed",
+      }),
+    ).toThrow(/not a parseable GGUF/);
+  });
+
+  it("still protects a well-formed GGUF with no tensors", () => {
+    const protectedModel = protectGgufBuffer(gguf({ withTensor: false }), {
+      intensity: "balanced",
+      seed: "gguf-fail-closed",
+    });
+    expect(protectedModel.buffer.subarray(0, 4).toString("ascii")).toBe("GGUF");
+    expect(protectedModel.buffer.length).toBeGreaterThan(24);
   });
 });

@@ -410,6 +410,14 @@ function parseExistingGgufHeader(bytes: Buffer): {
   };
 }
 
+/** Input that is not a parseable GGUF container. Never replaced with synthetic weights. */
+export class InvalidGgufInputError extends Error {
+  constructor(reason: string) {
+    super(`Invalid or unsupported GGUF input: ${reason}`);
+    this.name = "InvalidGgufInputError";
+  }
+}
+
 /**
  * Builds or protects a GGUF v2/v3 (`.gguf`) model binary against REA's `GgufHeader.ts`:
  * 1. Preserves all existing GGUF metadata KV entries and trailing tensor records.
@@ -437,13 +445,23 @@ export function protectGgufBuffer(
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
   const parsed = parseExistingGgufHeader(bytes);
-  const existingKvSlice = parsed ? bytes.subarray(24, parsed.kvEndOffset) : Buffer.alloc(0);
-  const trailingTensorSlice = parsed ? bytes.subarray(parsed.kvEndOffset) : Buffer.alloc(0);
+  if (parsed === null) {
+    // Fail closed like the safetensors / SQLite / archive shields. Synthesising
+    // a fresh container here discarded the caller's bytes entirely and returned
+    // a valid-looking GGUF with no weights. A `.gguf` extension alone reaches
+    // this path (detector.ts falls back to the extension), so it is reachable
+    // with any file the user is asked to "protect".
+    throw new InvalidGgufInputError(
+      "input is not a parseable GGUF v2/v3 container; refusing to replace it with synthetic metadata",
+    );
+  }
+  const existingKvSlice = bytes.subarray(24, parsed.kvEndOffset);
+  const trailingTensorSlice = bytes.subarray(parsed.kvEndOffset);
 
   const kvEntries: Buffer[] = [];
 
   // KV 1: general.description (STRING = 8) — only add if not already present in input
-  if (!parsed || !parsed.existingKeys.has("general.description")) {
+  if (!parsed.existingKeys.has("general.description")) {
     const key = encodeGgufString("general.description");
     const type = Buffer.alloc(4);
     type.writeUInt32LE(8, 0);
@@ -454,7 +472,7 @@ export function protectGgufBuffer(
   }
 
   // KV 2: enclave.delegation.manifest (STRING = 8)
-  if (!parsed || !parsed.existingKeys.has("enclave.delegation.manifest")) {
+  if (!parsed.existingKeys.has("enclave.delegation.manifest")) {
     const key = encodeGgufString("enclave.delegation.manifest");
     const type = Buffer.alloc(4);
     type.writeUInt32LE(8, 0);
@@ -467,7 +485,7 @@ export function protectGgufBuffer(
   // KV canary / diagnostic STRING metadata (under enclave.* hierarchy)
   deception.canary.syntheticCanaryTokens.forEach((tok, idx) => {
     const keyName = `enclave.canary.token.${idx}`;
-    if (!parsed || !parsed.existingKeys.has(keyName)) {
+    if (!parsed.existingKeys.has(keyName)) {
       const key = encodeGgufString(keyName);
       const type = Buffer.alloc(4);
       type.writeUInt32LE(8, 0);
@@ -476,7 +494,7 @@ export function protectGgufBuffer(
   });
   deception.canary.ambiguousCredentialUrls.forEach((url, idx) => {
     const keyName = `enclave.canary.transport.${idx}`;
-    if (!parsed || !parsed.existingKeys.has(keyName)) {
+    if (!parsed.existingKeys.has(keyName)) {
       const key = encodeGgufString(keyName);
       const type = Buffer.alloc(4);
       type.writeUInt32LE(8, 0);
@@ -485,7 +503,7 @@ export function protectGgufBuffer(
   });
   deception.diagnostics.diagnosticsInjected.forEach((d, idx) => {
     const keyName = `enclave.diagnostic.${idx}`;
-    if (!parsed || !parsed.existingKeys.has(keyName)) {
+    if (!parsed.existingKeys.has(keyName)) {
       const key = encodeGgufString(keyName);
       const type = Buffer.alloc(4);
       type.writeUInt32LE(8, 0);
@@ -498,7 +516,7 @@ export function protectGgufBuffer(
 
   // KV nesting: enclave.nesting.breaker — 35 nested ARRAY frames (> MODEL_METADATA_NESTING = 32)
   const nestingDepth = REA_INTERNAL_LIMITS.MODEL_MAX_METADATA_NESTING + 3;
-  if (!parsed || !parsed.existingKeys.has("enclave.nesting.breaker")) {
+  if (!parsed.existingKeys.has("enclave.nesting.breaker")) {
     const key = encodeGgufString("enclave.nesting.breaker");
     const outerType = Buffer.alloc(4);
     outerType.writeUInt32LE(9, 0); // KV value type = 9 (ARRAY)
@@ -533,10 +551,10 @@ export function protectGgufBuffer(
 
   const header = Buffer.alloc(24);
   header.write("GGUF", 0, "ascii");
-  header.writeUInt32LE(parsed ? parsed.version : 3, 4);
-  header.writeBigUInt64LE(parsed ? parsed.tensorCount : 0n, 8);
+  header.writeUInt32LE(parsed.version, 4);
+  header.writeBigUInt64LE(parsed.tensorCount, 8);
   header.writeBigUInt64LE(
-    (parsed ? parsed.kvCount : 0n) + BigInt(kvEntries.length),
+    parsed.kvCount + BigInt(kvEntries.length),
     16,
   );
 
