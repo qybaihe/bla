@@ -105,6 +105,7 @@ Options:
   --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest
   --public-key <path>         Trusted ed25519 public key PEM for verify-manifest
   --require-pinned-key        verify-manifest: exit 2 unless --public-key authenticated the manifest
+  --require-artifact          verify-manifest: exit 2 unless the protected artifact's SHA-256 was verified
   --llm-directives            Opt-in risky LLM directive layers (COPPA/medical bait, dual-use imitation, AI chat markers); OFF by default
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
@@ -143,6 +144,7 @@ interface ParsedCliArgs {
   readonly artifactPath?: string;
   readonly baseDir?: string;
   readonly requirePinnedKey: boolean;
+  readonly requireArtifact: boolean;
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
@@ -214,6 +216,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let artifactPath: string | undefined;
   let baseDir: string | undefined;
   let requirePinnedKey = false;
+  let requireArtifact = false;
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
@@ -309,6 +312,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       else baseDir = value;
     } else if (arg === "--require-pinned-key") {
       requirePinnedKey = true;
+    } else if (arg === "--require-artifact") {
+      requireArtifact = true;
     } else if (arg === "--llm-directives") {
       llmDirectives = true;
     } else if (arg === "--weave-decoys") {
@@ -452,6 +457,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     ...(artifactPath !== undefined ? { artifactPath } : {}),
     ...(baseDir !== undefined ? { baseDir } : {}),
     requirePinnedKey,
+    requireArtifact,
     llmDirectives,
     weaveDecoys,
     selfSeal,
@@ -1152,6 +1158,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         }
         const result = verifyManifestFile(target, parsed.publicKey, parsed.artifactPath, {
           requirePinnedKey: parsed.requirePinnedKey,
+          requireArtifact: parsed.requireArtifact,
         });
         if (parsed.json) {
           console.log(JSON.stringify(result, null, 2));

@@ -66,8 +66,7 @@ describe("bla verify-manifest", () => {
     expect(unsigned.reason).toMatch(/unsigned/);
   });
 
-  it("returns exit 0 for a valid manifest and 2 for an invalid one", async () => {
-    const dir = createTempDir();
+  it("returns exit 0 for a valid manifest and 2 for an invalid one", async () => {    const dir = createTempDir();
     const pair = generateManifestSigningKeyPair();
     const manifestPath = join(dir, "manifest.json");
     const publicKeyPath = join(dir, "public.pem");
@@ -120,5 +119,34 @@ describe("bla verify-manifest", () => {
     expect(badRes.ok).toBe(false);
     expect(badRes.artifactVerified).toBe(false);
     expect(badRes.reason).toMatch(/artifact SHA-256 mismatch/);
+  });
+
+  it("flags an unchecked artifact and can require verification", async () => {
+    const dir = createTempDir();
+    const pair = generateManifestSigningKeyPair();
+    const manifestPath = join(dir, "bundle.js.bla-manifest.json");
+    const publicKeyPath = join(dir, "public.pem");
+    const signed = signManifestPayload(
+      { schema: "s", blaVersion: "3.3.2", protectedSha256: "a".repeat(64) },
+      pair.privateKeyPem,
+    );
+    writeFileSync(manifestPath, JSON.stringify(signed, null, 2), "utf8");
+    writeFileSync(publicKeyPath, pair.publicKeyPem, "utf8");
+
+    // The artifact is not on disk, so nothing was verified — say so.
+    const unchecked = verifyManifestFile(manifestPath, publicKeyPath);
+    expect(unchecked).toMatchObject({ ok: true, artifactVerified: false });
+    expect(unchecked.reason).toMatch(/artifact NOT verified/);
+
+    // --require-artifact turns that into a hard failure.
+    const required = verifyManifestFile(manifestPath, publicKeyPath, undefined, {
+      requireArtifact: true,
+    });
+    expect(required).toMatchObject({ ok: false, artifactVerified: false });
+    expect(required.reason).toMatch(/artifact verification required/);
+
+    await expect(
+      runCli(["verify-manifest", manifestPath, "--public-key", publicKeyPath, "--require-artifact"]),
+    ).resolves.toBe(2);
   });
 });
