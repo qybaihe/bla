@@ -204,6 +204,18 @@ export function generateJsTarpitAndBudgetBreaker(
 }
 
 /**
+ * Escape text for a Python triple-quoted docstring. A raw `"""` (or a trailing
+ * backslash) would terminate the literal early and emit invalid Python into the
+ * protected artifact. Newlines are folded so the docstring stays a single line.
+ */
+function escapePythonDocstring(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/"""/g, '\\"\\"\\"')
+    .replace(/[\r\n]+/g, " ");
+}
+
+/**
  * Generates a Python Algorithmic Tarpit & Honey-Context block for `.py` protection.
  *
  * Defense properties (WorkBuddy / REA peel resistance):
@@ -273,9 +285,10 @@ export function generatePythonTarpit(
     let mix = (prng.nextUint32() | 1) >>> 0;
     if (mix === 0x9e3779b9 || mix === 2654435769) mix ^= 2;
 
-    const docstring =
+    const docstring = escapePythonDocstring(
       chaffPayloads[chaffIdx]?.rawText ??
-      "Compatibility shim retained for ABI alignment.";
+        "Compatibility shim retained for ABI alignment.",
+    );
 
     lines.push(`def ${fnName}(seed: int = 0, depth: int = 0) -> int:`);
     lines.push(`    """${docstring}"""`);

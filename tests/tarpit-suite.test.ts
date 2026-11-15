@@ -77,6 +77,23 @@ describe("tarpit generator suite (JS)", () => {
 });
 
 describe("tarpit generator suite (Python)", () => {
+  it("escapes a chaff payload that would break the docstring literal", () => {
+    const poisoned = chaff.map((payload, index) =>
+      index === 0
+        ? { ...payload, rawText: 'ends with """ and a trailing backslash \\' }
+        : payload,
+    );
+    const result = generatePythonTarpit(
+      new SeededPrng("py-tarpit-docstring"),
+      "stealth",
+      poisoned,
+    );
+    // The raw triple quote must not survive: it would terminate the literal and
+    // leave the rest of the payload as Python code.
+    expect(result.code).not.toContain('ends with """ and');
+    expect(result.code).toContain('\\"\\"\\"');
+  });
+
   it("emits warm-init, shared slot, and state var names without BLA markers", () => {
     for (const [intensity, decoys] of PYTHON_DECOY_COUNTS) {
       const result = generatePythonTarpit(
