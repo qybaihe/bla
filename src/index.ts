@@ -434,6 +434,7 @@ export {
   scanPackagingGates,
   evaluateHardenProjectPackagingBlocks,
   formatPackagingGatesReport,
+  buildPackagingGatesSarif,
   PACKAGING_GATES_SCHEMA,
   type PackagingGateId,
   type PackagingGateFinding,
