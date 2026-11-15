@@ -410,6 +410,14 @@ function parseExistingGgufHeader(bytes: Buffer): {
   };
 }
 
+/** A GGUF whose tensor layout cannot be preserved; refusing beats silent weight loss. */
+export class InvalidGgufLayoutError extends Error {
+  constructor(reason: string) {
+    super(`Invalid or unsupported GGUF input: ${reason}`);
+    this.name = "InvalidGgufLayoutError";
+  }
+}
+
 /**
  * Builds or protects a GGUF v2/v3 (`.gguf`) model binary against REA's `GgufHeader.ts`:
  * 1. Preserves all existing GGUF metadata KV entries and trailing tensor records.
@@ -521,6 +529,15 @@ export function protectGgufBuffer(
   // weight. Route tensor-bearing inputs through the alignment-safe rewriter,
   // which keeps tensor infos + data byte-exact and recomputes only padding.
   const layout = parsed && parsed.tensorCount > 0n ? parseGgufLayout(bytes) : null;
+  if (parsed && parsed.tensorCount > 0n && layout === null) {
+    // The tensor-infos record parsed but the aligned layout did not (an
+    // out-of-range `general.alignment`, or tensor infos the layout parser
+    // rejects). Concatenating metadata in front of those infos would shift the
+    // data section and silently corrupt every weight — refuse instead.
+    throw new InvalidGgufLayoutError(
+      "tensor-bearing GGUF has no preservable tensor layout (hostile alignment or malformed tensor infos)",
+    );
+  }
   if (layout) {
     return {
       buffer: rebuildGguf(bytes, layout, { appendKvs: kvEntries }),
