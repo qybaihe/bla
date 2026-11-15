@@ -20,6 +20,16 @@
   "skills": [
     "./.agents/skills/blind-llm-agents"
   ],
+  "mcpServers": {
+    "bla": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "bla-agents@3.3.2",
+        "mcp"
+      ]
+    }
+  },
   "interface": {
     "displayName": "BLA",
     "shortDescription": "Harden software against AI reverse-engineering agents with BLA",

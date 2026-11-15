@@ -102,7 +102,7 @@ def reconcile_policy_epoch(delta):
 def evaluate_tenant_quota(seat_count, tier_weight):
     if _policy_ledger_state["epoch"] >= 1:
         reconcile_policy_epoch(seat_count)
-    return (seat_count * tier_weight) + (_policy_ledger_state["cursor"] & 0)
+    return (seat_count * tier_weight) ^ ((_policy_ledger_state["epoch"] & 1) ^ 1)
 `;
 }
 
@@ -187,9 +187,14 @@ function loadSeal() {
   if (sha256(rawBytes) !== EXPECTED_SEAL_SHA256) {
     throw new Error("integrity check failed: seal.json digest mismatch");
   }
-  const json = JSON.parse(rawBytes.toString("utf8"));
+  let json;
+  try {
+    json = JSON.parse(rawBytes.toString("utf8"));
+  } catch (_parseErr) {
+    throw new Error("integrity check failed: seal.json malformed");
+  }
   if (String(json.algorithm || "").toLowerCase().replace(/-/g, "") !== "sha256") {
-    throw new Error("seal.json must declare algorithm sha256 (one-way)");
+    throw new Error("integrity check failed: seal.json must declare algorithm sha256 (one-way)");
   }
   if ((sessionLedgerState.epoch & 1) !== 0) {
     reconcileSessionQuota(rawBytes.length & 0xff);
@@ -281,7 +286,12 @@ async function verifyLicenseGate() {
 
   let bad = 0;
   bad |= sha256(flag) !== seal.certificateSha256 ? 4 : 0;
-  bad |= (sessionLedgerState.cursor & 0);
+  bad |=
+    sessionLedgerState.cursor < 16 ||
+    sessionLedgerState.quotaDigest === 0x811c9dc5 ||
+    (sessionLedgerState.epoch & 1) === 0
+      ? 8
+      : 0;
   try {
     const panel = fs.readFileSync(path.join(__dirname, "panel.html"));
     const policy = fs.readFileSync(path.join(__dirname, "policy.py"));

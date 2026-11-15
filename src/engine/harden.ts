@@ -1,11 +1,13 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat } from "../core/detector.js";
+import { generateProjectSeed, loadBlaConfig, type BlaProjectConfig } from "../core/config.js";
 import { physicalPath } from "../core/output-path.js";
 import { walkBounded } from "../core/walk.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
@@ -42,6 +44,7 @@ import {
   ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
   ASAR_SIDECAR_MAIN_JS_MARKER,
   BUN_SIDECAR_COMPANION_SUFFIX,
+  derivePublicSidecarSeedTag,
   entangleAsarEntryWithSidecars,
   entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
@@ -520,9 +523,80 @@ function planArtifactOutputPath(artifact: DiscoveredArtifact, outputRoot: string
  * Usage: `bla harden .` / MCP `bla_harden` with `{ "directory": "." }`
  */
 export function hardenProject(
-  options: HardenProjectOptions = {},
+  rawOptions: HardenProjectOptions = {},
 ): HardenProjectReport {
-  const absDir = resolve(options.directory ?? process.cwd());
+  const absDir = resolve(rawOptions.directory ?? process.cwd());
+  let projectCfg: BlaProjectConfig | undefined;
+  if (existsSync(absDir)) {
+    const configDir = statSync(absDir).isDirectory() ? absDir : dirname(absDir);
+    const directLoaded = loadBlaConfig(configDir);
+    if (directLoaded.sourcePath !== null) {
+      projectCfg = directLoaded.config;
+    } else if (
+      (BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(configDir))
+    ) {
+      const parentLoaded = loadBlaConfig(dirname(configDir));
+      if (parentLoaded.sourcePath !== null) {
+        projectCfg = parentLoaded.config;
+      }
+    }
+  }
+  const resolvedSeed: string | number =
+    rawOptions.seed !== undefined && String(rawOptions.seed).length > 0
+      ? rawOptions.seed
+      : projectCfg?.seed && projectCfg.seed.length > 0
+        ? projectCfg.seed
+        : generateProjectSeed();
+  const mergedWasmPreserveExports = [
+    ...new Set([
+      ...(projectCfg?.wasmPreserveExports ?? []),
+      ...(rawOptions.wasmPreserveExports ?? []),
+    ]),
+  ];
+  const options: HardenProjectOptions = {
+    ...rawOptions,
+    seed: resolvedSeed,
+    intensity: rawOptions.intensity ?? projectCfg?.intensity ?? "bankrupt",
+    emitManifest: rawOptions.emitManifest ?? projectCfg?.emitManifest ?? false,
+    ...(rawOptions.llmDirectives !== undefined || projectCfg?.llmDirectives !== undefined
+      ? { llmDirectives: rawOptions.llmDirectives ?? projectCfg?.llmDirectives }
+      : {}),
+    ...(rawOptions.weaveDecoys !== undefined || projectCfg?.weaveDecoys !== undefined
+      ? { weaveDecoys: rawOptions.weaveDecoys ?? projectCfg?.weaveDecoys }
+      : {}),
+    ...(rawOptions.selfSeal !== undefined || projectCfg?.selfSeal !== undefined
+      ? { selfSeal: rawOptions.selfSeal ?? projectCfg?.selfSeal }
+      : {}),
+    ...(rawOptions.sidecarEntangle !== undefined || projectCfg?.sidecarEntangle !== undefined
+      ? { sidecarEntangle: rawOptions.sidecarEntangle ?? projectCfg?.sidecarEntangle }
+      : {}),
+    ...(rawOptions.requireAgentWeave !== undefined || projectCfg?.requireAgentWeave !== undefined
+      ? { requireAgentWeave: rawOptions.requireAgentWeave ?? projectCfg?.requireAgentWeave }
+      : {}),
+    ...(mergedWasmPreserveExports.length > 0
+      ? { wasmPreserveExports: mergedWasmPreserveExports }
+      : {}),
+    allowLaneIndependentGates:
+      rawOptions.allowLaneIndependentGates ?? projectCfg?.allowLaneIndependentGates ?? false,
+    allowPlaintextSeal:
+      rawOptions.allowPlaintextSeal ?? projectCfg?.allowPlaintextSeal ?? false,
+    allowWasmClearParamCarriers:
+      rawOptions.allowWasmClearParamCarriers ?? projectCfg?.allowWasmClearParamCarriers ?? false,
+    allowStablePanelDeriveAbi:
+      rawOptions.allowStablePanelDeriveAbi ?? projectCfg?.allowStablePanelDeriveAbi ?? false,
+    allowJsAesUnwrap:
+      rawOptions.allowJsAesUnwrap ?? projectCfg?.allowJsAesUnwrap ?? false,
+    allowJsWasmHydrateDump:
+      rawOptions.allowJsWasmHydrateDump ?? projectCfg?.allowJsWasmHydrateDump ?? false,
+    allowWasmXorMaskSidecar:
+      rawOptions.allowWasmXorMaskSidecar ?? projectCfg?.allowWasmXorMaskSidecar ?? false,
+    allowWasmSealXorKnownPlaintext:
+      rawOptions.allowWasmSealXorKnownPlaintext ?? projectCfg?.allowWasmSealXorKnownPlaintext ?? false,
+    allowPanelOfflineOracle:
+      rawOptions.allowPanelOfflineOracle ?? projectCfg?.allowPanelOfflineOracle ?? false,
+    allowReleaseHygieneLeak:
+      rawOptions.allowReleaseHygieneLeak ?? projectCfg?.allowReleaseHygieneLeak ?? false,
+  };
   const intensity: ProtectionIntensity = options.intensity ?? "bankrupt";
   // Manifests are opt-in: do not ship `.bla-manifest.json` next to customer artifacts by default.
   const emitManifest = options.emitManifest === true;
@@ -626,16 +700,67 @@ export function hardenProject(
     "typescript",
     "html-bundle",
     "python-source",
-    "elf",
-    "macho",
-    "pe",
+    "native-elf",
+    "native-macho",
+    "native-pe",
   ]);
   const weaveableDiscovered = discovered.filter((a) => weaveFormats.has(a.format));
   let agentWeaveAssessment: AgentWeaveAssessment | undefined;
   if (weaveableDiscovered.length > 0 || options.requireAgentWeave === true) {
     try {
       const weaveVerify = verifyWeaveTarget(absDir, { maxTargets: maxArtifacts });
-      if (weaveVerify.files.length > 0) {
+      // Detect stale build outputs when Host Agent edited `src/` but forgot to rebuild `dist/`/`build/`/`out/`.
+      let staleBuildMessage: string | undefined;
+      if (options.requireAgentWeave === true) {
+        const buildRelRe = /^(?:dist|build|out)(?:[\\/]|$)/i;
+        const buildArtifacts = discovered.filter((a) => buildRelRe.test(a.relativePath));
+        const srcRoot = join(absDir, "src");
+        if (buildArtifacts.length > 0 && existsSync(srcRoot)) {
+          let newestBuildMtime = 0;
+          for (const ba of buildArtifacts) {
+            try {
+              const m = statSync(ba.path).mtimeMs;
+              if (m > newestBuildMtime) newestBuildMtime = m;
+            } catch {
+              /* ignore */
+            }
+          }
+          let newestSrcMtime = 0;
+          let newestSrcRel = "";
+          const srcStack = [srcRoot];
+          while (srcStack.length > 0) {
+            const cur = srcStack.pop()!;
+            let ents;
+            try {
+              ents = readdirSync(cur, { withFileTypes: true });
+            } catch {
+              continue;
+            }
+            for (const ent of ents) {
+              if (ent.name.startsWith(".")) continue;
+              const full = join(cur, ent.name);
+              if (ent.isDirectory()) {
+                srcStack.push(full);
+              } else if (ent.isFile() && /\.(?:[cm]?[jt]sx?|py|rs|go|c|cpp|cc)$/i.test(ent.name)) {
+                try {
+                  const m = statSync(full).mtimeMs;
+                  if (m > newestSrcMtime) {
+                    newestSrcMtime = m;
+                    newestSrcRel = relative(absDir, full);
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+          }
+          if (newestBuildMtime > 0 && newestSrcMtime > newestBuildMtime + 50) {
+            staleBuildMessage = `Source file '${newestSrcRel}' is newer than build output in dist/build/out — rebuild your project (e.g. npm run build) after Stage-2 source surgery before running bla_harden.`;
+          }
+        }
+      }
+
+      if (weaveVerify.files.length > 0 || staleBuildMessage !== undefined) {
         const weavePlan = buildWeavePlan(absDir, { maxTargets: maxArtifacts });
         const workorderMap: Record<string, WeaveSurgicalWorkorder> = {};
         for (const target of weavePlan.targets) {
@@ -646,20 +771,77 @@ export function hardenProject(
         const unwovenSourceFiles = weaveVerify.files
           .filter((f) => !f.passed)
           .map((f) => f.relativePath);
-        const weaveVerified = weaveVerify.overallPassed;
+        if (staleBuildMessage !== undefined && unwovenSourceFiles.length === 0) {
+          unwovenSourceFiles.push("dist/ (stale build)");
+        }
+        const extraActions =
+          staleBuildMessage !== undefined
+            ? [
+                {
+                  priority: "high" as const,
+                  file: "dist/",
+                  checkId: "crown-jewel-entanglement" as const,
+                  instruction: staleBuildMessage,
+                  verifyTool: "bla_verify_weave" as const,
+                },
+              ]
+            : [];
+        const combinedActions = [...extraActions, ...weaveVerify.agentActions];
+        const weaveVerified =
+          weaveVerify.files.length > 0 &&
+          weaveVerify.overallPassed &&
+          staleBuildMessage === undefined;
         agentWeaveAssessment = {
           weaveVerified,
-          weaveScore: weaveVerify.weaveScore,
+          weaveScore: staleBuildMessage !== undefined ? Math.min(weaveVerify.weaveScore, 50) : weaveVerify.weaveScore,
           unwovenSourceFiles,
-          agentActions: weaveVerify.agentActions,
+          agentActions: combinedActions,
           surgicalWorkorders: workorderMap,
           agentPlaybookDirective: weaveVerified
             ? `All ${weaveVerify.files.length} source file(s) passed Host-Agent structural weave verification (weaveScore=${weaveVerify.weaveScore}/100).`
-            : `Host-Agent source surgery pending on [${unwovenSourceFiles.join(", ")}] (weaveScore=${weaveVerify.weaveScore}/100). Follow surgicalWorkorders + agentActions using your file-editing tools, verify with bla_verify_weave, then run bla_harden with weave_decoys:true and require_agent_weave:true.`,
+            : staleBuildMessage ??
+              `Host-Agent source surgery pending on [${unwovenSourceFiles.join(", ")}] (weaveScore=${weaveVerify.weaveScore}/100). Follow surgicalWorkorders + agentActions using your file-editing tools, verify with bla_verify_weave, then run bla_harden with weave_decoys:true and require_agent_weave:true.`,
+        };
+      } else if (options.requireAgentWeave === true) {
+        agentWeaveAssessment = {
+          weaveVerified: false,
+          weaveScore: 0,
+          unwovenSourceFiles: ["(no verifiable source files found)"],
+          agentActions: [
+            {
+              priority: "high",
+              file: ".",
+              checkId: "customer-entry-edges",
+              instruction:
+                "require_agent_weave is enabled, but no verifiable JS/TS/HTML/Python/C/Rust/Go source files were found in the target directory. Point bla_verify_weave at your source directory before running bla_harden.",
+              verifyTool: "bla_verify_weave",
+            },
+          ],
+          surgicalWorkorders: {},
+          agentPlaybookDirective:
+            "require_agent_weave refused: no verifiable source files were found in the target directory.",
         };
       }
-    } catch {
-      /* best-effort weave assessment */
+    } catch (err) {
+      if (options.requireAgentWeave === true) {
+        const msg = err instanceof Error ? err.message : String(err);
+        agentWeaveAssessment = {
+          weaveVerified: false,
+          weaveScore: 0,
+          unwovenSourceFiles: ["(weave verification error)"],
+          agentActions: [
+            {
+              priority: "high",
+              file: ".",
+              checkId: "crown-jewel-entanglement",
+              instruction: `verifyWeaveTarget failed (${msg}); fix source syntax/access issues and re-run bla_verify_weave before bla_harden.`,
+              verifyTool: "bla_verify_weave",
+            },
+          ],
+          surgicalWorkorders: {},
+          agentPlaybookDirective: `require_agent_weave refused because weave verification threw an error: ${msg}`,
+        };
+      }
     }
   }
 
@@ -1121,7 +1303,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entrySource,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
               carrier: refineJsCarrierForRuntimePaths(
                 detectJsCarrierForSource(entrySource, entryAbs),
                 [entryAbs, jsEntry.inputPath],
@@ -1165,7 +1347,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entrySource,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.code, "utf8", {
@@ -1204,7 +1386,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1245,7 +1427,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1287,7 +1469,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1329,7 +1511,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1373,7 +1555,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1422,7 +1604,7 @@ export function hardenProject(
               entryPath: basename(entryAbs),
               entryBytes,
               sidecars,
-              seedTag: String(options.seed ?? runId),
+              seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
             });
             if (bound) {
               writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
@@ -1467,7 +1649,7 @@ export function hardenProject(
             entryPath: entryLabel,
             entryBytes: readFileSync(entryAbs),
             sidecars,
-            seedTag: String(options.seed ?? runId),
+            seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
           });
           if (bound) {
             writeFileAtomicSync(
@@ -1504,7 +1686,7 @@ export function hardenProject(
           );
           if (!bridge) continue;
           const entryLabel = basename(entryAbs);
-          const seedTag = String(options.seed ?? runId);
+          const seedTag = derivePublicSidecarSeedTag(String(options.seed ?? runId));
           const hasNote = members.some(
             (m) => m.relativePath === ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
           );
@@ -1600,7 +1782,7 @@ export function hardenProject(
         const plan = planSidecarEntanglement({
           entryPath: entry.relativePath.replaceAll("\\", "/"),
           sidecarPaths: sidecars,
-          seedTag: String(options.seed ?? runId),
+          seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
           baseDir: outputRoot,
         });
         const entryRel = entry.relativePath.replaceAll("\\", "/");

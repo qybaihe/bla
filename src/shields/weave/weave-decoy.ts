@@ -563,11 +563,30 @@ function classifyFunctionRole(
 }
 
 function extractJsFunctionName(path: any): string {
+  const parent = path.parent;
+  // Recognize top-level route / IPC handler callbacks: ipcMain.handle("ch", fn), app.post("/p", fn)
+  if (
+    t.isCallExpression(parent) &&
+    t.isMemberExpression(parent.callee) &&
+    t.isIdentifier(parent.callee.property) &&
+    /^(?:handle|on|once|get|post|put|delete|patch|use|all)$/.test(
+      parent.callee.property.name,
+    ) &&
+    parent.arguments.includes(path.node)
+  ) {
+    const parentFn = path.getFunctionParent?.();
+    if (!parentFn) {
+      const routeArg = parent.arguments[0];
+      const slugRaw =
+        routeArg && t.isStringLiteral(routeArg) ? routeArg.value : "handler";
+      const slug = slugRaw.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "route";
+      return `${parent.callee.property.name}_${slug}`;
+    }
+  }
   if (path.getFunctionParent && path.getFunctionParent() !== null) {
     return "";
   }
   const node = path.node;
-  const parent = path.parent;
   if (t.isFunctionDeclaration(node) && node.id) {
     return node.id.name;
   }
@@ -623,10 +642,75 @@ function extractStaticStringOrTemplate(node: t.Node | null | undefined): string 
   return null;
 }
 
+function isAlgebraicZeroEntropyAst(node: t.Node | null | undefined): boolean {
+  if (!node || !t.isBinaryExpression(node)) return false;
+  if (node.operator === "&" || node.operator === "*") {
+    if (
+      (t.isNumericLiteral(node.left) && node.left.value === 0) ||
+      (t.isNumericLiteral(node.right) && node.right.value === 0)
+    ) {
+      return true;
+    }
+  }
+  if (node.operator === "^" || node.operator === "-") {
+    if (
+      t.isIdentifier(node.left) &&
+      t.isIdentifier(node.right) &&
+      node.left.name === node.right.name
+    ) {
+      return true;
+    }
+    if (
+      t.isMemberExpression(node.left) &&
+      t.isMemberExpression(node.right) &&
+      !node.left.computed &&
+      !node.right.computed &&
+      t.isIdentifier(node.left.object) &&
+      t.isIdentifier(node.right.object) &&
+      node.left.object.name === node.right.object.name &&
+      t.isIdentifier(node.left.property) &&
+      t.isIdentifier(node.right.property) &&
+      node.left.property.name === node.right.property.name
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function extractHtmlInlineScripts(htmlSource: string): string {
+  const scripts: string[] = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(htmlSource)) !== null) {
+    const attrs = m[1] ?? "";
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    const typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'\s>]+)/i);
+    const scriptType = (typeMatch?.[1] ?? "").toLowerCase();
+    if (
+      scriptType &&
+      scriptType !== "module" &&
+      scriptType !== "text/javascript" &&
+      scriptType !== "application/javascript"
+    ) {
+      continue;
+    }
+    if (m[2] && m[2].trim().length > 0) {
+      scripts.push(m[2]);
+    }
+  }
+  return scripts.join("\n;\n");
+}
+
 function inspectRawBooleanReturnValue(
   node: t.Node | null | undefined,
+  scope?: any,
+  depth = 0,
 ): { readonly isRawBool: boolean; readonly isTrueBranch: boolean } {
-  if (!node) return { isRawBool: false, isTrueBranch: false };
+  if (!node || depth > 4) return { isRawBool: false, isTrueBranch: false };
+  if (t.isParenthesizedExpression(node)) {
+    return inspectRawBooleanReturnValue(node.expression, scope, depth + 1);
+  }
   if (t.isBooleanLiteral(node)) {
     return { isRawBool: true, isTrueBranch: node.value === true };
   }
@@ -638,14 +722,69 @@ function inspectRawBooleanReturnValue(
   ) {
     return { isRawBool: true, isTrueBranch: node.argument.value === 0 };
   }
+  if (
+    t.isUnaryExpression(node) &&
+    node.operator === "!" &&
+    t.isUnaryExpression(node.argument) &&
+    node.argument.operator === "!"
+  ) {
+    return { isRawBool: true, isTrueBranch: true };
+  }
+  if (
+    t.isCallExpression(node) &&
+    t.isIdentifier(node.callee) &&
+    node.callee.name === "Boolean"
+  ) {
+    return { isRawBool: true, isTrueBranch: true };
+  }
+  if (
+    t.isBinaryExpression(node) &&
+    (node.operator === "===" ||
+      node.operator === "!==" ||
+      node.operator === "==" ||
+      node.operator === "!=" ||
+      node.operator === "<" ||
+      node.operator === "<=" ||
+      node.operator === ">" ||
+      node.operator === ">=")
+  ) {
+    return { isRawBool: true, isTrueBranch: true };
+  }
   if (t.isConditionalExpression(node)) {
-    const c = inspectRawBooleanReturnValue(node.consequent);
-    const a = inspectRawBooleanReturnValue(node.alternate);
+    const c = inspectRawBooleanReturnValue(node.consequent, scope, depth + 1);
+    const a = inspectRawBooleanReturnValue(node.alternate, scope, depth + 1);
     if (c.isRawBool && a.isRawBool) {
       return {
         isRawBool: true,
         isTrueBranch: c.isTrueBranch || a.isTrueBranch,
       };
+    }
+  }
+  if (t.isIdentifier(node) && scope?.getBinding) {
+    const binding = scope.getBinding(node.name);
+    if (binding && t.isVariableDeclarator(binding.path?.node)) {
+      const assignedExprs: Array<t.Node | null | undefined> = [];
+      if (binding.path.node.init) {
+        assignedExprs.push(binding.path.node.init);
+      }
+      for (const viol of binding.constantViolations ?? []) {
+        if (t.isAssignmentExpression(viol.node) && viol.node.operator === "=") {
+          assignedExprs.push(viol.node.right);
+        } else {
+          return { isRawBool: false, isTrueBranch: false };
+        }
+      }
+      if (assignedExprs.length > 0) {
+        const evals = assignedExprs.map((e) =>
+          inspectRawBooleanReturnValue(e, scope, depth + 1),
+        );
+        if (evals.every((ev) => ev.isRawBool)) {
+          return {
+            isRawBool: true,
+            isTrueBranch: evals.some((ev) => ev.isTrueBranch),
+          };
+        }
+      }
     }
   }
   return { isRawBool: false, isTrueBranch: false };
@@ -861,15 +1000,35 @@ function buildJsSurgicalWorkorder(
               usesCryptographicDigest = true;
             }
           },
+          IfStatement(ifPath) {
+            if (branchCandidates.length < 12) {
+              const stmtLine = ifPath.node.loc?.start.line ?? line;
+              branchCandidates.push({
+                functionName: fnName,
+                line: stmtLine,
+                statementKind: "if-branch",
+                rewriteHint: `Entangle condition in \`${fnName}\` (line ${stmtLine}) with a shared-state invariant check and route the alternate/shadow path through a domain-plausible helper.`,
+              });
+            }
+          },
           ReturnStatement(retPath) {
             const arg = retPath.node.argument;
-            const b = inspectRawBooleanReturnValue(arg);
+            const b = inspectRawBooleanReturnValue(arg, retPath.scope);
             if (b.isRawBool) {
               if (b.isTrueBranch) hasTrueLiteralReturn = true;
               else hasFalseLiteralReturn = true;
               boolReturnLine = retPath.node.loc?.start.line ?? line;
             } else if (arg) {
               hasComputedReturn = true;
+            }
+            if (arg && branchCandidates.length < 12) {
+              const stmtLine = retPath.node.loc?.start.line ?? line;
+              branchCandidates.push({
+                functionName: fnName,
+                line: stmtLine,
+                statementKind: "return-gate",
+                rewriteHint: `Before returning from \`${fnName}\` (line ${stmtLine}), update shared state slot and fold an opaque-true invariant into the return value or guard.`,
+              });
             }
           },
           BinaryExpression(binPath) {
@@ -944,28 +1103,6 @@ function buildJsSurgicalWorkorder(
               riskSummary: `Function \`${fnName}\` (line ${cleartextLine}) compares against a cleartext string literal — trivial to recover via AST/strings scan.`,
               agentRefactorDirective: `Replace cleartext string equality in \`${fnName}\` with a whole-input chained digest comparison (FNV-1a / SHA-256) or mask literals via MCP \`bla_encrypt_strings\`.`,
             });
-          }
-        }
-
-        if (t.isBlockStatement(path.node.body) && branchCandidates.length < 12) {
-          for (const stmt of path.node.body.body) {
-            const stmtLine = stmt.loc?.start.line ?? line;
-            if (t.isIfStatement(stmt)) {
-              branchCandidates.push({
-                functionName: fnName,
-                line: stmtLine,
-                statementKind: "if-branch",
-                rewriteHint: `Entangle condition in \`${fnName}\` (line ${stmtLine}) with a shared-state invariant check and route the alternate/shadow path through a domain-plausible helper.`,
-              });
-            } else if (t.isReturnStatement(stmt) && stmt.argument) {
-              branchCandidates.push({
-                functionName: fnName,
-                line: stmtLine,
-                statementKind: "return-gate",
-                rewriteHint: `Before returning from \`${fnName}\` (line ${stmtLine}), update shared state slot and fold an opaque-true invariant into the return value or guard.`,
-              });
-            }
-            if (branchCandidates.length >= 12) break;
           }
         }
       },
@@ -1123,8 +1260,31 @@ function extractPythonFunctions(source: string): ParsedPythonFunction[] {
     if (singleLineAfterColon && singleLineAfterColon[1]!.trim().length > 0) {
       bodyLines.push("    " + singleLineAfterColon[1]!.trim());
     } else {
+      let inTripleQuote: '"""' | "'''" | null = null;
+      const updateTripleQuote = (lineStr: string): void => {
+        for (let c = 0; c < lineStr.length; c++) {
+          if (lineStr[c] === "\\" && inTripleQuote !== null) {
+            c += 1;
+            continue;
+          }
+          if (inTripleQuote === null && lineStr[c] === "#") break;
+          const tri = lineStr.slice(c, c + 3);
+          if (inTripleQuote === null && (tri === '"""' || tri === "'''")) {
+            inTripleQuote = tri;
+            c += 2;
+          } else if (inTripleQuote !== null && tri === inTripleQuote) {
+            inTripleQuote = null;
+            c += 2;
+          }
+        }
+      };
       for (let b = sigEndLineIdx + 1; b < lines.length; b++) {
         const bLine = lines[b]!;
+        if (inTripleQuote !== null) {
+          bodyLines.push(bLine);
+          updateTripleQuote(bLine);
+          continue;
+        }
         const trimmed = bLine.trim();
         if (trimmed.length === 0 || trimmed.startsWith("#")) {
           bodyLines.push(bLine);
@@ -1133,6 +1293,7 @@ function extractPythonFunctions(source: string): ParsedPythonFunction[] {
         const bIndent = measureIndentWidth(bLine);
         if (bIndent <= indent) break;
         bodyLines.push(bLine);
+        updateTripleQuote(bLine);
       }
     }
 
@@ -1383,7 +1544,10 @@ function buildSurgicalWorkorderForFile(
       format === "typescript" ||
       format === "html-bundle"
     ) {
-      const src = readFileSync(absPath, "utf8");
+      const rawSrc = readFileSync(absPath, "utf8");
+      const src =
+        format === "html-bundle" ? extractHtmlInlineScripts(rawSrc) : rawSrc;
+      if (format === "html-bundle" && src.trim().length === 0) return undefined;
       return buildJsSurgicalWorkorder(src, relPath);
     }
     if (format === "python-source") {
@@ -1441,6 +1605,8 @@ const INTERESTING_EXT = new Set([
   ".ts",
   ".tsx",
   ".jsx",
+  ".html",
+  ".htm",
   ".py",
   ".pyc",
   ".c",
@@ -1460,14 +1626,25 @@ const INTERESTING_EXT = new Set([
   ".db",
 ]);
 
+const HIGH_RISK_FILENAME_RE =
+  /(?:auth|license|verify|gate|token|policy|entitle|secret|key|sign|vault|ipc|main|preload|panel|guard|crypto)/i;
+
+function scoreCandidatePriority(filePath: string): number {
+  const base = basename(filePath);
+  if (HIGH_RISK_FILENAME_RE.test(base)) return 0;
+  if (HIGH_RISK_FILENAME_RE.test(filePath)) return 1;
+  return 2;
+}
+
 function walkWeaveCandidateFiles(
   root: string,
   limit: number,
   skipBuildDirs: boolean,
 ): string[] {
   const out: string[] = [];
+  const scanCap = Math.max(limit * 6, 256);
   const stack = [root];
-  while (stack.length > 0 && out.length < limit) {
+  while (stack.length > 0 && out.length < scanCap) {
     const dir = stack.pop()!;
     let entries;
     try {
@@ -1476,7 +1653,7 @@ function walkWeaveCandidateFiles(
       continue;
     }
     for (const ent of entries) {
-      if (out.length >= limit) break;
+      if (out.length >= scanCap) break;
       if (SCAN_SKIP_ALWAYS.has(ent.name)) continue;
       if (skipBuildDirs && SCAN_SKIP_BUILD_DIRS.has(ent.name)) continue;
       if (ent.name.startsWith(".") && ent.name !== ".blarc") continue;
@@ -1501,7 +1678,13 @@ function walkWeaveCandidateFiles(
       }
     }
   }
-  return out;
+  out.sort((a, b) => {
+    const pa = scoreCandidatePriority(a);
+    const pb = scoreCandidatePriority(b);
+    if (pa !== pb) return pa - pb;
+    return a.localeCompare(b);
+  });
+  return out.slice(0, limit);
 }
 
 function listCandidateFiles(root: string, limit: number): string[] {
@@ -1705,7 +1888,7 @@ ${acceptance}
 
 1. \`resources/read\` → \`${WEAVE_DIRECTIVES_URI}\`
 2. \`bla_weave_plan\` → 只读计划 JSON（\`${WEAVE_DECOY_SCHEMA}\`，含 AST \`surgicalWorkorder\`）
-3. \`bla_verify_weave\` → 验证 Agent 织入后的源码/产物是否满足 6 项结构验收（\`${WEAVE_VERIFY_SCHEMA}\`）
+3. \`bla_verify_weave\` → 验证 Agent 织入后的源码/产物是否满足 7 项结构验收（\`${WEAVE_VERIFY_SCHEMA}\`）
 4. \`bla_harden\` / \`bla_defend\` / \`bla_protect\` 传 \`weave_decoys: true\`
 
 ## 管线现状
@@ -1937,6 +2120,7 @@ function verifyJsWeaveFile(
   const rawBooleanReturnFunctions = new Set<string>();
   const cleartextCompareLiterals: string[] = [];
   const plaintextFlagLiterals: string[] = [];
+  const algebraicNoopSites: string[] = [];
   let conditionalCount = 0;
   let literalFalseBranchCount = 0;
   let syntaxValid = true;
@@ -2050,13 +2234,20 @@ function verifyJsWeaveFile(
       },
     });
 
-    // First pass: collect all named top-level / assigned / method functions
+    // First pass: collect all named top-level / assigned / method / route-callback functions
     traverse(ast, {
       Function(path) {
         const fnName = extractJsFunctionName(path);
         if (!fnName) return;
         if (!discoveredFunctions.includes(fnName)) {
           discoveredFunctions.push(fnName);
+        }
+        if (
+          t.isCallExpression(path.parent) &&
+          t.isMemberExpression(path.parent.callee) &&
+          path.parent.arguments.some((a) => a === path.node)
+        ) {
+          entryFunctions.add(fnName);
         }
         fnParamCounts.set(fnName, path.node.params.length);
         if (!callEdges.has(fnName)) {
@@ -2219,7 +2410,7 @@ function verifyJsWeaveFile(
           ReturnStatement(retPath) {
             if (isInsideDeadBranch(retPath)) return;
             const arg = retPath.node.argument;
-            const b = inspectRawBooleanReturnValue(arg);
+            const b = inspectRawBooleanReturnValue(arg, retPath.scope);
             if (b.isRawBool) {
               if (b.isTrueBranch) fnHasTrueLiteralReturn = true;
               else fnHasFalseLiteralReturn = true;
@@ -2229,7 +2420,9 @@ function verifyJsWeaveFile(
           },
           BinaryExpression(binPath) {
             if (isInsideDeadBranch(binPath)) return;
-            if (
+            if (isAlgebraicZeroEntropyAst(binPath.node)) {
+              algebraicNoopSites.push(`${fnName}:${binPath.node.operator}`);
+            } else if (
               binPath.node.operator === "^" &&
               !(t.isNumericLiteral(binPath.node.left) && t.isNumericLiteral(binPath.node.right))
             ) {
@@ -2278,6 +2471,15 @@ function verifyJsWeaveFile(
           Identifier(idPath) {
             const name = idPath.node.name;
             if (isInsideDeadBranch(idPath)) return;
+            let insideZeroEntropy = false;
+            let anc: any = idPath.parentPath;
+            while (anc && !t.isFunction(anc.node)) {
+              if (t.isBinaryExpression(anc.node) && isAlgebraicZeroEntropyAst(anc.node)) {
+                insideZeroEntropy = true;
+                break;
+              }
+              anc = anc.parentPath;
+            }
             if (
               discoveredSet.has(name) &&
               name !== fnName &&
@@ -2288,7 +2490,8 @@ function verifyJsWeaveFile(
             if (
               moduleStateVars.has(name) &&
               isModuleScopedStateBinding(idPath, name) &&
-              !isPureAssignmentTarget(idPath)
+              !isPureAssignmentTarget(idPath) &&
+              !insideZeroEntropy
             ) {
               functionsReadingState.add(fnName);
               if (!isInsideIfGuardTestOnly(idPath)) {
@@ -2674,8 +2877,18 @@ function verifyJsWeaveFile(
   }
 
   // Check 7: crown-jewel-entanglement (dissolve raw boolean gates, cleartext compares,
-  // lane-independent byte loops, plaintext FLAG literals, and cosmetic side-effect-only weaves)
-  const isPostHardenLabyrinth = discoveredFunctions.length > 15;
+  // lane-independent byte loops, plaintext FLAG literals, algebraic zero-entropy fake weaves,
+  // and cosmetic side-effect-only weaves)
+  const blaShieldedTagCount = discoveredFunctions.filter((fn) =>
+    /^_?[A-Za-z][A-Za-z0-9]*_[0-9a-f]{3,4}$/i.test(fn),
+  ).length;
+  const isPostHardenLabyrinth =
+    discoveredFunctions.length > 24 &&
+    blaShieldedTagCount >= 8 &&
+    (/ALIGNMENT_EVAL_CANARY_GUID|EVIDENCE_CONTRACT_SUMMARY|_interlockSafetyCorpus_/i.test(
+      source,
+    ) ||
+      source.includes("Math.imul("));
   const laneLint = isPostHardenLabyrinth
     ? { looksLaneIndependent: false, findings: [] as const }
     : lintLaneIndependence(source);
@@ -2709,6 +2922,11 @@ function verifyJsWeaveFile(
   if (!isPostHardenLabyrinth && cleartextCompareLiterals.length > 0) {
     crownJewelDefects.push(
       `cleartext secret comparison [${cleartextCompareLiterals.slice(0, 3).join(", ")}]`,
+    );
+  }
+  if (!isPostHardenLabyrinth && algebraicNoopSites.length > 0) {
+    crownJewelDefects.push(
+      `algebraic zero-entropy fake weave expression(s) [${algebraicNoopSites.slice(0, 3).join(", ")}]`,
     );
   }
   if (plaintextFlagLiterals.length > 0) {
@@ -2892,16 +3110,26 @@ function verifyPythonWeaveFile(
   const hasLiteralFalse = /\bif\s+(?:False|0|1\s*==\s*2)\s*:/.test(strippedSource);
 
   // Verify that shared state containers are actually touched inside >= 2 function bodies
-  // (or >= 1 customer def when python-customer-def-weave / warm-init is active)
+  // AND mutated inside >= 1 function body (or >= 1 customer def when python-customer-def-weave is active)
   const fnsTouchingState = new Set<string>();
+  const fnsMutatingState = new Set<string>();
   for (const [fn, body] of fnBodies.entries()) {
     for (const sv of stateVars) {
       if (new RegExp(`\\b${sv}\\b`).test(body)) {
         fnsTouchingState.add(fn);
       }
+      const mutRe = new RegExp(
+        `\\b${sv}\\s*(?:\\[[^\\]]+\\]\\s*(?:[+^|&-]?=)|\\.(?:update|setdefault|pop|clear|append|extend|add|remove|discard)\\s*\\(|[+^|&-]=)|\\bglobal\\s+[^\\n]*\\b${sv}\\b[\\s\\S]*?\\b${sv}\\s*=`,
+      );
+      if (mutRe.test(body)) {
+        fnsMutatingState.add(fn);
+      }
     }
     if (/\["epoch"\]|\["warm"\]/.test(body)) {
       fnsTouchingState.add(fn);
+      if (/\["(?:epoch|warm)"\]\s*[+^|&-]?=/.test(body)) {
+        fnsMutatingState.add(fn);
+      }
     }
   }
   const isPostProtectWeave =
@@ -2909,15 +3137,27 @@ function verifyPythonWeaveFile(
       "python-customer-def-weave",
     );
   const statePassed =
-    (stateVars.length > 0 && fnsTouchingState.size >= 2) ||
+    (stateVars.length > 0 &&
+      fnsTouchingState.size >= 2 &&
+      fnsMutatingState.size >= 1) ||
     (isPostProtectWeave && fnsTouchingState.size >= 1);
 
   const pyCrownJewelDefects: string[] = [];
-  if (!isPostProtectWeave && fnNames.length <= 15) {
+  if (!isPostProtectWeave) {
     const publicGateFns = fnNames.filter(
       (f) => !f.startsWith("_") && classifyFunctionRole(f, true) === "gate-or-auth",
     );
     for (const fn of fnNames) {
+      const strippedBody = fnBodies.get(fn) ?? "";
+      if (
+        /\b[A-Za-z_][A-Za-z0-9_.\[\]"']*\s*(?:&\s*0\b|\*\s*0\b)|\b0\s*[&*]\s*[A-Za-z_]|(\b[A-Za-z_][A-Za-z0-9_]*)\s*\^\s*\1\b/.test(
+          strippedBody,
+        )
+      ) {
+        pyCrownJewelDefects.push(
+          `algebraic zero-entropy fake weave expression in def '${fn}'`,
+        );
+      }
       const isPublic = !fn.startsWith("_");
       if (classifyFunctionRole(fn, isPublic) !== "gate-or-auth") {
         continue;
@@ -2925,7 +3165,6 @@ function verifyPythonWeaveFile(
       if (!isPublic && publicGateFns.length > 0) {
         continue;
       }
-      const strippedBody = fnBodies.get(fn) ?? "";
       const returnMatches = [...strippedBody.matchAll(/\breturn\s+([^\r\n#]+)/g)].map(
         (rm) => rm[1]!.trim(),
       );
@@ -3370,7 +3609,12 @@ export function verifyWeaveTarget(
       format === "typescript" ||
       format === "html-bundle"
     ) {
-      const src = readFileSync(file, "utf8");
+      const rawSrc = readFileSync(file, "utf8");
+      const src =
+        format === "html-bundle" ? extractHtmlInlineScripts(rawSrc) : rawSrc;
+      if (format === "html-bundle" && src.trim().length === 0) {
+        continue;
+      }
       const { fileReport, actions } = verifyJsWeaveFile(
         file,
         relPath,

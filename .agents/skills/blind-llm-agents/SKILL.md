@@ -61,8 +61,8 @@ When hardening a repository with source code, follow this 4-stage closed loop so
      - Wire call edges from `entryFunctions` into the shadow helpers guarded by state-dependent opaque-true invariants at `branchCandidates`.
    - For C/C++, Rust, or Go targets, call `bla_emit_headers` and include the emitted header in native sources.
 4. **Verify Source Weave**:
-   - Call **`bla_verify_weave`** `{ "path": "." }` (`bla-weave-verify/v1`).
-   - If `overallPassed: false`, execute each item in `agentActions` (fixing any unreferenced helpers, missing shared-state mutations, or stem ratios) and re-run `bla_verify_weave` until `overallPassed: true`.
+   - Call **`bla_verify_weave`** `{ "path": "." }` (`bla-weave-verify/v1`, 7 structural acceptance checks including `crown-jewel-entanglement`).
+   - If `overallPassed: false`, execute each item in `agentActions` (fixing any unreferenced helpers, missing shared-state mutations, isolated boolean gates, or stem ratios) and re-run `bla_verify_weave` until `overallPassed: true`.
 
 ### Stage 3: Build & Post-Build Counter-REA Exhaustion Harden (`mcp-primary`)
 1. If the project has a build step (`npm run build`, `cargo build`, etc.), run it so compiled artifacts reflect your Stage 2 source surgery.
@@ -110,6 +110,7 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | WASM XOR-mask beside masked pack | `bla_lint_wasm_xor_mask_sidecar` | `allow_wasm_xor_mask_sidecar` |
 | `seal.revision` as XOR known-plaintext | `bla_lint_wasm_seal_xor_known_plaintext` | `allow_wasm_seal_xor_known_plaintext` |
 | Cleartext sensitive literals (panel/license) | `bla_lint_plaintext_secrets` / `bla_encrypt_strings` | `allow_plaintext_string` |
+| Release hygiene leaks (SOLUTION/dotenv/keys/debug) | `bla_lint` | `allow_release_hygiene_leak` |
 
 Prefer **one** project scan: MCP `bla_lint` / CLI `bla lint .` (schema `bla-packaging-gates/v1` with `remediationPlan`). Individual `bla_lint_*` remain for single-file drills. Bankrupt harden **refuses** the six carrier/JS/WASM gates unless the matching allow flag is set; lanes/panel also refuse at protect-time.
 

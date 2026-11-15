@@ -97,7 +97,7 @@ function shieldOrPassThrough(
  * Usage in `vite.config.ts`:
  * ```ts
  * import { defineConfig } from "vite";
- * import { blaVitePlugin } from "bla-shield";
+ * import { blaVitePlugin } from "bla-agents/bundler";
  *
  * export default defineConfig({
  *   plugins: [blaVitePlugin({ intensity: "bankrupt" })],
@@ -175,6 +175,20 @@ export function blaVitePlugin(options: BlaBundlerPluginOptions = {}) {
   };
 }
 
+function createWebpackRawSource(content: string) {
+  const byteBuf = Buffer.from(content, "utf8");
+  return {
+    source: () => content,
+    size: () => byteBuf.length,
+    buffer: () => byteBuf,
+    map: () => null,
+    sourceAndMap: () => ({ source: content, map: null }),
+    updateHash: (hash: { update: (data: string | Buffer) => void }) => {
+      hash.update(byteBuf);
+    },
+  };
+}
+
 /**
  * Webpack 5 / Rspack plugin class (`BlaWebpackPlugin`) that shields emitted JS assets.
  */
@@ -208,6 +222,10 @@ export class BlaWebpackPlugin {
               name: string,
               newSource: { source: () => string; size: () => number },
             ) => void;
+            emitAsset?: (
+              name: string,
+              newSource: { source: () => string; size: () => number },
+            ) => void;
           }) => void,
         ) => void;
       };
@@ -215,13 +233,14 @@ export class BlaWebpackPlugin {
   }): void {
     const intensity = this.options.intensity ?? "balanced";
     const include = this.options.include ?? /\.(?:m?js|cjs)$/i;
+    const emitMap = this.options.honeySourceMap ?? true;
     const failBuildOnError = this.options.failBuildOnError ?? false;
 
     compiler.hooks.compilation.tap("BlaWebpackPlugin", (compilation) => {
       compilation.hooks.processAssets.tap(
         {
           name: "BlaWebpackPlugin",
-          stage: 400, // PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE
+          stage: 2000, // PROCESS_ASSETS_STAGE_OPTIMIZE_TRANSFER (post-minify so Terser cannot fold shields)
         },
         (assets) => {
           for (const assetName of Object.keys(assets)) {
@@ -229,13 +248,14 @@ export class BlaWebpackPlugin {
             const rawAsset = assets[assetName];
             if (!rawAsset) continue;
             const rawSource = rawAsset.source().toString("utf8");
+            const seed = deriveSeedLabel(this.options.seed ?? "bla-webpack", assetName);
             const sourceType = inferJsCarrierFromPath(assetName);
             const loader = inferEsbuildLoader(assetName);
             const shieldedCode = shieldOrPassThrough(
               () =>
                 transformJavaScriptWithBlaShield(rawSource, {
                   intensity,
-                  seed: deriveSeedLabel(this.options.seed ?? "bla-webpack", assetName),
+                  seed,
                   filename: assetName,
                   sourceType,
                   loader,
@@ -245,10 +265,18 @@ export class BlaWebpackPlugin {
             if (shieldedCode === null) {
               continue; // Webpack leaves the already-emitted asset untouched.
             }
-            compilation.updateAsset(assetName, {
-              source: () => shieldedCode,
-              size: () => Buffer.byteLength(shieldedCode, "utf8"),
-            });
+            compilation.updateAsset(assetName, createWebpackRawSource(shieldedCode));
+            if (emitMap && typeof compilation.emitAsset === "function" && !assets[`${assetName}.map`]) {
+              const prng = new SeededPrng(seed);
+              const chaff = generateChaffPayloads(prng, intensity);
+              const honeyMap = generateHoneySourceMap(
+                assetName,
+                shieldedCode.split("\n").length,
+                prng,
+                chaff,
+              );
+              compilation.emitAsset(`${assetName}.map`, createWebpackRawSource(honeyMap.jsonString));
+            }
           }
         },
       );
@@ -280,7 +308,14 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
         const fs = await import("node:fs/promises");
         const source = await fs.readFile(args.path, "utf8");
         const loader = inferEsbuildLoader(args.path);
-        const sourceType = inferJsCarrierFromPath(args.path);
+        const pathCarrier = inferJsCarrierFromPath(args.path);
+        const sourceType: JsCarrierType =
+          pathCarrier === "script" &&
+          /(?:^|\n)\s*(?:import\s+(?:[\w*{]|["'])|export\s+(?:default\b|const\b|let\b|var\b|function\b|async\b|class\b|type\b|interface\b|enum\b|\{|\*))/m.test(
+            source,
+          )
+            ? "module"
+            : pathCarrier;
         const shieldedCode = shieldOrPassThrough(
           () =>
             transformJavaScriptWithBlaShield(source, {

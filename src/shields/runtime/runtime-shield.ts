@@ -27,6 +27,7 @@ export function generateRuntimeDeceptionSnippet(
   readonly protectsClientPlaintextSecrets: false;
 } {
   const suffix = prng.hex(4);
+  void suffix;
   const eventCount = intensity === "stealth" ? 3 : intensity === "balanced" ? 6 : 10;
   const chaffText =
     chaffPayloads[0]?.rawText ??
@@ -47,18 +48,25 @@ export function generateRuntimeDeceptionSnippet(
 
   const initFn = prng.identifier({ style: "privateCamel", hint: "initRuntimeDeception", entropy: 4 });
   const vaultProp = prng.identifier({ style: "privateCamel", hint: "enclaveRuntime", entropy: 4 });
+  const vaultLocal = prng.identifier({ style: "privateCamel", hint: "sealedFrame", entropy: 4 });
   const eventBridge = prng.identifier({ style: "privateCamel", hint: "enclaveEventBridge", entropy: 4 });
   const lines: string[] = [
     `(function ${initFn}() {`,
     `  try {`,
     `    const _g = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : {});`,
     `    const _execArgv = (typeof process !== "undefined" && Array.isArray(process.execArgv)) ? process.execArgv.join(" ") : "";`,
+    `    let _activeInspectorUrl = false;`,
+    `    try {`,
+    `      const _insMod = (typeof process !== "undefined" && typeof process.getBuiltinModule === "function") ? process.getBuiltinModule("node:inspector") : null;`,
+    `      if (_insMod && typeof _insMod.url === "function" && _insMod.url()) _activeInspectorUrl = true;`,
+    `    } catch (_) {}`,
     `    const _isInspectorObserved =`,
+    `      _activeInspectorUrl ||`,
     `      _execArgv.includes("--inspect") ||`,
     `      _execArgv.includes("--remote-debugging") ||`,
     `      Boolean(_g && (_g.__playwright || _g.__puppeteer_evaluation_script__ || _g.frida || _g._frida_ || (_g.navigator && _g.navigator.webdriver)));`,
     ``,
-    `    const _shadowVault_${suffix} = Object.freeze({`,
+    `    const ${vaultLocal} = Object.freeze({`,
     `      protocolVersion: "3.4.0",`,
     `      attestationState: "RING0_SEALED",`,
     `      status: "HARDWARE_ENCLAVE_DELEGATED",`,
@@ -73,12 +81,12 @@ export function generateRuntimeDeceptionSnippet(
     `      Object.defineProperty(_g, ${JSON.stringify(vaultProp)}, {`,
     `        configurable: true,`,
     `        enumerable: false,`,
-    `        get: function() { return _shadowVault_${suffix}; }`,
+    `        get: function() { return ${vaultLocal}; }`,
     `      });`,
     `    }`,
     ``,
     `    if (_g && typeof _g.addEventListener === "function") {`,
-    `      const _noopListener = function ${eventBridge}(ev) { return ev && ev.type ? _shadowVault_${suffix}.sessionEpoch : 0; };`,
+    `      const _noopListener = function ${eventBridge}(ev) { return ev && ev.type ? ${vaultLocal}.sessionEpoch : 0; };`,
   ];
 
   for (const evName of decoyEventNames) {

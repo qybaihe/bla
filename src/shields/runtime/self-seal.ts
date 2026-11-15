@@ -203,6 +203,8 @@ export interface SelfSealSnippet {
 
 function emitMeasureFunction(
   helperName: string,
+  siteIndex: number,
+  siteSalt: string,
   siblingsLiteral: string,
   expectedLiteral: string,
   hardFailOnSiblingMismatch: boolean,
@@ -214,6 +216,7 @@ function emitMeasureFunction(
   const lines: string[] = [];
   lines.push(`function ${helperName}() {`);
   lines.push(`  var digest = 0;`);
+  lines.push(`  var _tampered = false;`);
   lines.push(`  try {`);
   if (esmRequireHelperIdent && esmMetaUrlIdent) {
     lines.push(`    var _req = ${esmRequireHelperIdent}(${esmMetaUrlIdent});`);
@@ -226,9 +229,10 @@ function emitMeasureFunction(
     );
     lines.push(`    var baseDir = _path.dirname(selfPath);`);
   } else {
-    lines.push(`    var _c = require("node:crypto");`);
-    lines.push(`    var _fs = require("node:fs");`);
-    lines.push(`    var _path = require("node:path");`);
+    lines.push(`    var _req = require;`);
+    lines.push(`    var _c = _req("node:crypto");`);
+    lines.push(`    var _fs = _req("node:fs");`);
+    lines.push(`    var _path = _req("node:path");`);
     lines.push(`    var h = _c.createHash("sha256");`);
     lines.push(
       `    var selfPath = (typeof __filename === "string" ? __filename : null);`,
@@ -240,6 +244,7 @@ function emitMeasureFunction(
       `    var baseDir = (typeof __dirname === "string" ? __dirname : null);`,
     );
   }
+  lines.push(`    h.update(${JSON.stringify(siteSalt)});`);
   lines.push(`    var selfBuf = null;`);
   lines.push(
     `    if (selfPath) { try { selfBuf = _fs.readFileSync(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
@@ -259,7 +264,7 @@ function emitMeasureFunction(
     if (hardFailOnSiblingMismatch) {
       lines.push(`        throw new Error("integrity check failed");`);
     } else {
-      lines.push(`        digest = 0xffffffff;`);
+      lines.push(`        _tampered = true;`);
     }
     lines.push(`      }`);
     lines.push(`    }`);
@@ -281,7 +286,7 @@ function emitMeasureFunction(
   if (hardFailOnSiblingMismatch) {
     lines.push(`          throw new Error("integrity check failed");`);
   } else {
-    lines.push(`          digest = 0xffffffff;`);
+    lines.push(`          _tampered = true;`);
   }
   lines.push(`        }`);
   lines.push(`        h.update(sp);`);
@@ -296,6 +301,8 @@ function emitMeasureFunction(
     lines.push(
       `        if (expected[String(siblings[i])]) throw new Error("integrity check failed");`,
     );
+  } else {
+    lines.push(`        if (expected[String(siblings[i])]) _tampered = true;`);
   }
   lines.push(`        h.update("missing:" + String(siblings[i]));`);
   lines.push(`      }`);
@@ -303,16 +310,26 @@ function emitMeasureFunction(
   if (envFingerprint) {
     lines.push(`    var envNote = "";`);
     lines.push(`    try {`);
-    lines.push(`      envNote += String(process.env.NODE_OPTIONS || "");`);
-    lines.push(`      envNote += (process.execArgv || []).join(",");`);
-    lines.push(
-      `      envNote += (/\\[native code\\]/.test(Function.prototype.toString.call(Function.prototype.toString)) ? "N" : "T");`,
-    );
+    lines.push(`      var _nodeOpts = String((typeof process !== "undefined" && process && process.env && process.env.NODE_OPTIONS) || "");`);
+    lines.push(`      var _execArgv = (typeof process !== "undefined" && process && Array.isArray(process.execArgv)) ? process.execArgv.join(",") : "";`);
+    lines.push(`      envNote += _nodeOpts + "|" + _execArgv;`);
+    lines.push(`      if (/--inspect(?:-brk|-port|-publish-uid|=|\\b)|--debug(?:-brk|-port|=|\\b)/.test(_nodeOpts + " " + _execArgv)) _tampered = true;`);
+    lines.push(`      var _fnToStr = Function.prototype.toString;`);
+    lines.push(`      var _nativeToStr = /\\[native code\\]/.test(_fnToStr.call(_fnToStr)) && /\\[native code\\]/.test(_fnToStr.call(Math.imul));`);
+    lines.push(`      var _isElectron = Boolean(typeof process !== "undefined" && process && process.versions && process.versions.electron);`);
+    lines.push(`      var _nativeFs = _isElectron || !(typeof process !== "undefined" && process && typeof process.getBuiltinModule === "function") || (_fs.readFileSync === process.getBuiltinModule("node:fs").readFileSync);`);
+    lines.push(`      if (!_nativeToStr || !_nativeFs) _tampered = true;`);
+    lines.push(`      envNote += (_nativeToStr && _nativeFs ? "N" : "T");`);
+    lines.push(`      try { var _ins = _req("node:inspector"); if (_ins && typeof _ins.url === "function" && _ins.url()) { envNote += "I"; _tampered = true; } } catch (_ei) {}`);
     lines.push(`    } catch (_e3) { envNote += "E"; }`);
     lines.push(`    h.update(envNote);`);
   }
   lines.push(`    var hex = h.digest("hex");`);
-  lines.push(`    digest = parseInt(hex.slice(0, 8), 16) >>> 0;`);
+  lines.push(`    digest = (parseInt(hex.slice(0, 8), 16) & 0xfffffffe) >>> 0;`);
+  if (siteIndex === 0) {
+    lines.push(`    if (digest === 0) digest = 0x40000002;`);
+    lines.push(`    if (_tampered) digest = (digest | 1) >>> 0;`);
+  }
   lines.push(`  } catch (_e4) {`);
   lines.push(
     `    if (_e4 && _e4.message === "integrity check failed") throw _e4;`,
@@ -375,10 +392,13 @@ export function generateSelfSealSnippet(
       hint: site === 0 ? "measureIntegrity" : `measureIntegrity${site}`,
       entropy: 4,
     });
+    const siteSalt = `s${site}:${prng.hex(6)}`;
     helperNames.push(helperName);
     lines.push(
       ...emitMeasureFunction(
         helperName,
+        site,
+        siteSalt,
         siblingsLiteral,
         expectedLiteral,
         hardFailOnSiblingMismatch,

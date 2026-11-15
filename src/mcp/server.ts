@@ -1,5 +1,6 @@
 import { BLA_IDENTITY } from "../identity.js";
 import { initBlaConfig } from "../core/config.js";
+import { verifyManifestFile } from "../core/manifest-verify.js";
 import { inspectReleaseExposure } from "../core/release-exposure.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import { auditTarget } from "../engine/auditor.js";
@@ -143,9 +144,17 @@ export interface McpPropertySchema {
   readonly items?: { readonly type: "string" | "boolean" | "number" };
 }
 
+export interface McpToolAnnotations {
+  readonly readOnlyHint?: boolean;
+  readonly destructiveHint?: boolean;
+  readonly idempotentHint?: boolean;
+  readonly openWorldHint?: boolean;
+}
+
 export interface McpToolDefinition {
   readonly name: string;
   readonly description: string;
+  readonly annotations?: McpToolAnnotations;
   readonly inputSchema: {
     readonly type: "object";
     readonly properties: Readonly<Record<string, McpPropertySchema | undefined>>;
@@ -197,7 +206,30 @@ export const SUPPORTED_MCP_PROTOCOL_VERSIONS = Object.freeze([
   "2025-03-26",
 ] as const);
 
-export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
+const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
+  "bla_harden",
+  "bla_defend",
+  "bla_protect",
+  "bla_init",
+  "bla_encrypt_strings",
+  "bla_bind_scope",
+  "bla_redteam_report",
+]);
+
+function withToolAnnotations(tool: McpToolDefinition): McpToolDefinition {
+  const isMutating = MUTATING_MCP_TOOLS.has(tool.name);
+  return {
+    ...tool,
+    annotations: {
+      readOnlyHint: !isMutating,
+      destructiveHint: false,
+      idempotentHint: !isMutating || tool.name === "bla_redteam_report",
+      openWorldHint: false,
+    },
+  };
+}
+
+const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_harden",
     description:
@@ -300,6 +332,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
+        },
+        allow_release_hygiene_leak: {
+          type: "boolean",
+          description:
+            "Lab escape: allow bankrupt/maximum harden despite leaked SOLUTION/writeup notes, populated .env secrets, SSH/PEM private keys, or unstripped .pdb/.dSYM/.dwp debug databases. Default false — refuse.",
         },
         seed: {
           type: "string",
@@ -457,6 +494,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description:
             "Allow bankrupt harden/protect despite WASM seal.revision XOR known-plaintext entitlement packs. Default false — refuse (red-blue round-7). Prefer one-way mask KDFs; keep public digests out of masked plaintext.",
+        },
+        allow_release_hygiene_leak: {
+          type: "boolean",
+          description:
+            "Lab escape: allow bankrupt/maximum defend despite leaked SOLUTION/writeup notes, populated .env secrets, SSH/PEM private keys, or unstripped .pdb/.dSYM/.dwp debug databases. Default false — refuse.",
         },
         seed: {
           type: "string",
@@ -657,6 +699,21 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           description:
             "Optional harden run_id; when paired with summary_path, must match the summary or the tool errors.",
         },
+        manifest_path: {
+          type: "string",
+          description:
+            "Optional path to a .bla-manifest.json attestation file to cryptographically verify alongside the artifact.",
+        },
+        public_key_path: {
+          type: "string",
+          description:
+            "Optional path to a pinned Ed25519 public key PEM file used when verifying manifest_path.",
+        },
+        require_pinned_key: {
+          type: "boolean",
+          description:
+            "When true with manifest_path, fails verification unless a pinned public_key_path is supplied and matches.",
+        },
       },
       required: ["target_path"],
       additionalProperties: false,
@@ -775,7 +832,7 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   {
     name: "bla_verify_weave",
     description:
-      "Read-only structural weave verifier (bla-weave-verify/v1): validates Agent-authored source weave edits and hardened outputs against WEAVE_ACCEPTANCE_TESTS (no forbidden banners, mixed mundane/security stems, shared-state mutation across functions, customer entry call-graph reachability, opaque-true entanglement, and filter resistance). Returns weaveScore and actionable agentActions for autonomous self-repair.",
+      "Read-only structural weave verifier (bla-weave-verify/v1): validates Agent-authored source weave edits and hardened outputs against all 7 WEAVE_ACCEPTANCE_TESTS (no forbidden banners, mixed mundane/security stems, shared-state mutation across functions, customer entry call-graph reachability, opaque-true entanglement, filter resistance, and crown-jewel entanglement). Returns weaveScore and actionable agentActions for autonomous self-repair.",
     inputSchema: {
       type: "object",
       properties: {
@@ -836,6 +893,10 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
           type: "boolean",
           description: "Treat lane-independent gates as non-blocking (lab only)",
         },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description: "Keep stable __vaultPanelDerive_* / deriveLocal ABI without rewrite warning (lab only)",
+        },
         allow_panel_offline_oracle: {
           type: "boolean",
           description: "Treat panel offline oracle as non-blocking (lab only)",
@@ -871,6 +932,10 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         path: {
           type: "string",
           description: "Path to a UTF-8 source file to lint (JS/TS/Python-like)",
+        },
+        allow_lane_independent: {
+          type: "boolean",
+          description: "Lab escape: report findings without refusing",
         },
       },
       required: ["path"],
@@ -919,6 +984,14 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
         path: {
           type: "string",
           description: "Path to a JS/TS/HTML file to lint",
+        },
+        allow_stable_panel_derive: {
+          type: "boolean",
+          description: "Lab escape: allow stable __vaultPanelDerive_* / deriveLocal ABI",
+        },
+        allow_panel_offline_oracle: {
+          type: "boolean",
+          description: "Lab escape: allow deriveLocal + panelTokenSha256 offline oracle combo",
         },
       },
       required: ["path"],
@@ -1221,7 +1294,11 @@ export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
       additionalProperties: false,
     },
   },
-]);
+];
+
+export const BLA_MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze(
+  RAW_BLA_MCP_TOOLS.map(withToolAnnotations),
+);
 
 
 export interface McpResourceDefinition {
@@ -1448,6 +1525,9 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     ...(args.allow_wasm_seal_xor_known_plaintext === true
       ? { allowWasmSealXorKnownPlaintext: true }
       : {}),
+    ...(args.allow_release_hygiene_leak === true
+      ? { allowReleaseHygieneLeak: true }
+      : {}),
     ...(typeof args.seed === "string" ? { seed: args.seed } : {}),
   });
 }
@@ -1492,6 +1572,9 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
       : {}),
     ...(args.allow_wasm_seal_xor_known_plaintext === true
       ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(args.allow_release_hygiene_leak === true
+      ? { allowReleaseHygieneLeak: true }
       : {}),
   });
 }
@@ -1545,6 +1628,9 @@ function runPackagingGatesLint(args: Record<string, unknown>): PackagingGatesRep
       : {}),
     ...(args.allow_lane_independent === true
       ? { allowLaneIndependentGates: true }
+      : {}),
+    ...(args.allow_stable_panel_derive === true
+      ? { allowStablePanelDeriveAbi: true }
       : {}),
     ...(args.allow_panel_offline_oracle === true
       ? { allowPanelOfflineOracle: true }
@@ -2106,8 +2192,13 @@ export async function handleMcpRequest(
             payload = confirmationRequiredPayload(name, preOverwrite);
           } else {
             const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
-            const abortCtl = new AbortController();
+            const preAborted =
+              typeof req.id === "string" || typeof req.id === "number"
+                ? preAbortedHardenRequests.get(req.id)
+                : undefined;
+            const abortCtl = preAborted ?? new AbortController();
             if (typeof req.id === "string" || typeof req.id === "number") {
+              preAbortedHardenRequests.delete(req.id);
               activeHardenAborts.set(req.id, abortCtl);
             }
             const progressToken = progressTokenOf(req);
@@ -2118,11 +2209,12 @@ export async function handleMcpRequest(
                 dryRun,
                 ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
                 ...(outputDirectory !== undefined ? { outputDirectory } : {}),
-                intensity:
-                  typeof args.intensity === "string"
-                    ? (args.intensity as ProtectionIntensity)
-                    : "bankrupt",
-                emitManifest: Boolean(args.emit_manifest) || args.sign_manifest === true,
+                ...(typeof args.intensity === "string"
+                  ? { intensity: args.intensity as ProtectionIntensity }
+                  : {}),
+                ...(typeof args.emit_manifest === "boolean" || args.sign_manifest === true
+                  ? { emitManifest: Boolean(args.emit_manifest) || args.sign_manifest === true }
+                  : {}),
                 ...(args.sign_manifest === true
                   ? {
                       signManifest: true,
@@ -2130,12 +2222,20 @@ export async function handleMcpRequest(
                         typeof args.manifest_key_path === "string" ? args.manifest_key_path : "",
                     }
                   : {}),
-                llmDirectives: Boolean(args.llm_directives),
-                weaveDecoys: Boolean(args.weave_decoys),
-                selfSeal: Boolean(args.self_seal),
-                sidecarEntangle: Boolean(args.sidecar_entangle),
-                ...(args.require_agent_weave === true
-                  ? { requireAgentWeave: true }
+                ...(typeof args.llm_directives === "boolean"
+                  ? { llmDirectives: args.llm_directives }
+                  : {}),
+                ...(typeof args.weave_decoys === "boolean"
+                  ? { weaveDecoys: args.weave_decoys }
+                  : {}),
+                ...(typeof args.self_seal === "boolean"
+                  ? { selfSeal: args.self_seal }
+                  : {}),
+                ...(typeof args.sidecar_entangle === "boolean"
+                  ? { sidecarEntangle: args.sidecar_entangle }
+                  : {}),
+                ...(typeof args.require_agent_weave === "boolean"
+                  ? { requireAgentWeave: args.require_agent_weave }
                   : {}),
                 ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
                 ...(args.allow_lane_independent === true
@@ -2258,6 +2358,7 @@ export async function handleMcpRequest(
             typeof args.original_path === "string" ? args.original_path : undefined,
             verifyHonestyOptions(args),
           );
+          let verifyPayload: Record<string, unknown> = { ...verification };
           if (typeof args.summary_path === "string" && args.summary_path.trim().length > 0) {
             const lookup = readHardenRunSummary(
               args.summary_path as string,
@@ -2265,8 +2366,8 @@ export async function handleMcpRequest(
                 ? (args.run_id as string)
                 : undefined,
             );
-            payload = {
-              ...verification,
+            verifyPayload = {
+              ...verifyPayload,
               runCorrelation: {
                 schema: "bla-run-correlation/v1",
                 signature: "unsigned",
@@ -2279,9 +2380,25 @@ export async function handleMcpRequest(
             throw new Error(
               "bla_verify: run_id requires summary_path so the id can be correlated against an on-disk harden summary",
             );
-          } else {
-            payload = verification;
           }
+          if (typeof args.manifest_path === "string" && args.manifest_path.trim().length > 0) {
+            const manifestVerification = verifyManifestFile(
+              args.manifest_path,
+              typeof args.public_key_path === "string" && args.public_key_path.trim().length > 0
+                ? args.public_key_path
+                : undefined,
+              args.target_path as string,
+              { requirePinnedKey: args.require_pinned_key === true },
+            );
+            verifyPayload = {
+              ...verifyPayload,
+              manifestVerification,
+            };
+            if (!manifestVerification.ok) {
+              refused = true;
+            }
+          }
+          payload = verifyPayload;
         } else if (name === "bla_benchmark") {
           payload = await handlers.runShowcaseBenchmark();
         } else if (name === "bla_emit_headers") {
@@ -2335,11 +2452,16 @@ export async function handleMcpRequest(
               plaintextSecrets: details.plaintextSecrets.length,
               integrityCoverage: details.integrityCoverage.length,
               bindScope: details.bindScope.length,
+              releaseHygiene: details.releaseHygiene.length,
             },
           };
           refused = full.shouldRefuseBankrupt;
         } else if (name === "bla_lint_lanes") {
           payload = runLintLanes(args);
+          refused =
+            args.allow_lane_independent === true
+              ? false
+              : (payload as LaneIndependenceReport).looksLaneIndependent;
         } else if (name === "bla_lint_seal") {
           payload = runLintSeal(args);
           refused = (payload as SealCommitmentReport).shouldRefuseBankrupt;
@@ -2348,9 +2470,10 @@ export async function handleMcpRequest(
           refused = (payload as WasmParamCarrierReport).shouldRefuseBankrupt;
         } else if (name === "bla_lint_panel_derive") {
           payload = runLintPanelDerive(args);
+          const panelRep = payload as PanelDeriveAbiReport;
           refused =
-            (payload as PanelDeriveAbiReport).shouldRefuseBankrupt ||
-            (payload as PanelDeriveAbiReport).shouldRewriteOrRefuse;
+            (panelRep.shouldRefuseBankrupt && args.allow_panel_offline_oracle !== true) ||
+            (panelRep.shouldRewriteOrRefuse && args.allow_stable_panel_derive !== true);
         } else if (name === "bla_lint_js_aes_unwrap") {
           payload = runLintJsAesUnwrap(args);
           refused = (payload as JsAesUnwrapReport).shouldRefuseBankrupt;
@@ -2379,6 +2502,7 @@ export async function handleMcpRequest(
                 ? "No integrity-coverage.json found (not an error — emit via harden --self-seal)."
                 : "Integrity coverage matrix OK.",
           };
+          refused = allow ? false : anyRefuse;
         } else if (name === "bla_run_lookup") {
           payload = readHardenRunSummary(
             args.summary_path as string,
@@ -2555,6 +2679,9 @@ export async function handleMcpRequest(
   }
 }
 
+/** Queued bla_harden requests cancelled before their serial turn started. */
+const preAbortedHardenRequests = new Map<string | number, AbortController>();
+
 /**
  * Largest single stdio line accepted before the client is treated as
  * misbehaving. Measured in UTF-16 code units (`String.length`, matching what
@@ -2572,18 +2699,18 @@ export interface StdioLineProcessor {
 }
 
 /**
- * Newline-delimited stdio line splitter with a hard per-line size cap so a
- * client that streams an unterminated giant line cannot grow the buffer without
- * bound. Blank lines and `Content-Length:` framing lines are skipped, matching
- * the previous server behavior.
+ * Dual-mode stdio frame splitter supporting both newline-delimited JSON-RPC 2.0
+ * and LSP/MCP `Content-Length: <bytes>\r\n\r\n<body>` byte-counted frames with
+ * a hard per-message size cap.
  */
 export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioLineProcessor {
   let buffer = "";
   let discarding = false;
+  let pendingContentBytes: number | null = null;
+  let awaitingHeaderBlankLine = false;
   return {
     push(chunk: string): void {
       if (discarding) {
-        // The remainder of an oversized line is still in flight; resume at its newline.
         const nl = chunk.indexOf("\n");
         if (nl < 0) return;
         discarding = false;
@@ -2591,19 +2718,73 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
       } else {
         buffer += chunk;
       }
-      let newlineIdx: number;
-      while ((newlineIdx = buffer.indexOf("\n")) >= 0) {
+
+      while (buffer.length > 0) {
+        if (!awaitingHeaderBlankLine && pendingContentBytes !== null) {
+          const byteLen = Buffer.byteLength(buffer, "utf8");
+          if (byteLen >= pendingContentBytes) {
+            const rawBuf = Buffer.from(buffer, "utf8");
+            const body = rawBuf.subarray(0, pendingContentBytes).toString("utf8").trim();
+            buffer = rawBuf.subarray(pendingContentBytes).toString("utf8");
+            pendingContentBytes = null;
+            if (body.length > MAX_STDIO_LINE_CHARS) {
+              hooks.onOversizedLine?.();
+              continue;
+            }
+            if (body.length > 0) {
+              hooks.onLine(body);
+            }
+            continue;
+          }
+          // Fallback when a newline-delimited message arrives shorter than a stale/skipped header.
+          if (buffer.indexOf("\n") >= 0) {
+            pendingContentBytes = null;
+          } else {
+            break;
+          }
+        }
+
+        const newlineIdx = buffer.indexOf("\n");
+        if (newlineIdx < 0) break;
         const line = buffer.slice(0, newlineIdx).trim();
         buffer = buffer.slice(newlineIdx + 1);
-        if (!line || line.startsWith("Content-Length:")) continue;
+
+        if (awaitingHeaderBlankLine) {
+          if (line === "") {
+            awaitingHeaderBlankLine = false;
+          }
+          continue;
+        }
+
+        if (!line) continue;
+        const clMatch = /^Content-Length:\s*(\d+)$/i.exec(line);
+        if (clMatch) {
+          const parsedBytes = Number.parseInt(clMatch[1]!, 10);
+          if (!Number.isFinite(parsedBytes) || parsedBytes > MAX_STDIO_LINE_CHARS * 4) {
+            pendingContentBytes = null;
+            awaitingHeaderBlankLine = false;
+            buffer = "";
+            discarding = true;
+            hooks.onOversizedLine?.();
+            return;
+          }
+          pendingContentBytes = parsedBytes;
+          awaitingHeaderBlankLine = true;
+          continue;
+        }
+        if (line.startsWith("Content-Type:")) continue;
+
         if (line.length > MAX_STDIO_LINE_CHARS) {
           hooks.onOversizedLine?.();
           continue;
         }
         hooks.onLine(line);
       }
+
       if (buffer.length > MAX_STDIO_LINE_CHARS) {
         buffer = "";
+        pendingContentBytes = null;
+        awaitingHeaderBlankLine = false;
         discarding = true;
         hooks.onOversizedLine?.();
       }
@@ -2612,13 +2793,14 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
 }
 
 /**
- * Starts the BLA MCP server over stdio (supporting newline-delimited JSON-RPC 2.0).
+ * Starts the BLA MCP server over stdio (supporting newline-delimited and Content-Length JSON-RPC 2.0).
  */
 export function startMcpStdioServer(): void {
   let processingQueue = Promise.resolve();
+  const queuedRequests = new Map<string | number, { cancelled: boolean; reason?: string }>();
   const processor = createStdioLineProcessor({
     onLine: (line: string) => {
-      // Parse first so cancel can abort an in-flight harden without waiting
+      // Parse first so cancel can abort an in-flight or queued harden without waiting
       // for the serial request queue (issue #75).
       let req: JsonRpcRequest;
       try {
@@ -2636,10 +2818,37 @@ export function startMcpStdioServer(): void {
         return;
       }
       if (req.method === "notifications/cancelled") {
+        const params = (req.params ?? {}) as {
+          requestId?: string | number;
+          reason?: string;
+        };
+        const rid = params.requestId;
+        if (
+          (typeof rid === "string" || typeof rid === "number") &&
+          queuedRequests.has(rid)
+        ) {
+          const entry = queuedRequests.get(rid)!;
+          entry.cancelled = true;
+          entry.reason = params.reason ?? "cancelled";
+        }
         void handleMcpRequest(req);
         return;
       }
+      const reqId =
+        typeof req.id === "string" || typeof req.id === "number" ? req.id : undefined;
+      if (reqId !== undefined) {
+        queuedRequests.set(reqId, { cancelled: false });
+      }
       processingQueue = processingQueue.then(async () => {
+        const queuedState = reqId !== undefined ? queuedRequests.get(reqId) : undefined;
+        if (reqId !== undefined) {
+          queuedRequests.delete(reqId);
+          if (queuedState?.cancelled) {
+            const ctl = new AbortController();
+            ctl.abort(queuedState.reason ?? "cancelled");
+            preAbortedHardenRequests.set(reqId, ctl);
+          }
+        }
         try {
           const res = await handleMcpRequest(req);
           if (res !== null) {
@@ -2655,6 +2864,10 @@ export function startMcpStdioServer(): void {
             },
           };
           process.stdout.write(JSON.stringify(parseErr) + "\n");
+        } finally {
+          if (reqId !== undefined) {
+            preAbortedHardenRequests.delete(reqId);
+          }
         }
       });
     },

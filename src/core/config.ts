@@ -43,6 +43,8 @@ export interface BlaProjectConfig {
   readonly allowWasmXorMaskSidecar?: boolean;
   /** When true, allow bankrupt despite seal.revision XOR known-plaintext packs (red-blue round-7). Default false. */
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** Lab-only: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. Default false. */
+  readonly allowReleaseHygieneLeak?: boolean;
 }
 
 /**
@@ -95,6 +97,7 @@ const BOOLEAN_CONFIG_KEYS = [
   "allowJsWasmHydrateDump",
   "allowWasmXorMaskSidecar",
   "allowWasmSealXorKnownPlaintext",
+  "allowReleaseHygieneLeak",
 ] as const;
 
 /**

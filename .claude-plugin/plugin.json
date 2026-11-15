@@ -1,0 +1,25 @@
+{
+  "name": "bla",
+  "version": "3.3.2",
+  "description": "Counter-REA Blue Defense plugin: teaches coding agents the BLA Agent-Driven Hardening playbook and registers the 31-tool BLA MCP server.",
+  "author": {
+    "name": "BLA Contributors",
+    "url": "https://bla.tools"
+  },
+  "homepage": "https://bla.tools",
+  "repository": "https://github.com/qybaihe/bla",
+  "license": "MIT",
+  "skills": [
+    "../.agents/skills/blind-llm-agents"
+  ],
+  "mcpServers": {
+    "bla": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "bla-agents@3.3.2",
+        "mcp"
+      ]
+    }
+  }
+}

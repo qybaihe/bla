@@ -95,6 +95,7 @@ import { finalizeSelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import {
   ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
   BUN_SIDECAR_COMPANION_SUFFIX,
+  derivePublicSidecarSeedTag,
   entangleAsarEntryWithSidecars,
   entangleAsarMainJsWithSidecars,
   entangleBunEntryWithSidecars,
@@ -198,7 +199,7 @@ function applySidecarEntangleToJs(
     entryPath: entryLabel,
     entrySource: source,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
     carrier,
   });
@@ -234,7 +235,7 @@ function applySidecarEntangleToPython(
     entryPath: entryLabel,
     entrySource: source,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { code: source, applied: false };
@@ -269,7 +270,7 @@ function applySidecarEntangleToWasm(
     entryPath: entryLabel,
     entryBytes: wasmBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: wasmBytes, applied: false };
@@ -304,7 +305,7 @@ function applySidecarEntangleToPyc(
     entryPath: entryLabel,
     entryBytes: pycBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: pycBytes, applied: false };
@@ -339,7 +340,7 @@ function applySidecarEntangleToGguf(
     entryPath: entryLabel,
     entryBytes: ggufBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: ggufBytes, applied: false };
@@ -374,7 +375,7 @@ function applySidecarEntangleToSafetensors(
     entryPath: entryLabel,
     entryBytes: safetensorsBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: safetensorsBytes, applied: false };
@@ -409,7 +410,7 @@ function applySidecarEntangleToDex(
     entryPath: entryLabel,
     entryBytes: dexBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: dexBytes, applied: false };
@@ -444,7 +445,7 @@ function applySidecarEntangleToSqlite(
     entryPath: entryLabel,
     entryBytes: sqliteBytes,
     sidecars,
-    seedTag: String(seed),
+    seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
   if (!bound) return { buffer: sqliteBytes, applied: false };
@@ -981,7 +982,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         entryPath: entryLabel,
         entryBytes: rawAsar,
         sidecars,
-        seedTag: String(seed),
+        seedTag: derivePublicSidecarSeedTag(String(seed)),
         softFold: options.sidecarEntangleSoftFold === true,
       });
       if (bound) {
@@ -996,7 +997,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           entryPath: entryLabel,
           expectedHex: bound.digest.hex,
           sidecarPaths: sidecars.map((s) => s.pathLabel),
-          seedTag: String(seed),
+          seedTag: derivePublicSidecarSeedTag(String(seed)),
           softFold: options.sidecarEntangleSoftFold === true,
         });
         if (withMain) {
@@ -1183,7 +1184,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           entryPath: entryLabel,
           entryBytes: res.buffer,
           sidecars,
-          seedTag: String(seed),
+          seedTag: derivePublicSidecarSeedTag(String(seed)),
           softFold: options.sidecarEntangleSoftFold === true,
         });
         if (bound) {

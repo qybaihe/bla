@@ -12,6 +12,7 @@ import {
   DEFENSE_SCORE_DISCLAIMER,
 } from "./defense-score-honesty.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
+import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
@@ -115,6 +116,33 @@ export function verifyTarget(
     baselineSource,
   });
 
+  let effectiveSelfSealEnabled = options.selfSealEnabled === true;
+  if (
+    effectiveSelfSealEnabled &&
+    (afterAudit.detectedFormat === "javascript" ||
+      afterAudit.detectedFormat === "typescript")
+  ) {
+    try {
+      const targetBytes = readFileSync(absTarget);
+      if (/\bselfExpected\s*=/.test(targetBytes.toString("latin1"))) {
+        const sealVerify = verifySelfSealSelfDigest(targetBytes);
+        if (!sealVerify.verified) {
+          effectiveSelfSealEnabled = false;
+          checks.push({
+            id: "self-seal-digest-integrity",
+            name: "Self-Seal Canonical Self-Digest Integrity",
+            targetReaComponent: "runtime/self-seal.ts",
+            passed: false,
+            details:
+              "Embedded selfExpected canonical SHA-256 digest failed offline verification (file tampered or unfinalized after self-seal)",
+          });
+        }
+      }
+    } catch {
+      /* ignore unreadable path */
+    }
+  }
+
   const passedCount = checks.filter((c) => c.passed).length;
   // Raw score = Counter-REA gate pass-rate + exposure drop only.
   // Soft-capped below when known gaps still apply (issue #40.6).
@@ -141,7 +169,7 @@ export function verifyTarget(
 
   const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
     detectedFormat: afterAudit.detectedFormat,
-    selfSealEnabled: options.selfSealEnabled === true,
+    selfSealEnabled: effectiveSelfSealEnabled,
     sidecarEntangleEnabled: options.sidecarEntangleEnabled === true,
     wasmExportRenameApplied: options.wasmExportRenameApplied === true,
     numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,

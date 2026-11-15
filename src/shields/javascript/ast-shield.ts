@@ -370,7 +370,9 @@ function buildCombinatorialStringAst(
       invertedCond = t.binaryExpression("===", t.cloneNode(bitAnd, true), t.numericLiteral(0));
     } else if (mode === 0) {
       // Unsigned-domain MBA inequality: ((u | (u - 1)) >>> 0) >= ((u ^ (u - 1)) >>> 0)
-      const k = prng.nextUint32() >>> 0;
+      // Keep bit 0 of k clear so `odd_seed ^ even_k` is always odd (>= 1, never 0)
+      // across all parameter-entangled local seeds.
+      const k = (prng.nextUint32() & 0xfffffffe) >>> 0;
       const u = t.binaryExpression(
         ">>>",
         t.binaryExpression("^", t.identifier(seedIdentifierName), t.numericLiteral(k)),
@@ -751,8 +753,50 @@ export function transformJavaScriptWithBlaShield(
   let ipcAmbiguitySitesInjected = 0;
   let usesCjsAst = false;
 
-  // Track functions to weave tarpit calls into
+  // Track functions to weave tarpit calls into, plus parameter-entangled local seeds
   const functionBodies: t.BlockStatement[] = [];
+  const fnLocalSeedByBody = new Map<
+    t.BlockStatement,
+    { fn: t.Function; localSeedName: string }
+  >();
+  traverse(ast, {
+    Function(path) {
+      if (!t.isBlockStatement(path.node.body)) return;
+      const hasPlainParam = path.node.params.some(
+        (p) =>
+          t.isIdentifier(p) &&
+          p.name !== "this" &&
+          p.name !== "arguments" &&
+          !RENAME_RESERVED.has(p.name),
+      );
+      if (!hasPlainParam) return;
+      const localSeedName = prng.identifier({
+        style: "privateCamel",
+        hint: "frameSeed",
+        entropy: 4,
+      });
+      fnLocalSeedByBody.set(path.node.body, {
+        fn: path.node,
+        localSeedName,
+      });
+    },
+  });
+  const resolveSeedForPath = (path: {
+    findParent: (cb: (p: any) => boolean) => any;
+  }): string => {
+    const enclosingBody = path.findParent(
+      (p) =>
+        p.isBlockStatement?.() &&
+        fnLocalSeedByBody.has(p.node as t.BlockStatement),
+    );
+    if (enclosingBody) {
+      const info = fnLocalSeedByBody.get(
+        enclosingBody.node as t.BlockStatement,
+      );
+      if (info) return info.localSeedName;
+    }
+    return seedVarName;
+  };
 
   const handleCallOrOptionalCall = (
     path: {
@@ -760,6 +804,7 @@ export function transformJavaScriptWithBlaShield(
       findParent: (cb: (p: any) => boolean) => any;
     },
   ): void => {
+    const activeSeedName = resolveSeedForPath(path);
     const callee = path.node.callee;
     // Leave dynamic eval arguments untouched: they may contain lexical names.
     if (t.isIdentifier(callee) && callee.name === "eval") return;
@@ -813,7 +858,7 @@ export function transformJavaScriptWithBlaShield(
                 prop.value = buildCombinatorialStringAst(
                   prop.value.value,
                   prng,
-                  seedVarName,
+                  activeSeedName,
                 );
                 electronProtocolsProtected += 1;
                 primitiveCandidateBranchesCreated += 512;
@@ -830,8 +875,8 @@ export function transformJavaScriptWithBlaShield(
                     t.isBooleanLiteral(privProp.value)
                   ) {
                     privProp.value = privProp.value.value
-                      ? buildOpaqueTrueAst(prng, seedVarName)
-                      : buildOpaqueFalseAst(prng, seedVarName);
+                      ? buildOpaqueTrueAst(prng, activeSeedName)
+                      : buildOpaqueFalseAst(prng, activeSeedName);
                   }
                 }
               }
@@ -849,7 +894,7 @@ export function transformJavaScriptWithBlaShield(
           path.node.arguments[0] = buildCombinatorialStringAst(
             firstArg.value,
             prng,
-            seedVarName,
+            activeSeedName,
           );
           electronProtocolsProtected += 1;
           primitiveCandidateBranchesCreated += 512;
@@ -870,7 +915,7 @@ export function transformJavaScriptWithBlaShield(
           path.node.arguments[0] = buildCombinatorialStringAst(
             firstArg.value,
             prng,
-            seedVarName,
+            activeSeedName,
           );
           primitiveCandidateBranchesCreated += 512;
         }
@@ -884,7 +929,7 @@ export function transformJavaScriptWithBlaShield(
           path.node.arguments[0] = buildCombinatorialStringAst(
             firstArg.value,
             prng,
-            seedVarName,
+            activeSeedName,
           );
           primitiveCandidateBranchesCreated += 512;
         }
@@ -893,7 +938,7 @@ export function transformJavaScriptWithBlaShield(
         const secondArg = path.node.arguments[1];
         if (t.isObjectExpression(secondArg)) {
           path.node.arguments[1] = t.conditionalExpression(
-            buildOpaqueTrueAst(prng, seedVarName),
+            buildOpaqueTrueAst(prng, activeSeedName),
             secondArg,
             t.objectExpression([]),
           );
@@ -929,7 +974,7 @@ export function transformJavaScriptWithBlaShield(
         path.node.arguments[0] = buildCombinatorialStringAst(
           val,
           prng,
-          seedVarName,
+          activeSeedName,
         );
         primitiveCandidateBranchesCreated += 512;
       }
@@ -1054,6 +1099,7 @@ export function transformJavaScriptWithBlaShield(
       ) {
         return;
       }
+      const activeSeedName = resolveSeedForPath(path);
       const propName = getStaticPropName(path.node);
       if (
         propName === "webPreferences" &&
@@ -1064,8 +1110,8 @@ export function transformJavaScriptWithBlaShield(
           const prefKey = getStaticPropName(pref);
           if (t.isBooleanLiteral(pref.value)) {
             pref.value = pref.value.value
-              ? buildOpaqueTrueAst(prng, seedVarName)
-              : buildOpaqueFalseAst(prng, seedVarName);
+              ? buildOpaqueTrueAst(prng, activeSeedName)
+              : buildOpaqueFalseAst(prng, activeSeedName);
           } else if (prefKey === "preload") {
             if (
               t.isStringLiteral(pref.value) &&
@@ -1074,13 +1120,13 @@ export function transformJavaScriptWithBlaShield(
               pref.value = buildCombinatorialStringAst(
                 pref.value.value,
                 prng,
-                seedVarName,
+                activeSeedName,
               );
               primitiveCandidateBranchesCreated += 512;
             } else if (t.isCallExpression(pref.value)) {
               pref.value.arguments = pref.value.arguments.map((arg) =>
                 t.isStringLiteral(arg) && arg.value.length > 0
-                  ? buildCombinatorialStringAst(arg.value, prng, seedVarName)
+                  ? buildCombinatorialStringAst(arg.value, prng, activeSeedName)
                   : arg,
               );
               primitiveCandidateBranchesCreated += 512;
@@ -1149,7 +1195,9 @@ export function transformJavaScriptWithBlaShield(
       ) {
         return;
       }
-      path.replaceWith(buildCombinatorialStringAst(val, prng, seedVarName));
+      path.replaceWith(
+        buildCombinatorialStringAst(val, prng, resolveSeedForPath(path)),
+      );
       path.skip();
       primitiveCandidateBranchesCreated += 256;
     },
@@ -1200,9 +1248,10 @@ export function transformJavaScriptWithBlaShield(
       if (totalCookedLen < 3 || totalCookedLen > 256) {
         return;
       }
+      const activeSeedName = resolveSeedForPath(path);
       if (exprs.length === 0) {
         const val = quasis[0]?.value.cooked ?? "";
-        path.replaceWith(buildCombinatorialStringAst(val, prng, seedVarName));
+        path.replaceWith(buildCombinatorialStringAst(val, prng, activeSeedName));
         path.skip();
         primitiveCandidateBranchesCreated += 256;
         return;
@@ -1214,7 +1263,7 @@ export function transformJavaScriptWithBlaShield(
       for (let i = 0; i < quasis.length; i++) {
         const chunk = quasis[i]!.value.cooked ?? "";
         if (chunk.length >= 3) {
-          parts.push(buildCombinatorialStringAst(chunk, prng, seedVarName));
+          parts.push(buildCombinatorialStringAst(chunk, prng, activeSeedName));
           primitiveCandidateBranchesCreated += 256;
         } else if (chunk.length > 0 || parts.length === 0) {
           parts.push(t.stringLiteral(chunk));
@@ -1275,7 +1324,9 @@ export function transformJavaScriptWithBlaShield(
       ) {
         return;
       }
-      path.replaceWith(buildOpaqueIntegerAst(val, prng, seedVarName));
+      path.replaceWith(
+        buildOpaqueIntegerAst(val, prng, resolveSeedForPath(path)),
+      );
       path.skip();
       primitiveCandidateBranchesCreated += 64;
     },
@@ -1295,7 +1346,10 @@ export function transformJavaScriptWithBlaShield(
   // names onto the class scope with the SAME binding object; renaming there a second
   // time with a fresh PRNG name desyncs `class Foo` from `new Foo()` (issue #40).
   const exportedNameSet = new Set(exportedSymbolsBefore);
-  const generatedNames = new Set<string>();
+  const generatedNames = new Set<string>([seedVarName]);
+  for (const info of fnLocalSeedByBody.values()) {
+    generatedNames.add(info.localSeedName);
+  }
   // Strip unreferenced Stage-2 encryptStrings marker aliases (`_blaS`, `_blaT`)
   // before scope renaming so hardened artifacts retain zero marker dead-vars.
   traverse(ast, {
@@ -1424,6 +1478,9 @@ export function transformJavaScriptWithBlaShield(
       if (!functionBodies.includes(path.node)) return;
       const stmts = path.node.body;
       if (stmts.length === 0) return;
+      const blockSeed =
+        fnLocalSeedByBody.get(path.node)?.localSeedName ??
+        resolveSeedForPath(path);
       const next: t.Statement[] = [];
       for (let i = 0; i < stmts.length; i++) {
         const stmt = stmts[i]!;
@@ -1436,7 +1493,7 @@ export function transformJavaScriptWithBlaShield(
         if (wrappable && i % 2 === 0) {
           next.push(
             t.ifStatement(
-              buildOpaqueTrueAst(prng, seedVarName),
+              buildOpaqueTrueAst(prng, blockSeed),
               t.blockStatement([stmt]),
             ),
           );
@@ -1447,42 +1504,6 @@ export function transformJavaScriptWithBlaShield(
       path.node.body = next;
     },
   });
-
-  // 3. Weave synchronized shadow-heap churn + unreachable tarpit calls into real function bodies
-  for (const body of functionBodies) {
-    const stepCallStmt = t.expressionStatement(
-      t.callExpression(t.identifier(memoryDiffShield.stepperFunctionName), [
-        t.numericLiteral(prng.nextInt(1, 4095)),
-      ]),
-    );
-    if (tarpit.decoyFunctionNames.length >= 2) {
-      const d1 = prng.pick(tarpit.decoyFunctionNames);
-      const d2 = prng.pick(tarpit.decoyFunctionNames);
-      const guard = t.ifStatement(
-        buildOpaqueFalseAst(prng, seedVarName),
-        t.blockStatement([
-          t.expressionStatement(
-            t.binaryExpression(
-              "^",
-              t.callExpression(t.identifier(d1), [
-                t.numericLiteral(prng.nextInt(1, 255)),
-                t.numericLiteral(2),
-              ]),
-              t.callExpression(t.identifier(d2), [
-                t.numericLiteral(prng.nextInt(1, 255)),
-                t.numericLiteral(2),
-              ]),
-            ),
-          ),
-        ]),
-      );
-      body.body.unshift(stepCallStmt, guard);
-      fakeCrossReferencesCreated += 3;
-    } else {
-      body.body.unshift(stepCallStmt);
-      fakeCrossReferencesCreated += 1;
-    }
-  }
 
   // 4. Build Decoy IPC Ambiguity & Route Mirage block + Cognitive-Armor seed entanglement
   const mirageLines: string[] = [];
@@ -1521,19 +1542,20 @@ export function transformJavaScriptWithBlaShield(
   }
   // Deterministic opaque-predicate seed (issue #40.4): never hrtime/Date.now/bit0-only.
   // Draw ~28 bits of PRNG material (two draws xor'd) so weak hrtime/bit0 patterns
-  // cannot be guessed; keep low bit free for cognitive-armor entanglement.
-  // When self-seal is on, also fold the integrity digest into the seed material.
+  // cannot be guessed; keep low bit free for cognitive-armor + self-seal parity entanglement.
   const opaqueSeedHi = prng.nextUint32() >>> 0;
   const opaqueSeedLo = prng.nextUint32() >>> 0;
   const opaqueSeedBase =
     (((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffc) >>> 0) || 4096;
-  const selfSealFold =
-    selfSealEnabled && selfSealBindingName
-      ? ` ^ ((${selfSealBindingName} >>> 0) & 0xfffffffc)`
-      : "";
-  mirageLines.push(
-    `const ${seedVarName} = ((${opaqueSeedBase}${selfSealFold}) | ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
-  );
+  if (selfSealEnabled && selfSealBindingName) {
+    mirageLines.push(
+      `const ${seedVarName} = ((${opaqueSeedBase} ^ (${selfSealBindingName} >>> 0)) ^ ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+    );
+  } else {
+    mirageLines.push(
+      `const ${seedVarName} = (${opaqueSeedBase} | ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+    );
+  }
   mirageLines.push(memoryDiffShield.code);
   const channelsToMirror =
     observedIpcChannels.size > 0
@@ -1646,7 +1668,6 @@ export function transformJavaScriptWithBlaShield(
   }
   mirageLines.push(`  }`);
   mirageLines.push(`}`);
-  mirageLines.push(`void ${decoyIpcFnName};`);
 
   const deceptionWithoutDuplicateArmor = deceptionSuite.combinedJsCode.replace(
     deceptionSuite.cognitiveArmor.code,
@@ -1666,14 +1687,46 @@ export function transformJavaScriptWithBlaShield(
     plugins: ["typescript"],
   });
 
+  // Scrub static generator prefixes in combinedInjectedAst so hardened output has
+  // zero greppable template stems while preserving _[0-9a-f]{4} auditor entropy tags.
+  const INJECTED_RAW_PREFIX_RE =
+    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault)_[A-Za-z0-9_]+$/i;
+  traverse(combinedInjectedAst, {
+    Program(progPath) {
+      for (const name of Object.keys(progPath.scope.bindings)) {
+        if (!INJECTED_RAW_PREFIX_RE.test(name)) continue;
+        const preserveDecoyTag = /_[a-f0-9]{4}$/i.test(name);
+        const idEntropy = preserveDecoyTag ? 4 : 3;
+        let fresh = prng.identifier({
+          style: name.startsWith("_") ? "privateCamel" : "camel",
+          entropy: idEntropy,
+        });
+        while (
+          progPath.scope.hasBinding(fresh) ||
+          generatedNames.has(fresh) ||
+          exportedNameSet.has(fresh) ||
+          RENAME_RESERVED.has(fresh)
+        ) {
+          fresh = prng.identifier({
+            style: name.startsWith("_") ? "privateCamel" : "camel",
+            entropy: idEntropy,
+          });
+        }
+        try {
+          progPath.scope.rename(name, fresh);
+          generatedNames.add(fresh);
+        } catch {
+          /* keep original if scope refuses */
+        }
+      }
+      progPath.stop();
+    },
+  });
+
   const sanitizedInjectedStatements: t.Statement[] = [];
-  const injectedFnIdentifiers: t.Identifier[] = [];
   for (const stmt of combinedInjectedAst.program.body) {
     if (t.isExportNamedDeclaration(stmt) && stmt.declaration) {
       sanitizedInjectedStatements.push(stmt.declaration);
-      if (t.isFunctionDeclaration(stmt.declaration) && stmt.declaration.id) {
-        injectedFnIdentifiers.push(t.identifier(stmt.declaration.id.name));
-      }
     } else if (
       !t.isImportDeclaration(stmt) &&
       !t.isExportNamedDeclaration(stmt) &&
@@ -1681,17 +1734,7 @@ export function transformJavaScriptWithBlaShield(
       !t.isExportAllDeclaration(stmt)
     ) {
       sanitizedInjectedStatements.push(stmt);
-      if (t.isFunctionDeclaration(stmt) && stmt.id) {
-        injectedFnIdentifiers.push(t.identifier(stmt.id.name));
-      }
     }
-  }
-  if (injectedFnIdentifiers.length > 0) {
-    sanitizedInjectedStatements.push(
-      t.expressionStatement(
-        t.unaryExpression("void", t.arrayExpression(injectedFnIdentifiers)),
-      ),
-    );
   }
 
   // Prepend Cognitive-Armor corpus, digest function, `seedVarName`, and shadow heap at top of program
@@ -1724,48 +1767,7 @@ export function transformJavaScriptWithBlaShield(
       (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
     );
   });
-  // Bind all hoisted decoy/tarpit/exhaustion function declarations directly into `seedVarName`
-  // so stripping the injected tail throws ReferenceError or zeroes the integrity bit.
-  if (seedInjectIndex >= 0 && injectedFnIdentifiers.length > 0) {
-    const seedStmt = sanitizedInjectedStatements[seedInjectIndex];
-    if (seedStmt && t.isVariableDeclaration(seedStmt)) {
-      const decl = seedStmt.declarations.find(
-        (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
-      );
-      if (
-        decl &&
-        decl.init &&
-        t.isBinaryExpression(decl.init) &&
-        decl.init.operator === "|" &&
-        t.isConditionalExpression(decl.init.right)
-      ) {
-        const fnParam = t.identifier("_f");
-        const everyCall = t.callExpression(
-          t.memberExpression(
-            t.arrayExpression(
-              injectedFnIdentifiers.map((id) => t.identifier(id.name)),
-            ),
-            t.identifier("every"),
-          ),
-          [
-            t.arrowFunctionExpression(
-              [fnParam],
-              t.binaryExpression(
-                "===",
-                t.unaryExpression("typeof", t.identifier("_f")),
-                t.stringLiteral("function"),
-              ),
-            ),
-          ],
-        );
-        decl.init.right.test = t.logicalExpression(
-          "&&",
-          everyCall,
-          decl.init.right.test,
-        );
-      }
-    }
-  }
+
   const topEnd =
     seedInjectIndex >= 0
       ? Math.min(
@@ -1775,6 +1777,183 @@ export function transformJavaScriptWithBlaShield(
       : Math.min(4, sanitizedInjectedStatements.length);
   const topDecls = sanitizedInjectedStatements.slice(0, topEnd);
   const restInjected = sanitizedInjectedStatements.slice(topEnd);
+
+  // Build a cyclic cross-call mesh across all post-seed injected functions so
+  // every decoy/tarpit/exhaustion function belongs to a single live SCC without
+  // any self-snitching `void [...]` or `[...].every(...)` array manifest.
+  const meshFns: t.FunctionDeclaration[] = [];
+  for (const stmt of restInjected) {
+    if (t.isFunctionDeclaration(stmt) && stmt.id && t.isBlockStatement(stmt.body)) {
+      meshFns.push(stmt);
+    }
+  }
+  if (meshFns.length >= 2) {
+    for (let i = 0; i < meshFns.length; i++) {
+      const nextA = meshFns[(i + 1) % meshFns.length]!.id!.name;
+      const stmts = meshFns[i]!.body.body;
+      const parityZeroCond = t.binaryExpression(
+        "===",
+        t.binaryExpression("&", t.identifier(seedVarName), t.numericLiteral(1)),
+        t.numericLiteral(0),
+      );
+      const linkExpr = t.memberExpression(t.identifier(nextA), t.identifier("length"));
+      if (stmts.length === 1 && t.isReturnStatement(stmts[0]) && stmts[0].argument) {
+        stmts[0] = t.returnStatement(
+          t.conditionalExpression(parityZeroCond, linkExpr, stmts[0].argument),
+        );
+      } else {
+        stmts.unshift(t.ifStatement(parityZeroCond, t.returnStatement(linkExpr)));
+      }
+    }
+  }
+
+  // 3. Weave synchronized shadow-heap churn + cyclic mesh calls + parameter-entangled
+  // local seeds into real customer function bodies.
+  const decoyBridgePool =
+    meshFns.length >= 2
+      ? meshFns.map((fn) => fn.id!.name)
+      : [...tarpit.decoyFunctionNames];
+  for (let bIdx = 0; bIdx < functionBodies.length; bIdx++) {
+    const body = functionBodies[bIdx]!;
+    const localInfo = fnLocalSeedByBody.get(body);
+    const blockSeed = localInfo?.localSeedName ?? seedVarName;
+    const stepCallStmt = t.expressionStatement(
+      t.callExpression(t.identifier(memoryDiffShield.stepperFunctionName), [
+        t.numericLiteral(prng.nextInt(1, 4095)),
+      ]),
+    );
+    const prefixStmts: t.Statement[] = [];
+    if (localInfo) {
+      let paramName: string | undefined;
+      for (const p of localInfo.fn.params) {
+        if (t.isIdentifier(p) && p.name !== "this" && p.name !== "arguments") {
+          paramName = p.name;
+          break;
+        }
+      }
+      const seedInitExpr: t.Expression = paramName
+        ? t.binaryExpression(
+            ">>>",
+            t.binaryExpression(
+              "^",
+              t.identifier(seedVarName),
+              t.conditionalExpression(
+                t.binaryExpression(
+                  "===",
+                  t.unaryExpression("typeof", t.identifier(paramName)),
+                  t.stringLiteral("string"),
+                ),
+                t.binaryExpression(
+                  "<<",
+                  t.binaryExpression(
+                    "&",
+                    t.memberExpression(
+                      t.identifier(paramName),
+                      t.identifier("length"),
+                    ),
+                    t.numericLiteral(1023),
+                  ),
+                  t.numericLiteral(2),
+                ),
+                t.conditionalExpression(
+                  t.binaryExpression(
+                    "===",
+                    t.unaryExpression("typeof", t.identifier(paramName)),
+                    t.stringLiteral("number"),
+                  ),
+                  t.binaryExpression(
+                    "<<",
+                    t.binaryExpression(
+                      "&",
+                      t.identifier(paramName),
+                      t.numericLiteral(255),
+                    ),
+                    t.numericLiteral(2),
+                  ),
+                  t.numericLiteral(0),
+                ),
+              ),
+            ),
+            t.numericLiteral(0),
+          )
+        : t.identifier(seedVarName);
+      prefixStmts.push(
+        t.variableDeclaration("const", [
+          t.variableDeclarator(t.identifier(localInfo.localSeedName), seedInitExpr),
+        ]),
+      );
+    }
+    prefixStmts.push(stepCallStmt);
+    if (decoyBridgePool.length >= 2) {
+      const d1 = decoyBridgePool[(bIdx * 2) % decoyBridgePool.length]!;
+      const d2 = decoyBridgePool[(bIdx * 2 + 1) % decoyBridgePool.length]!;
+      prefixStmts.push(
+        t.ifStatement(
+          buildOpaqueFalseAst(prng, blockSeed),
+          t.blockStatement([
+            t.expressionStatement(
+              t.binaryExpression(
+                "^",
+                t.callExpression(t.identifier(d1), [
+                  t.numericLiteral(prng.nextInt(1, 255)),
+                  t.numericLiteral(2),
+                ]),
+                t.callExpression(t.identifier(d2), [
+                  t.numericLiteral(prng.nextInt(1, 255)),
+                  t.numericLiteral(2),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      );
+      fakeCrossReferencesCreated += 3;
+    } else {
+      fakeCrossReferencesCreated += 1;
+    }
+    body.body.unshift(...prefixStmts);
+  }
+
+  // Entangle every post-seed decoy function directly into `seedVarName` so stripping
+  // any injected declaration triggers an immediate ReferenceError or flips seed parity.
+  if (seedInjectIndex >= 0 && meshFns.length > 0) {
+    const seedStmt = sanitizedInjectedStatements[seedInjectIndex];
+    if (seedStmt && t.isVariableDeclaration(seedStmt)) {
+      const decl = seedStmt.declarations.find(
+        (d) => t.isIdentifier(d.id) && d.id.name === seedVarName,
+      );
+      if (
+        decl &&
+        decl.init &&
+        t.isBinaryExpression(decl.init) &&
+        (decl.init.operator === "|" || decl.init.operator === "^") &&
+        t.isConditionalExpression(decl.init.right)
+      ) {
+        const checkParam = prng.identifier({ style: "camel", hint: "fn", entropy: 2 });
+        const everyCheck = t.callExpression(
+          t.memberExpression(
+            t.arrayExpression(meshFns.map((fn) => t.identifier(fn.id!.name))),
+            t.identifier("every"),
+          ),
+          [
+            t.arrowFunctionExpression(
+              [t.identifier(checkParam)],
+              t.binaryExpression(
+                "===",
+                t.unaryExpression("typeof", t.identifier(checkParam)),
+                t.stringLiteral("function"),
+              ),
+            ),
+          ],
+        );
+        decl.init.right.test = t.logicalExpression(
+          "&&",
+          everyCheck,
+          decl.init.right.test,
+        );
+      }
+    }
+  }
   if (esmSelfSealReqIdent && esmSelfSealMetaUrlIdent) {
     const reqImportDecl = t.importDeclaration(
       [

@@ -60,13 +60,68 @@ function measureConstantPoolEntry(buf: Buffer, offset: number): { size: number; 
 }
 
 /**
+ * Walks the class-file structure after `constant_pool` (`access_flags`, `this_class`,
+ * `super_class`, `interfaces[]`, `fields[]`, `methods[]`, `attributes[]`).
+ * Returns the exact `attributes_count` offset ONLY when `this_class` is a valid
+ * constant-pool slot (`1 <= this_class < cpCount`) and the class attribute table
+ * terminates cleanly at `buf.length` with zero trailing bytes.
+ */
+function locateClassAttributeTable(
+  buf: Buffer,
+  cpEndOffset: number,
+  cpCount: number,
+): { readonly attrsCountOffset: number; readonly attrsCount: number } | null {
+  if (cpEndOffset + 8 > buf.length) return null;
+  const thisClass = buf.readUInt16BE(cpEndOffset + 2);
+  if (thisClass < 1 || thisClass >= cpCount) return null;
+
+  const interfacesCount = buf.readUInt16BE(cpEndOffset + 6);
+  let p = cpEndOffset + 8 + interfacesCount * 2;
+
+  for (let table = 0; table < 2; table++) {
+    // table 0 = fields[], table 1 = methods[]
+    if (p + 2 > buf.length) return null;
+    const memberCount = buf.readUInt16BE(p);
+    p += 2;
+    for (let m = 0; m < memberCount; m++) {
+      // access_flags(2) + name_index(2) + descriptor_index(2) + attributes_count(2)
+      if (p + 8 > buf.length) return null;
+      const mAttrs = buf.readUInt16BE(p + 6);
+      p += 8;
+      for (let a = 0; a < mAttrs; a++) {
+        if (p + 6 > buf.length) return null;
+        const attrLen = buf.readUInt32BE(p + 2);
+        p += 6 + attrLen;
+        if (p > buf.length) return null;
+      }
+    }
+  }
+
+  if (p + 2 > buf.length) return null;
+  const attrsCountOffset = p;
+  const attrsCount = buf.readUInt16BE(p);
+  if (attrsCount >= 65535) return null;
+  p += 2;
+  for (let a = 0; a < attrsCount; a++) {
+    if (p + 6 > buf.length) return null;
+    const attrLen = buf.readUInt32BE(p + 2);
+    p += 6 + attrLen;
+    if (p > buf.length) return null;
+  }
+
+  if (p !== buf.length) return null;
+  return { attrsCountOffset, attrsCount };
+}
+
+/**
  * Protects a Java / Kotlin JVM `.class` bytecode buffer (`0xCAFEBABE`).
- * - Parses the JVM constant pool if structurally complete and appends valid `CONSTANT_Utf8`
- *   decoy enclave descriptors to it, then appends a JSON decoy trailer *after* the class body.
- *   No §4.7.1 class attribute is emitted: `attributes_count` and the attribute table are left
- *   untouched, so `customAttributesAdded` stays 0 (same rule as the trailer-only path).
- * - Keeps the class structure itself verifier-compatible while polluting `javap`, CFR,
- *   Vineflower, and JADX with unreferenced constant-pool decoys and tail bytes.
+ * - When the class file is structurally complete through `attributes[]` (exact EOF,
+ *   valid `this_class`), appends valid `CONSTANT_Utf8` decoy descriptors AND emits a
+ *   genuine JVM Spec §4.7.1 `attribute_info` (`BlaEnclaveDelegation`) inside the class
+ *   attribute table (`customAttributesAdded === 1`) with zero trailing bytes, so
+ *   `java.lang.ClassLoader.defineClass` accepts the class without `ClassFormatError`.
+ * - When only the constant pool + minimal header are parseable (synthetic test stubs),
+ *   appends constant-pool entries + tail payload and reports `customAttributesAdded: 0`.
  */
 export function protectJvmClassBuffer(
   rawBuffer: Buffer,
@@ -119,8 +174,13 @@ export function protectJvmClassBuffer(
       index += measured.slots;
     }
 
-    // Check if the rest of the minimal class structure (access_flags..attributes_count) fits
-    if (validCp && offset + 16 <= rawBuffer.length) {
+    const attrTableLoc = validCp
+      ? locateClassAttributeTable(rawBuffer, offset, cpCount)
+      : null;
+
+    // Enter structural mode when either a complete JVM class attribute table is parsed
+    // OR the minimal header + synthetic 16-byte body stub fits.
+    if (validCp && (attrTableLoc !== null || offset + 16 <= rawBuffer.length)) {
       const cpEndOffset = offset;
       const newCpBuffers: Buffer[] = [];
       for (const str of utf8Strings) {
@@ -136,7 +196,6 @@ export function protectJvmClassBuffer(
       if (newCpCount < 65535) {
         const headerAndOldCp = Buffer.from(rawBuffer.subarray(0, cpEndOffset));
         headerAndOldCp.writeUInt16BE(newCpCount, 8);
-        const bodyAfterCp = rawBuffer.subarray(cpEndOffset);
 
         const attrPayload = Buffer.from(
           JSON.stringify({
@@ -148,12 +207,40 @@ export function protectJvmClassBuffer(
           "utf8",
         );
 
+        if (attrTableLoc) {
+          // Slot `cpCount` holds utf8Strings[0] === "BlaEnclaveDelegation"
+          const bodyAfterCp = Buffer.from(rawBuffer.subarray(cpEndOffset));
+          bodyAfterCp.writeUInt16BE(
+            attrTableLoc.attrsCount + 1,
+            attrTableLoc.attrsCountOffset - cpEndOffset,
+          );
+          const attrHeader = Buffer.alloc(6);
+          attrHeader.writeUInt16BE(cpCount, 0);
+          attrHeader.writeUInt32BE(attrPayload.length, 2);
+
+          return {
+            buffer: Buffer.concat([
+              headerAndOldCp,
+              ...newCpBuffers,
+              bodyAfterCp,
+              attrHeader,
+              attrPayload,
+            ]),
+            mode: "structural",
+            constantPoolEntriesAdded: newCpBuffers.length,
+            customAttributesAdded: 1,
+            chaffPayloadsEmbedded: chaff.length,
+            canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
+            diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
+          };
+        }
+
+        const bodyAfterCp = rawBuffer.subarray(cpEndOffset);
         return {
           buffer: Buffer.concat([headerAndOldCp, ...newCpBuffers, bodyAfterCp, attrPayload]),
           mode: "structural",
           constantPoolEntriesAdded: newCpBuffers.length,
-          // The decoy corpus lives in the constant pool + the tail after the
-          // class body; no class attribute is added to the attribute table.
+          // Synthetic header stub with trailing/incomplete body: no §4.7.1 attribute emitted.
           customAttributesAdded: 0,
           chaffPayloadsEmbedded: chaff.length,
           canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,

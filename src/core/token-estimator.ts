@@ -62,6 +62,12 @@ export function estimateAgentReverseEngineeringCosts(
       const inputUsd = (cumulativeInputTokens / 1_000_000) * model.inputUsdPerMillion;
       const outputUsd = (outputTokens / 1_000_000) * model.outputUsdPerMillion;
       const cost = Number(Math.max(0.02, inputUsd + outputUsd).toFixed(2));
+      const unshieldedOverflowProb = Number(
+        Math.min(
+          0.09,
+          Math.max(0.01, (baseSourceTokens * 2 + 820) / model.contextWindowTokens),
+        ).toFixed(2),
+      );
       return {
         modelName: model.modelName,
         estimatedInputTokens: cumulativeInputTokens,
@@ -69,7 +75,7 @@ export function estimateAgentReverseEngineeringCosts(
         estimatedMcpToolCalls: totalMcpCalls,
         estimatedWallClockSeconds: Math.round(totalMcpCalls * model.secondsPerMcpRoundtrip),
         estimatedCostUsd: cost,
-        contextWindowOverflowProbability: 0.02,
+        contextWindowOverflowProbability: unshieldedOverflowProb,
         outcomeVerdict: "TRIVIAL_CLONE",
       };
     });
@@ -102,6 +108,20 @@ export function estimateAgentReverseEngineeringCosts(
     const outputUsd = (rawOutputTokens / 1_000_000) * model.outputUsdPerMillion;
     const totalCostUsd = Number((inputUsd + outputUsd).toFixed(2));
     const wallClockSeconds = Math.round(totalMcpCalls * model.secondsPerMcpRoundtrip);
+    const peakTurnTokens =
+      baseSourceTokens + avgContextPerTurn + Math.min(45_000, totalMcpCalls * 420);
+    const occupancyRatio = peakTurnTokens / model.contextWindowTokens;
+    const overflowProb = Number(
+      Math.min(
+        0.99,
+        Math.max(
+          0.22,
+          occupancyRatio * 0.92 +
+            Math.min(0.18, sim.triggeredResourceLimits.length * 0.05) +
+            (sim.decoyFunctionsDetectedAsReal >= 10 ? 0.08 : 0),
+        ),
+      ).toFixed(2),
+    );
 
     return {
       modelName: model.modelName,
@@ -110,8 +130,7 @@ export function estimateAgentReverseEngineeringCosts(
       estimatedMcpToolCalls: totalMcpCalls,
       estimatedWallClockSeconds: wallClockSeconds,
       estimatedCostUsd: Math.max(1.5, totalCostUsd),
-      contextWindowOverflowProbability:
-        sim.decoyFunctionsDetectedAsReal >= 10 ? 0.98 : 0.84,
+      contextWindowOverflowProbability: overflowProb,
       outcomeVerdict:
         sim.examinationStatus === "limited" && sim.decoyFunctionsDetectedAsReal >= 8
           ? "AGENT_HALLUCINATION_AND_BANKRUPTCY"

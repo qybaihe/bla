@@ -226,6 +226,8 @@ export interface ProtectionOptions {
   /** Red/blue round-6: allow WASM XOR-mask-beside-blob entitlement packs under bankrupt/maximum. */
   readonly allowWasmXorMaskSidecar?: boolean;
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** Lab-only: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. */
+  readonly allowReleaseHygieneLeak?: boolean;
   /**
    * Optional sibling paths for self-seal when `selfSeal` is true (multi-artifact harden).
    * Relative paths are resolved from the protected module's directory at runtime.

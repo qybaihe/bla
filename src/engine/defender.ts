@@ -65,6 +65,8 @@ export interface OneClickDefenseOptions {
   readonly allowWasmXorMaskSidecar?: boolean;
   /** Allow bankrupt despite seal.revision XOR known-plaintext packs (red-blue round-7). Default false. */
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /** Lab-only: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. Default false. */
+  readonly allowReleaseHygieneLeak?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
 }
@@ -215,6 +217,9 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       : {}),
     ...(options.allowWasmSealXorKnownPlaintext === true
       ? { allowWasmSealXorKnownPlaintext: true }
+      : {}),
+    ...(options.allowReleaseHygieneLeak === true
+      ? { allowReleaseHygieneLeak: true }
       : {}),
     ...(options.selfSealSiblingPaths !== undefined &&
     options.selfSealSiblingPaths.length > 0

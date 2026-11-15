@@ -32,6 +32,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_js_wasm_hydrate_dump",
       "allow_wasm_xor_mask_sidecar",
       "allow_wasm_seal_xor_known_plaintext",
+      "allow_release_hygiene_leak",
       "seed",
       "dry_run",
       "max_artifacts",
@@ -64,6 +65,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_js_wasm_hydrate_dump",
       "allow_wasm_xor_mask_sidecar",
       "allow_wasm_seal_xor_known_plaintext",
+      "allow_release_hygiene_leak",
       "seed",
       "in_place",
       "confirm_overwrite",
@@ -87,6 +89,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_js_wasm_hydrate_dump",
       "allow_wasm_xor_mask_sidecar",
       "allow_wasm_seal_xor_known_plaintext",
+      "allow_release_hygiene_leak",
       "seed",
       "llm_directives",
       "in_place",
@@ -104,6 +107,9 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "numeric_template_leak_known",
       "summary_path",
       "run_id",
+      "manifest_path",
+      "public_key_path",
+      "require_pinned_key",
     ],
   },
   {
@@ -118,12 +124,14 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "allow_wasm_xor_mask_sidecar",
       "allow_wasm_seal_xor_known_plaintext",
       "allow_lane_independent",
+      "allow_stable_panel_derive",
       "allow_panel_offline_oracle",
+      "allow_release_hygiene_leak",
     ],
   },
   {
     tool: "bla_lint_lanes",
-    params: ["path"],
+    params: ["path", "allow_lane_independent"],
   },
   {
     tool: "bla_lint_seal",
@@ -135,7 +143,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_lint_panel_derive",
-    params: ["path"],
+    params: ["path", "allow_stable_panel_derive", "allow_panel_offline_oracle"],
   },
   {
     tool: "bla_lint_js_aes_unwrap",

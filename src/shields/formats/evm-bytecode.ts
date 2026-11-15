@@ -101,17 +101,21 @@ function stripTerminalMetadata(bytes: Buffer): Buffer {
   return bytes;
 }
 
+const EIP_170_MAX_CODE_BYTES = 24_576;
+
 /**
  * Protects EVM contract bytecode by appending Solidity-compatible terminal
  * CBOR metadata packed with canary/diagnostic strings. Optional bankrupt
  * padding inserts JUMPDEST filler before the metadata (runtime-equivalent for
- * contracts that never fall through into the padding).
+ * contracts that never fall through into the padding). Pass `enforceEip170Cap: true`
+ * when deploying on networks that enforce the 24,576-byte EIP-170 runtime code ceiling.
  */
 export function protectEvmBytecodeBuffer(
   input: Buffer,
   options: {
     readonly intensity?: ProtectionIntensity;
     readonly seed?: string;
+    readonly enforceEip170Cap?: boolean;
   } = {},
 ): {
   readonly buffer: Buffer;
@@ -120,6 +124,7 @@ export function protectEvmBytecodeBuffer(
   readonly diagnosticsEmbedded: number;
   readonly paddingBytes: number;
   readonly approachesInputBudget: boolean;
+  readonly exceedsEip170Limit: boolean;
 } {
   if (input.length === 0) {
     throw new Error(
@@ -148,12 +153,17 @@ export function protectEvmBytecodeBuffer(
   if (intensity === "bankrupt") {
     // Full approach of REA's 4 MiB `inputBytes` budget (leave a small slack
     // so the artifact still fits under the hard ceiling after metadata).
-    const target = REA_INTERNAL_LIMITS.EVM_INPUT_BYTES - 4096;
+    const target = options.enforceEip170Cap
+      ? EIP_170_MAX_CODE_BYTES
+      : REA_INTERNAL_LIMITS.EVM_INPUT_BYTES - 4096;
     const need = Math.max(0, target - base.length - metadata.length);
     // 0x5b = JUMPDEST; inert when never jumped to (runtime-equivalent).
     padding = Buffer.alloc(need, 0x5b);
   } else if (intensity === "maximum") {
-    const need = 64 * 1024;
+    const rawNeed = 64 * 1024;
+    const need = options.enforceEip170Cap
+      ? Math.max(0, Math.min(rawNeed, EIP_170_MAX_CODE_BYTES - base.length - metadata.length))
+      : rawNeed;
     padding = Buffer.alloc(need, 0x5b);
   }
   // balanced stays lean: metadata only, no JUMPDEST padding.
@@ -167,5 +177,6 @@ export function protectEvmBytecodeBuffer(
     paddingBytes: padding.length,
     approachesInputBudget:
       buffer.length >= REA_INTERNAL_LIMITS.EVM_INPUT_BYTES - 8192,
+    exceedsEip170Limit: buffer.length > EIP_170_MAX_CODE_BYTES,
   };
 }

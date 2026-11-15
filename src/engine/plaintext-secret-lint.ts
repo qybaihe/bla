@@ -72,7 +72,7 @@ const MAX_FILES = 48;
 const MAX_SCAN_CHARS = 800_000;
 
 const TARGET_BASENAME =
-  /^(?:panel\.html?|license\.cjs|license\.js|vault\.cjs|gate\.cjs)$/i;
+  /^(?:panel\.html?|license\.cjs|license\.js|vault\.cjs|vault\.js|gate\.cjs|gate\.js|auth\.cjs|auth\.js|entitlement\.cjs|entitlement\.js|activate\.cjs|activate\.js)$/i;
 const SCAN_EXT = /\.(?:html?|[cm]?js|tsx?|mts|cts)$/i;
 
 /** Safe UI / ABI tokens that must stay greppable. */
@@ -283,12 +283,18 @@ function walkTargets(root: string, depth: number, out: string[]): void {
       if (SKIP_DIR_NAMES.has(ent.name)) continue;
       walkTargets(full, depth + 1, out);
     } else if (ent.isFile()) {
+      if (
+        /\.d\.ts$/i.test(ent.name) ||
+        /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name)
+      ) {
+        continue;
+      }
       if (TARGET_BASENAME.test(ent.name) || SCAN_EXT.test(ent.name)) {
         // Prefer entitlement-shaped basenames; still accept other JS/HTML but
-        // only if basename matches target OR path contains panel/license/vault.
+        // only if basename matches target OR path contains panel/license/vault/auth/gate/entitlement.
         if (
           TARGET_BASENAME.test(ent.name) ||
-          /(?:^|\/)(?:panel|license|vault)[^/]*$/i.test(ent.name)
+          /(?:^|\/)(?:panel|license|vault|auth|gate|entitlement)[^/]*$/i.test(ent.name)
         ) {
           out.push(full);
         }

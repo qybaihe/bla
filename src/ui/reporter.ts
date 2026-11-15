@@ -229,6 +229,7 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
     `  • WebAssembly (.wasm) Custom & Name Section Shield:    ${formatEngineStatus(doc.engines.wasmBinaryShield)}`,
     `  • Python (.py / CPython .pyc) Marshal Tarpit Shield:   ${formatEngineStatus(doc.engines.pythonPycMarshalShield)}`,
     `  • Native Binary (ELF / Mach-O / PE) Section Shield:    ${formatEngineStatus(doc.engines.nativeElfMachoPeShield)}`,
+    `  • Android DEX / R8 Exhaustion & Layout Shield:         ${formatEngineStatus(doc.engines.androidDexR8Shield)}`,
     `  • Archive (ZIP / Android APK) Enclave Shield:          ${formatEngineStatus(doc.engines.zipApkArchiveShield)}`,
     `  • AI Model (Safetensors / GGUF) Nesting Breaker:       ${formatEngineStatus(doc.engines.aiModelShield)}`,
     `  • Erlang BEAM Chunk & Atom Exhaustion Shield:          ${formatEngineStatus(doc.engines.erlangBeamShield)}`,

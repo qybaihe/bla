@@ -580,6 +580,7 @@ export {
   stripSqliteSidecarSchemaComment,
   stripWasmSidecarCustomSection,
   SIDECAR_ENTANGLE_SCHEMA,
+  derivePublicSidecarSeedTag,
   WASM_SIDECAR_SECTION_NAME,
   BUN_SIDECAR_COMPANION_SUFFIX,
   BUN_SIDECAR_COMPANION_KIND,

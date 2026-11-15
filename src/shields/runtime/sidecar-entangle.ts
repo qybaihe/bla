@@ -75,6 +75,21 @@ import {
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
+/**
+ * Derive a one-way public binding nonce from a project/master seed so sidecar
+ * preambles, custom sections, and metadata notes never leak the raw master seed.
+ * Idempotent when `rawSeed` is already a `scn1-<32hex>` public tag.
+ */
+export function derivePublicSidecarSeedTag(rawSeed: string): string {
+  if (/^scn1-[0-9a-f]{32}$/.test(rawSeed)) return rawSeed;
+  const hex = createHash("sha256")
+    .update("bla-sidecar-public-nonce/v1\0")
+    .update(rawSeed)
+    .digest("hex")
+    .slice(0, 32);
+  return `scn1-${hex}`;
+}
+
 export type SidecarJsCarrier = "module" | "script" | "commonjs";
 
 /**
@@ -439,17 +454,18 @@ export function generateSidecarJsPreamble(
   const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
   const seedTag = options.seedTag ?? "bla-sidecar-v1";
   const softFold = options.softFold === true;
-  const bindingName = options.bindingName ?? "__blaSidecarDigest";
   const expectedHex = options.expectedHex.toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
     throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
   }
-  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const tag = expectedHex.slice(0, 8);
+  const bindingName = options.bindingName ?? `_verifySiblingDigest_${tag}`;
+  const expectedU32 = parseInt(tag, 16) >>> 0;
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
   const seedLiteral = JSON.stringify(seedTag);
   const isEsm = options.carrier === "module";
-  const reqHelperAlias = `__blaSidecarReq_${expectedHex.slice(0, 8)}`;
+  const reqHelperAlias = `_resolveModuleRequire_${tag}`;
 
   const lines: string[] = [];
   if (isEsm) {
@@ -664,56 +680,57 @@ export function generateSidecarPythonPreamble(
   const sidecars = (options.sidecarPaths ?? []).filter((p) => p.length > 0);
   const seedTag = options.seedTag ?? "bla-sidecar-v1";
   const softFold = options.softFold === true;
-  const bindingName = options.bindingName ?? "__bla_sidecar_digest";
   const expectedHex = options.expectedHex.toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
     throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
   }
-  const expectedU32 = parseInt(expectedHex.slice(0, 8), 16) >>> 0;
+  const tag = expectedHex.slice(0, 8);
+  const bindingName = options.bindingName ?? `_verify_sibling_digest_${tag}`;
+  const expectedU32 = parseInt(tag, 16) >>> 0;
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
   const seedLiteral = JSON.stringify(seedTag);
   const expectedLiteral = JSON.stringify(expectedHex);
 
   const lines: string[] = [];
-  lines.push(`import hashlib as __bla_hashlib`);
-  lines.push(`import pathlib as __bla_pathlib`);
+  lines.push(`import hashlib as _sc_hashlib_${tag}`);
+  lines.push(`import pathlib as _sc_pathlib_${tag}`);
   lines.push(`${bindingName} = 0`);
   lines.push(`try:`);
-  lines.push(`    __bla_expected = ${expectedLiteral}`);
-  lines.push(`    __bla_h = __bla_hashlib.sha256()`);
-  lines.push(`    __bla_entry_label = ${entryLiteral}`);
-  lines.push(`    __bla_h.update(__bla_entry_label.encode("utf-8"))`);
-  lines.push(`    __bla_h.update(b"\\x00")`);
-  lines.push(`    __bla_sidecars = ${sidecarsLiteral}`);
-  lines.push(`    __bla_base = __bla_pathlib.Path(__file__).resolve().parent`);
-  lines.push(`    for __bla_sp in __bla_sidecars:`);
-  lines.push(`        __bla_h.update(__bla_sp.encode("utf-8"))`);
-  lines.push(`        __bla_h.update(b"\\x00")`);
-  lines.push(`        __bla_sp_path = __bla_pathlib.Path(__bla_sp)`);
-  lines.push(`        if not __bla_sp_path.is_absolute():`);
-  lines.push(`            __bla_sp_path = __bla_base / __bla_sp`);
+  lines.push(`    _sc_expected_${tag} = ${expectedLiteral}`);
+  lines.push(`    _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`    _sc_entry_label_${tag} = ${entryLiteral}`);
+  lines.push(`    _sc_h_${tag}.update(_sc_entry_label_${tag}.encode("utf-8"))`);
+  lines.push(`    _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`    _sc_sidecars_${tag} = ${sidecarsLiteral}`);
+  lines.push(`    _sc_base_${tag} = _sc_pathlib_${tag}.Path(__file__).resolve().parent`);
+  lines.push(`    for _sc_sp_${tag} in _sc_sidecars_${tag}:`);
+  lines.push(`        _sc_h_${tag}.update(_sc_sp_${tag}.encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        _sc_sp_path_${tag} = _sc_pathlib_${tag}.Path(_sc_sp_${tag})`);
+  lines.push(`        if not _sc_sp_path_${tag}.is_absolute():`);
+  lines.push(`            _sc_sp_path_${tag} = _sc_base_${tag} / _sc_sp_${tag}`);
   lines.push(`        try:`);
-  lines.push(`            __bla_h.update(__bla_sp_path.read_bytes())`);
+  lines.push(`            _sc_h_${tag}.update(_sc_sp_path_${tag}.read_bytes())`);
   lines.push(`        except Exception:`);
-  lines.push(`            __bla_h.update(("missing:" + str(__bla_sp)).encode("utf-8"))`);
-  lines.push(`        __bla_h.update(b"\\x00")`);
-  lines.push(`    __bla_h.update(${seedLiteral}.encode("utf-8"))`);
-  lines.push(`    __bla_hex = __bla_h.hexdigest()`);
-  lines.push(`    ${bindingName} = int(__bla_hex[:8], 16) & 0xffffffff`);
+  lines.push(`            _sc_h_${tag}.update(("missing:" + str(_sc_sp_${tag})).encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`    _sc_h_${tag}.update(${seedLiteral}.encode("utf-8"))`);
+  lines.push(`    _sc_hex_${tag} = _sc_h_${tag}.hexdigest()`);
+  lines.push(`    ${bindingName} = int(_sc_hex_${tag}[:8], 16) & 0xffffffff`);
   if (softFold) {
-    lines.push(`    if __bla_hex != __bla_expected:`);
+    lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
     lines.push(`        ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
   } else {
-    lines.push(`    if __bla_hex != __bla_expected:`);
+    lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
     lines.push(`        raise RuntimeError("integrity binding mismatch")`);
   }
-  lines.push(`except Exception as __bla_e2:`);
+  lines.push(`except Exception as _sc_err_${tag}:`);
   if (softFold) {
     lines.push(`    ${bindingName} = 0`);
   } else {
     lines.push(
-      `    if isinstance(__bla_e2, RuntimeError) and str(__bla_e2) == "integrity binding mismatch":`,
+      `    if isinstance(_sc_err_${tag}, RuntimeError) and str(_sc_err_${tag}) == "integrity binding mismatch":`,
     );
     lines.push(`        raise`);
     lines.push(`    raise RuntimeError("integrity binding mismatch") from None`);

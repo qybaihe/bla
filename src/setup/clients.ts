@@ -390,6 +390,31 @@ function inspectCodexTomlDocument(
   let pendingKey: string | null = null;
   let pendingArrayBuffer = "";
   let bracketBalance = 0;
+  let pendingMultilineQuote: '"""' | "'''" | null = null;
+  let pendingMultilineKey: string | null = null;
+  let pendingMultilineBuffer = "";
+
+  const findClosingTripleQuote = (text: string, quote: '"""' | "'''"): number => {
+    if (quote === "'''") {
+      return text.indexOf("'''");
+    }
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]!;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (text.startsWith('"""', i)) {
+        return i;
+      }
+    }
+    return -1;
+  };
 
   const countArrayBracketsOutsideQuotes = (code: string): { delta: number; valid: boolean } => {
     let delta = 0;
@@ -421,6 +446,66 @@ function inspectCodexTomlDocument(
 
   for (let idx = 0; idx < lines.length; idx++) {
     const rawLine = lines[idx]!;
+    if (pendingMultilineQuote !== null && pendingMultilineKey !== null) {
+      const closePos = findClosingTripleQuote(rawLine, pendingMultilineQuote);
+      if (closePos < 0) {
+        pendingMultilineBuffer += "\n" + rawLine;
+        continue;
+      }
+      const afterClose = stripTomlInlineComment(rawLine.slice(closePos + 3));
+      if (afterClose.unclosedQuote || afterClose.code.length > 0) {
+        return {
+          ok: false,
+          error: `Malformed TOML multiline string trailing content at line ${idx + 1}`,
+        };
+      }
+      pendingMultilineBuffer += "\n" + rawLine.slice(0, closePos + 3);
+      const targetMap = currentSection ? currentSection.assignments : topLevelAssignments;
+      targetMap.set(pendingMultilineKey, pendingMultilineBuffer);
+      pendingMultilineQuote = null;
+      pendingMultilineKey = null;
+      pendingMultilineBuffer = "";
+      continue;
+    }
+
+    // Check for TOML triple-quoted string assignments (`key = """...` or `key = '''...`)
+    if (pendingKey === null && !rawLine.trimStart().startsWith("#") && !rawLine.trimStart().startsWith("[")) {
+      const eqPos = rawLine.indexOf("=");
+      if (eqPos > 0) {
+        const candidateKey = rawLine.slice(0, eqPos).trim();
+        const rhsTrimmed = rawLine.slice(eqPos + 1).trimStart();
+        const tripleQuote: '"""' | "'''" | null = rhsTrimmed.startsWith('"""')
+          ? '"""'
+          : rhsTrimmed.startsWith("'''")
+            ? "'''"
+            : null;
+        if (
+          tripleQuote !== null &&
+          (/^[A-Za-z0-9_.-]+$/.test(candidateKey) ||
+            (candidateKey.startsWith('"') && candidateKey.endsWith('"')))
+        ) {
+          const afterOpen = rhsTrimmed.slice(3);
+          const closePos = findClosingTripleQuote(afterOpen, tripleQuote);
+          if (closePos >= 0) {
+            const afterClose = stripTomlInlineComment(afterOpen.slice(closePos + 3));
+            if (afterClose.unclosedQuote || afterClose.code.length > 0) {
+              return {
+                ok: false,
+                error: `Malformed TOML triple-quoted string at line ${idx + 1}`,
+              };
+            }
+            const targetMap = currentSection ? currentSection.assignments : topLevelAssignments;
+            targetMap.set(candidateKey, rhsTrimmed.slice(0, 3 + closePos + 3));
+            continue;
+          }
+          pendingMultilineQuote = tripleQuote;
+          pendingMultilineKey = candidateKey;
+          pendingMultilineBuffer = rhsTrimmed;
+          continue;
+        }
+      }
+    }
+
     const stripped = stripTomlInlineComment(rawLine);
     if (stripped.unclosedQuote) {
       return { ok: false, error: `Malformed TOML at line ${idx + 1}: unclosed string quote` };
@@ -516,6 +601,12 @@ function inspectCodexTomlDocument(
     targetMap.set(key, val);
   }
 
+  if (pendingMultilineQuote !== null) {
+    return {
+      ok: false,
+      error: `Malformed TOML: unclosed multiline string for key '${pendingMultilineKey}'`,
+    };
+  }
   if (pendingKey !== null || bracketBalance !== 0) {
     return { ok: false, error: `Malformed TOML: unclosed multiline array for key '${pendingKey}'` };
   }
@@ -663,13 +754,23 @@ export function writeCodexTomlMcp(
       }
     }
 
+    const existingSection = inspected.sections.find((s) => s.name === targetTable);
+    const preservedAssignments: string[] = [];
+    if (existingSection) {
+      for (const [k, v] of existingSection.assignments.entries()) {
+        if (k !== "command" && k !== "args") {
+          preservedAssignments.push(`${k} = ${v}`);
+        }
+      }
+    }
+
     const formattedSectionLines = [
       `[${targetTable}]`,
       `command = ${JSON.stringify(reg.command)}`,
       `args = [${reg.args.map((a) => JSON.stringify(a)).join(", ")}]`,
+      ...preservedAssignments,
     ];
 
-    const existingSection = inspected.sections.find((s) => s.name === targetTable);
     if (existingSection) {
       // Preserve trailing comments before the next section header
       let replaceEnd = existingSection.endLineIndex;
@@ -724,13 +825,103 @@ export function removeCodexTomlMcp(
   };
 }
 
+/**
+ * Parses standard JSON or JSONC (`//` line comments, `/* ... *\/` block comments,
+ * and trailing commas immediately before `}` or `]`), while preserving strict
+ * rejection of unclosed braces, unclosed quotes, and invalid tokens.
+ */
+function parseJsonOrJsonc(rawContent: string): unknown {
+  try {
+    return JSON.parse(rawContent);
+  } catch {
+    // Fall through to JSONC comment + trailing-comma normalization
+  }
+
+  let noComments = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < rawContent.length; i++) {
+    const ch = rawContent[i]!;
+    if (inString) {
+      noComments += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      noComments += ch;
+      continue;
+    }
+    if (ch === "/" && rawContent[i + 1] === "/") {
+      i += 2;
+      while (i < rawContent.length && rawContent[i] !== "\n") i++;
+      if (i < rawContent.length) noComments += "\n";
+      continue;
+    }
+    if (ch === "/" && rawContent[i + 1] === "*") {
+      const end = rawContent.indexOf("*/", i + 2);
+      if (end < 0) {
+        throw new SyntaxError("Unclosed JSONC block comment");
+      }
+      for (let j = i; j < end + 2; j++) {
+        noComments += rawContent[j] === "\n" ? "\n" : " ";
+      }
+      i = end + 1;
+      continue;
+    }
+    noComments += ch;
+  }
+
+  let cleaned = "";
+  inString = false;
+  escaped = false;
+  for (let i = 0; i < noComments.length; i++) {
+    const ch = noComments[i]!;
+    if (inString) {
+      cleaned += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      cleaned += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let look = i + 1;
+      while (look < noComments.length && /\s/.test(noComments[look]!)) {
+        look++;
+      }
+      const nextCh = noComments[look];
+      if (nextCh === "}" || nextCh === "]") {
+        continue;
+      }
+    }
+    cleaned += ch;
+  }
+
+  return JSON.parse(cleaned);
+}
+
 function createJsonMcpServersAdapter(): ClientConfigAdapter {
   return {
     format: "json-mcpServers",
     readServer(rawContent: string, serverName: string = BLA_IDENTITY.mcpServerName): ConfigReadResult {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         return {
           status: "malformed",
@@ -827,7 +1018,7 @@ function createJsonMcpServersAdapter(): ClientConfigAdapter {
       if (rawContent !== null && rawContent.trim().length > 0) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(rawContent);
+          parsed = parseJsonOrJsonc(rawContent);
         } catch (err) {
           throw new Error(
             `Malformed JSON configuration: ${err instanceof Error ? err.message : String(err)}`,
@@ -842,7 +1033,11 @@ function createJsonMcpServersAdapter(): ClientConfigAdapter {
         root = { ...parsed };
       }
       const existingServers = isPlainObject(root.mcpServers) ? { ...root.mcpServers } : {};
+      const prevEntry = isPlainObject(existingServers[serverName])
+        ? { ...existingServers[serverName] }
+        : {};
       existingServers[serverName] = {
+        ...prevEntry,
         command: reg.command,
         args: [...reg.args],
       };
@@ -852,7 +1047,7 @@ function createJsonMcpServersAdapter(): ClientConfigAdapter {
     removeServer(rawContent: string, serverName: string): { readonly content: string; readonly removed: boolean } {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         throw new Error(
           `Malformed JSON configuration: ${err instanceof Error ? err.message : String(err)}`,
@@ -884,7 +1079,7 @@ function createJsonVscodeAdapter(): ClientConfigAdapter {
     readServer(rawContent: string, serverName: string = BLA_IDENTITY.mcpServerName): ConfigReadResult {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         return {
           status: "malformed",
@@ -990,7 +1185,7 @@ function createJsonVscodeAdapter(): ClientConfigAdapter {
       if (rawContent !== null && rawContent.trim().length > 0) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(rawContent);
+          parsed = parseJsonOrJsonc(rawContent);
         } catch (err) {
           throw new Error(
             `Malformed VS Code mcp.json: ${err instanceof Error ? err.message : String(err)}`,
@@ -1005,7 +1200,11 @@ function createJsonVscodeAdapter(): ClientConfigAdapter {
         root = { ...parsed };
       }
       const existingServers = isPlainObject(root.servers) ? { ...root.servers } : {};
+      const prevEntry = isPlainObject(existingServers[serverName])
+        ? { ...existingServers[serverName] }
+        : {};
       existingServers[serverName] = {
+        ...prevEntry,
         type: "stdio",
         command: reg.command,
         args: [...reg.args],
@@ -1016,7 +1215,7 @@ function createJsonVscodeAdapter(): ClientConfigAdapter {
     removeServer(rawContent: string, serverName: string): { readonly content: string; readonly removed: boolean } {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         throw new Error(
           `Malformed VS Code mcp.json: ${err instanceof Error ? err.message : String(err)}`,
@@ -1048,7 +1247,7 @@ function createJsonOpencodeAdapter(): ClientConfigAdapter {
     readServer(rawContent: string, serverName: string = BLA_IDENTITY.mcpServerName): ConfigReadResult {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         return {
           status: "malformed",
@@ -1166,7 +1365,7 @@ function createJsonOpencodeAdapter(): ClientConfigAdapter {
       if (rawContent !== null && rawContent.trim().length > 0) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(rawContent);
+          parsed = parseJsonOrJsonc(rawContent);
         } catch (err) {
           throw new Error(
             `Malformed OpenCode configuration: ${err instanceof Error ? err.message : String(err)}`,
@@ -1181,10 +1380,14 @@ function createJsonOpencodeAdapter(): ClientConfigAdapter {
         root = { ...parsed };
       }
       const existingMcp = isPlainObject(root.mcp) ? { ...root.mcp } : {};
+      const prevEntry = isPlainObject(existingMcp[serverName])
+        ? { ...existingMcp[serverName] }
+        : {};
       existingMcp[serverName] = {
+        ...prevEntry,
         type: "local",
         command: [reg.command, ...reg.args],
-        enabled: reg.enabled ?? true,
+        enabled: reg.enabled ?? (typeof prevEntry.enabled === "boolean" ? prevEntry.enabled : true),
       };
       root.mcp = existingMcp;
       return JSON.stringify(root, null, 2) + "\n";
@@ -1192,7 +1395,7 @@ function createJsonOpencodeAdapter(): ClientConfigAdapter {
     removeServer(rawContent: string, serverName: string): { readonly content: string; readonly removed: boolean } {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawContent);
+        parsed = parseJsonOrJsonc(rawContent);
       } catch (err) {
         throw new Error(
           `Malformed OpenCode configuration: ${err instanceof Error ? err.message : String(err)}`,

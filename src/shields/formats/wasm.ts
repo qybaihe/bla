@@ -113,6 +113,7 @@ export function parseWasmExportSectionPayload(
       p += nameLen;
       if (p >= exportSectionPayload.length) return out;
       const kind = exportSectionPayload[p++]!;
+      if (kind > 0x04) return [];
       const { value: index, nextOffset: afterIdx } = decodeUnsignedLeb128(
         exportSectionPayload,
         p,
@@ -120,6 +121,7 @@ export function parseWasmExportSectionPayload(
       p = afterIdx;
       out.push({ name, kind, index });
     }
+    if (p !== exportSectionPayload.length) return [];
     return out;
   } catch {
     return [];
@@ -221,12 +223,25 @@ export function renameWasmExports(
 function appendDecoyExports(
   exportSectionPayload: Buffer,
   decoys: readonly { readonly name: string; readonly funcIndex: number }[],
-): Buffer {
-  if (decoys.length === 0) return exportSectionPayload;
-  let p = 0;
-  const { value: count, nextOffset } = decodeUnsignedLeb128(exportSectionPayload, 0);
-  p = nextOffset;
-  const existing = exportSectionPayload.subarray(p);
+): { readonly payload: Buffer; readonly injected: number } {
+  if (decoys.length === 0) return { payload: exportSectionPayload, injected: 0 };
+  let count = 0;
+  let nextOffset = 0;
+  try {
+    const decoded = decodeUnsignedLeb128(exportSectionPayload, 0);
+    count = decoded.value;
+    nextOffset = decoded.nextOffset;
+  } catch {
+    return { payload: exportSectionPayload, injected: 0 };
+  }
+  const parsedExisting = parseWasmExportSectionPayload(exportSectionPayload);
+  if (
+    parsedExisting.length !== count ||
+    (count === 0 && nextOffset !== exportSectionPayload.length)
+  ) {
+    return { payload: exportSectionPayload, injected: 0 };
+  }
+  const existing = exportSectionPayload.subarray(nextOffset);
   const decoyParts: Buffer[] = [];
   for (const d of decoys) {
     decoyParts.push(
@@ -235,11 +250,14 @@ function appendDecoyExports(
       encodeUnsignedLeb128(d.funcIndex),
     );
   }
-  return Buffer.concat([
-    encodeUnsignedLeb128(count + decoys.length),
-    existing,
-    ...decoyParts,
-  ]);
+  return {
+    payload: Buffer.concat([
+      encodeUnsignedLeb128(count + decoys.length),
+      existing,
+      ...decoyParts,
+    ]),
+    injected: decoys.length,
+  };
 }
 
 /**
@@ -760,10 +778,11 @@ export function protectWasmBinary(
         payload = Buffer.from(renamed.payload);
         exportsRenamed = renamed.renames;
       }
-      let expanded =
+      const appended =
         decoyExports.length > 0
           ? appendDecoyExports(payload, decoyExports)
-          : payload;
+          : { payload, injected: 0 };
+      let expanded = appended.payload;
       // Round-11: shuffle combined original+decoy export order at maximum/bankrupt
       // (same intensity band as rename / decoy injection). Independent of alias
       // funcIndex spread — closes "first arity-2 = unlock" RE shortcut.
@@ -781,7 +800,7 @@ export function protectWasmBinary(
           expanded,
         ]),
       );
-      exportDecoysInjected = decoyExports.length;
+      exportDecoysInjected = appended.injected;
     } else {
       keptChunks.push(bytes.subarray(sectionStart, sectionEnd));
     }

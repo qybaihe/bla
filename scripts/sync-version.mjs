@@ -98,18 +98,25 @@ for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
   }
 }
 
-// Keep plugin marketplace manifests in lockstep with package.json.
+// Keep plugin marketplace & MCP manifests in lockstep with package.json.
 for (const rel of [
+  ".mcp.json",
+  ".claude-plugin/plugin.json",
   ".claude-plugin/marketplace.json",
   ".codex-plugin/plugin.json",
 ]) {
   const pluginPath = resolve(root, rel);
   try {
     const pluginText = readFileSync(pluginPath, "utf8");
-    const next = pluginText.replace(
-      /"version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"/g,
-      `"version": "${version}"`,
-    );
+    const next = pluginText
+      .replace(
+        /"version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"/g,
+        `"version": "${version}"`,
+      )
+      .replace(
+        /bla-agents@[0-9]+\.[0-9]+\.[0-9]+/g,
+        `bla-agents@${version}`,
+      );
     if (next !== pluginText) {
       writeFileSync(pluginPath, next, "utf8");
       console.log(`Synced ${rel} version -> ${version}`);

@@ -67,20 +67,20 @@ const MAX_JS_FILES = 48;
 const MAX_SCAN_CHARS = 800_000;
 
 const CREATE_CIPHER_IV =
-  /\bcreate(?:Decipher|Cipher)iv\b|\.create(?:Decipher|Cipher)iv\s*\(/;
+  /\bcreate(?:Decipher|Cipher)iv\b|\.create(?:Decipher|Cipher)iv\s*\(|\bsubtle\.(?:decrypt|encrypt|unwrapKey|wrapKey)\s*\(/;
 
-/** Hex/base64 wrap-key material shapes (R4 WRAP_KEY_HEX + Buffer.from(..., "hex")). */
+/** Hex/base64 wrap-key material shapes (R4 WRAP_KEY_HEX + Buffer.from(..., "hex") + WebCrypto importKey("raw")). */
 const WRAP_KEY_NAME =
   /\b(?:WRAP_KEY|AES_KEY|SEAL_KEY|UNWRAP_KEY|BLOB_KEY)(?:_HEX|_B64|_BASE64|_BYTES)?\b/;
 
 const BUFFER_FROM_HEX_B64 =
-  /Buffer\.from\s*\(\s*[^,)]+?\s*,\s*['"](?:hex|base64)['"]\s*\)/;
+  /Buffer\.from\s*\(\s*[^,)]+?\s*,\s*['"](?:hex|base64)['"]\s*\)|\bsubtle\.importKey\s*\(\s*['"]raw['"]/;
 
 /** AES-256 key as a 64-hex string literal (or AES-128 32-hex). */
 const HEX_KEY_LITERAL = /['"][0-9a-fA-F]{32}(?:[0-9a-fA-F]{32})?['"]/;
 
 const AES_ALGO =
-  /['"]aes-(?:128|192|256)-(?:ctr|cbc|gcm)['"]/i;
+  /['"]aes-(?:(?:128|192|256)-(?:ctr|cbc|gcm)|ctr|cbc|gcm|kw)['"]/i;
 
 /** Fixed 4-byte sealed hdr beacons (R4 D17EA004 and generic Buffer.from("........","hex")). */
 const FIXED_HDR_HEX =

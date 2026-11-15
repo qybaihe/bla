@@ -250,17 +250,26 @@ interface LiteralSpan {
   readonly start: number;
   readonly end: number;
   readonly value: string;
+  readonly wrapJsxExpr?: boolean;
 }
 
 function isNonReplaceableStringPosition(path: {
   readonly node: unknown;
   readonly parent: unknown;
-  readonly parentPath?: { readonly parent: unknown } | null;
+  readonly parentPath?: { readonly node?: unknown; readonly parent: unknown; readonly parentPath?: unknown } | null;
 }): boolean {
   const node = path.node as Record<string, unknown>;
   const parent = path.parent as Record<string, unknown> | null | undefined;
   if (!parent) return false;
   const pType = parent.type;
+
+  // Ambient TypeScript declarations (`declare const`, `declare enum`, `declare module`, etc.)
+  let cur: { readonly node?: unknown; readonly parentPath?: unknown } | null | undefined = path;
+  while (cur) {
+    const curNode = cur.node as Record<string, unknown> | undefined;
+    if (curNode?.declare === true) return true;
+    cur = cur.parentPath as { readonly node?: unknown; readonly parentPath?: unknown } | null | undefined;
+  }
 
   // Module specifiers in import / export declarations
   if (
@@ -271,14 +280,15 @@ function isNonReplaceableStringPosition(path: {
   ) {
     return true;
   }
-  if (pType === "ImportAttribute") {
+  if (pType === "ImportAttribute" || pType === "Directive") {
     return true;
   }
-  // TypeScript literal types or module references
+  // TypeScript literal types, enum member identifiers, or module references
   if (
     pType === "TSLiteralType" ||
     pType === "TSExternalModuleReference" ||
-    pType === "TSImportType"
+    pType === "TSImportType" ||
+    (pType === "TSEnumMember" && parent.id === node)
   ) {
     return true;
   }
@@ -329,7 +339,14 @@ function collectJsLiteralSpans(source: string): LiteralSpan[] {
         if (isNonReplaceableStringPosition(path)) return;
         const { start, end, value } = path.node;
         if (typeof start === "number" && typeof end === "number") {
-          spans.push({ start, end, value });
+          const wrapJsxExpr =
+            path.parent.type === "JSXAttribute" && path.parent.value === path.node;
+          spans.push({
+            start,
+            end,
+            value,
+            ...(wrapJsxExpr ? { wrapJsxExpr: true } : {}),
+          });
         }
       },
       TemplateLiteral(path) {
@@ -430,18 +447,21 @@ function transformJsSource(
   for (const span of descending) {
     const idx = indexByLiteral.get(span.value);
     if (idx === undefined) continue;
-    body = `${body.slice(0, span.start)}${fnName}(${idx})${body.slice(span.end)}`;
+    const callExpr = span.wrapJsxExpr ? `{${fnName}(${idx})}` : `${fnName}(${idx})`;
+    body = `${body.slice(0, span.start)}${callExpr}${body.slice(span.end)}`;
   }
 
-  // Keep shebang / "use strict" at the very top so Node can still execute the file.
+  // Keep shebang and module-top directives ("use strict" / "use client" / "use server") at the very top.
   const shebangMatch = body.match(/^#![^\n]*\n/);
   const shebang = shebangMatch ? shebangMatch[0] : "";
   const rest = shebang ? body.slice(shebang.length) : body;
-  const strictMatch = rest.match(/^["']use strict["'];?\r?\n/);
-  const strict = strictMatch ? strictMatch[0] : "";
-  const afterStrict = strict ? rest.slice(strict.length) : rest;
+  const directiveMatch = rest.match(
+    /^(?:[ \t]*["']use (?:strict|client|server)["'];?[ \t]*\r?\n)+/,
+  );
+  const directives = directiveMatch ? directiveMatch[0] : "";
+  const afterDirectives = directives ? rest.slice(directives.length) : rest;
   return {
-    code: shebang + strict + stub + "\n" + afterStrict,
+    code: shebang + directives + stub + "\n" + afterDirectives,
     encrypted: unique,
     skipped,
   };
@@ -460,13 +480,30 @@ function transformHtml(
   const allEncrypted: string[] = [];
   let skipped = 0;
   let any = false;
+  let scriptIndex = 0;
   const code = source.replace(scriptRe, (_m, open, body, close) => {
-    if (/\bsrc\s*=/.test(open) && String(body).trim().length === 0) {
+    const openStr = String(open);
+    if (/\bsrc\s*=/.test(openStr) && String(body).trim().length === 0) {
       return `${open}${body}${close}`;
     }
+    const typeMatch = openStr.match(/\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const rawType = (typeMatch?.[1] ?? typeMatch?.[2] ?? typeMatch?.[3] ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      rawType.length > 0 &&
+      rawType !== "module" &&
+      rawType !== "text/javascript" &&
+      rawType !== "application/javascript" &&
+      rawType !== "text/ecmascript" &&
+      rawType !== "application/ecmascript"
+    ) {
+      return `${open}${body}${close}`;
+    }
+    const currentScriptIdx = scriptIndex++;
     const result = transformJsSource(
       body,
-      prng.derive(`html:${allEncrypted.length}`),
+      prng.derive(`html:${currentScriptIdx}`),
       includeUrls,
     );
     skipped += result.skipped;
@@ -518,20 +555,23 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
     if (outDir && !options.dryRun) mkdirSync(outDir, { recursive: true });
 
     const files: EncryptStringsFileResult[] = [];
+    const transformedByOutPath = new Map<string, string>();
     let totalEncrypted = 0;
 
     for (const file of targets) {
       const source = readFileSync(file, "utf8");
       const isHtml = /\.html?$/i.test(file);
-      const filePrng = rootPrng.derive(basename(file));
+      const relFromRoot = isSingleFileInput
+        ? basename(file)
+        : relative(baseRoot, file) || basename(file);
+      const normalizedRel = relFromRoot.replace(/\\/g, "/");
+      const filePrng = rootPrng.derive(normalizedRel);
       const result = isHtml
         ? transformHtml(source, filePrng, includeUrls)
         : transformJsSource(source, filePrng, includeUrls);
 
-      const relFromRoot = isSingleFileInput
-        ? basename(file)
-        : relative(baseRoot, file) || basename(file);
       const outPath = outDir ? join(outDir, relFromRoot) : file;
+      transformedByOutPath.set(outPath, result.code);
       let written = false;
       if (result.encrypted.length > 0 && !options.dryRun) {
         if (outDir) mkdirSync(dirname(outPath), { recursive: true });
@@ -556,7 +596,7 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
       totalEncrypted += result.encrypted.length;
       files.push({
         path: file,
-        relativeName: relFromRoot.replace(/\\/g, "/"),
+        relativeName: normalizedRel,
         encryptedCount: result.encrypted.length,
         skippedCount: result.skipped,
         literals: result.encrypted.map((s) =>
@@ -570,11 +610,9 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
     let postLintClean = true;
     for (const f of files) {
       if (f.encryptedCount === 0) continue;
-      if (options.dryRun) {
-        postLintClean = false;
-        break;
-      }
-      const src = readFileSync(f.outPath, "utf8");
+      const src = options.dryRun
+        ? (transformedByOutPath.get(f.outPath) ?? readFileSync(f.path, "utf8"))
+        : readFileSync(f.outPath, "utf8");
       const report = lintPlaintextSecretsSource(src, { path: f.outPath });
       if (report.shouldRefuseBankrupt) {
         postLintClean = false;

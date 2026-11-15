@@ -123,6 +123,7 @@ export interface UninstallRunOptions {
   readonly clientIds?: readonly (SupportedAgentClientId | string)[];
   readonly clients?: readonly (SupportedAgentClientId | string)[];
   readonly force?: boolean;
+  readonly dryRun?: boolean;
 }
 
 export interface UninstallRunResult {
@@ -805,7 +806,9 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
             try {
               const rem = adapter.removeServer(rawConfig, BLA_IDENTITY.mcpServerName);
               if (rem.removed) {
-                writeFileAtomicSync(client.configPath, rem.content);
+                if (!options.dryRun) {
+                  writeFileAtomicSync(client.configPath, rem.content);
+                }
                 mcpRemoved = true;
               }
             } catch (err) {
@@ -826,7 +829,9 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
             try {
               const rem = adapter.removeServer(rawConfig, BLA_IDENTITY.mcpServerName);
               if (rem.removed) {
-                writeFileAtomicSync(client.configPath, rem.content);
+                if (!options.dryRun) {
+                  writeFileAtomicSync(client.configPath, rem.content);
+                }
                 mcpRemoved = true;
               }
             } catch (err) {
@@ -863,23 +868,25 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
           manifestRecord === undefined && mcpRemoved && currentSkillSha === bundledSkillHash;
 
         if (ownedByThisManifest || ownedByAnyManifest || ownedByFallbackUnmodified || options.force) {
-          unlinkSync(skillPath);
-          skillRemoved = true;
-          // Remove supporting bundle files BLA wrote (unmodified only), then
-          // prune their now-empty subdirectories.
-          removeOwnedSkillSupportFiles(
-            client.skillDirectory,
-            manifestRecord?.writtenSkillFiles,
-            bundledSupportHashes,
-            options.force === true,
-          );
-          // Only remove `client.skillDirectory` if it is now completely empty!
-          if (existsSync(client.skillDirectory)) {
-            const remainingFiles = readdirSync(client.skillDirectory);
-            if (remainingFiles.length === 0) {
-              rmdirSync(client.skillDirectory);
+          if (!options.dryRun) {
+            unlinkSync(skillPath);
+            // Remove supporting bundle files BLA wrote (unmodified only), then
+            // prune their now-empty subdirectories.
+            removeOwnedSkillSupportFiles(
+              client.skillDirectory,
+              manifestRecord?.writtenSkillFiles,
+              bundledSupportHashes,
+              options.force === true,
+            );
+            // Only remove `client.skillDirectory` if it is now completely empty!
+            if (existsSync(client.skillDirectory)) {
+              const remainingFiles = readdirSync(client.skillDirectory);
+              if (remainingFiles.length === 0) {
+                rmdirSync(client.skillDirectory);
+              }
             }
           }
+          skillRemoved = true;
         } else if (manifestRecord !== undefined || mcpRemoved) {
           conflictReason =
             conflictReason ??
@@ -927,7 +934,10 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
 
   // Persist updated manifest if it existed or has remaining records
   const manifestPath = getInstallManifestPath(home);
-  if (existsSync(manifestPath) || Object.keys(remainingManifestClients).length > 0) {
+  if (
+    !options.dryRun &&
+    (existsSync(manifestPath) || Object.keys(remainingManifestClients).length > 0)
+  ) {
     writeInstallManifest(home, {
       version: 1,
       updatedAt: new Date().toISOString(),

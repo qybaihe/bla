@@ -24,7 +24,8 @@ export type SealCommitmentFindingId =
   | "reversible-public-commitment"
   | "seal-offline-oracle-package"
   | "public-materialization-seed"
-  | "public-key-digest-oracle";
+  | "public-key-digest-oracle"
+  | "seal-oversized-sidecar";
 
 export type SealCommitmentSeverity = "warning" | "error";
 
@@ -87,7 +88,38 @@ const SKIP_DIR_NAMES = new Set([
 
 const MAX_WALK_DEPTH = 6;
 const MAX_SEAL_FILES = 32;
-const MAX_JSON_BYTES = 400_000;
+const MAX_JSON_BYTES = 4 * 1024 * 1024;
+
+function buildOversizedSealReport(
+  pathLabel: string,
+  byteLength: number,
+): SealCommitmentReport {
+  if (!looksLikeSealFileName(pathLabel)) {
+    return {
+      schema: SEAL_COMMITMENT_SCHEMA,
+      path: pathLabel,
+      findings: [],
+      looksExposed: false,
+      shouldRefuseBankrupt: false,
+      oneLineAdvice: `Oversized non-seal file (${byteLength} bytes > ${MAX_JSON_BYTES}) — seal-commitment lint skipped.`,
+    };
+  }
+  const f = finding(
+    "seal-oversized-sidecar",
+    "error",
+    `Seal sidecar exceeds ${MAX_JSON_BYTES} bytes (${byteLength} bytes) — refusing unverified oversized seal JSON (fail-closed against padding bypass).`,
+    `bytes=${byteLength} limit=${MAX_JSON_BYTES}`,
+  );
+  return {
+    schema: SEAL_COMMITMENT_SCHEMA,
+    path: pathLabel,
+    findings: [f],
+    looksExposed: true,
+    shouldRefuseBankrupt: true,
+    oneLineAdvice:
+      "ERROR: Oversized seal sidecar exceeds safe inspection limit — shrink or omit plaintext seal JSON, or pass allowPlaintextSeal (lab fixture only).",
+  };
+}
 
 function finding(
   id: SealCommitmentFindingId,
@@ -186,12 +218,15 @@ export function lintSealCommitmentSource(
   options: { readonly path?: string } = {},
 ): SealCommitmentReport {
   const pathLabel = options.path ?? "<memory>";
+  const byteLen = Buffer.byteLength(source, "utf8");
+  if (byteLen > MAX_JSON_BYTES) {
+    return buildOversizedSealReport(pathLabel, byteLen);
+  }
   const findings: SealCommitmentFinding[] = [];
-  const text = source.length > MAX_JSON_BYTES ? source.slice(0, MAX_JSON_BYTES) : source;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(source);
   } catch {
     return {
       schema: SEAL_COMMITMENT_SCHEMA,
@@ -341,6 +376,10 @@ export function lintSealCommitmentFile(filePath: string): SealCommitmentReport {
   const abs = resolve(filePath);
   if (!existsSync(abs)) {
     throw new Error(`seal-commitment target not found: ${abs}`);
+  }
+  const st = statSync(abs);
+  if (st.size > MAX_JSON_BYTES) {
+    return buildOversizedSealReport(abs, st.size);
   }
   const source = readFileSync(abs, "utf8");
   return lintSealCommitmentSource(source, { path: abs });

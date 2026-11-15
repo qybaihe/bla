@@ -3,7 +3,7 @@
  * CI gate for CrackMe v9 (Sovereign — BLA 3.0). No plaintext secrets required.
  * If CRACKME_V9_KEY/FLAG match SEAL digests, also verifies unlock + byte rebuild.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -22,6 +22,7 @@ import {
   extractFlag,
   hardenChallenge,
   prepareRunnable,
+  privateSeed,
   runLicense,
   sha256File,
   sha256Hex,
@@ -87,15 +88,51 @@ try {
   const fxB = tmp("bla-crackme-v9-fxB-");
   const a = await hardenChallenge({ key: FIXTURE_KEY, flag: FIXTURE_FLAG, outDir: fxA });
   const b = await hardenChallenge({ key: FIXTURE_KEY, flag: FIXTURE_FLAG, outDir: fxB });
+  const fxSeed = privateSeed(FIXTURE_KEY, FIXTURE_FLAG);
   for (const rel of COMMITTED_FILES) {
     if (a.artifacts[rel].sha256 !== b.artifacts[rel].sha256) fail(`fixture re-harden not reproducible on ${rel}`);
+    const rawBuf = rel === "core.wasm.gz" ? gunzipSync(readFileSync(join(fxA, rel))) : readFileSync(join(fxA, rel));
+    if (rawBuf.includes(Buffer.from(fxSeed, "utf8"))) {
+      fail(`fixture artifact ${rel} leaked plaintext privateSeed`);
+    }
   }
   const fxRun = prepareRunnable(fxA);
   tmpRoots.push(fxRun);
   const unlocked = runLicense(fxRun, FIXTURE_KEY);
   if (!unlocked.ok || extractFlag(unlocked.stdout) !== FIXTURE_FLAG) fail("fixture unlock failed");
   if (runLicense(fxRun, "WrongKey!!!!!!!!").ok) fail("fixture accepted wrong key");
-  ok("fixture re-harden reproducible + unlock/deny");
+
+  // Negative tamper checks on runnable copies: sibling deletion, seal tamper, and entry patch must hard-fail
+  for (const sib of ["panel.html", "policy.py"]) {
+    const tDir = prepareRunnable(fxA);
+    tmpRoots.push(tDir);
+    rmSync(join(tDir, sib), { force: true });
+    const tr = runLicense(tDir, FIXTURE_KEY);
+    if (tr.ok || !/integrity (?:check failed|binding mismatch)/.test(tr.stdout)) {
+      fail(`deleting ${sib} did not trigger integrity hard-fail: ${tr.stdout}`);
+    }
+  }
+  {
+    const tDir = prepareRunnable(fxA);
+    tmpRoots.push(tDir);
+    const tamperedSeal = readFileSync(join(tDir, "seal.json"), "utf8").replace('"sha256"', '"md5"');
+    writeFileSync(join(tDir, "seal.json"), tamperedSeal, "utf8");
+    const tr = runLicense(tDir, FIXTURE_KEY);
+    if (tr.ok || !/integrity check failed/.test(tr.stdout) || /\[license\] DENIED/.test(tr.stdout)) {
+      fail(`tampering seal.json did not trigger integrity hard-fail: ${tr.stdout}`);
+    }
+  }
+  {
+    const tDir = prepareRunnable(fxA);
+    tmpRoots.push(tDir);
+    const patchedEntry = readFileSync(join(tDir, "license.cjs"), "utf8") + "\n// patched\n";
+    writeFileSync(join(tDir, "license.cjs"), patchedEntry, "utf8");
+    const tr = runLicense(tDir, FIXTURE_KEY);
+    if (tr.ok || !/integrity check failed/.test(tr.stdout)) {
+      fail(`patching license.cjs did not trigger self-seal hard-fail: ${tr.stdout}`);
+    }
+  }
+  ok("fixture re-harden reproducible + zero seed leak + unlock/deny + negative tamper checks");
 
   const key = process.env.CRACKME_V9_KEY;
   const flag = process.env.CRACKME_V9_FLAG;

@@ -118,9 +118,12 @@ Options:
   --allow-wasm-seal-xor-known-plaintext  Allow bankrupt despite seal.revision XOR known-plaintext packs (round-7); OFF by default
   --lang <c|rust|go>          Target language for emit-headers (default: c)
   --fail-under <n>            Exit 2 when the score fails the gate: defense score < n (defend/verify) or audit exposure score > n (audit)
-  --client <id>               Agent client ID for setup (repeatable: claude_code, cursor, codex, etc.)
+  --client <id>               Agent client ID for setup/uninstall (repeatable: claude_code, cursor, codex, etc.)
   --all-detected              Configure all detected coding agents on this machine
-  --dry-run                   Preview planned setup/harden changes without writing files
+  --all-clients               Configure all 10 supported coding agents (including undetected)
+  --force                     Force setup/uninstall overwrite when custom SKILL.md or MCP entry conflicts
+  --require-agent-weave       Enforce verified Stage-2 Agent source weave before harden/defend
+  --dry-run                   Preview planned setup/uninstall/harden changes without writing files
   -y, --yes                   Approve setup actions without interactive confirmation
   --json                      Emit structured JSON output
   -v, --version               Print BLA version
@@ -166,6 +169,8 @@ interface ParsedCliArgs {
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
+  readonly allClients: boolean;
+  readonly force: boolean;
   readonly dryRun: boolean;
   readonly yes: boolean;
   readonly json: boolean;
@@ -238,6 +243,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   const clients: SupportedAgentClientId[] = [];
   const argErrors: string[] = [];
   let allDetected = false;
+  let allClients = false;
+  let force = false;
   let dryRun = false;
   let yes = false;
   let json = false;
@@ -283,6 +290,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       dryRun = true;
     } else if (arg === "--all-detected") {
       allDetected = true;
+    } else if (arg === "--all-clients" || arg === "--include-undetected") {
+      allClients = true;
+    } else if (arg === "-f" || arg === "--force") {
+      force = true;
     } else if (arg === "--in-place") {
       inPlace = true;
     } else if (arg === "--no-honey-maps") {
@@ -475,6 +486,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     lang,
     clients,
     allDetected,
+    allClients,
+    force,
     dryRun,
     yes,
     json,
@@ -553,12 +566,14 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const res = runSetup({
           ...(parsed.clients.length > 0 ? { clientIds: parsed.clients } : {}),
           allDetected: parsed.allDetected,
+          includeUndetected: parsed.allClients,
+          force: parsed.force,
           dryRun: parsed.dryRun,
           yes: parsed.yes,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatSetupReport(res));
-        return 0;
+        return res.status === "error" || res.status === "conflict" ? 1 : 0;
       }
 
       case "doctor": {
@@ -585,10 +600,18 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       }
 
       case "uninstall": {
-        const res = runUninstall();
+        const res = runUninstall({
+          ...(parsed.clients.length > 0 ? { clientIds: parsed.clients } : {}),
+          force: parsed.force,
+          dryRun: parsed.dryRun,
+        });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
-        else console.log(`Removed BLA configuration from ${res.removedClients.length} client(s).`);
-        return 0;
+        else if (parsed.dryRun) {
+          console.log(`Dry-run: would remove BLA configuration from ${res.removedClients.length} client(s).`);
+        } else {
+          console.log(`Removed BLA configuration from ${res.removedClients.length} client(s).`);
+        }
+        return res.conflicts.length > 0 ? 1 : 0;
       }
 
       case "init": {
@@ -646,7 +669,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
-          ...(parsed.requireAgentWeave ? { requireAgentWeave: true } : {}),
+          ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
+            ? { requireAgentWeave: true }
+            : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
@@ -675,7 +700,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmSealXorKnownPlaintext:
             parsed.allowWasmSealXorKnownPlaintext ||
             loaded.config.allowWasmSealXorKnownPlaintext === true,
-          allowReleaseHygieneLeak: parsed.allowReleaseHygieneLeak,
+          allowReleaseHygieneLeak:
+            parsed.allowReleaseHygieneLeak ||
+            loaded.config.allowReleaseHygieneLeak === true,
           ...(parsed.output !== undefined ? { outputDirectory: parsed.output } : {}),
         });
         if (parsed.json) {
@@ -718,7 +745,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
-          ...(parsed.requireAgentWeave ? { requireAgentWeave: true } : {}),
+          ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
+            ? { requireAgentWeave: true }
+            : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
@@ -747,6 +776,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmSealXorKnownPlaintext:
             parsed.allowWasmSealXorKnownPlaintext ||
             loaded.config.allowWasmSealXorKnownPlaintext === true,
+          allowReleaseHygieneLeak:
+            parsed.allowReleaseHygieneLeak ||
+            loaded.config.allowReleaseHygieneLeak === true,
         });
         if (parsed.sarif) {
           console.log(
@@ -772,19 +804,33 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           intensity: argv.some((a) => a === "--intensity" || a.startsWith("--intensity="))
             ? parsed.intensity
             : (loaded.config.intensity ?? "bankrupt"),
-          allowPlaintextSeal: parsed.allowPlaintextSeal,
-          allowWasmClearParamCarriers: parsed.allowWasmClearParamCarriers,
-          allowJsAesUnwrap: parsed.allowJsAesUnwrap,
-          allowJsWasmHydrateDump: parsed.allowJsWasmHydrateDump,
-          allowWasmXorMaskSidecar: parsed.allowWasmXorMaskSidecar,
-          allowWasmSealXorKnownPlaintext: parsed.allowWasmSealXorKnownPlaintext,
+          allowPlaintextSeal:
+            parsed.allowPlaintextSeal || loaded.config.allowPlaintextSeal === true,
+          allowWasmClearParamCarriers:
+            parsed.allowWasmClearParamCarriers ||
+            loaded.config.allowWasmClearParamCarriers === true,
+          allowJsAesUnwrap:
+            parsed.allowJsAesUnwrap || loaded.config.allowJsAesUnwrap === true,
+          allowJsWasmHydrateDump:
+            parsed.allowJsWasmHydrateDump || loaded.config.allowJsWasmHydrateDump === true,
+          allowWasmXorMaskSidecar:
+            parsed.allowWasmXorMaskSidecar || loaded.config.allowWasmXorMaskSidecar === true,
+          allowWasmSealXorKnownPlaintext:
+            parsed.allowWasmSealXorKnownPlaintext ||
+            loaded.config.allowWasmSealXorKnownPlaintext === true,
           allowPlaintextString: parsed.allowPlaintextString,
           allowSinglePointIntegrity: parsed.allowSinglePointIntegrity,
           allowMissingBindRuntime: parsed.allowMissingBindRuntime,
-          allowReleaseHygieneLeak: parsed.allowReleaseHygieneLeak,
-          allowLaneIndependentGates: parsed.allowLaneIndependentGates,
-          allowPanelOfflineOracle: parsed.allowPanelOfflineOracle,
-          allowStablePanelDeriveAbi: parsed.allowStablePanelDeriveAbi,
+          allowReleaseHygieneLeak:
+            parsed.allowReleaseHygieneLeak || loaded.config.allowReleaseHygieneLeak === true,
+          allowLaneIndependentGates:
+            parsed.allowLaneIndependentGates ||
+            loaded.config.allowLaneIndependentGates === true,
+          allowPanelOfflineOracle:
+            parsed.allowPanelOfflineOracle || loaded.config.allowPanelOfflineOracle === true,
+          allowStablePanelDeriveAbi:
+            parsed.allowStablePanelDeriveAbi ||
+            loaded.config.allowStablePanelDeriveAbi === true,
           includeProtectTimeGates: true,
         });
         if (parsed.json) {
@@ -1093,6 +1139,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           allowWasmSealXorKnownPlaintext:
             parsed.allowWasmSealXorKnownPlaintext ||
             loaded.config.allowWasmSealXorKnownPlaintext === true,
+          allowReleaseHygieneLeak:
+            parsed.allowReleaseHygieneLeak ||
+            loaded.config.allowReleaseHygieneLeak === true,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));

@@ -51,7 +51,7 @@
 
 1. `resources/read` → `bla://directives/weave-decoy`（或读本文件）  
 2. `bla_weave_plan` → `{ "path": "<project-or-artifact>" }`，读取返回的 JSON 工单及每个目标的 `surgicalWorkorder`（`entryFunctions`、`sharedStateSlots`、`branchCandidates`、`agentRewriteRecipe`）  
-3. **Agent 源码级织入（Stage 2）**：按 `surgicalWorkorder` 在源码中编写共享同一运行时状态槽的领域诱饵函数并从真实入口调用，随后调用 **`bla_verify_weave`** 验证 6 项结构验收，确保 `overallPassed: true` 且 `agentActions` 清零  
+3. **Agent 源码级织入（Stage 2）**：按 `surgicalWorkorder` 在源码中编写共享同一运行时状态槽的领域诱饵函数并从真实入口调用，随后调用 **`bla_verify_weave`** 验证 7 项结构验收，确保 `overallPassed: true` 且 `agentActions` 清零  
 4. `bla_harden` / `bla_defend` / `bla_protect` 传 **`weave_decoys: true`**  
 5. JS：验证现有 AST 织入，**不要**再堆 sidecar 噪声  
 6. Python `.py`：确认客户 `def` 体内出现共享槽 touch / 诱饵 xref；**不要**用空 scare 模块填补  
@@ -64,7 +64,8 @@
 3. **共享状态变异** — 诱饵体与织入语句修改同一共享槽  
 4. **客户入口边** — 静态 xref 从客户入口到达诱饵（JS；Python 在 `weave_decoys:true` 下经由客户 def 织入）  
 5. **opaque 缠绕** — 删除守卫或诱饵调用会改变行为或验证结果  
-6. **抗独立层过滤** — 不能仅凭空体 / 同质 scare / 未引用启发式整层丢弃
+6. **抗独立层过滤** — 不能仅凭空体 / 同质 scare / 未引用启发式整层丢弃  
+7. **皇冠宝石状态纠缠（crown-jewel-entanglement）** — 鉴权/解锁等核心门控不得残留孤立布尔返回或零熵假织入（如 `expr & 0`、`x ^ x`），必须经由全输入累加器与共享状态槽纠缠
 
 ## 7. MCP 表面
 
@@ -72,7 +73,7 @@
 | :--- | :--- |
 | Resource `bla://directives/weave-decoy` | 返回本理论的可执行 Markdown |
 | Tool `bla_weave_plan` | 只读：分析路径 → `bla-weave-plan/v1` JSON（含 AST 级 `surgicalWorkorder`） |
-| Tool `bla_verify_weave` | 只读：校验源码/产物的 6 项织入验收 → `bla-weave-verify/v1` JSON（含 `weaveScore` 与 `agentActions`） |
+| Tool `bla_verify_weave` | 只读：校验源码/产物的 7 项织入验收 → `bla-weave-verify/v1` JSON（含 `weaveScore` 与 `agentActions`） |
 | `bla_harden` / `bla_defend` / `bla_protect` 参数 `weave_decoys` | **真实管线属性**：激活 Python 客户 def 结构织入（JS 始终 AST 织入）；非仅报告布尔标注 |
 | `.blarc` / `bla.config.json` 字段 `weaveDecoys` | 与 CLI `--weave-decoys` / MCP `weave_decoys` 同义；CLI 读取后与旗标做 OR |
 

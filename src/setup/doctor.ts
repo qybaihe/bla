@@ -210,7 +210,12 @@ export function probeLocalMcpHandshake(
     // Only allow trusted local Node/BLA invocations.
     const baseCmd = command.split(/[/\\]/).pop() ?? "";
     if (baseCmd === "npx" || baseCmd === "npx.cmd") {
-      if (!existsSync(distCli)) {
+      const joinedArgs = args.join(" ");
+      const targetsBlaPackage =
+        joinedArgs.includes(BLA_IDENTITY.packageName) ||
+        joinedArgs.includes(BLA_IDENTITY.packageAlias);
+      const invokesMcp = args.some((a) => a === "mcp" || a === "--mcp");
+      if (!targetsBlaPackage || !invokesMcp || !existsSync(distCli)) {
         return false;
       }
       execCmd = process.execPath;
