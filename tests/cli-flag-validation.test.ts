@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCliArgs, runCli } from "../src/cli.js";
+import { parseCliArgs, runCli, shouldSetProcessExitCode } from "../src/cli.js";
 
 describe("CLI flag validation", () => {
   it("rejects out-of-range --fail-under values", () => {
@@ -36,6 +36,29 @@ describe("CLI flag validation", () => {
   it("returns exit code 1 for invalid flags and 0 for --help", async () => {
     await expect(runCli(["--fail-under", "-1", "protect", "x"])).resolves.toBe(1);
     await expect(runCli(["--help", "--fail-under", "-1"])).resolves.toBe(0);
+  });
+
+  it("returns exit code 1 for invalid flags even when no subcommand is given", async () => {
+    await expect(runCli(["--bogus"])).resolves.toBe(1);
+    await expect(runCli(["--fail-under", "-1"])).resolves.toBe(1);
+    await expect(runCli([])).resolves.toBe(0);
+  });
+
+  it("rejects invalid flags passed to mcp before starting the server", async () => {
+    await expect(runCli(["mcp", "--bogus"])).resolves.toBe(1);
+  });
+
+  it("still surfaces a non-zero exit code on the mcp path", () => {
+    // The stdio server owns the process lifetime once it starts, so a zero exit
+    // is suppressed there — but a refused invocation must not be.
+    expect(shouldSetProcessExitCode(["node", "cli.js", "mcp"], 0)).toBe(false);
+    expect(shouldSetProcessExitCode(["node", "cli.js", "mcp", "--bogus"], 1)).toBe(true);
+    expect(shouldSetProcessExitCode(["node", "cli.js", "audit", "."], 1)).toBe(true);
+    expect(shouldSetProcessExitCode(["node", "cli.js", "audit", "."], 0)).toBe(true);
+  });
+
+  it("keeps --version short-circuiting ahead of flag validation", async () => {
+    await expect(runCli(["--version", "--bogus"])).resolves.toBe(0);
   });
 
   it("accepts --flag=value spellings for every value flag", () => {
