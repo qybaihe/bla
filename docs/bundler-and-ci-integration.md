@@ -10,11 +10,19 @@ export default defineConfig({
   plugins: [
     blaVitePlugin({
       intensity: "bankrupt",
-      enableHoneySourceMaps: true,
+      honeySourceMap: true,
     }),
   ],
 });
 ```
+
+Chunk-level protection is never silently partial. When a chunk fails to parse or transform and `failBuildOnError` is `false` (the default), that chunk ships **unshielded**, and the plugin prints one build-end summary listing every affected chunk:
+
+```text
+[bla-shield] rollup/vite: 2 chunk(s) shipped UNPROTECTED (transform failed, failBuildOnError is false): a.js, b.js. Fix the parse/transform errors or set failBuildOnError: true.
+```
+
+Set `failBuildOnError: true` to fail the build at the first bad chunk instead. The Rollup/Vite and esbuild plugins print the summary from their build-end hook; the Webpack plugin prints it at the end of the asset stage.
 
 ## 2. GitHub Actions Post-Build Hardening
 
