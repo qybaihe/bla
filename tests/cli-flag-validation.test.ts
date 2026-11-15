@@ -38,6 +38,23 @@ describe("CLI flag validation", () => {
     await expect(runCli(["--help", "--fail-under", "-1"])).resolves.toBe(0);
   });
 
+  it("rejects manifest flags on protect instead of silently ignoring them", async () => {
+    for (const argv of [
+      ["protect", "x.js", "--manifest"],
+      ["protect", "x.js", "--sign-manifest"],
+      ["protect", "x.js", "--manifest-key", "k.pem"],
+    ]) {
+      expect(parseCliArgs(argv).argErrors.join(" ")).toMatch(
+        /not supported by the protect command/,
+      );
+    }
+    await expect(runCli(["protect", "x.js", "--manifest"])).resolves.toBe(1);
+
+    // harden and defend do implement the manifest stage.
+    expect(parseCliArgs(["harden", "./dist", "--manifest"]).argErrors).toEqual([]);
+    expect(parseCliArgs(["defend", "./dist", "--manifest"]).argErrors).toEqual([]);
+  });
+
   it("accepts --flag=value spellings for every value flag", () => {
     const parsed = parseCliArgs([
       "defend",
