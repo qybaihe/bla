@@ -13,15 +13,15 @@
 **The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 14 showcase benchmark targets.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents_v3.4.0-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
-[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%235_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
 [![MCP Server](https://img.shields.io/badge/MCP-31_Defense_Tools-0ea5e9?style=for-the-badge)](docs/cli-and-mcp.md)
-[![Formats](https://img.shields.io/badge/Formats-19%2B_Artifacts-0284c7?style=for-the-badge)](#format-coverage)
+[![Formats](https://img.shields.io/badge/Formats-26_Artifacts-0284c7?style=for-the-badge)](#format-coverage)
 [![Counter-REA](https://img.shields.io/badge/Counter--REA-Empirically_Verified-1d4ed8?style=for-the-badge)](#empirical-results-vs-real-rea)
 [![MIT License](https://img.shields.io/badge/License-MIT-38bdf8?style=for-the-badge)](LICENSE)
 
 <p align="center">
   <a href="https://trendshift.io/repositories/323569" target="_blank" rel="noopener noreferrer">
-    <img src="docs/assets/bla-github-trending-badge.png" alt="GitHub Trending — #15 Repository Of The Day" width="270" height="54"/>
+    <img src="docs/assets/bla-github-trending-badge.png" alt="GitHub Trending — #5 Repository Of The Day" width="270" height="54"/>
   </a>
 </p>
 

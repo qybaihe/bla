@@ -178,10 +178,39 @@
             One MCP server and CLI for auditing, protecting, and verifying JavaScript, Electron, WebAssembly, Python, SQLite, AI Models, and Native Binaries against AI reverse-engineering workflows—while preserving 100% of original runtime behavior.
           </p>
 
-          <div class="command-box">
-            <code class="command-code">npx bla-agents@latest setup &amp;&amp; npx bla-agents@latest harden .</code>
+          <div class="command-switcher" role="tablist" aria-label="CLI Commands">
             <button
+              type="button"
+              class="cmd-tab active"
+              data-cmd="npx bla-agents@latest setup && npx bla-agents@latest harden ."
+              data-i18n="hero.cmd.harden"
+            >
+              One-Click Harden
+            </button>
+            <button
+              type="button"
+              class="cmd-tab"
+              data-cmd="npx bla-agents@latest setup --all-detected -y"
+              data-i18n="hero.cmd.setup"
+            >
+              MCP Agent Setup
+            </button>
+            <button
+              type="button"
+              class="cmd-tab"
+              data-cmd="npx bla-agents@latest benchmark"
+              data-i18n="hero.cmd.bench"
+            >
+              14-Target Benchmark
+            </button>
+          </div>
+
+          <div class="command-box">
+            <code class="command-code" id="hero-command-code">npx bla-agents@latest setup &amp;&amp; npx bla-agents@latest harden .</code>
+            <button
+              type="button"
               class="copy-btn"
+              id="hero-copy-btn"
               data-copy="npx bla-agents@latest setup && npx bla-agents@latest harden ."
               data-i18n="hero.copy"
             >
@@ -206,22 +235,60 @@
           </p>
 
           <div class="hero-metrics">
+            <a href="#trending" class="hero-metric-card hero-metric-trending">
+              <span class="hero-metric-num">#5</span>
+              <span class="hero-metric-label" data-i18n="hero.m1.label">GitHub Trending</span>
+            </a>
             <div class="hero-metric-card">
-              <span class="hero-metric-num">19</span>
-              <span class="hero-metric-label" data-i18n="formats.eyebrow">19 Supported Artifact Formats</span>
+              <span class="hero-metric-num">26</span>
+              <span class="hero-metric-label" data-i18n="hero.m2.label">Supported Artifact Formats</span>
+            </div>
+            <div class="hero-metric-card">
+              <span class="hero-metric-num">31</span>
+              <span class="hero-metric-label" data-i18n="hero.m3.label">MCP Defense Tools</span>
             </div>
             <div class="hero-metric-card">
               <span class="hero-metric-num">14 / 14</span>
-              <span class="hero-metric-label" data-i18n="nav.showcase">Benchmarks</span>
+              <span class="hero-metric-label" data-i18n="hero.m4.label">100% Runtime Equivalence</span>
             </div>
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">41.3× – 49.2×</span>
-              <span class="hero-metric-label" data-i18n="sim.blue.tokensLabel">Estimated Token Usage</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- GitHub Trending #5 Spotlight -->
+      <section class="trending-section" id="trending">
+        <div class="container">
+          <div class="trending-card">
+            <a
+              href="https://trendshift.io/repositories/323569"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="trending-badge-link"
+            >
+              <img
+                src="assets/bla-github-trending-badge.svg"
+                alt="GitHub Trending — #5 Repository Of The Day"
+                class="trending-badge-img"
+                width="280"
+                height="56"
+              />
+            </a>
+            <div class="trending-copy">
+              <span class="trending-eyebrow" data-i18n="trending.eyebrow">🏆 GitHub Trending Leaderboard</span>
+              <h2 class="trending-title" data-i18n="trending.title">We Hit #5 on GitHub Trending</h2>
+              <p class="trending-desc" data-i18n="trending.desc">
+                Ranked #5 Repository of the Day worldwide on GitHub Trending, verified by Trendshift.
+              </p>
             </div>
-            <div class="hero-metric-card">
-              <span class="hero-metric-num">100%</span>
-              <span class="hero-metric-label" data-i18n="ent.c3.tag">03 · Verify &amp; deliver</span>
-            </div>
+            <a
+              href="https://trendshift.io/repositories/323569"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn-secondary trending-cta"
+              data-i18n="trending.cta"
+            >
+              View on Trendshift ↗
+            </a>
           </div>
         </div>
       </section>
@@ -339,7 +406,7 @@
       <section class="section">
         <div class="container">
           <div class="section-header">
-            <div class="eyebrow" data-i18n="formats.eyebrow">19 Supported Artifact Formats</div>
+            <div class="eyebrow" data-i18n="formats.eyebrow">26 Supported Artifact Formats</div>
             <h2 class="section-title" data-i18n="formats.title">Full-Stack &amp; Binary Coverage, Zero External Dependencies</h2>
             <p class="section-lead" data-i18n="formats.lead">
               Every static, bytecode, database, model, and binary protection pass runs locally in Node.js 22.23.4+ / 24+.

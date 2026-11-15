@@ -533,6 +533,43 @@ pre code {
 }
 
 /* Clean Command Switcher in Hero */
+.command-switcher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 auto 12px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(9, 18, 38, 0.72);
+  border: 1px solid var(--border-subtle);
+}
+
+.cmd-tab {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cmd-tab:hover {
+  color: var(--text-primary);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.cmd-tab.active {
+  color: #ffffff;
+  background: rgba(59, 130, 246, 0.22);
+  border-color: rgba(96, 165, 250, 0.36);
+}
+
 .command-box {
   position: relative;
   max-width: 680px;
@@ -563,6 +600,13 @@ pre code {
   white-space: nowrap;
 }
 
+.command-code::before {
+  content: "$ ";
+  color: #38bdf8;
+  opacity: 0.75;
+  user-select: none;
+}
+
 .copy-btn {
   padding: 9px 16px;
   border-radius: 9px;
@@ -580,6 +624,12 @@ pre code {
 .copy-btn:hover {
   background: var(--bla-blue-deep);
   color: #ffffff;
+}
+
+.copy-btn.copied {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(52, 211, 153, 0.55);
+  color: #6ee7b7;
 }
 
 .hero-actions {
@@ -702,6 +752,20 @@ pre code {
   transform: translateY(-2px);
 }
 
+.hero-metric-trending {
+  border-color: rgba(167, 139, 250, 0.36);
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.16) 0%, rgba(9, 18, 38, 0.78) 100%);
+}
+
+.hero-metric-trending:hover {
+  border-color: rgba(196, 181, 253, 0.72);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.22);
+}
+
+.hero-metric-trending .hero-metric-num {
+  color: #ddd6fe;
+}
+
 .hero-metric-num {
   display: block;
   font-family: var(--font-mono);
@@ -718,6 +782,88 @@ pre code {
   font-size: 0.88rem;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+/* GitHub Trending #5 Spotlight Section */
+.trending-section {
+  padding: 36px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: radial-gradient(ellipse 75% 120% at 50% 50%, rgba(124, 58, 237, 0.09), transparent 72%);
+}
+
+.trending-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 28px 34px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(30, 27, 75, 0.45) 0%, rgba(14, 27, 56, 0.78) 52%, rgba(9, 18, 38, 0.92) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.36);
+  box-shadow:
+    0 18px 44px rgba(2, 6, 23, 0.48),
+    inset 0 1px 0 rgba(196, 181, 253, 0.18);
+}
+
+.trending-badge-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(124, 58, 237, 0.26);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.trending-badge-link:hover {
+  transform: translateY(-2px) scale(1.015);
+  box-shadow: 0 14px 34px rgba(124, 58, 237, 0.4);
+}
+
+.trending-badge-img {
+  display: block;
+  width: 268px;
+  height: auto;
+  border-radius: 12px;
+}
+
+.trending-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.trending-eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #c4b5fd;
+  margin-bottom: 6px;
+}
+
+.trending-title {
+  font-size: clamp(1.28rem, 2.2vw, 1.58rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.trending-desc {
+  font-size: 0.98rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.trending-cta {
+  flex-shrink: 0;
+  border-color: rgba(167, 139, 250, 0.42);
+}
+
+.trending-cta:hover {
+  border-color: #c4b5fd;
+  background: rgba(124, 58, 237, 0.22);
 }
 
 /* Generous Vertical Spacing so pages feel calm and uncrowded */
@@ -781,7 +927,9 @@ pre code {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 32px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.35);
+  box-shadow:
+    0 12px 32px rgba(2, 6, 23, 0.35),
+    inset 0 1px 0 rgba(148, 163, 184, 0.1);
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -1308,6 +1456,15 @@ pre.code-block {
   }
   .hero-metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .trending-card {
+    flex-direction: column;
+    text-align: center;
+    padding: 24px 20px;
+    gap: 18px;
+  }
+  .trending-cta {
+    width: 100%;
   }
   .section {
     padding: 64px 0;

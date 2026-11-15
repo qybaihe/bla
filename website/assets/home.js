@@ -399,6 +399,24 @@ function initHeroParticles() {
   });
 }
 
+function initCommandSwitcher() {
+  const cmdTabs = document.querySelectorAll("[data-cmd]");
+  const codeEl = document.getElementById("hero-command-code");
+  const copyBtn = document.getElementById("hero-copy-btn");
+  if (!cmdTabs.length || !codeEl || !copyBtn) return;
+
+  cmdTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const cmd = tab.getAttribute("data-cmd");
+      if (!cmd) return;
+      cmdTabs.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      codeEl.textContent = cmd;
+      copyBtn.setAttribute("data-copy", cmd);
+    });
+  });
+}
+
 function initHome() {
   const tabs = document.querySelectorAll("[data-scenario]");
   tabs.forEach((tab) => {
@@ -414,6 +432,7 @@ function initHome() {
   });
 
   renderScenario("electron");
+  initCommandSwitcher();
   initHeroParticles();
 }
 

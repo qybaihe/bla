@@ -514,8 +514,10 @@ function initMain() {
       try {
         await navigator.clipboard.writeText(text);
         btn.textContent = dict["hero.copied"] || "Copied ✓";
+        btn.classList.add("copied");
         setTimeout(() => {
           btn.textContent = dict["hero.copy"] || "Copy";
+          btn.classList.remove("copied");
         }, 1600);
       } catch {
         // Fallback no-op

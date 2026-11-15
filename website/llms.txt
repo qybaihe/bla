@@ -1,6 +1,6 @@
 # BLA (`bla-agents`) — Blind LLM Agents
 
-> Open-source adversarial Blue Defense MCP server, CLI, and bundler plugin toolkit engineered to protect software release artifacts against AI reverse-engineering agents (such as `morluto/rea`, Ghidra/IDA/Hopper MCP workflows, and autonomous coding agents). MIT licensed.
+> Open-source adversarial Blue Defense MCP server (31 tools), CLI, and bundler plugin toolkit engineered to protect 26 software release artifact formats against AI reverse-engineering agents (such as `morluto/rea`, Ghidra/IDA/Hopper MCP workflows, and autonomous coding agents). Ranked #5 Repository of the Day worldwide on GitHub Trending. MIT licensed.
 
 BLA shifts reverse-engineering economics via surgical token exhaustion, parameterized Mixed Boolean-Arithmetic (MBA) instruction substitution, shadow business-logic entanglement, and runtime integrity bindings (`selfSeal` + `sidecarEntangle`) — while preserving 100% runtime equivalence.
 

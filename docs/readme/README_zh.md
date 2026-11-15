@@ -13,15 +13,15 @@
 **开源的 Counter-REA 蓝队防御 MCP 服务与 CLI 工具 —— 专为保护软件发布产物免受 AI 逆向分析代理（`morluto/rea`、自动化反编译与大模型逆向流水线）还原而设计，同时保持 100% 运行时等价。**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents_v3.4.0-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
-[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%2315_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
-[![MCP Server](https://img.shields.io/badge/MCP-25_项防御工具-0ea5e9?style=for-the-badge)](../cli-and-mcp.md)
-[![Formats](https://img.shields.io/badge/支持格式-19%2B_种构建产物-0284c7?style=for-the-badge)](#支持的产物格式与覆盖矩阵)
+[![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%235_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
+[![MCP Server](https://img.shields.io/badge/MCP-31_项防御工具-0ea5e9?style=for-the-badge)](../cli-and-mcp.md)
+[![Formats](https://img.shields.io/badge/支持格式-26_种构建产物-0284c7?style=for-the-badge)](#支持的产物格式与覆盖矩阵)
 [![Counter-REA](https://img.shields.io/badge/Counter--REA-真机实测验证-1d4ed8?style=for-the-badge)](#真机对抗实测结果vs-真实-rea)
 [![MIT License](https://img.shields.io/badge/License-MIT-38bdf8?style=for-the-badge)](../../LICENSE)
 
 <p align="center">
   <a href="https://trendshift.io/repositories/323569" target="_blank" rel="noopener noreferrer">
-    <img src="../assets/bla-github-trending-badge.png" alt="GitHub Trending — 当日趋势榜第 15 名" width="270" height="54"/>
+    <img src="../assets/bla-github-trending-badge.png" alt="GitHub Trending — 当日趋势榜第 5 名" width="270" height="54"/>
   </a>
 </p>
 
@@ -91,7 +91,7 @@ npx bla-agents setup
 使用 BLA 对当前项目进行防逆向闭环加固
 ```
 
-宿主 Agent 将自动编排 BLA 的 25 个 MCP 工具（`bla_weave_plan` → 源码级状态缠绕与字符串加密 → `bla_verify_weave` → `bla_harden` → `bla_verify`），从源码结构到最终产物完成全链路防护。
+宿主 Agent 将自动编排 BLA 的 31 个 MCP 工具（`bla_weave_plan` → 源码级状态缠绕与字符串加密 → `bla_verify_weave` → `bla_harden` → `bla_verify`），从源码结构到最终产物完成全链路防护。
 
 ### 方式三：构建打包插件（Vite / Rollup / Webpack / esbuild）
 在前端或全栈构建阶段自动保护 JS 分包、注入 VLQ v3 诱饵 SourceMap 并加固 `.wasm` 模块：
