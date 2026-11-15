@@ -1160,7 +1160,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_encrypt_strings",
     description:
-      "Encrypt sensitive string literals in panel.html / license.cjs with a seed-derived XOR keystream and inject a runtime decrypt stub. Reuses SeededPrng.derive(\"string.encrypt\") — never JS AES wrap-key (that footgun is refused by bla_lint_js_aes_unwrap). Honesty: raises static grep cost only; prove equivalence with verify / CrackMe / REA. Writes outputs (or dry_run).",
+      "Encrypt sensitive string literals in panel.html / license.cjs with a seed-derived XOR keystream and inject a runtime decrypt stub. Reuses SeededPrng.derive(\"string.encrypt\") — never JS AES wrap-key (that footgun is refused by bla_lint_js_aes_unwrap). Honesty: raises static grep cost only; prove equivalence with verify / CrackMe / REA. Writes outputs (or dry_run); an in-place run refuses until confirm_overwrite: true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1183,6 +1183,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         dry_run: {
           type: "boolean",
           description: "Report only; write nothing",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Required when the run would rewrite an existing file in place. Re-run with true to confirm.",
         },
       },
       required: ["path", "seed"],
@@ -1212,7 +1217,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_bind_scope",
     description:
-      "Optional honest code-lock: write a PUBLIC bind-scope.json (domains + validity window) and inject a deterministic runtime check into license.cjs/entry. Default OFF. Never a covert backdoor — public:true is mandatory; hidden fields refuse. Host for Node comes from BLA_BIND_HOST (or location.hostname in browsers).",
+      "Optional honest code-lock: write a PUBLIC bind-scope.json (domains + validity window) and inject a deterministic runtime check into license.cjs/entry. Default OFF. Never a covert backdoor — public:true is mandatory; hidden fields refuse. Host for Node comes from BLA_BIND_HOST (or location.hostname in browsers). In-place runs refuse until confirm_overwrite: true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1244,6 +1249,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         dry_run: {
           type: "boolean",
           description: "Report only; write nothing",
+        },
+        confirm_overwrite: {
+          type: "boolean",
+          description:
+            "Required when the run would rewrite an existing entry or contract. Re-run with true to confirm.",
         },
       },
       required: ["directory"],
@@ -1418,6 +1428,22 @@ function writeReceipt(
   confirmed: boolean,
 ): Record<string, unknown> {
   return { status: "written", wrote: outputs, overwrote: overwritten, confirmed };
+}
+
+/**
+ * Planned write targets for `bla_bind_scope`, resolved with a zero-write
+ * dry run so the overwrite gate can name the exact files before anything is
+ * mutated. An invalid contract returns `[]` here so the real run surfaces the
+ * contract error instead of a misleading confirmation request.
+ */
+function plannedBindScopeWrites(
+  options: Parameters<typeof applyBindScope>[0],
+): string[] {
+  const preview = applyBindScope({ ...options, dryRun: true });
+  if (preview.status === "error") return [];
+  return [preview.contractPath, preview.entryPath].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
 }
 
 function attachArtifactRunEvidence(
@@ -2543,7 +2569,7 @@ export async function handleMcpRequest(
             refused = status === "fail" || status === "error";
           }
         } else if (name === "bla_encrypt_strings") {
-          payload = encryptStrings({
+          const encryptArgs = {
             path: args.path as string,
             seed: args.seed as string,
             ...(typeof args.out_dir === "string" && args.out_dir.trim().length > 0
@@ -2552,11 +2578,28 @@ export async function handleMcpRequest(
             ...(typeof args.include_urls === "boolean"
               ? { includeUrls: args.include_urls as boolean }
               : {}),
-            dryRun: args.dry_run === true,
-          });
-          {
-            const status = (payload as { status: string }).status;
-            refused = status === "error";
+          };
+          const dryRun = args.dry_run === true;
+          const clobbered = dryRun
+            ? []
+            : existingPaths(
+                encryptStrings({ ...encryptArgs, dryRun: true })
+                  .files.filter((f) => f.encryptedCount > 0)
+                  .map((f) => f.outPath),
+              );
+          if (clobbered.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, clobbered);
+          } else {
+            const report = encryptStrings({ ...encryptArgs, dryRun });
+            const written = report.files
+              .filter((f) => f.written)
+              .map((f) => f.outPath);
+            payload =
+              written.length > 0
+                ? { ...report, writeReceipt: writeReceipt(written, clobbered, confirmed) }
+                : report;
+            refused = report.status === "error";
           }
         } else if (name === "bla_lint_plaintext_secrets") {
           const allow = args.allow_plaintext_string === true;
@@ -2581,7 +2624,7 @@ export async function handleMcpRequest(
           const domains = Array.isArray(args.domains)
             ? args.domains.filter((d) => typeof d === "string")
             : undefined;
-          payload = applyBindScope({
+          const bindArgs = {
             directory: args.directory as string,
             ...(domains && domains.length > 0 ? { domains } : {}),
             ...(typeof args.valid_from === "string" && args.valid_from.trim()
@@ -2596,11 +2639,24 @@ export async function handleMcpRequest(
             ...(typeof args.out_dir === "string" && args.out_dir.trim()
               ? { outDir: args.out_dir as string }
               : {}),
-            dryRun: args.dry_run === true,
-          });
-          {
-            const status = (payload as { status: string }).status;
-            refused = status === "error";
+          };
+          const dryRun = args.dry_run === true;
+          const clobbered = dryRun
+            ? []
+            : existingPaths(plannedBindScopeWrites(bindArgs));
+          if (clobbered.length > 0 && !confirmed) {
+            refused = true;
+            payload = confirmationRequiredPayload(name, clobbered);
+          } else {
+            const report = applyBindScope({ ...bindArgs, dryRun });
+            const written = report.written
+              ? [report.contractPath, ...(report.entryPath ? [report.entryPath] : [])]
+              : [];
+            payload =
+              written.length > 0
+                ? { ...report, writeReceipt: writeReceipt(written, clobbered, confirmed) }
+                : report;
+            refused = report.status === "error";
           }
         } else if (name === "bla_lint_bind_scope") {
           const allow = args.allow_missing_bind_runtime === true;

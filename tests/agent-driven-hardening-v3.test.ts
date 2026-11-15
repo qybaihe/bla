@@ -847,6 +847,7 @@ async def verify_access_policy(
         arguments: {
           path: dir,
           seed: "dogfood-seed-2026",
+          confirm_overwrite: true,
         },
       },
     });
