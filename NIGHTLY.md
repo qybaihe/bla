@@ -1,5 +1,45 @@
 # BLA nightly development log
 
+## 2026-11-15 ~America/Los_Angeles / ~2026-11-16 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `1ba93b460` → `f916b3ecf` (**+320** commits). Dirty
+  `third_party/*` deletions were left untouched.
+- No new 1:1 trip-able densify constants that beat the queued WASM JS-loader hook.
+- Catalog-only / honesty notes (not implemented as new densify counters):
+  - REA #11144 / #11181: `DEFAULT_JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES = 524_288`
+    / `MAXIMUM_JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES = 8_388_608` (recoverable
+    runtime setting `javascript.member_mutation_alias_states`). Planting enough
+    alias-state mutations to trip the default would bloat and risk perturbing
+    real member-mutation behavior; catalogued in `REA_INTERNAL_LIMITS`.
+  - New tool/reply budgets `REA_BRIDGE_MAX_REPLY_BYTES` (default 256 MiB) and
+    `REA_CAPTURE_PACKET_JSON_EXPANSION_BYTES` (default 128 GiB) — not plantable
+    in a protected program.
+  - `APK_SIGNING_BLOCK_MAX_PAIRS = 4096` (admission cap on signing-block pairs)
+    — not a densify trip target (stuffing the signing block would break
+    signature / installer validity).
+
+### Done tonight
+- Optional JS-loader hook for WASM `bla.sidecar.v1` custom-section verification
+  (`computeWasmSidecarCodeIdentity` / `generateSidecarWasmLoaderSnippet` /
+  `prependWasmSidecarLoaderHook` / `entangleWasmLoaderWithSidecars`; marker
+  `_installWasmSidecarLoaderHook`; wraps `WebAssembly.instantiate` /
+  `compile` / `instantiateStreaming`; identity is SHA-256 of the module with
+  the note stripped so a strip still matches and fails closed; unrelated WASM
+  passes through). Host-opt-in snippet — the hook runs only when the customer
+  prepends it into the loader that instantiates the module. Vector
+  `wasm-sidecar-entangle` reserved, not recorded; defenseScore gap
+  `wasm-sidecar-host-verify-only` soft-cap 93 kept; default OFF via existing
+  `sidecarEntangle`. Export surface and function bodies stay unchanged.
+- Gates: build OK, tests **907 passed / 4 skipped**, benchmark **14/14** runtime-equivalent.
+
+### Next step (following night)
+1. Auto-wire the WASM JS-loader hook into a known customer loader path (only
+   then record `wasm-sidecar-entangle` / clear `wasm-sidecar-host-verify-only`).
+2. `.pyc` import-time hook; GGUF / DEX / Safetensors / SQLite load-time hooks.
+3. MCP one-click polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-14 ~America/Los_Angeles / Asia/Shanghai
 
 ### REA delta

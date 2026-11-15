@@ -6,7 +6,11 @@
  * strip⇒fail rewrite is available via `bindSidecarEntanglement` /
  * `generateSidecarJsPreamble` / `generateSidecarPythonPreamble` when
  * `sidecarEntangle` is set; WASM uses a `bla.sidecar.v1` custom-section note
- * plus host-side `verifyWasmSidecarCustomSection`; Bun standalone plants a
+ * plus host-side `verifyWasmSidecarCustomSection` and an optional host JS
+ * loader hook (`generateSidecarWasmLoaderSnippet`) that wraps
+ * `WebAssembly.instantiate` / `compile` / `instantiateStreaming` so stripping
+ * the custom section fails closed at load time when the host prepends it;
+ * Bun standalone plants a
  * sibling `.bla-sidecar.v1.json` companion note (byte-exact binary preserved)
  * verified by `verifyBunSidecarCompanionNote`; Electron ASAR plants an in-archive
  * `.bla/sidecar.v1.json` note verified by `verifyAsarSidecarArchiveNote`, plus an
@@ -1149,6 +1153,358 @@ export function verifyWasmSidecarCustomSection(
     measuredHex: measured.hex,
     measuredU32: measured.u32,
     softFold: false,
+  };
+}
+
+/**
+ * SHA-256 hex of a WASM binary with every `bla.sidecar.v1` custom section
+ * removed. Used by the optional JS loader hook to recognize the protected
+ * module after an adversary strips the note (non-custom sections stay
+ * identical, so the hook can still fail closed).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function computeWasmSidecarCodeIdentity(bytes: Uint8Array): string {
+  const stripped = stripWasmSidecarCustomSection(bytes);
+  return createHash("sha256").update(stripped).digest("hex");
+}
+
+/** Idempotence marker prepended with the optional WASM JS-loader hook. */
+export const WASM_SIDECAR_LOADER_MARKER = "_installWasmSidecarLoaderHook" as const;
+
+export interface SidecarWasmLoaderInjectOptions {
+  /**
+   * SHA-256 hex (or list) of the protected module with `bla.sidecar.v1`
+   * stripped. Instantiated modules whose identity matches MUST present a
+   * valid custom-section note; other modules pass through unchanged.
+   */
+  readonly codeIdentityHex: string | readonly string[];
+  readonly carrier?: SidecarJsCarrier;
+  readonly bindingName?: string;
+  /**
+   * Optional absolute directory used to resolve relative sidecar paths from
+   * the note. When omitted, the hook uses the loader file's directory
+   * (`__dirname` / `import.meta.url`).
+   */
+  readonly baseDir?: string;
+}
+
+export interface SidecarWasmLoaderInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly codeIdentityHexes: readonly string[];
+  readonly sidecarCount: 0;
+}
+
+function normalizeWasmCodeIdentity(hex: string): string {
+  const value = hex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("codeIdentityHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  return value;
+}
+
+/**
+ * Emit a self-contained host JS snippet that wraps `WebAssembly.instantiate`,
+ * `WebAssembly.compile`, and `WebAssembly.instantiateStreaming` (when present)
+ * so a protected module whose `bla.sidecar.v1` custom section is missing or
+ * whose sibling sidecars were stripped/altered fails closed at load time.
+ *
+ * Unrelated WASM modules (identity mismatch) pass through. Export surface and
+ * function bodies of the protected module are not rewritten. The hook is
+ * host-opt-in: it runs only when the customer prepends or evals this snippet
+ * in the loader that actually instantiates the module. Until that happens,
+ * `wasm-sidecar-host-verify-only` stays in place and `wasm-sidecar-entangle`
+ * is not recorded.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarWasmLoaderSnippet(
+  options: SidecarWasmLoaderInjectOptions,
+): SidecarWasmLoaderInjectResult {
+  const raw = options.codeIdentityHex;
+  const list = (Array.isArray(raw) ? raw : [raw]).map((hex) =>
+    normalizeWasmCodeIdentity(hex),
+  );
+  if (list.length === 0) {
+    throw new Error("codeIdentityHex must contain at least one digest");
+  }
+  const tag = list[0]!.slice(0, 8);
+  const bindingName = options.bindingName ?? `${WASM_SIDECAR_LOADER_MARKER}_${tag}`;
+  const isEsm = options.carrier === "module";
+  const reqHelperAlias = `_resolveWasmLoaderRequire_${tag}`;
+  const idsLiteral = JSON.stringify(list);
+  const sectionLiteral = JSON.stringify(WASM_SIDECAR_SECTION_NAME);
+  const schemaLiteral = JSON.stringify(SIDECAR_ENTANGLE_SCHEMA);
+  const markerLiteral = JSON.stringify(WASM_SIDECAR_LOADER_MARKER);
+  const baseDirLiteral =
+    typeof options.baseDir === "string" && options.baseDir.length > 0
+      ? JSON.stringify(options.baseDir)
+      : "null";
+
+  const lines: string[] = [];
+  if (isEsm) {
+    lines.push(`import { createRequire as ${reqHelperAlias} } from "node:module";`);
+  }
+  lines.push(`(function(){`);
+  lines.push(`  var ${WASM_SIDECAR_LOADER_MARKER} = true;`);
+  lines.push(`  var ${bindingName} = { ok: false };`);
+  lines.push(`  var __ids = ${idsLiteral};`);
+  lines.push(`  var __idSet = Object.create(null);`);
+  lines.push(`  for (var __i = 0; __i < __ids.length; __i++) __idSet[__ids[__i]] = true;`);
+  lines.push(`  var __section = ${sectionLiteral};`);
+  lines.push(`  var __schema = ${schemaLiteral};`);
+  lines.push(`  var __marker = ${markerLiteral};`);
+  lines.push(`  var __bakedBaseDir = ${baseDirLiteral};`);
+  if (isEsm) {
+    lines.push(`  var _req = ${reqHelperAlias}(import.meta.url);`);
+    lines.push(`  var _c = _req("node:crypto");`);
+    lines.push(`  var _fs = _req("node:fs");`);
+    lines.push(`  var _path = _req("node:path");`);
+    lines.push(
+      `  var __loaderDir = _path.dirname(_req("node:url").fileURLToPath(import.meta.url));`,
+    );
+  } else {
+    lines.push(`  var _c = require("node:crypto");`);
+    lines.push(`  var _fs = require("node:fs");`);
+    lines.push(`  var _path = require("node:path");`);
+    lines.push(
+      `  var __loaderDir = (typeof __dirname === "string" ? __dirname : ".");`,
+    );
+  }
+  lines.push(`  function __uleb(bytes, offset) {`);
+  lines.push(`    var value = 0, shift = 0, i = offset;`);
+  lines.push(`    while (i < bytes.length) {`);
+  lines.push(`      var b = bytes[i++];`);
+  lines.push(`      value = (value | ((b & 0x7f) << shift)) >>> 0;`);
+  lines.push(`      if ((b & 0x80) === 0) return { value: value, next: i };`);
+  lines.push(`      shift += 7;`);
+  lines.push(`      if (shift > 35) break;`);
+  lines.push(`    }`);
+  lines.push(`    return null;`);
+  lines.push(`  }`);
+  lines.push(`  function __asU8(src) {`);
+  lines.push(`    if (!src) return null;`);
+  lines.push(`    if (src instanceof Uint8Array) return src;`);
+  lines.push(`    if (src instanceof ArrayBuffer) return new Uint8Array(src);`);
+  lines.push(`    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(src)) {`);
+  lines.push(`      return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);`);
+  lines.push(`    }`);
+  lines.push(`    return null;`);
+  lines.push(`  }`);
+  lines.push(`  function __concat(chunks) {`);
+  lines.push(`    var total = 0, i;`);
+  lines.push(`    for (i = 0; i < chunks.length; i++) total += chunks[i].length;`);
+  lines.push(`    var out = new Uint8Array(total), o = 0;`);
+  lines.push(`    for (i = 0; i < chunks.length; i++) { out.set(chunks[i], o); o += chunks[i].length; }`);
+  lines.push(`    return out;`);
+  lines.push(`  }`);
+  lines.push(`  function __strip(bytes) {`);
+  lines.push(`    if (bytes.length < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return bytes;`);
+  lines.push(`    var chunks = [bytes.subarray(0, 8)];`);
+  lines.push(`    var offset = 8;`);
+  lines.push(`    while (offset < bytes.length) {`);
+  lines.push(`      var start = offset;`);
+  lines.push(`      var sectionId = bytes[offset++];`);
+  lines.push(`      var header = __uleb(bytes, offset);`);
+  lines.push(`      if (!header) { chunks.push(bytes.subarray(start)); break; }`);
+  lines.push(`      var sectionEnd = header.next + header.value;`);
+  lines.push(`      if (sectionEnd > bytes.length) { chunks.push(bytes.subarray(start)); break; }`);
+  lines.push(`      var drop = false;`);
+  lines.push(`      if (sectionId === 0) {`);
+  lines.push(`        var payload = bytes.subarray(header.next, sectionEnd);`);
+  lines.push(`        var nameHdr = __uleb(payload, 0);`);
+  lines.push(`        if (nameHdr && nameHdr.next + nameHdr.value <= payload.length) {`);
+  lines.push(`          var name = new TextDecoder("utf-8").decode(payload.subarray(nameHdr.next, nameHdr.next + nameHdr.value));`);
+  lines.push(`          if (name === __section) drop = true;`);
+  lines.push(`        }`);
+  lines.push(`      }`);
+  lines.push(`      if (!drop) chunks.push(bytes.subarray(start, sectionEnd));`);
+  lines.push(`      offset = sectionEnd;`);
+  lines.push(`    }`);
+  lines.push(`    return __concat(chunks);`);
+  lines.push(`  }`);
+  lines.push(`  function __readNote(bytes) {`);
+  lines.push(`    if (bytes.length < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return null;`);
+  lines.push(`    var offset = 8;`);
+  lines.push(`    while (offset < bytes.length) {`);
+  lines.push(`      var sectionId = bytes[offset++];`);
+  lines.push(`      var header = __uleb(bytes, offset);`);
+  lines.push(`      if (!header) break;`);
+  lines.push(`      var sectionEnd = header.next + header.value;`);
+  lines.push(`      if (sectionEnd > bytes.length) break;`);
+  lines.push(`      if (sectionId === 0) {`);
+  lines.push(`        var payload = bytes.subarray(header.next, sectionEnd);`);
+  lines.push(`        var nameHdr = __uleb(payload, 0);`);
+  lines.push(`        if (nameHdr && nameHdr.next + nameHdr.value <= payload.length) {`);
+  lines.push(`          var name = new TextDecoder("utf-8").decode(payload.subarray(nameHdr.next, nameHdr.next + nameHdr.value));`);
+  lines.push(`          if (name === __section) return new TextDecoder("utf-8").decode(payload.subarray(nameHdr.next + nameHdr.value));`);
+  lines.push(`        }`);
+  lines.push(`      }`);
+  lines.push(`      offset = sectionEnd;`);
+  lines.push(`    }`);
+  lines.push(`    return null;`);
+  lines.push(`  }`);
+  lines.push(`  function __sha256Hex(bytes) {`);
+  lines.push(`    return _c.createHash("sha256").update(Buffer.from(bytes)).digest("hex");`);
+  lines.push(`  }`);
+  lines.push(`  function __identity(bytes) {`);
+  lines.push(`    return __sha256Hex(__strip(bytes));`);
+  lines.push(`  }`);
+  lines.push(`  function __resolveBase(noteBase) {`);
+  lines.push(`    if (typeof __bakedBaseDir === "string" && __bakedBaseDir.length > 0) return __bakedBaseDir;`);
+  lines.push(`    if (typeof noteBase === "string" && noteBase.length > 0) return noteBase;`);
+  lines.push(`    return __loaderDir;`);
+  lines.push(`  }`);
+  lines.push(`  function __readSidecar(label, baseDir) {`);
+  lines.push(`    var abs = label;`);
+  lines.push(`    try { if (!_path.isAbsolute(abs) && typeof baseDir === "string") abs = _path.join(baseDir, label); } catch (_eJoin) {}`);
+  lines.push(`    try { return _fs.readFileSync(abs); } catch (_eRead) { return Buffer.from("missing:" + String(label), "utf8"); }`);
+  lines.push(`  }`);
+  lines.push(`  function __verify(bytes) {`);
+  lines.push(`    var raw = __readNote(bytes);`);
+  lines.push(`    if (typeof raw !== "string") return { ok: false, reason: "bla.sidecar.v1 custom section missing or unreadable" };`);
+  lines.push(`    var note;`);
+  lines.push(`    try { note = JSON.parse(raw); } catch (_eJson) { return { ok: false, reason: "bla.sidecar.v1 note is not valid JSON" }; }`);
+  lines.push(`    if (!note || note.schema !== __schema || note.section !== __section || typeof note.digest !== "string" || !/^[0-9a-f]{64}$/i.test(note.digest)) {`);
+  lines.push(`      return { ok: false, reason: "bla.sidecar.v1 note malformed" };`);
+  lines.push(`    }`);
+  lines.push(`    var digest = String(note.digest).toLowerCase();`);
+  lines.push(`    var seedTag = typeof note.seedTag === "string" ? note.seedTag : "bla-sidecar-v1";`);
+  lines.push(`    var entryPath = typeof note.entryPath === "string" ? note.entryPath : "";`);
+  lines.push(`    var sidecarPaths = Array.isArray(note.sidecarPaths) ? note.sidecarPaths.filter(function(p){ return typeof p === "string" && p.length > 0; }) : [];`);
+  lines.push(`    var softFold = note.softFold === true;`);
+  lines.push(`    var baseDir = __resolveBase();`);
+  lines.push(`    var h = _c.createHash("sha256");`);
+  lines.push(`    h.update(entryPath);`);
+  lines.push(`    h.update(String.fromCharCode(0));`);
+  lines.push(`    for (var i = 0; i < sidecarPaths.length; i++) {`);
+  lines.push(`      var sp = sidecarPaths[i];`);
+  lines.push(`      h.update(sp);`);
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(`      h.update(__readSidecar(sp, baseDir));`);
+  lines.push(`      h.update(String.fromCharCode(0));`);
+  lines.push(`    }`);
+  lines.push(`    h.update(seedTag);`);
+  lines.push(`    var hex = h.digest("hex");`);
+  lines.push(`    if (hex === digest) return { ok: true, softFold: softFold };`);
+  lines.push(`    return { ok: false, reason: softFold ? "integrity binding mismatch (soft-fold)" : "integrity binding mismatch", softFold: softFold };`);
+  lines.push(`  }`);
+  lines.push(`  function __enforce(src) {`);
+  lines.push(`    var bytes = __asU8(src);`);
+  lines.push(`    if (!bytes) return;`);
+  lines.push(`    var id = __identity(bytes);`);
+  lines.push(`    if (!__idSet[id]) return;`);
+  lines.push(`    var result = __verify(bytes);`);
+  lines.push(`    ${bindingName} = result;`);
+  lines.push(`    if (result.ok) return;`);
+  lines.push(`    if (result.softFold) return;`);
+  lines.push(`    throw new Error(result.reason || "integrity binding mismatch");`);
+  lines.push(`  }`);
+  lines.push(`  var _instantiate = WebAssembly.instantiate;`);
+  lines.push(`  WebAssembly.instantiate = function(first, imports) {`);
+  lines.push(`    if (first instanceof WebAssembly.Module) return _instantiate(first, imports);`);
+  lines.push(`    var bytes = __asU8(first);`);
+  lines.push(`    return Promise.resolve().then(function(){`);
+  lines.push(`      if (bytes) __enforce(bytes);`);
+  lines.push(`      return _instantiate(first, imports);`);
+  lines.push(`    });`);
+  lines.push(`  };`);
+  lines.push(`  var _compile = WebAssembly.compile;`);
+  lines.push(`  WebAssembly.compile = function(source) {`);
+  lines.push(`    var bytes = __asU8(source);`);
+  lines.push(`    return Promise.resolve().then(function(){`);
+  lines.push(`      if (bytes) __enforce(bytes);`);
+  lines.push(`      return _compile(source);`);
+  lines.push(`    });`);
+  lines.push(`  };`);
+  lines.push(`  if (typeof WebAssembly.instantiateStreaming === "function") {`);
+  lines.push(`    var _is = WebAssembly.instantiateStreaming;`);
+  lines.push(`    WebAssembly.instantiateStreaming = function(source, imports) {`);
+  lines.push(`      return Promise.resolve(source).then(function(resolved) {`);
+  lines.push(`        if (resolved && typeof resolved.arrayBuffer === "function") {`);
+  lines.push(`          return resolved.arrayBuffer().then(function(ab) {`);
+  lines.push(`            __enforce(ab);`);
+  lines.push(`            return _instantiate(ab, imports);`);
+  lines.push(`          });`);
+  lines.push(`        }`);
+  lines.push(`        return _is(source, imports);`);
+  lines.push(`      });`);
+  lines.push(`    };`);
+  lines.push(`  }`);
+  lines.push(`  if (typeof WebAssembly.compileStreaming === "function") {`);
+  lines.push(`    var _cs = WebAssembly.compileStreaming;`);
+  lines.push(`    WebAssembly.compileStreaming = function(source) {`);
+  lines.push(`      return Promise.resolve(source).then(function(resolved) {`);
+  lines.push(`        if (resolved && typeof resolved.arrayBuffer === "function") {`);
+  lines.push(`          return resolved.arrayBuffer().then(function(ab) {`);
+  lines.push(`            __enforce(ab);`);
+  lines.push(`            return _compile(ab);`);
+  lines.push(`          });`);
+  lines.push(`        }`);
+  lines.push(`        return _cs(source);`);
+  lines.push(`      });`);
+  lines.push(`    };`);
+  lines.push(`  }`);
+  lines.push(`  ${bindingName} = { ok: true, installed: true, marker: __marker };`);
+  lines.push(`})();`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    codeIdentityHexes: list,
+    sidecarCount: 0,
+  };
+}
+
+/**
+ * Prepend a WASM JS-loader hook after shebang / `"use strict"`, idempotent
+ * when {@link WASM_SIDECAR_LOADER_MARKER} is already present.
+ */
+export function prependWasmSidecarLoaderHook(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(WASM_SIDECAR_LOADER_MARKER)) return entrySource;
+  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
+  const shebang = shebangMatch ? shebangMatch[0] : "";
+  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
+  const isEsmPreamble = /^\s*import\s/.test(preamble);
+  const strictMatch = !isEsmPreamble
+    ? afterShebang.match(/^["']use strict["'];?\r?\n/)
+    : null;
+  const strict = strictMatch ? strictMatch[0] : "";
+  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
+  return `${shebang}${strict}${preamble}\n${body}`;
+}
+
+/**
+ * Convenience: build a JS-loader hook from a (possibly already bound) WASM
+ * binary and prepend it onto an existing loader source. Returns the original
+ * source unchanged when the marker is already present.
+ */
+export function entangleWasmLoaderWithSidecars(options: {
+  readonly loaderSource: string;
+  readonly wasmBytes: Uint8Array;
+  readonly carrier?: SidecarJsCarrier;
+  readonly baseDir?: string;
+}): {
+  readonly code: string;
+  readonly inject: SidecarWasmLoaderInjectResult;
+  readonly codeIdentityHex: string;
+} {
+  const codeIdentityHex = computeWasmSidecarCodeIdentity(options.wasmBytes);
+  const inject = generateSidecarWasmLoaderSnippet({
+    codeIdentityHex,
+    carrier: options.carrier,
+    baseDir: options.baseDir,
+  });
+  return {
+    code: prependWasmSidecarLoaderHook(options.loaderSource, inject.preamble),
+    inject,
+    codeIdentityHex,
   };
 }
 

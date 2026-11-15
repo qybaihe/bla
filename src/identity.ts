@@ -256,4 +256,16 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
    */
   ANDROID_NATIVE_SPLIT_TYPES: 64,
   ANDROID_NATIVE_SPLIT_TYPE_CHARS: 256,
+  /**
+   * JavaScript member-mutation work allowance (`javascriptSemanticWorkAllowance.ts`,
+   * REA #11144 / #11181). Recoverable analysis budget (runtime setting
+   * `javascript.member_mutation_alias_states`, env
+   * `REA_JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES`). Honesty catalog only —
+   * not a densify trip target: planting enough alias-state mutations to
+   * exceed the default 524,288 allowance would bloat and risk perturbing
+   * real member-mutation behavior of the protected program, and the caller
+   * can raise the cap to 8,388,608.
+   */
+  JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES: 524_288,
+  JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES_MAX: 8_388_608,
 });

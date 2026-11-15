@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.1] — 2026-11-15
+
+Patch adding an optional **JS-loader hook** for WASM `bla.sidecar.v1` custom-section verification, plus `REA_INTERNAL_LIMITS` catalog hygiene for REA's new JavaScript member-mutation work allowance.
+
+### Added
+- **Optional WASM JS-loader hook (`generateSidecarWasmLoaderSnippet` / `prependWasmSidecarLoaderHook` / `entangleWasmLoaderWithSidecars` / `computeWasmSidecarCodeIdentity`, `src/shields/runtime/sidecar-entangle.ts`):** Emits a self-contained host JS snippet that wraps `WebAssembly.instantiate`, `WebAssembly.compile`, and `WebAssembly.instantiateStreaming`. When the instantiated module's code identity (SHA-256 of the binary with `bla.sidecar.v1` stripped) matches a protected module, the hook re-runs the same sidecars-mode digest as `verifyWasmSidecarCustomSection` and fails closed if the custom section is missing or sibling sidecars were stripped/altered. Unrelated WASM modules pass through unchanged. Export surface and function bodies stay intact. Host-opt-in: the hook runs only when the customer prepends or evals the snippet in the loader that actually instantiates the module. Vector `wasm-sidecar-entangle` stays reserved, not recorded; defenseScore gap `wasm-sidecar-host-verify-only` (soft-cap 93) remains until a protect/harden path actually injects the hook. Default still OFF via existing `sidecarEntangle`.
+- **`REA_INTERNAL_LIMITS` catalog hygiene:** `JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES` (524,288) / `JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES_MAX` (8,388,608) — REA #11144 / #11181 recoverable analysis budget (`javascript.member_mutation_alias_states`). Honesty catalog only, not a densify trip target.
+
+### Notes
+- REA tip `f916b3ecf` (+320 since `1ba93b460`): mostly evidence/contract/limit-ownership refactors, MCP schema annotations, and recoverable budgets (`javascript.member_mutation_alias_states`, `REA_BRIDGE_MAX_REPLY_BYTES`, `REA_CAPTURE_PACKET_JSON_EXPANSION_BYTES`). **No new 1:1 trip-able densify constants.** Catalogued the member-mutation allowance; tool-reply and pcap expansion ceilings are not plantable in a protected program.
+
 ## [3.4.0] — 2026-11-16
 
 Minor release shipping **one-way public sidecar seed tags (`scn1-<32hex>`) & zero-prefix JS AST entanglement**, **multi-site `self-seal` non-cancellation & anti-hook parity**, **anti-gaming `bla_verify_weave` closed-loop gates**, **dual-mode MCP `Content-Length`/newline stdio framing + 31-tool MCP annotations + plugin manifests**, **JVM Spec §4.7.1 `BlaEnclaveDelegation` class-attribute emission**, **JSX/TSX/directive-safe `encryptStrings`**, and an automated **5-Layer CI Red-Team Adversarial Regression Gate**.
