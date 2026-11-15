@@ -33,6 +33,8 @@ export interface OneClickDefenseOptions {
   readonly manifestSigningKeyPath?: string;
   readonly llmDirectives?: boolean;
   readonly weaveDecoys?: boolean;
+  /** Emit honey source maps (CLI `--no-honey-maps` / `.blarc` `honeySourceMaps`). Default true. */
+  readonly honeySourceMaps?: boolean;
   /**
    * Enforce Agent-First Closed Loop: refuse mechanical defense when source
    * files have not yet passed Host-Agent structural weave verification
@@ -230,7 +232,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     ...(options.sidecarEntangleSoftFold === true
       ? { sidecarEntangleSoftFold: true }
       : {}),
-    honeySourceMaps: true,
+    honeySourceMaps: options.honeySourceMaps !== false,
   });
 
   // Stage 4: Verify Counter-REA Invariants

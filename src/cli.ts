@@ -710,6 +710,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           inPlace: parsed.inPlace,
           intensity: explicitIntensity,
           seed: resolved.seed,
+          honeySourceMaps: parsed.honeyMaps && loaded.config.honeySourceMaps !== false,
           emitManifest: parsed.manifest || parsed.signManifest === true || loaded.config.emitManifest === true,
           ...(parsed.signManifest === true
             ? { signManifest: true, manifestSigningKeyPath: parsed.manifestKey ?? "" }
@@ -1049,7 +1050,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             ? parsed.intensity
             : (loaded.config.intensity ?? parsed.intensity),
           seed: resolved.seed,
-          honeySourceMaps: parsed.honeyMaps,
+          honeySourceMaps: parsed.honeyMaps && loaded.config.honeySourceMaps !== false,
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
