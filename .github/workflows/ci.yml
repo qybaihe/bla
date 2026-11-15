@@ -52,7 +52,15 @@ jobs:
         run: npm run build
 
       - name: Run unit & multi-format shield tests
+        if: matrix.os != 'ubuntu-latest' || matrix.node != 24
         run: npm test
+
+      # The v8 coverage thresholds in vitest.config.ts were never evaluated:
+      # no job passed --coverage, so the floors could not fail a build. Run the
+      # same suite once with coverage on the primary leg instead of every leg.
+      - name: Run unit & multi-format shield tests with coverage floors
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: npm test -- --coverage
 
       - name: CrackMe v6 seal (digest + fixture rebuild)
         env:
