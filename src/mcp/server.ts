@@ -142,6 +142,10 @@ export interface McpPropertySchema {
   readonly enum?: readonly string[];
   /** Present when type is "array" (JSON Schema items). */
   readonly items?: { readonly type: "string" | "boolean" | "number" };
+  /** Present when type is "array": upper bound on item count (JSON Schema `maxItems`). */
+  readonly maxItems?: number;
+  /** Present for count-like numbers: reject fractional values. */
+  readonly integer?: boolean;
 }
 
 export interface McpToolAnnotations {
@@ -229,6 +233,14 @@ function withToolAnnotations(tool: McpToolDefinition): McpToolDefinition {
   };
 }
 
+/**
+ * Upper bound for string-array tool arguments. Every array argument is a short
+ * user-authored list (WASM export names, allowed hostnames, glob patterns), so
+ * the cap is far above real use while still refusing an unbounded or buggy
+ * client the ability to push one call into unbounded work.
+ */
+export const MAX_STRING_ARRAY_ITEMS = 1024;
+
 const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_harden",
@@ -285,6 +297,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
+          maxItems: MAX_STRING_ARRAY_ITEMS,
           description:
             "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
         },
@@ -349,6 +362,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         },
         max_artifacts: {
           type: "number",
+          integer: true,
           description: "Optional cap on discovered artifacts (default 64); the report sets truncated=true when more exist.",
         },
         confirm_overwrite: {
@@ -378,10 +392,12 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         },
         max_artifacts: {
           type: "number",
+          integer: true,
           description: "Optional page size / cap (default 64); truncated=true when more exist beyond this page.",
         },
         offset: {
           type: "number",
+          integer: true,
           description: "Zero-based offset into the stable discovery order (use prior nextOffset to page). Default 0.",
         },
       },
@@ -447,6 +463,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
+          maxItems: MAX_STRING_ARRAY_ITEMS,
           description:
             "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
         },
@@ -573,6 +590,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         wasm_preserve_exports: {
           type: "array",
           items: { type: "string" },
+          maxItems: MAX_STRING_ARRAY_ITEMS,
           description:
             "WASM export names to keep as the public ABI. At maximum/bankrupt every other export is renamed by default — pass explicitly to keep mix/seal-style names (issue #40.3 / red-blue round-1).",
         },
@@ -778,10 +796,12 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         },
         max_files: {
           type: "number",
+          integer: true,
           description: "Optional maximum number of files to scan",
         },
         max_total_bytes: {
           type: "number",
+          integer: true,
           description: "Optional maximum total bytes to scan",
         },
       },
@@ -822,6 +842,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         },
         max_targets: {
           type: "number",
+          integer: true,
           description: "Optional cap on files to classify (default 48)",
         },
       },
@@ -842,6 +863,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         },
         max_targets: {
           type: "number",
+          integer: true,
           description: "Optional cap on files to verify (default 48)",
         },
       },
@@ -1223,6 +1245,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         domains: {
           type: "array",
           items: { type: "string" },
+          maxItems: MAX_STRING_ARRAY_ITEMS,
           description: "Allowed hostnames or *.suffix globs (public)",
         },
         valid_from: {
@@ -1841,11 +1864,19 @@ export function validateMcpToolCall(
     } else if (propSchema.type === "number") {
       const allowZero =
         key === "offset" || key.endsWith("_threshold") || key === "fail_under";
-      if (typeof val !== "number" || !Number.isFinite(val) || (allowZero ? val < 0 : val <= 0)) {
+      const integerOnly = propSchema.integer === true;
+      if (
+        typeof val !== "number" ||
+        !Number.isFinite(val) ||
+        (integerOnly && !Number.isInteger(val)) ||
+        (allowZero ? val < 0 : val <= 0)
+      ) {
         return {
           ok: false,
           code: -32602,
-          message: `Invalid params for '${tool.name}': argument '${key}' must be a ${allowZero ? "non-negative" : "positive"} finite number`,
+          message: `Invalid params for '${tool.name}': argument '${key}' must be a ${allowZero ? "non-negative" : "positive"} ${
+            integerOnly ? "integer" : "finite number"
+          }`,
         };
       }
     } else if (propSchema.type === "array") {
@@ -1854,6 +1885,14 @@ export function validateMcpToolCall(
           ok: false,
           code: -32602,
           message: `Invalid params for '${tool.name}': argument '${key}' must be an array, received ${val === null ? "null" : typeof val}`,
+        };
+      }
+      const maxItems = propSchema.maxItems ?? MAX_STRING_ARRAY_ITEMS;
+      if (val.length > maxItems) {
+        return {
+          ok: false,
+          code: -32602,
+          message: `Invalid params for '${tool.name}': argument '${key}' must hold at most ${maxItems} items, received ${val.length}`,
         };
       }
       if (propSchema.items?.type === "string") {
