@@ -76,6 +76,7 @@ function shieldOrPassThrough(
   ctx: {
     readonly fileName: string;
     readonly failBuildOnError: boolean;
+    readonly onSkip?: (fileName: string) => void;
   },
 ): string | null {
   try {
@@ -86,8 +87,32 @@ function shieldOrPassThrough(
     console.warn(
       `[bla-shield] skipped protection for ${ctx.fileName}: ${message}`,
     );
+    ctx.onSkip?.(ctx.fileName);
     return null;
   }
+}
+
+/**
+ * Collects the chunks that shipped unshielded so a build can end with one
+ * honest summary. A per-chunk `console.warn` alone is easy to lose in a large
+ * build log, and a partial shield is exactly the kind of claim the rest of BLA
+ * refuses to leave implicit.
+ */
+function createSkipTracker(pluginName: string) {
+  const skipped: string[] = [];
+  return {
+    note(fileName: string): void {
+      skipped.push(fileName);
+    },
+    summary(): string | null {
+      if (skipped.length === 0) return null;
+      return (
+        `[bla-shield] ${pluginName}: ${skipped.length} chunk(s) shipped UNPROTECTED ` +
+        `(transform failed, failBuildOnError is false): ${skipped.join(", ")}. ` +
+        "Fix the parse/transform errors or set failBuildOnError: true."
+      );
+    },
+  };
 }
 
 /**
@@ -109,9 +134,14 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
   const include = options.include ?? /\.(?:m?js|cjs)$/i;
   const emitMap = options.honeySourceMap ?? true;
   const failBuildOnError = options.failBuildOnError ?? false;
+  const skips = createSkipTracker("rollup/vite");
 
   return {
     name: "bla-shield-rollup-plugin",
+    buildEnd() {
+      const summary = skips.summary();
+      if (summary !== null) console.warn(summary);
+    },
     renderChunk(
       code: string,
       chunk: { fileName: string; isEntry?: boolean },
@@ -135,7 +165,7 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
             sourceType,
             loader,
           }),
-        { fileName: chunk.fileName, failBuildOnError },
+        { fileName: chunk.fileName, failBuildOnError, onSkip: (f) => skips.note(f) },
       );
       if (shieldedCode === null) {
         return null; // Rollup treats null as "no change": chunk passes through.
@@ -235,6 +265,7 @@ export class BlaWebpackPlugin {
     const include = this.options.include ?? /\.(?:m?js|cjs)$/i;
     const emitMap = this.options.honeySourceMap ?? true;
     const failBuildOnError = this.options.failBuildOnError ?? false;
+    const skips = createSkipTracker("webpack");
 
     compiler.hooks.compilation.tap("BlaWebpackPlugin", (compilation) => {
       compilation.hooks.processAssets.tap(
@@ -260,7 +291,7 @@ export class BlaWebpackPlugin {
                   sourceType,
                   loader,
                 }),
-              { fileName: assetName, failBuildOnError },
+              { fileName: assetName, failBuildOnError, onSkip: (f) => skips.note(f) },
             );
             if (shieldedCode === null) {
               continue; // Webpack leaves the already-emitted asset untouched.
@@ -278,6 +309,10 @@ export class BlaWebpackPlugin {
               compilation.emitAsset(`${assetName}.map`, createWebpackRawSource(honeyMap.jsonString));
             }
           }
+          // Same honest build-end summary the Rollup plugin prints; webpack only
+          // exposes the asset stage to a structural plugin type.
+          const summary = skips.summary();
+          if (summary !== null) console.warn(summary);
         },
       );
     });
@@ -302,7 +337,16 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
           path: string;
         }) => Promise<{ contents: string; loader: JsLoaderType } | null>,
       ) => void;
+      onEnd?: (cb: () => void) => void;
     }) {
+      const skips = createSkipTracker("esbuild");
+      // Real esbuild always provides onEnd; tolerate structural test doubles.
+      if (typeof build.onEnd === "function") {
+        build.onEnd(() => {
+          const summary = skips.summary();
+          if (summary !== null) console.warn(summary);
+        });
+      }
       build.onLoad({ filter: include }, async (args) => {
         if (args.path.includes("node_modules")) return null;
         const fs = await import("node:fs/promises");
@@ -325,7 +369,7 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
               loader,
               sourceType,
             }),
-          { fileName: args.path, failBuildOnError },
+          { fileName: args.path, failBuildOnError, onSkip: (f) => skips.note(f) },
         );
         if (shieldedCode === null) {
           return null; // esbuild falls back to reading the file as-is.
