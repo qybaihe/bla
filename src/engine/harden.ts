@@ -9,6 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { detectArtifactFormat } from "../core/detector.js";
 import { generateProjectSeed, loadBlaConfig, type BlaProjectConfig } from "../core/config.js";
 import { physicalPath } from "../core/output-path.js";
+import { sanitizeTerminalText } from "../core/terminal-text.js";
 import { walkBounded } from "../core/walk.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
@@ -1833,9 +1834,13 @@ export function hardenProject(
 }
 
 export function formatHardenProjectReport(report: HardenProjectReport): string {
+  // Artifact-derived strings (paths, errors, usage advice) pass through the
+  // shared terminal sanitizer like every other formatter — a hostile name
+  // must not carry OSC/CSI/C0 bytes into the operator's terminal.
+  const safe = sanitizeTerminalText;
   const lines: string[] = [
-    `BLA harden ${report.blaVersion} — ${report.directory}${report.dryRun ? " (dry-run: nothing written)" : ""}`,
-    `Run: ${report.runId} (unsigned)`,
+    `BLA harden ${report.blaVersion} — ${safe(report.directory)}${report.dryRun ? " (dry-run: nothing written)" : ""}`,
+    `Run: ${safe(report.runId)} (unsigned)`,
     `Intensity: ${report.intensity} | discovered=${report.discoveredCount} hardened=${report.hardenedCount} failed=${report.failedCount}`,
     `Overall: ${
       report.dryRun
@@ -1856,30 +1861,30 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
       `  ⚠ cancelled after ${(report.written ?? []).length} written artifact(s); list is authoritative — no silent half-harden`,
     );
     for (const w of report.written ?? []) {
-      lines.push(`    · written: ${w}`);
+      lines.push(`    · written: ${safe(w)}`);
     }
   }
   if (report.selfSealRecommended) {
     lines.push(
-      `  ⚠ self_seal recommended: ${report.selfSealRecommendation ?? "multi-artifact tree — pass --self-seal / self_seal:true"}`,
+      `  ⚠ self_seal recommended: ${report.selfSealRecommendation === undefined ? "multi-artifact tree — pass --self-seal / self_seal:true" : safe(report.selfSealRecommendation)}`,
     );
   }
   if (report.sidecarEntangleError !== undefined) {
     lines.push(
-      `  ⚠ sidecar entanglement failed: ${report.sidecarEntangleError} — entry shipped WITHOUT the strip⇒fail binding`,
+      `  ⚠ sidecar entanglement failed: ${safe(report.sidecarEntangleError)} — entry shipped WITHOUT the strip⇒fail binding`,
     );
   }
   for (const a of report.artifacts) {
     if (report.dryRun) {
       lines.push(
-        `  • ${a.relativePath} [${a.format}] → ${a.outputPath}${a.outputExisted ? " (exists; would overwrite)" : ""}`,
+        `  • ${safe(a.relativePath)} [${a.format}] → ${safe(a.outputPath)}${a.outputExisted ? " (exists; would overwrite)" : ""}`,
       );
       continue;
     }
     lines.push(
       a.success
-        ? `  ✓ ${a.relativePath} [${a.format}] score=${a.defenseScore} tokens×${a.tokenAmplificationFactor.toFixed(1)} → ${a.outputPath}`
-        : `  ✗ ${a.relativePath} [${a.format}] ${a.error ?? "failed"}`,
+        ? `  ✓ ${safe(a.relativePath)} [${a.format}] score=${a.defenseScore} tokens×${a.tokenAmplificationFactor.toFixed(1)} → ${safe(a.outputPath)}`
+        : `  ✗ ${safe(a.relativePath)} [${a.format}] ${a.error === undefined ? "failed" : safe(a.error)}`,
     );
   }
   if (report.truncated) {
@@ -1892,7 +1897,7 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
       `  ⚠ discovery read errors (${report.discoveryReadErrors.length}) — inventory may be incomplete:`,
     );
     for (const entry of report.discoveryReadErrors.slice(0, 5)) {
-      lines.push(`    - ${entry}`);
+      lines.push(`    - ${safe(entry)}`);
     }
     if (report.discoveryReadErrors.length > 5) {
       lines.push(`    … ${report.discoveryReadErrors.length - 5} more`);
@@ -1903,13 +1908,13 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
       "  (no protectable artifacts found — put build outputs under dist/, build/, out/, or release/, or place .wasm/.sqlite/.safetensors/binaries at the project root)",
     );
   } else {
-    lines.push(`Output: ${report.outputDirectory}`);
+    lines.push(`Output: ${safe(report.outputDirectory)}`);
     lines.push(
       report.dryRun
         ? "Next: re-run without --dry-run (MCP: dry_run=false) to write the hardened copies."
         : "Next: ship or point your release at the hardened copies above (originals are untouched). See DISCLAIMER.md.",
     );
   }
-  lines.push(`Tip: ${report.oneSentenceUsage}`);
+  lines.push(`Tip: ${safe(report.oneSentenceUsage)}`);
   return lines.join("\n");
 }
