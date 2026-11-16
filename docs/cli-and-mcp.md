@@ -76,8 +76,8 @@ Argument bounds are enforced before any tool runs: count arguments (`max_artifac
 - `bla_polymorph_report`: Compare two hardened directories (`dir_a`, `dir_b`, optional thresholds) and report structural drift (export-name Jaccard, export-order Kendall-tau, byte-diff ratio, identifier overlap, aggregate `driftScore`). Drift is a stability signal, not a cracking-resistance proof.
 - `bla_benchmark`: Runs the 14-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
-- `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor.
-- `bla_encrypt_strings`: Encrypt sensitive literals in `panel.html` / `license.cjs` with a seed-derived XOR keystream plus a runtime decrypt stub (`path`, `seed`, optional `out_dir`, `include_urls`, `dry_run`). Raises static-grep cost only — not white-box AES.
+- `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor. In-place runs require `confirm_overwrite` (see write-safety below).
+- `bla_encrypt_strings`: Encrypt sensitive literals in `panel.html` / `license.cjs` with a seed-derived XOR keystream plus a runtime decrypt stub (`path`, `seed`, optional `out_dir`, `include_urls`, `dry_run`, `confirm_overwrite`). Raises static-grep cost only — not white-box AES.
 - `bla_lint_bind_scope`: Read-only lint for `bla-bind-scope/v1` (refuses non-public / hidden fields / missing runtime check).
 - `bla_doctor`: Diagnostics for BLA engines and agent client registrations; also reports `skillMissingFiles` / `skillModifiedFiles` (format appendices under `references/` included).
 - `bla_weave_plan`: Read-only weave-decoy planner (`path`, optional `max_targets`) → `bla-weave-plan/v1` JSON (defensive theory checklist + AST `surgicalWorkorder` with `entryFunctions`, `sharedStateSlots`, `branchCandidates`, and `agentRewriteRecipe`; no crack/RE).
@@ -87,8 +87,8 @@ Argument bounds are enforced before any tool runs: count arguments (`max_artifac
 
 - `bla_harden` with `dry_run: true` (CLI `bla harden . --dry-run`) discovers targets and plans outputs with **zero bytes written** (no `.bla-hardened/`, no summary, no `.blarc` seed). Dry-run sets `overallSuccess: false` — it never claims a successful harden.
 - Discovery is capped (`max_artifacts`, default 64); when more targets exist the result sets `truncated: true` and `nextOffset` instead of silently dropping them — page with `offset` until `truncated` is false.
-- `bla_harden` / `bla_defend` / `bla_protect` refuse to overwrite an existing output file unless `confirm_overwrite: true`. A refusal is `isError: true` with `{ status: "confirmation_required", wouldOverwrite: [...], wrote: [] }`; nothing is written.
-- Successful `bla_harden` / `bla_defend` / `bla_protect` writes add `writeReceipt: { status: "written", wrote, overwrote, confirmed }` (`bla_harden` dry-run omits it).
+- `bla_harden` / `bla_defend` / `bla_protect` / `bla_encrypt_strings` / `bla_bind_scope` refuse to overwrite an existing output file unless `confirm_overwrite: true`. A refusal is `isError: true` with `{ status: "confirmation_required", wouldOverwrite: [...], wrote: [] }`; nothing is written.
+- Successful `bla_harden` / `bla_defend` / `bla_protect` / `bla_encrypt_strings` / `bla_bind_scope` writes add `writeReceipt: { status: "written", wrote, overwrote, confirmed }` (`bla_harden` dry-run and runs that write nothing omit it).
 - `in_place: true` (MCP) / `--in-place` (CLI) plans the output as the input path; because that path already exists, `confirm_overwrite: true` is required on MCP or the call is refused with `confirmation_required`.
 
 `weave_decoys: true` activates structural Python customer-def weave (shared-slot touch + opaque-false decoy calls) after the #51 tarpit; when false, Python stays warm-init-only. JS AST weave remains always-on.

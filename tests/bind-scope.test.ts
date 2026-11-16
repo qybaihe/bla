@@ -155,6 +155,7 @@ describe("bind-scope (Direction-4 honest code lock)", () => {
           directory: dir,
           domains: ["mcp.example"],
           valid_until: "2099-12-31T00:00:00.000Z",
+          confirm_overwrite: true,
         },
       },
     });
