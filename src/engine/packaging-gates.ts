@@ -83,6 +83,8 @@ import {
   releaseHygieneRefuseMessage,
   type ReleaseHygieneFileReport,
 } from "./release-hygiene-lint.js";
+import { BLA_IDENTITY } from "../identity.js";
+import type { SarifLog } from "../core/sarif.js";
 
 export const PACKAGING_GATES_SCHEMA = "bla-packaging-gates/v1" as const;
 
@@ -745,4 +747,74 @@ export function formatPackagingGatesReport(report: PackagingGatesReport): string
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * SARIF 2.1.0 projection of a packaging-gates report for CI code scanning
+ * (`github/codeql-action/upload-sarif`), the same way `buildSarifReport` covers
+ * audit findings. Each gate becomes one rule, refusing findings become `error`,
+ * informational findings become `note`, and paths are emitted with forward
+ * slashes so GitHub can match them to repository files.
+ */
+export function buildPackagingGatesSarif(report: PackagingGatesReport): SarifLog {
+  const rulesMap = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      shortDescription: { text: string };
+      defaultConfiguration: { level: "error" | "warning" | "note" };
+    }
+  >();
+  const results: SarifLog["runs"][0]["results"][number][] = [];
+
+  for (const f of report.findings) {
+    const ruleId = `BLA-LINT-${f.gate.toUpperCase().replace(/[^A-Z0-9]+/g, "-")}`;
+    const level: "error" | "warning" | "note" = f.shouldRefuseBankrupt
+      ? "error"
+      : "note";
+    if (!rulesMap.has(ruleId)) {
+      rulesMap.set(ruleId, {
+        id: ruleId,
+        name: `PackagingGate_${f.gate}`,
+        shortDescription: {
+          text: `BLA packaging gate '${f.gate}' (${f.shouldRefuseBankrupt ? "bankrupt refusal" : "informational"})`,
+        },
+        defaultConfiguration: { level },
+      });
+    }
+    results.push({
+      ruleId,
+      level,
+      message: {
+        text: `${f.gate}: ${f.findingCount} finding(s) — ${f.oneLineAdvice}`,
+      },
+      locations: [
+        {
+          physicalLocation: {
+            artifactLocation: { uri: f.relativePath.replace(/\\/g, "/") },
+          },
+        },
+      ],
+    });
+  }
+
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: BLA_IDENTITY.packageName,
+            fullName: BLA_IDENTITY.fullName,
+            version: BLA_IDENTITY.version,
+            informationUri: "https://bla.tools",
+            rules: [...rulesMap.values()],
+          },
+        },
+        results,
+      },
+    ],
+  };
 }

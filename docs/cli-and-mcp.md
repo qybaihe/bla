@@ -8,7 +8,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | :--- | :--- |
 | `npx bla-agents setup` | Auto-registers the `bla` MCP server and `blind-llm-agents` skill with Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity. |
 | `npx bla-agents harden .` | **Default one-command UX**: auto-discover build outputs and run audit → protect → verify (bankrupt). Prefer over `defend` when you have a project directory. Agent guide: [`blind-llm-agents` skill](../.agents/skills/blind-llm-agents/SKILL.md). |
-| `npx bla-agents lint .` | **Unified packaging-footgun scan** (`bla-packaging-gates/v1`): all R1–R7 refuse lints + lanes/panel. Exit 2 when bankrupt would refuse. Writes nothing. |
+| `npx bla-agents lint .` | **Unified packaging-footgun scan** (`bla-packaging-gates/v1`): all R1–R7 refuse lints + lanes/panel. Exit 2 when bankrupt would refuse. `--json` prints the compact report and `--sarif` prints SARIF 2.1.0 for `upload-sarif` code scanning. Writes nothing. |
 | `npx bla-agents defend <target> [--manifest] [--sign-manifest --manifest-key <pem>] [--llm-directives] [--weave-decoys]` | **5-stage pipeline** on a known path: `inspect-release` → `audit` → `protect` → `verify` → optional `.bla-manifest.json` (opt-in; unsigned unless `--sign-manifest` is set). Risky LLM directive layers stay off unless `--llm-directives`. Structural weave decoys stay off unless `--weave-decoys`. |
 | `npx bla-agents harden . [--weave-decoys]` | Same as `harden` with opt-in structural weave (`weave_decoys`). |
 | `npx bla-agents inspect-release <target>` | Read-only local scan for embedded `.map` (`sourcesContent`) and sourceMappingURL references. |

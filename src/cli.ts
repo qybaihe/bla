@@ -29,6 +29,7 @@ import { lintWasmSealXorKnownPlaintextFile } from "./engine/wasm-seal-xor-known-
 import {
   scanPackagingGates,
   formatPackagingGatesReport,
+  buildPackagingGatesSarif,
 } from "./engine/packaging-gates.js";
 import { runShowcaseBenchmark } from "./engine/benchmark.js";
 import { verifySidecarTarget } from "./engine/verify-sidecar.js";
@@ -850,6 +851,8 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             bindScope: report.details.bindScope.length,
             releaseHygiene: report.details.releaseHygiene.length,
           } }, null, 2));
+        } else if (parsed.sarif) {
+          console.log(JSON.stringify(buildPackagingGatesSarif(report), null, 2));
         } else {
           console.log(formatPackagingGatesReport(report));
         }
