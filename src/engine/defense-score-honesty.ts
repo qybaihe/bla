@@ -24,6 +24,7 @@ export type DefenseScoreGapId =
   | "dex-sidecar-host-verify-only"
   | "sqlite-sidecar-host-verify-only"
   | "wasm-sidecar-host-verify-only"
+  | "esm-import-hoist-before-hooks"
   | "numeric-template-hygiene-partial"
   | "native-postlink-cfg-untouched"
   | "native-trailer-unmapped";
@@ -47,6 +48,11 @@ export interface DefenseScoreHonestyInput {
   readonly numericTemplateLeakKnown?: boolean;
   /** For post-link native binaries: true when decoys were planted into a mapped PT_LOAD / COFF section, false when trailer-only. */
   readonly nativeMappedSectionInjected?: boolean;
+  /**
+   * True when a JS/TS ES module entry has static import / export-from bindings
+   * that the loader instantiates before a prepended sidecar / self-seal IIFE.
+   */
+  readonly esmImportHoistBeforeHooks?: boolean;
 }
 
 export interface DefenseScoreHonesty {
@@ -185,6 +191,22 @@ export function collectDefenseScoreGaps(
       id: "wasm-sidecar-host-verify-only",
       summary:
         "sidecarEntangle planted a WASM bla.sidecar.v1 custom section verified by host verifyWasmSidecarCustomSection; WebAssembly.instantiate ignores custom sections unless your JS/host loader enforces verification before instantiation (issue #40 / DESIGN).",
+      scoreCap: 93,
+    });
+  }
+
+  // ESM static import / export-from bindings evaluate before any statement in
+  // the entry, including a prepended sidecarEntangle / self-seal IIFE. The
+  // entry body still fail-closes, but imported module side effects already ran.
+  if (
+    JS_LIKE.has(input.detectedFormat) &&
+    (input.sidecarEntangleEnabled === true || input.selfSealEnabled === true) &&
+    input.esmImportHoistBeforeHooks === true
+  ) {
+    gaps.push({
+      id: "esm-import-hoist-before-hooks",
+      summary:
+        "ES module static import / export-from bindings evaluate before the prepended sidecarEntangle or self-seal IIFE, so imported module side effects still run after a sidecar strip or hook failure. Entry-body fail-closed is not process-start for the hoisted graph (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

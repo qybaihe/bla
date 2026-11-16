@@ -25,6 +25,7 @@ export {
   inferJsLoaderFromPath,
   inferJsCarrierFromPath,
   collectEsmExportedSymbols,
+  jsModuleHasHoistedDependencyGraph,
   type JsCarrierType,
   type JsLoaderType,
   type JsTransformOptions,

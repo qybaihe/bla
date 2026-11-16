@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **defenseScore honesty gap `esm-import-hoist-before-hooks` (soft-cap 93):** ESM static `import` / `export-from` bindings are instantiated before any statement in the entry, including the prepended `sidecarEntangle` / `self-seal` IIFE. The entry body still fail-closes on sidecar strip or hook failure, but imported module side effects already ran — this is not process-start strip⇒fail for the hoisted graph (CJS `require()` after the preamble is unaffected). `jsModuleHasHoistedDependencyGraph` detects the case (ignoring the BLA `createRequire` preamble); `verifyTarget` annotates the gap when sidecar or self-seal is on. Skill B / DESIGN / MCP / CLI wording updated so "full runtime strip⇒fail" is not overclaimed (red 2026-11-16).
+
 ## [3.4.1] — 2026-11-15
 
 Patch adding an optional **JS-loader hook** for WASM `bla.sidecar.v1` custom-section verification, plus `REA_INTERNAL_LIMITS` catalog hygiene for REA's new JavaScript member-mutation work allowance.

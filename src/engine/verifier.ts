@@ -13,6 +13,7 @@ import {
 } from "./defense-score-honesty.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
+import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
@@ -167,6 +168,21 @@ export function verifyTarget(
     }
   }
 
+  let esmImportHoistBeforeHooks = false;
+  if (
+    afterAudit.detectedFormat === "javascript" ||
+    afterAudit.detectedFormat === "typescript"
+  ) {
+    try {
+      esmImportHoistBeforeHooks = jsModuleHasHoistedDependencyGraph(
+        readFileSync(absTarget, "utf8"),
+        absTarget,
+      );
+    } catch {
+      esmImportHoistBeforeHooks = false;
+    }
+  }
+
   const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
     detectedFormat: afterAudit.detectedFormat,
     selfSealEnabled: effectiveSelfSealEnabled,
@@ -176,6 +192,7 @@ export function verifyTarget(
     ...(nativeMappedSectionInjected !== undefined
       ? { nativeMappedSectionInjected }
       : {}),
+    ...(esmImportHoistBeforeHooks ? { esmImportHoistBeforeHooks: true } : {}),
   });
 
   const agentActions: VerificationAgentAction[] = [];
