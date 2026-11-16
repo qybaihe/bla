@@ -3,6 +3,7 @@ import {
   createPublicKey,
   generateKeyPairSync,
   sign as cryptoSign,
+  timingSafeEqual,
   verify as cryptoVerify,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -110,9 +111,13 @@ export function verifyManifestSignature(
       const publicKey = createPublicKey(signature.publicKey);
       if (expectedPublicKeyPem !== undefined) {
         const pinned = createPublicKey(expectedPublicKeyPem);
-        const embeddedSpki = String(publicKey.export({ type: "spki", format: "pem" }));
-        const pinnedSpki = String(pinned.export({ type: "spki", format: "pem" }));
-        if (embeddedSpki !== pinnedSpki) return false;
+        const embeddedSpki = Buffer.from(String(publicKey.export({ type: "spki", format: "pem" })), "utf8");
+        const pinnedSpki = Buffer.from(String(pinned.export({ type: "spki", format: "pem" })), "utf8");
+        // The SPKI itself is public, but compare in constant time for
+        // consistency with the rest of the pinned-verification posture.
+        if (embeddedSpki.length !== pinnedSpki.length || !timingSafeEqual(embeddedSpki, pinnedSpki)) {
+          return false;
+        }
       }
       const { signature: _ignored, ...rest } = manifest;
       const canonical =
