@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-seo-page="enterprise">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,6 +9,11 @@
       name="description"
       content="Enterprise software hardening with BLA: exposure audits against AI reverse-engineering agents, custom MBA &amp; weave defense pipelines, CI/CD signing gates, and clean-room red-team verification."
     />
+    <meta
+      name="keywords"
+      content="enterprise software hardening, anti-reverse engineering consulting, Electron app security audit, binary protection service, AI model weight protection, Counter-REA advisory"
+    />
+    <meta name="author" content="BLA Contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="theme-color" content="#040814" />
     <link rel="canonical" href="https://bla.tools/enterprise/" />
@@ -21,8 +26,18 @@
     <link rel="alternate" hreflang="fr" href="https://bla.tools/enterprise/?lang=fr" />
     <link rel="alternate" hreflang="de" href="https://bla.tools/enterprise/?lang=de" />
     <link rel="alternate" hreflang="x-default" href="https://bla.tools/enterprise/" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms-full.txt" title="BLA Full Technical Reference" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="ko_KR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="de_DE" />
     <meta property="og:url" content="https://bla.tools/enterprise/" />
     <meta property="og:title" content="Enterprise Software Hardening &amp; Counter-REA Advisory — BLA" />
     <meta
@@ -30,6 +45,7 @@
       content="Assess AI reverse-engineering exposure, deploy custom multi-artifact hardening pipelines, and verify release builds with Ed25519 manifests."
     />
     <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="BLA Enterprise Hardening Services" />
@@ -40,6 +56,7 @@
       content="Custom Counter-REA exposure assessment, build-pipeline hardening, and adversarial verification for commercial desktop, mobile, and edge-AI releases."
     />
     <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <meta name="twitter:image:alt" content="BLA Enterprise Hardening Services" />
     <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="apple-touch-icon" href="../assets/logo.png" />
@@ -60,10 +77,12 @@
             "@type": "Service",
             "name": "BLA Enterprise Software Hardening & Counter-REA Assessment",
             "url": "https://bla.tools/enterprise/",
+            "areaServed": "Worldwide",
             "serviceType": "Application Security & Anti-Reverse-Engineering Hardening",
+            "description": "Full-cycle software release exposure assessment, custom multi-format Counter-REA hardening, CI/CD signing gates, and runtime-equivalent delivery verification.",
             "provider": {
               "@type": "Organization",
-              "name": "BLA Contributors",
+              "name": "BLA (Blind LLM Agents)",
               "url": "https://bla.tools/",
               "email": "qybaihe@gmail.com"
             }
@@ -92,7 +111,7 @@
     <header class="site-header">
       <div class="container nav-bar">
         <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" decoding="async" />
           <span>BLA</span>
         </a>
         <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
@@ -207,12 +226,25 @@
     <footer class="site-footer">
       <div class="container footer-inner">
         <div data-i18n-html="footer.tagline"><strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP &amp; CLI</div>
-                <div>
-          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="./" data-i18n="nav.enterprise">Enterprise</a> ·
-          <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
+        <nav class="footer-nav" aria-label="Footer">
           <a href="../" data-i18n="nav.overview">Overview</a>
-        </div>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../get-started/" data-i18n="nav.getStarted">Get Started</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../showcase/" data-i18n="nav.showcase">Benchmarks</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../guides/" data-i18n="nav.guides">Guides</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../crackme/" data-i18n="nav.crackme">CrackMe</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../faq/" data-i18n="nav.faq">FAQ</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../llms.txt">llms.txt</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/qybaihe/bla">GitHub ★</a>
+        </nav>
         <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>

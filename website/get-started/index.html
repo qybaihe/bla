@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-seo-page="get-started">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,8 +7,13 @@
     <title>Get Started with BLA (bla-agents) — MCP Setup, CLI &amp; Bundler Plugins</title>
     <meta
       name="description"
-      content="Install and configure BLA (bla-agents) in seconds: register the Counter-REA MCP server for Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, harden builds with npx bla-agents harden ., or add Vite/Webpack/esbuild plugins."
+      content="Install BLA in seconds: register the Counter-REA MCP server across Claude Code, Cursor, Codex, Windsurf, or Gemini CLI, harden builds with npx bla-agents harden ., or add Vite/Webpack/esbuild plugins."
     />
+    <meta
+      name="keywords"
+      content="bla-agents install, BLA MCP setup, Claude Code MCP security, Cursor MCP server, Vite obfuscation plugin, Webpack protection plugin, esbuild obfuscation, npx bla-agents harden"
+    />
+    <meta name="author" content="BLA Contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="theme-color" content="#040814" />
     <link rel="canonical" href="https://bla.tools/get-started/" />
@@ -21,8 +26,18 @@
     <link rel="alternate" hreflang="fr" href="https://bla.tools/get-started/?lang=fr" />
     <link rel="alternate" hreflang="de" href="https://bla.tools/get-started/?lang=de" />
     <link rel="alternate" hreflang="x-default" href="https://bla.tools/get-started/" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms-full.txt" title="BLA Full Technical Reference" />
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="ko_KR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="de_DE" />
     <meta property="og:url" content="https://bla.tools/get-started/" />
     <meta property="og:title" content="Get Started with BLA (bla-agents) — MCP Setup, CLI &amp; Bundler Plugins" />
     <meta
@@ -30,6 +45,7 @@
       content="One-command setup for Claude Code, Cursor, Codex &amp; Gemini CLI, plus CLI hardening workflows and Vite/Rollup/Webpack/esbuild integration."
     />
     <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Get Started with BLA (bla-agents)" />
@@ -40,6 +56,7 @@
       content="Register BLA's MCP tools in one command and harden JS/TS, Electron, WASM, Python, and native binaries against AI reverse engineering."
     />
     <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <meta name="twitter:image:alt" content="Get Started with BLA (bla-agents) — MCP Setup, CLI &amp; Bundler Plugins" />
     <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="apple-touch-icon" href="../assets/logo.png" />
@@ -60,23 +77,32 @@
             "@type": "HowTo",
             "name": "How to Protect Software Artifacts Against AI Reverse Engineering with BLA",
             "description": "Register BLA's MCP server with your coding agent and harden build outputs in three steps.",
+            "totalTime": "PT1M",
+            "image": "https://bla.tools/assets/social-card.png",
+            "tool": [
+              { "@type": "HowToTool", "name": "Node.js ^22.23.4 || >=24.0.0" },
+              { "@type": "HowToTool", "name": "bla-agents CLI / MCP Server" }
+            ],
             "step": [
               {
                 "@type": "HowToStep",
                 "position": 1,
                 "name": "Register MCP Server & Agent Skill",
-                "text": "Run npx bla-agents@latest setup -y to configure Claude Code, Cursor, Codex, Windsurf, or Gemini CLI."
+                "url": "https://bla.tools/get-started/",
+                "text": "Run npx bla-agents@latest setup --all-detected --yes to configure Claude Code, Cursor, Codex, Windsurf, Gemini CLI, or Antigravity."
               },
               {
                 "@type": "HowToStep",
                 "position": 2,
                 "name": "Audit & Lint Release Packaging",
+                "url": "https://bla.tools/get-started/",
                 "text": "Run npx bla-agents@latest lint . to check for source-map, plaintext secret, and debug-symbol leaks."
               },
               {
                 "@type": "HowToStep",
                 "position": 3,
                 "name": "Harden & Verify Artifacts",
+                "url": "https://bla.tools/get-started/",
                 "text": "Run npx bla-agents@latest harden . --weave-decoys --self-seal --sidecar-entangle to protect discovered artifacts and verify runtime equivalence."
               }
             ]
@@ -105,7 +131,7 @@
     <header class="site-header">
       <div class="container nav-bar">
         <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" decoding="async" />
           <span>BLA</span>
         </a>
         <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
@@ -209,12 +235,25 @@ export default {
     <footer class="site-footer">
       <div class="container footer-inner">
         <div data-i18n-html="footer.tagline"><strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP &amp; CLI</div>
-                <div>
-          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a> ·
-          <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
+        <nav class="footer-nav" aria-label="Footer">
           <a href="../" data-i18n="nav.overview">Overview</a>
-        </div>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../showcase/" data-i18n="nav.showcase">Benchmarks</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../guides/" data-i18n="nav.guides">Guides</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../crackme/" data-i18n="nav.crackme">CrackMe</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../faq/" data-i18n="nav.faq">FAQ</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../llms.txt">llms.txt</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/qybaihe/bla">GitHub ★</a>
+        </nav>
         <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>

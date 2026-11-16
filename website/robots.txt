@@ -4,7 +4,25 @@ Allow: /
 User-agent: Googlebot
 Allow: /
 
+User-agent: Googlebot-Image
+Allow: /
+
 User-agent: Bingbot
+Allow: /
+
+User-agent: Slurp
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+User-agent: Baiduspider
+Allow: /
+
+User-agent: YandexBot
+Allow: /
+
+User-agent: Applebot
 Allow: /
 
 User-agent: GPTBot
@@ -31,4 +49,13 @@ Allow: /
 User-agent: Applebot-Extended
 Allow: /
 
+User-agent: Amazonbot
+Allow: /
+
+User-agent: Meta-ExternalAgent
+Allow: /
+
+# AI / LLM Machine-Readable Documentation:
+# https://bla.tools/llms.txt
+# https://bla.tools/llms-full.txt
 Sitemap: https://bla.tools/sitemap.xml

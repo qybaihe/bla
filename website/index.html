@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-seo-page="overview">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,12 +7,13 @@
     <title>BLA (bla-agents) — Protect Software Against AI Reverse-Engineering Agents (REA)</title>
     <meta
       name="description"
-      content="BLA (Blind LLM Agents) is the open-source Blue Defense MCP server, CLI, and bundler plugin that protects JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE binaries, SQLite, AI models (GGUF/Safetensors), and Android DEX against AI reverse-engineering agents like REA."
+      content="Open-source Blue Defense MCP server (31 tools), CLI, and bundler plugin protecting 26 software formats (JS/TS, Electron ASAR, WASM, Python, ELF/Mach-O/PE, SQLite, GGUF/Safetensors, Android DEX) against AI reverse engineering."
     />
     <meta
       name="keywords"
-      content="BLA, bla-agents, Blind LLM Agents, AI reverse engineering defense, anti-REA, morluto rea countermeasure, code obfuscation, Electron ASAR protection, WebAssembly protection, binary protection, Ghidra MCP defense, MBA obfuscation, Claude Code MCP, Cursor MCP"
+      content="BLA, bla-agents, Blind LLM Agents, AI reverse engineering defense, anti-REA, morluto rea countermeasure, code obfuscation, Electron ASAR protection, WebAssembly protection, binary protection, Ghidra MCP defense, MBA obfuscation, Claude Code MCP, Cursor MCP, Vite obfuscation plugin, Safetensors GGUF model protection, 防AI逆向, 反编译加固"
     />
+    <meta name="author" content="BLA Contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="theme-color" content="#040814" />
     <link rel="canonical" href="https://bla.tools/" />
@@ -26,14 +27,22 @@
     <link rel="alternate" hreflang="de" href="https://bla.tools/?lang=de" />
     <link rel="alternate" hreflang="x-default" href="https://bla.tools/" />
     <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms-full.txt" title="BLA Full Technical Reference" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="BLA (bla-agents)" />
     <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="ko_KR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="de_DE" />
     <meta property="og:url" content="https://bla.tools/" />
     <meta property="og:title" content="BLA (bla-agents) — Adversarial Blue Defense Against AI Reverse Engineering" />
     <meta
       property="og:description"
-      content="Open-source Counter-REA MCP server &amp; CLI protecting 26 software artifact formats via token exhaustion, parameterized MBA substitutions, shadow logic weave, and runtime integrity bindings."
+      content="Open-source Counter-REA MCP server (31 tools) &amp; CLI protecting 26 software artifact formats via token exhaustion, parameterized MBA substitutions, shadow logic weave, and runtime integrity bindings."
     />
     <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
     <meta property="og:image:type" content="image/png" />
@@ -58,30 +67,67 @@
         "@context": "https://schema.org",
         "@graph": [
           {
+            "@type": "Organization",
+            "@id": "https://bla.tools/#organization",
+            "name": "BLA (Blind LLM Agents)",
+            "url": "https://bla.tools/",
+            "email": "qybaihe@gmail.com",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://bla.tools/assets/logo.png",
+              "width": 256,
+              "height": 256
+            },
+            "sameAs": [
+              "https://github.com/qybaihe/bla",
+              "https://www.npmjs.com/package/bla-agents",
+              "https://trendshift.io/repositories/323569"
+            ]
+          },
+          {
             "@type": "WebSite",
             "@id": "https://bla.tools/#website",
             "url": "https://bla.tools/",
             "name": "BLA (bla-agents) — Blind LLM Agents",
             "description": "Open-source Blue Defense MCP server, CLI, and bundler plugin protecting software artifacts against AI reverse-engineering agents.",
+            "publisher": { "@id": "https://bla.tools/#organization" },
             "inLanguage": ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de"]
           },
           {
             "@type": "SoftwareApplication",
             "@id": "https://bla.tools/#software",
             "name": "BLA (bla-agents)",
-            "alternateName": ["Blind LLM Agents", "bla-shield"],
+            "alternateName": ["Blind LLM Agents", "bla-shield", "bla"],
             "applicationCategory": "DeveloperApplication",
             "applicationSubCategory": "SecurityApplication",
             "operatingSystem": "Linux, macOS, Windows",
+            "softwareVersion": "3.4.1",
+            "softwareRequirements": "Node.js ^22.23.4 || >=24.0.0",
+            "dateModified": "2026-11-16",
             "url": "https://bla.tools/",
             "downloadUrl": "https://www.npmjs.com/package/bla-agents",
+            "installUrl": "https://www.npmjs.com/package/bla-agents",
+            "releaseNotes": "https://github.com/qybaihe/bla/releases/tag/bla-agents-3.4.1",
+            "screenshot": "https://bla.tools/assets/social-card.png",
             "license": "https://opensource.org/licenses/MIT",
+            "award": "GitHub Trending #5 Repository of the Day",
+            "author": { "@id": "https://bla.tools/#organization" },
+            "publisher": { "@id": "https://bla.tools/#organization" },
             "offers": {
               "@type": "Offer",
               "price": "0",
               "priceCurrency": "USD"
             },
-            "description": "Adversarial Blue Defense MCP server and CLI engineered to protect 26 software artifact formats (JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE, SQLite, GGUF/Safetensors, Android DEX) against AI reverse-engineering agents like REA."
+            "featureList": [
+              "31 JSON-RPC 2.0 MCP defense tools for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity",
+              "26 supported software, bytecode, database, AI model, and binary artifact formats",
+              "Parameterized Mixed Boolean-Arithmetic (MBA) instruction substitution and number-theoretic opaque predicates",
+              "Electron ASAR header amplification, IPC channel de-literalization, and V1 Fuse hardening",
+              "Vite, Rollup, Webpack, and esbuild build-time protection and honey SourceMap plugins",
+              "Bit-exact tensor preservation for GGUF v2/v3 and Safetensors AI models",
+              "Process-start Self-Seal integrity verification and multi-artifact Sidecar SHA-256 entanglement"
+            ],
+            "description": "Adversarial Blue Defense MCP server (31 tools) and CLI engineered to protect 26 software artifact formats (JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE, SQLite, GGUF/Safetensors, Android DEX) against AI reverse-engineering agents like REA."
           },
           {
             "@type": "SoftwareSourceCode",
@@ -90,7 +136,9 @@
             "codeRepository": "https://github.com/qybaihe/bla",
             "programmingLanguage": "TypeScript",
             "runtimePlatform": "Node.js",
+            "version": "3.4.1",
             "license": "https://opensource.org/licenses/MIT",
+            "author": { "@id": "https://bla.tools/#organization" },
             "targetProduct": { "@id": "https://bla.tools/#software" }
           }
         ]
@@ -117,7 +165,7 @@
     <header class="site-header">
       <div class="container nav-bar">
         <a href="./" class="brand">
-          <img src="assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <img src="assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" decoding="async" />
           <span>BLA</span>
         </a>
         <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
@@ -163,7 +211,7 @@
           <div class="hero-logo-orbital">
             <div class="orbital-ring ring-outer" aria-hidden="true"></div>
             <div class="orbital-ring ring-inner" aria-hidden="true"></div>
-            <img src="assets/logo.png" alt="BLA Blue Shield Logo" class="hero-logo" width="78" height="78" />
+            <img src="assets/logo.png" alt="BLA Blue Shield Logo" class="hero-logo" width="78" height="78" fetchpriority="high" decoding="async" />
           </div>
           <div class="hero-pill">
             <span class="dot-red" data-i18n="hero.pill.red">RE = Reverse Engineering</span>
@@ -271,6 +319,8 @@
                 class="trending-badge-img"
                 width="280"
                 height="56"
+                loading="lazy"
+                decoding="async"
               />
             </a>
             <div class="trending-copy">
@@ -454,12 +504,27 @@
         <div data-i18n-html="footer.tagline">
           <strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP &amp; CLI · MIT License
         </div>
-                <div>
-          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="enterprise/" data-i18n="nav.enterprise">Enterprise</a> ·
-          <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
-          <a href="https://www.npmjs.com/package/bla-agents">npm (`bla-agents`)</a>
-        </div>
+        <nav class="footer-nav" aria-label="Footer">
+          <a href="get-started/" data-i18n="nav.getStarted">Get Started</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="showcase/" data-i18n="nav.showcase">Benchmarks</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="guides/" data-i18n="nav.guides">Guides</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="crackme/" data-i18n="nav.crackme">CrackMe</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="faq/" data-i18n="nav.faq">FAQ</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="enterprise/" data-i18n="nav.enterprise">Enterprise</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="llms.txt">llms.txt</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/qybaihe/bla">GitHub ★</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://www.npmjs.com/package/bla-agents">npm</a>
+        </nav>
         <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>

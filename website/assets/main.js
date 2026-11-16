@@ -49,10 +49,41 @@ function detectInitialLang() {
   return "en";
 }
 
-function applyLanguage(lang) {
+const OG_LOCALE_BY_LANG = {
+  en: "en_US",
+  "zh-CN": "zh_CN",
+  "zh-TW": "zh_TW",
+  ja: "ja_JP",
+  ko: "ko_KR",
+  es: "es_ES",
+  fr: "fr_FR",
+  de: "de_DE",
+};
+
+function setMetaContent(selector, value) {
+  if (!value) return;
+  const el = document.querySelector(selector);
+  if (el) el.setAttribute("content", value);
+}
+
+function applyLanguage(lang, options = {}) {
   const dictRoot = window.BLA_I18N || {};
   const enDict = dictRoot.en || {};
   const langDict = dictRoot[lang] || enDict;
+
+  if (options.syncUrl && typeof window.history?.replaceState === "function") {
+    try {
+      const nextUrl = new URL(window.location.href);
+      if (lang && lang !== "en") {
+        nextUrl.searchParams.set("lang", lang);
+      } else {
+        nextUrl.searchParams.delete("lang");
+      }
+      window.history.replaceState(null, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    } catch {
+      // ignore URL update issues
+    }
+  }
 
   document.documentElement.lang = lang;
   try {
@@ -88,18 +119,35 @@ function applyLanguage(lang) {
     select.value = lang;
   }
 
+  const seoPage = document.documentElement.getAttribute("data-seo-page");
+  if (seoPage) {
+    const seoTitle = langDict[`seo.${seoPage}.title`] || enDict[`seo.${seoPage}.title`];
+    const seoDesc = langDict[`seo.${seoPage}.desc`] || enDict[`seo.${seoPage}.desc`];
+    if (seoTitle) {
+      document.title = seoTitle;
+      setMetaContent('meta[property="og:title"]', seoTitle);
+      setMetaContent('meta[name="twitter:title"]', seoTitle);
+    }
+    if (seoDesc) {
+      setMetaContent('meta[name="description"]', seoDesc);
+      setMetaContent('meta[property="og:description"]', seoDesc);
+      setMetaContent('meta[name="twitter:description"]', seoDesc);
+    }
+  }
+  setMetaContent('meta[property="og:locale"]', OG_LOCALE_BY_LANG[lang] || "en_US");
+
   const canonicalEl = document.querySelector('link[rel="canonical"]');
   if (canonicalEl) {
     const baseHref = (canonicalEl.getAttribute("data-base-canonical") || canonicalEl.getAttribute("href") || "").split("?")[0];
     if (baseHref) {
       canonicalEl.setAttribute("data-base-canonical", baseHref);
       const queryLang = new URLSearchParams(window.location.search).get("lang");
-      canonicalEl.setAttribute(
-        "href",
+      const localizedHref =
         queryLang && queryLang !== "en" && lang === queryLang
           ? `${baseHref}?lang=${encodeURIComponent(lang)}`
-          : baseHref,
-      );
+          : baseHref;
+      canonicalEl.setAttribute("href", localizedHref);
+      setMetaContent('meta[property="og:url"]', localizedHref);
     }
   }
 
@@ -501,7 +549,7 @@ function initMain() {
   const select = document.getElementById("bla-lang-select");
   if (select) {
     select.addEventListener("change", (e) => {
-      applyLanguage(e.target.value);
+      applyLanguage(e.target.value, { syncUrl: true });
     });
   }
 

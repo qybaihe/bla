@@ -1371,7 +1371,23 @@ pre.code-block {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 20px;
+  gap: 16px 20px;
+}
+
+.footer-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.footer-nav a:hover {
+  color: var(--text-primary);
+}
+
+.footer-sep {
+  color: rgba(148, 163, 184, 0.42);
+  user-select: none;
 }
 
 .footer-inner .live-stamp {

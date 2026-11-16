@@ -1,26 +1,43 @@
 {
+  "id": "/",
   "name": "BLA (bla-agents) — Blind LLM Agents",
   "short_name": "BLA Shield",
-  "description": "Open-source adversarial Blue Defense MCP server and CLI protecting binaries, Electron apps, JS/TS, Python, WebAssembly, SQLite, AI models, and Android DEX against AI reverse-engineering agents.",
+  "description": "Open-source adversarial Blue Defense MCP server (31 tools), CLI, and bundler plugin protecting 26 software artifact formats (JS/TS, Electron ASAR, WebAssembly, Python, Native ELF/Mach-O/PE, SQLite, GGUF/Safetensors, Android DEX) against AI reverse-engineering agents.",
   "start_url": "/",
+  "scope": "/",
+  "lang": "en",
+  "dir": "ltr",
   "display": "standalone",
   "background_color": "#040814",
   "theme_color": "#040814",
+  "categories": ["developer tools", "security", "utilities"],
   "icons": [
     {
       "src": "/assets/favicon.png",
-      "sizes": "192x192",
+      "sizes": "64x64",
       "type": "image/png"
+    },
+    {
+      "src": "/assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/logo.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "/assets/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml"
-    },
-    {
-      "src": "/assets/logo.png",
-      "sizes": "512x512",
-      "type": "image/png"
     }
   ]
 }

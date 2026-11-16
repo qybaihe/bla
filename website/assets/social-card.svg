@@ -20,6 +20,11 @@
     OPEN-SOURCE BLUE DEFENSE MCP &amp; CLI · MIT
   </text>
 
+  <rect x="544" y="102" width="290" height="40" rx="20" fill="#1e153d" stroke="#8b5cf6" stroke-width="1.4" />
+  <text x="689" y="128" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="15" font-weight="700" fill="#ddd6fe">
+    GITHUB TRENDING #5 DAILY
+  </text>
+
   <text x="108" y="216" font-family="Helvetica Neue, Arial, sans-serif" font-size="66" font-weight="800" fill="#f8fafc">
     BLA: Blind LLM Agents
   </text>
@@ -30,7 +35,7 @@
     JS/TS · Electron ASAR · WASM · Python · Native ELF/Mach-O/PE · SQLite · GGUF/Safetensors · DEX
   </text>
 
-  <rect x="108" y="354" width="660" height="72" rx="14" fill="#040917" stroke="#2563eb" stroke-width="1.8" />
+  <rect x="108" y="354" width="680" height="72" rx="14" fill="#040917" stroke="#2563eb" stroke-width="1.8" />
   <text x="138" y="399" font-family="Menlo, Consolas, monospace" font-size="24" font-weight="700" fill="#60a5fa">
     $ npx bla-agents@latest harden .
   </text>

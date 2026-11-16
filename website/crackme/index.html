@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-seo-page="crackme">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,8 +7,13 @@
     <title>Public CrackMe Challenge Lab — Adversarial AI Reverse-Engineering Evaluation | BLA</title>
     <meta
       name="description"
-      content="Evaluate AI reverse-engineering agents against hardened BLA CrackMe challenges (v6–v9) backed by cryptographic SEAL.json commitments in qybaihe/bla."
+      content="Evaluate AI reverse-engineering agents against hardened BLA CrackMe challenges (v6–v9) backed by cryptographic SEAL.json SHA-256 commitments in qybaihe/bla."
     />
+    <meta
+      name="keywords"
+      content="AI CrackMe challenge, LLM reverse engineering benchmark, adversarial reverse engineering, BLA CrackMe, SEAL.json SHA-256, anti-REA evaluation"
+    />
+    <meta name="author" content="BLA Contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="theme-color" content="#040814" />
     <link rel="canonical" href="https://bla.tools/crackme/" />
@@ -21,8 +26,18 @@
     <link rel="alternate" hreflang="fr" href="https://bla.tools/crackme/?lang=fr" />
     <link rel="alternate" hreflang="de" href="https://bla.tools/crackme/?lang=de" />
     <link rel="alternate" hreflang="x-default" href="https://bla.tools/crackme/" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms-full.txt" title="BLA Full Technical Reference" />
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="ko_KR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="de_DE" />
     <meta property="og:url" content="https://bla.tools/crackme/" />
     <meta property="og:title" content="Public CrackMe Challenge Lab — BLA (bla-agents)" />
     <meta
@@ -30,6 +45,7 @@
       content="Test your AI reverse-engineering pipeline against publicly verifiable BLA CrackMe bundles with pinned SHA-256 SEAL commitments."
     />
     <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="BLA Public CrackMe Evaluation Lab" />
@@ -40,6 +56,7 @@
       content="Public adversarial CrackMe evaluation bundles hardened by BLA with reproducible SEAL.json commitments."
     />
     <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <meta name="twitter:image:alt" content="BLA Public CrackMe Evaluation Lab" />
     <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="apple-touch-icon" href="../assets/logo.png" />
@@ -60,6 +77,12 @@
             "@type": "TechArticle",
             "headline": "BLA Public CrackMe Challenge Lab",
             "url": "https://bla.tools/crackme/",
+            "mainEntityOfPage": "https://bla.tools/crackme/",
+            "image": "https://bla.tools/assets/social-card.png",
+            "datePublished": "2026-10-25",
+            "dateModified": "2026-11-16",
+            "author": { "@type": "Organization", "name": "BLA (Blind LLM Agents)", "url": "https://bla.tools/" },
+            "publisher": { "@type": "Organization", "name": "BLA (Blind LLM Agents)", "url": "https://bla.tools/" },
             "description": "Publicly verifiable multi-artifact CrackMe bundles hardened by BLA (bla-agents) for clean-room AI reverse-engineering evaluation."
           }
         ]
@@ -86,7 +109,7 @@
     <header class="site-header">
       <div class="container nav-bar">
         <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" decoding="async" />
           <span>BLA</span>
         </a>
         <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
@@ -224,12 +247,25 @@
     <footer class="site-footer">
       <div class="container footer-inner">
         <div data-i18n-html="footer.tagline"><strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP &amp; CLI</div>
-        <div>
-          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a> ·
-          <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
+        <nav class="footer-nav" aria-label="Footer">
           <a href="../" data-i18n="nav.overview">Overview</a>
-        </div>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../get-started/" data-i18n="nav.getStarted">Get Started</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../showcase/" data-i18n="nav.showcase">Benchmarks</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../guides/" data-i18n="nav.guides">Guides</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../faq/" data-i18n="nav.faq">FAQ</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../llms.txt">llms.txt</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/qybaihe/bla">GitHub ★</a>
+        </nav>
         <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>

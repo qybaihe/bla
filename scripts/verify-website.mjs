@@ -30,6 +30,8 @@ const REQUIRED_ASSETS = [
   "assets/logo.png",
   "assets/favicon.png",
   "assets/favicon.svg",
+  "assets/icon-192.png",
+  "assets/icon-512.png",
   "assets/social-card.svg",
   "assets/social-card.png",
   "schemas/defense-manifest-v1.json",
@@ -263,6 +265,13 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     }
 
     // SEO & Structured Metadata Checks
+    const seoPageMatch = /<html\b[^>]*data-seo-page=["']([a-z0-9-]+)["']/i.exec(html);
+    if (!seoPageMatch) {
+      errors.push(`${rel}: missing data-seo-page attribute on <html>`);
+    } else {
+      usedI18nKeys.add(`seo.${seoPageMatch[1]}.title`);
+      usedI18nKeys.add(`seo.${seoPageMatch[1]}.desc`);
+    }
     if (!/<title>[^<]{10,}<\/title>/i.test(html)) {
       errors.push(`${rel}: missing or too-short <title>`);
     }
@@ -275,6 +284,12 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     } else if (sitemapXml && !sitemapXml.includes(`<loc>${canonicalMatch[1]}</loc>`)) {
       errors.push(`${rel}: canonical URL '${canonicalMatch[1]}' is missing from sitemap.xml`);
     }
+    if (!/<link\b[^>]*hreflang=["']x-default["']/i.test(html)) {
+      errors.push(`${rel}: missing <link rel="alternate" hreflang="x-default">`);
+    }
+    if (!/<meta\b[^>]*property=["']og:locale["'][^>]*content=["'][^"']+["']/i.test(html)) {
+      errors.push(`${rel}: missing OpenGraph og:locale`);
+    }
     if (!/<meta\b[^>]*property=["']og:title["'][^>]*content=["'][^"']+["']/i.test(html)) {
       errors.push(`${rel}: missing OpenGraph og:title`);
     }
@@ -284,8 +299,14 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     if (!html.includes('property="og:image" content="https://bla.tools/assets/social-card.png"')) {
       errors.push(`${rel}: og:image must reference https://bla.tools/assets/social-card.png`);
     }
+    if (!/<meta\b[^>]*property=["']og:image:type["'][^>]*content=["']image\/png["']/i.test(html)) {
+      errors.push(`${rel}: missing og:image:type image/png`);
+    }
     if (!/<meta\b[^>]*name=["']twitter:card["'][^>]*content=["']summary_large_image["']/i.test(html)) {
       errors.push(`${rel}: missing twitter:card summary_large_image`);
+    }
+    if (!/<meta\b[^>]*name=["']twitter:image:alt["'][^>]*content=["'][^"']+["']/i.test(html)) {
+      errors.push(`${rel}: missing twitter:image:alt`);
     }
     const jsonLdMatches = [...html.matchAll(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/gi)];
     if (jsonLdMatches.length === 0) {

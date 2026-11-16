@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-seo-page="faq">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,8 +7,13 @@
     <title>FAQ — AI Reverse-Engineering Defense, Performance &amp; Security Boundaries | BLA</title>
     <meta
       name="description"
-      content="Frequently asked questions about BLA (bla-agents): zero hot-path performance overhead, one-command MCP/CLI hardening, GGUF/Safetensors bit-exact tensor preservation, and honest client-side security boundaries."
+      content="Frequently asked questions about BLA (bla-agents): zero hot-path overhead, one-command MCP/CLI hardening, GGUF/Safetensors bit-exact tensor preservation, and honest client-side security boundaries."
     />
+    <meta
+      name="keywords"
+      content="BLA FAQ, bla-agents performance, obfuscation overhead, GGUF tensor integrity, Android DEX checksum, software protection limits"
+    />
+    <meta name="author" content="BLA Contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="theme-color" content="#040814" />
     <link rel="canonical" href="https://bla.tools/faq/" />
@@ -21,8 +26,18 @@
     <link rel="alternate" hreflang="fr" href="https://bla.tools/faq/?lang=fr" />
     <link rel="alternate" hreflang="de" href="https://bla.tools/faq/?lang=de" />
     <link rel="alternate" hreflang="x-default" href="https://bla.tools/faq/" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms.txt" title="BLA LLM Documentation" />
+    <link rel="alternate" type="text/plain" href="https://bla.tools/llms-full.txt" title="BLA Full Technical Reference" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="BLA (bla-agents)" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="ko_KR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="de_DE" />
     <meta property="og:url" content="https://bla.tools/faq/" />
     <meta property="og:title" content="FAQ — BLA (bla-agents) AI Reverse-Engineering Defense" />
     <meta
@@ -30,6 +45,7 @@
       content="Answers on runtime equivalence, performance overhead, GGUF/DEX binary integrity, one-step hardening, and BLA's Honesty Red Line."
     />
     <meta property="og:image" content="https://bla.tools/assets/social-card.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="BLA Frequently Asked Questions" />
@@ -40,6 +56,7 @@
       content="Common questions on protecting binaries, Electron apps, JS/WASM, and AI models against automated AI reverse engineering."
     />
     <meta name="twitter:image" content="https://bla.tools/assets/social-card.png" />
+    <meta name="twitter:image:alt" content="BLA Frequently Asked Questions" />
     <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
     <link rel="icon" type="image/png" href="../assets/favicon.png" />
     <link rel="apple-touch-icon" href="../assets/logo.png" />
@@ -125,7 +142,7 @@
     <header class="site-header">
       <div class="container nav-bar">
         <a href="../" class="brand">
-          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" />
+          <img src="../assets/logo.png" alt="BLA Shield Logo" class="brand-logo" width="38" height="38" decoding="async" />
           <span>BLA</span>
         </a>
         <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="site-nav">
@@ -202,7 +219,7 @@
             <details class="evidence-drawer">
               <summary data-i18n="faq.q5">What are BLA's honest limits?</summary>
               <div class="drawer-body" data-i18n-html="faq.a5">
-                BLA raises analyzer cost and plants decoys; it is not a magic anti-RE seal. Traditional interactive reverse engineering is out of scope of the commodity REA red-team numbers. Try the public CrackMe v6 challenge on GitHub.
+                BLA raises analyzer cost and plants decoys; it is not a magic anti-RE seal. Traditional interactive reverse engineering (Ghidra, Frida, LLDB, JADX sessions) is out of scope of the commodity REA red-team numbers. The public challenge status is read from <a href="https://github.com/qybaihe/bla/tree/main/challenge">challenge/README.md</a>. This site does not publish a solve count.
               </div>
             </details>
           </div>
@@ -213,12 +230,25 @@
     <footer class="site-footer">
       <div class="container footer-inner">
         <div data-i18n-html="footer.tagline"><strong>BLA (`bla-agents`)</strong> · Blind LLM Agents · Software Protection MCP &amp; CLI</div>
-                <div>
-          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a> ·
-          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a> ·
-          <a href="https://github.com/qybaihe/bla">GitHub ★</a> ·
+        <nav class="footer-nav" aria-label="Footer">
           <a href="../" data-i18n="nav.overview">Overview</a>
-        </div>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../get-started/" data-i18n="nav.getStarted">Get Started</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../showcase/" data-i18n="nav.showcase">Benchmarks</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../guides/" data-i18n="nav.guides">Guides</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../crackme/" data-i18n="nav.crackme">CrackMe</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../enterprise/" data-i18n="nav.enterprise">Enterprise</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="../llms.txt">llms.txt</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="mailto:qybaihe@gmail.com">qybaihe@gmail.com</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/qybaihe/bla">GitHub ★</a>
+        </nav>
         <p class="live-stamp" data-live-stamp="stars" data-state="loading"></p>
       </div>
     </footer>
