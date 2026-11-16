@@ -262,6 +262,60 @@ export function detectJsCarrierForSource(
   }
 }
 
+/**
+ * True when an ES module has static `import` / `export-from` bindings that the
+ * ESM loader will instantiate *before* any statement in the file — including a
+ * prepended sidecarEntangle / self-seal IIFE. The BLA preamble's own
+ * `import { createRequire } from "node:module"` is ignored (it has no user
+ * side effects). CommonJS `require()` after a preamble is *not* hoisted.
+ *
+ * Honesty: entry-body fail-closed is not process-start for the hoisted graph.
+ */
+export function jsModuleHasHoistedDependencyGraph(
+  source: string,
+  filename?: string,
+): boolean {
+  const loader = inferJsLoaderFromPath(filename);
+  const requested = inferJsCarrierFromPath(filename);
+  const parserSourceType =
+    requested === "module"
+      ? "module"
+      : requested === "commonjs" || requested === "script"
+        ? "script"
+        : "unambiguous";
+  try {
+    const ast = parse(source, {
+      sourceType: parserSourceType,
+      plugins: buildParserPlugins(loader, filename !== undefined),
+      errorRecovery: false,
+    });
+    if (ast.program.sourceType !== "module") return false;
+    return ast.program.body.some((stmt) => isHoistedUserModuleEdge(stmt));
+  } catch {
+    return false;
+  }
+}
+
+function isPreambleCreateRequireImport(stmt: t.Node): boolean {
+  if (!t.isImportDeclaration(stmt)) return false;
+  if (stmt.source.value !== "node:module") return false;
+  if (stmt.specifiers.length === 0) return false;
+  return stmt.specifiers.every(
+    (spec) =>
+      t.isImportSpecifier(spec) &&
+      t.isIdentifier(spec.imported) &&
+      spec.imported.name === "createRequire",
+  );
+}
+
+function isHoistedUserModuleEdge(stmt: t.Node): boolean {
+  if (isPreambleCreateRequireImport(stmt)) return false;
+  if (t.isImportDeclaration(stmt)) return true;
+  if (t.isExportAllDeclaration(stmt) && stmt.source !== null) return true;
+  if (t.isExportNamedDeclaration(stmt) && stmt.source !== null) return true;
+  return false;
+}
+
 export function collectEsmExportedSymbols(program: t.Program): string[] {
   const exported: string[] = [];
   for (const stmt of program.body) {
