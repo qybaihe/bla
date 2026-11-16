@@ -2480,7 +2480,12 @@ export async function handleMcpRequest(
             typeof args.home_dir === "string" ? args.home_dir : undefined,
           );
         } else if (name === "bla_inspect_release") {
-          payload = handlers.inspectReleaseExposure(args.path as string);
+          const maxFiles = optionalCount(args.max_files);
+          const maxTotalBytes = optionalCount(args.max_total_bytes);
+          payload = handlers.inspectReleaseExposure(args.path as string, {
+            ...(maxFiles !== undefined ? { maxFiles } : {}),
+            ...(maxTotalBytes !== undefined ? { maxTotalBytes } : {}),
+          });
         } else if (name === "bla_init") {
           payload = handlers.initBlaConfig(
             args.directory as string,

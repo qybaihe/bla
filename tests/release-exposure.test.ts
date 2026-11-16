@@ -208,4 +208,32 @@ describe("read-only release exposure observations", () => {
     writeFileSync(file, "invalid");
     expect(await runCli(["inspect-release", file])).toBe(2);
   });
+
+  it("honors the optional maxFiles bound", () => {
+    const dir = temp();
+    for (const name of ["a.js", "b.js", "c.js"]) {
+      writeFileSync(join(dir, name), "const x = 1;\n");
+    }
+    expect(inspectReleaseExposure(dir).filesInspected).toBe(3);
+    const capped = inspectReleaseExposure(dir, { maxFiles: 1 });
+    expect(capped.filesInspected).toBe(1);
+    expect(capped.status).toBe("partial");
+    expect(capped.limitations.some((l) => l.reason === "file-count-limit")).toBe(
+      true,
+    );
+  });
+
+  it("honors the optional maxTotalBytes bound", () => {
+    const dir = temp();
+    const body = `//# sourceMappingURL=x.map;${"x".repeat(600)}`;
+    writeFileSync(join(dir, "big1.js"), body);
+    writeFileSync(join(dir, "big2.js"), body);
+    const capped = inspectReleaseExposure(dir, { maxTotalBytes: 700 });
+    expect(capped.filesInspected).toBe(1);
+    expect(capped.bytesRead).toBeLessThanOrEqual(700);
+    expect(capped.status).toBe("partial");
+    expect(capped.limitations.some((l) => l.reason === "read-size-limit")).toBe(
+      true,
+    );
+  });
 });
