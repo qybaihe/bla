@@ -73,6 +73,23 @@ describe("panel offline oracle (red-blue round-4)", () => {
     );
   });
 
+  it("keeps external property accesses of the same name intact during the local rename", () => {
+    // A local `function deriveLocal` can legally coexist with `other.deriveLocal`
+    // property accesses on an external object; renaming the access would change
+    // the program's behavior instead of just hiding the stable ABI.
+    const body = [
+      "function deriveLocal(k) { return k; }",
+      "const mine = deriveLocal(7);",
+      "const theirs = helpers.deriveLocal(9);",
+    ].join("\n");
+    const rw = rewriteStablePanelDeriveSymbols(body, "r4-panel-seed");
+    expect(rw.rewrote).toBe(true);
+    expect(rw.code).not.toContain("function deriveLocal");
+    expect(rw.code).toContain("helpers.deriveLocal(9)");
+    const remaining = rw.code.match(/deriveLocal/g) ?? [];
+    expect(remaining.length).toBe(1);
+  });
+
   it("warns on panelTokenSha256 alone without refuse", () => {
     const src = `const digest = seal.panelTokenSha256;\n`;
     const report = lintPanelDeriveAbiSource(src);
