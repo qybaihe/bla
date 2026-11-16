@@ -14,7 +14,6 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { writeFileAtomicSync } from "./protector.js";
