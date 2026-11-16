@@ -109,7 +109,7 @@ Options:
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --self-seal-sibling-glob <a,b>  Comma-separated globs (cwd-relative) expanded into self-seal sibling paths; requires --self-seal (protect only)
-  --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for CommonJS & ESM JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40); OFF by default
+  --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for CommonJS & ESM JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40); ESM static imports still evaluate before the entry hook; OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default

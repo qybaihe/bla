@@ -275,7 +275,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fail-closes the entry body. ESM static import/export-from bindings still evaluate before that hook (defenseScore gap esm-import-hoist-before-hooks). OFF by default.",
         },
         require_agent_weave: {
           type: "boolean",
@@ -437,7 +437,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fail-closes the entry body. ESM static import/export-from bindings still evaluate before that hook (defenseScore gap esm-import-hoist-before-hooks). OFF by default.",
         },
         require_agent_weave: {
           type: "boolean",
@@ -568,7 +568,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         sidecar_entangle: {
           type: "boolean",
           description:
-            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fails closed. OFF by default.",
+            "Opt-in sidecar/entry entanglement for JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40). When true, harden/protect binds sibling sidecar bytes into the entry via a strip⇒fail preamble (CommonJS require or ESM createRequire + import.meta.url) — removing or altering a sidecar fail-closes the entry body. ESM static import/export-from bindings still evaluate before that hook (defenseScore gap esm-import-hoist-before-hooks). OFF by default.",
         },
         wasm_preserve_exports: {
           type: "array",
