@@ -14,6 +14,7 @@ import {
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
+import { isWasmSidecarLoaderHookWired } from "../shields/runtime/sidecar-entangle.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
@@ -168,6 +169,18 @@ export function verifyTarget(
     }
   }
 
+  let wasmSidecarLoaderHookApplied = false;
+  if (afterAudit.detectedFormat === "wasm") {
+    try {
+      wasmSidecarLoaderHookApplied = isWasmSidecarLoaderHookWired({
+        wasmBytes: readFileSync(absTarget),
+        wasmPath: absTarget,
+      });
+    } catch {
+      wasmSidecarLoaderHookApplied = false;
+    }
+  }
+
   let esmImportHoistBeforeHooks = false;
   if (
     afterAudit.detectedFormat === "javascript" ||
@@ -193,6 +206,7 @@ export function verifyTarget(
       ? { nativeMappedSectionInjected }
       : {}),
     ...(esmImportHoistBeforeHooks ? { esmImportHoistBeforeHooks: true } : {}),
+    ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true } : {}),
   });
 
   const agentActions: VerificationAgentAction[] = [];

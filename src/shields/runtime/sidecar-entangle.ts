@@ -30,9 +30,9 @@
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import {
   INTEGRITY_COVERAGE_SCHEMA,
   buildInterleavedCoverageMatrix,
@@ -1009,8 +1009,10 @@ export function entangleWasmEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  /** When true, plant a custom-section note even with no sibling sidecars (load-time hook strip⇒fail). */
+  readonly allowEmptySidecars?: boolean;
 }): SidecarWasmBindResult | null {
-  if (options.sidecars.length === 0) return null;
+  if (options.sidecars.length === 0 && options.allowEmptySidecars !== true) return null;
   return bindWasmSidecarEntanglement({
     entryPath: options.entryPath,
     sidecarPaths: options.sidecars.map((s) => s.pathLabel),
@@ -1214,9 +1216,13 @@ function normalizeWasmCodeIdentity(hex: string): string {
  * Unrelated WASM modules (identity mismatch) pass through. Export surface and
  * function bodies of the protected module are not rewritten. The hook is
  * host-opt-in: it runs only when the customer prepends or evals this snippet
- * in the loader that actually instantiates the module. Until that happens,
- * `wasm-sidecar-host-verify-only` stays in place and `wasm-sidecar-entangle`
- * is not recorded.
+ * in the loader that actually instantiates the module. `protectTarget` /
+ * `hardenProject` auto-wire this hook into a same-directory Node.js
+ * CommonJS loader that already uses `fs` and `WebAssembly.instantiate` /
+ * `compile` / `instantiateStreaming` and mentions the `.wasm` basename;
+ * only then is `wasm-sidecar-entangle` recorded and
+ * `wasm-sidecar-host-verify-only` cleared. Browser, ESM (static import),
+ * minified, and ambiguous loaders are left untouched.
  *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
  */
@@ -1506,6 +1512,225 @@ export function entangleWasmLoaderWithSidecars(options: {
     inject,
     codeIdentityHex,
   };
+}
+
+/** Candidate Node.js WASM loader extensions (CommonJS only; `.mjs` is never auto-wired). */
+const NODE_WASM_JS_LOADER_EXTENSIONS = [".cjs", ".js"] as const;
+
+/** Skip tests, typings, and minified bundles — too risky to rewrite automatically. */
+const UNSAFE_WASM_LOADER_NAME = /\.(?:test|spec|d)\.(?:cjs|js)$/i;
+
+const WASM_INSTANTIATE_API_RE =
+  /WebAssembly\s*\.\s*(instantiate(?:Streaming)?|compile(?:Streaming)?)\b/;
+
+const NODE_FS_LOADER_RE =
+  /require\s*\(\s*["'](?:node:)?fs["']\s*\)|\bfrom\s+["'](?:node:)?fs["']|createRequire\s*\(|\bfs\.readFile(?:Sync)?\b/;
+
+/** Line-leading ESM `import` / `export` (or `import.meta`) — hook would run too late. */
+const ESM_STATIC_IMPORT_RE = /^\s*(?:import(?:\s+type)?\s|export\s)/m;
+
+/** Soft cap so we do not slurp huge bundled artifacts as loader candidates. */
+const MAX_WASM_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
+
+/** Dedicated loaders are small; large JS entries (apps / already-protected artifacts) are not auto-wired. */
+const MAX_WASM_LOADER_AUTOWIRE_CHARS = 64 * 1024;
+
+/**
+ * Already-entangled JS entries (self-seal / sidecar preamble) are applications,
+ * not dedicated WASM loaders — rewriting them again would invalidate baked
+ * integrity digests (red line).
+ */
+const ALREADY_ENTANGLED_JS_RE =
+  /bla-self-seal\/v1|integrity check failed|integrity binding mismatch/;
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function isNodeWasmJsLoaderFilename(filename: string): boolean {
+  const base = basename(filename);
+  const lower = base.toLowerCase();
+  if (UNSAFE_WASM_LOADER_NAME.test(base) || lower.endsWith(".min.js")) return false;
+  return NODE_WASM_JS_LOADER_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/**
+ * True when `source` mentions `wasmBasename` (or a path ending in it) inside a
+ * quoted string or template literal.
+ */
+export function sourceMentionsWasmBasename(source: string, wasmBasename: string): boolean {
+  const name = wasmBasename.replaceAll("\\", "/").split("/").pop() ?? "";
+  if (!name || !name.toLowerCase().endsWith(".wasm")) return false;
+  const pattern = new RegExp(
+    `['"\`](?:[^'"\`\\\\]|\\\\.)*${escapeRegExpLiteral(name)}['"\`]`,
+  );
+  return pattern.test(source);
+}
+
+/**
+ * Conservative auto-wire predicate: a Node.js CommonJS file that already
+ * loads the named `.wasm` via `WebAssembly.instantiate` / `compile` /
+ * `instantiateStreaming` and already uses `fs`. ESM, browser (`fetch`-only),
+ * minified, and test files return false.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function isSafeNodeWasmJsLoader(options: {
+  readonly source: string;
+  readonly filename: string;
+  readonly wasmBasename: string;
+}): boolean {
+  if (!isNodeWasmJsLoaderFilename(options.filename)) return false;
+  if (options.source.length > MAX_WASM_LOADER_AUTOWIRE_CHARS) return false;
+  if (ALREADY_ENTANGLED_JS_RE.test(options.source)) return false;
+  if (ESM_STATIC_IMPORT_RE.test(options.source) || /\bimport\.meta\b/.test(options.source)) {
+    return false;
+  }
+  if (!WASM_INSTANTIATE_API_RE.test(options.source)) return false;
+  if (!NODE_FS_LOADER_RE.test(options.source)) return false;
+  return sourceMentionsWasmBasename(options.source, options.wasmBasename);
+}
+
+function wasmLoaderPreference(loaderName: string, wasmBasename: string): number {
+  const stem = (wasmBasename.replaceAll("\\", "/").split("/").pop() ?? "").replace(
+    /\.wasm$/i,
+    "",
+  );
+  const base = basename(loaderName).replace(/\.(?:cjs|js)$/i, "");
+  if (stem.length > 0 && base.toLowerCase() === stem.toLowerCase()) return 0;
+  if (/^loader$/i.test(base)) return 1;
+  if (/^index$/i.test(base)) return 2;
+  return 3;
+}
+
+export interface NodeWasmJsLoaderCandidate {
+  readonly name: string;
+  readonly source: string;
+}
+
+/**
+ * Pick a single same-directory Node CJS WASM loader, or `null` when none
+ * qualify or several unranked files all qualify (do not guess). Preferred
+ * names: `<stem>.cjs` / `<stem>.js`, then `loader.*`, then `index.*`
+ * (`.cjs` wins a same-rank tie).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function selectNodeWasmJsLoader(
+  wasmBasename: string,
+  candidates: readonly NodeWasmJsLoaderCandidate[],
+): string | null {
+  const qualifying = candidates.filter((c) =>
+    isSafeNodeWasmJsLoader({
+      source: c.source,
+      filename: c.name,
+      wasmBasename,
+    }),
+  );
+  if (qualifying.length === 0) return null;
+  const scored = qualifying.map((c) => ({
+    c,
+    score: wasmLoaderPreference(c.name, wasmBasename),
+    cjs: basename(c.name).toLowerCase().endsWith(".cjs") ? 0 : 1,
+  }));
+  scored.sort(
+    (a, b) =>
+      a.score - b.score || a.cjs - b.cjs || a.c.name.localeCompare(b.c.name),
+  );
+  const best = scored[0]!;
+  // Only known names: <stem>, loader, index. Never guess at unique app files
+  // such as license.cjs / main.cjs / helper.cjs.
+  if (best.score >= 3) return null;
+  const ties = scored.filter((s) => s.score === best.score && s.cjs === best.cjs);
+  if (ties.length > 1) return null;
+  return best.c.name;
+}
+
+export interface DiscoveredNodeWasmJsLoader {
+  readonly absPath: string;
+  readonly name: string;
+  readonly source: string;
+}
+
+function readWasmLoaderCandidateSource(absPath: string): string | null {
+  try {
+    const st = statSync(absPath);
+    if (!st.isFile() || st.size <= 0 || st.size > MAX_WASM_LOADER_CANDIDATE_BYTES) {
+      return null;
+    }
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * List same-directory `.cjs` / `.js` candidates (no recursion). Unreadable
+ * or oversized files are skipped.
+ */
+export function listSameDirNodeWasmJsLoaderCandidates(
+  directory: string,
+): DiscoveredNodeWasmJsLoader[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const out: DiscoveredNodeWasmJsLoader[] = [];
+  for (const name of names) {
+    if (!isNodeWasmJsLoaderFilename(name)) continue;
+    const absPath = join(directory, name);
+    const source = readWasmLoaderCandidateSource(absPath);
+    if (source === null) continue;
+    out.push({ absPath, name, source });
+  }
+  return out;
+}
+
+/**
+ * Discover the unique safe Node CJS loader for `wasmBasename` in the first
+ * search directory that yields a selection. Later directories are not
+ * consulted once one directory produces a hit (output dir wins over source).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function discoverNodeWasmJsLoader(options: {
+  readonly wasmBasename: string;
+  readonly searchDirectories: readonly string[];
+}): DiscoveredNodeWasmJsLoader | null {
+  const seen = new Set<string>();
+  for (const directory of options.searchDirectories) {
+    if (typeof directory !== "string" || directory.length === 0) continue;
+    const key = directory;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const candidates = listSameDirNodeWasmJsLoaderCandidates(directory);
+    const selected = selectNodeWasmJsLoader(options.wasmBasename, candidates);
+    if (!selected) continue;
+    const hit = candidates.find((c) => c.name === selected || c.absPath === selected);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * True when a same-directory JS file already carries the WASM loader hook
+ * bound to this module's code identity (used by defenseScore honesty).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function isWasmSidecarLoaderHookWired(options: {
+  readonly wasmBytes: Uint8Array;
+  readonly wasmPath: string;
+}): boolean {
+  const identity = computeWasmSidecarCodeIdentity(options.wasmBytes);
+  const directory = dirname(options.wasmPath);
+  const candidates = listSameDirNodeWasmJsLoaderCandidates(directory);
+  return candidates.some(
+    (c) =>
+      c.source.includes(WASM_SIDECAR_LOADER_MARKER) && c.source.includes(identity),
+  );
 }
 
 

@@ -107,6 +107,9 @@ import {
   entangleSqliteEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
+  entangleWasmLoaderWithSidecars,
+  discoverNodeWasmJsLoader,
+  WASM_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -275,6 +278,47 @@ function applySidecarEntangleToWasm(
   });
   if (!bound) return { buffer: wasmBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarWasmLoaderAutoWire(options: {
+  readonly wasmBytes: Uint8Array;
+  readonly wasmBasenames: readonly string[];
+  readonly outputDir: string;
+  readonly sourceDir: string;
+}): { applied: boolean; destPath?: string } {
+  const search = [options.outputDir];
+  if (options.sourceDir !== options.outputDir) search.push(options.sourceDir);
+  const names = [...new Set(options.wasmBasenames.filter((n) => /\.wasm$/i.test(n)))];
+  let found: ReturnType<typeof discoverNodeWasmJsLoader> = null;
+  for (const wasmBasename of names) {
+    found = discoverNodeWasmJsLoader({
+      wasmBasename,
+      searchDirectories: search,
+    });
+    if (found) break;
+  }
+  if (!found) return { applied: false };
+  let destPath = found.absPath;
+  const foundDir = dirname(found.absPath);
+  if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
+    destPath = join(options.outputDir, found.name);
+    if (existsSync(destPath) && destPath !== found.absPath) {
+      // Do not clobber an existing output sibling that was not the selected loader.
+      return { applied: false };
+    }
+  }
+  const entangled = entangleWasmLoaderWithSidecars({
+    loaderSource: found.source,
+    wasmBytes: options.wasmBytes,
+    carrier: "commonjs",
+  });
+  if (entangled.code === found.source && destPath === found.absPath) {
+    return found.source.includes(WASM_SIDECAR_LOADER_MARKER)
+      ? { applied: true, destPath }
+      : { applied: false };
+  }
+  writeFileAtomicSync(destPath, entangled.code, "utf8");
+  return { applied: true, destPath };
 }
 
 function applySidecarEntangleToPyc(
@@ -664,6 +708,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
   let sidecarEntangleApplied = false;
+  let wasmSidecarLoaderHookApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -1059,9 +1104,37 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     });
     let finalWasm = res.buffer;
     {
+      const willPlantSection =
+        options.sidecarEntangle === true &&
+        (options.sidecarEntanglePaths ?? []).some((rel) => {
+          if (typeof rel !== "string" || rel.length === 0) return false;
+          const abs = isAbsolute(rel) ? rel : join(dirname(absOutput), rel);
+          try {
+            return existsSync(abs);
+          } catch {
+            return false;
+          }
+        });
+      if (willPlantSection) {
+        const hook = applySidecarWasmLoaderAutoWire({
+          wasmBytes: finalWasm,
+          wasmBasenames: [basename(absInput), basename(absOutput)],
+          outputDir: dirname(absOutput),
+          sourceDir: dirname(absInput),
+        });
+        if (hook.applied) wasmSidecarLoaderHookApplied = true;
+      }
       const entangled = applySidecarEntangleToWasm(finalWasm, options, absOutput, seed);
       finalWasm = entangled.buffer;
       if (entangled.applied) sidecarEntangleApplied = true;
+      // Only record the load-time vector when the section was planted AND
+      // a Node CJS loader was actually auto-wired (honesty: do not claim
+      // strip⇒fail if the hook never shipped).
+      if (entangled.applied && wasmSidecarLoaderHookApplied) {
+        counteredVectors.add("wasm-sidecar-entangle");
+      } else {
+        wasmSidecarLoaderHookApplied = false;
+      }
     }
     writeProtectedOutput(absOutput, finalWasm);
     decoyFunctionsInjected = 16;
@@ -1515,6 +1588,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
+    ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),
     ...(wasmExportDecoysInjected > 0

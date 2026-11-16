@@ -268,4 +268,14 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
    */
   JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES: 524_288,
   JAVASCRIPT_MEMBER_MUTATION_ALIAS_STATES_MAX: 8_388_608,
+  /**
+   * SQLite owned-worker JS heap ceiling (`SqliteDatabaseLimits.ts`,
+   * advertised as `SQLITE_WORKER_HEAP_BYTES` / `workerHeapMiB` on tip
+   * 26d88826c). Honesty catalog only — not a densify trip target: this is
+   * a worker `--max-old-space-size` cap, not plantable in a protected
+   * program. REA 26d88826c also mostly *projects existing* fixed
+   * allowances as typed refusals (Ghidra seed, ZIP Zstd window, Flutter,
+   * native command output, etc.) rather than adding new trip-able budgets.
+   */
+  SQLITE_WORKER_HEAP_BYTES: 268_435_456,
 });

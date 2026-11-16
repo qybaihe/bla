@@ -56,6 +56,7 @@ export type ReaAttackVectorId =
   | "archive-inventory"
   | "asar-header-admission"
   | "asar-sidecar-entangle"
+  | "wasm-sidecar-entangle"
   | "pyc-sidecar-entangle"
   | "gguf-sidecar-entangle"
   | "dex-sidecar-entangle"
@@ -276,6 +277,8 @@ export interface ProtectionResult {
   readonly selfSeal?: boolean;
   /** Present when protect applied sidecar entry entanglement (strip⇒fail preamble). */
   readonly sidecarEntangle?: boolean;
+  /** Present when a same-directory Node CJS WASM loader was auto-wired with the load-time hook. */
+  readonly wasmSidecarLoaderHookApplied?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
   /** Present when WASM export-section order was seed-shuffled (red-blue round-11). */

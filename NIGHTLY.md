@@ -1,5 +1,70 @@
 # BLA nightly development log
 
+## 2026-11-16 ~America/Los_Angeles / ~2026-11-17 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `f916b3ecf` → `26d88826c` (**+208** commits). Dirty
+  `third_party/*` deletions were left untouched (a stash-pop auto-merge of
+  `package-lock.json` was restored to HEAD so only those deletions remain
+  dirty).
+- No new 1:1 trip-able densify constants that beat the queued WASM JS-loader
+  auto-wire.
+- Catalog-only / honesty notes (not implemented as new densify counters):
+  - `SQLITE_WORKER_HEAP_BYTES` = 256 MiB (`SqliteDatabaseLimits.workerHeapMiB`,
+    newly advertised on this tip). Owned-worker `--max-old-space-size` cap —
+    not plantable in a protected program; catalogued in `REA_INTERNAL_LIMITS`.
+  - The bulk of the delta *projects existing* fixed allowances as typed
+    refusals (`feat(errors|native|flutter|pcap|artifacts): carry the value
+    of each fixed … allowance`, Ghidra seed / ZIP Zstd window / native
+    command output / Flutter ceilings relocated or re-exported, not raised).
+  - Evidence format revision 2 (`feat(evidence)!: name the Evidence subject
+    by its target identity`, #11416) — contract revision, not a densify
+    target.
+  - `fix(browser): report semantic limits reached by captured scripts`
+    (#11755) reports already-catalogued web-bundle / JS semantic controls;
+    no new plantable budget.
+
+### Done tonight
+- Auto-wired the 2026-11-15 WASM JS-loader hook into a known, safe customer
+  loader path (`selectNodeWasmJsLoader` / `discoverNodeWasmJsLoader` /
+  `isSafeNodeWasmJsLoader` / `isWasmSidecarLoaderHookWired` /
+  `listSameDirNodeWasmJsLoaderCandidates`; `protectTarget` + `hardenProject`
+  post-pass). The hook is injected only into a same-directory Node.js
+  CommonJS file that already uses `fs` and `WebAssembly.instantiate` /
+  `compile` / `instantiateStreaming` and mentions the `.wasm` basename.
+  Known names only: `<stem>.cjs`/`.js`, `loader.*`, `index.*` (`.cjs` wins
+  a same-rank tie). Browser `fetch`-only loaders, ESM static `import` /
+  `import.meta`, minified / test files, already-entangled self-seal or
+  sidecar-preamble entries, files over 64 KiB (predicate run on the
+  pre-protect input), and unranked unique app files such as `license.cjs`
+  are left untouched — this keeps CrackMe v9 `license.cjs` + `core.wasm`
+  (baked self-seal digests) behavior-preserving. The hook is written
+  before the `bla.sidecar.v1` custom section is planted and before a JS
+  sidecar preamble, and a new section is planted only when the only
+  JS/Python entry being bound is the dedicated loader itself (never when
+  a foreign entry may already bake a wasm digest). Export surface and
+  function bodies stay unchanged. Vector `wasm-sidecar-entangle` is
+  recorded and defenseScore gap `wasm-sidecar-host-verify-only` is cleared
+  only when that hook was actually written (`wasmSidecarLoaderHookApplied`;
+  `verifyTarget` also detects a sibling hook via
+  `isWasmSidecarLoaderHookWired`). Default OFF via existing
+  `sidecarEntangle`.
+- Live BLA tree was pulled `98e01cc` → `de982cb` before this increment
+  (daytime PRs already on 3.4.1: MCP in-place confirmation / arg bounds,
+  lint SARIF, coverage floors, reporter sanitization, bundler skip
+  summary, Node 22 pin, ESM import-hoist honesty, SEO).
+- Gates: build OK, tests **938 passed / 4 skipped**, benchmark **14/14**
+  runtime-equivalent.
+
+### Next step (following night)
+1. `.pyc` import-time hook (only then record `pyc-sidecar-entangle` /
+   clear `pyc-sidecar-host-verify-only`).
+2. GGUF / DEX / Safetensors / SQLite load-time hooks (same honesty bar).
+3. MCP one-click polish; ESM loader hook that runs before hoisted
+   imports; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
+
 ## 2026-11-15 ~America/Los_Angeles / ~2026-11-16 02:00 Asia/Shanghai
 
 ### REA delta

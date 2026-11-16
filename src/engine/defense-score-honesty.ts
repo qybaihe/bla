@@ -53,6 +53,12 @@ export interface DefenseScoreHonestyInput {
    * that the loader instantiates before a prepended sidecar / self-seal IIFE.
    */
   readonly esmImportHoistBeforeHooks?: boolean;
+  /**
+   * True when a same-directory Node CJS loader was auto-wired with
+   * `entangleWasmLoaderWithSidecars` (or the hook is already present next to
+   * the .wasm). Clears `wasm-sidecar-host-verify-only`.
+   */
+  readonly wasmSidecarLoaderHookApplied?: boolean;
 }
 
 export interface DefenseScoreHonesty {
@@ -185,12 +191,17 @@ export function collectDefenseScoreGaps(
     });
   }
 
-  // Standalone WASM custom-section is host-verify only until the host JS loader calls verifyWasmSidecarCustomSection.
-  if (input.detectedFormat === "wasm" && input.sidecarEntangleEnabled === true) {
+  // Standalone WASM custom-section is host-verify only until a Node CJS
+  // loader hook is actually auto-wired (or already present) beside the module.
+  if (
+    input.detectedFormat === "wasm" &&
+    input.sidecarEntangleEnabled === true &&
+    input.wasmSidecarLoaderHookApplied !== true
+  ) {
     gaps.push({
       id: "wasm-sidecar-host-verify-only",
       summary:
-        "sidecarEntangle planted a WASM bla.sidecar.v1 custom section verified by host verifyWasmSidecarCustomSection; WebAssembly.instantiate ignores custom sections unless your JS/host loader enforces verification before instantiation (issue #40 / DESIGN).",
+        "sidecarEntangle planted a WASM bla.sidecar.v1 custom section verified by host verifyWasmSidecarCustomSection; WebAssembly.instantiate ignores custom sections unless a same-directory Node CJS loader was auto-wired with the load-time hook (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

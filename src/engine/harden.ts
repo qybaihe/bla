@@ -56,10 +56,18 @@ import {
   entangleSqliteEntryWithSidecars,
   entanglePythonEntryWithSidecars,
   entangleWasmEntryWithSidecars,
+  generateSidecarWasmLoaderSnippet,
+  prependWasmSidecarLoaderHook,
+  selectNodeWasmJsLoader,
+  isNodeWasmJsLoaderFilename,
+  computeWasmSidecarCodeIdentity,
+  WASM_SIDECAR_LOADER_MARKER,
+  WASM_SIDECAR_SECTION_NAME,
   planSidecarEntanglement,
   verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
+import { inspectWasmBinary } from "../shields/formats/wasm.js";
 import { detectJsCarrierForSource } from "../shields/javascript/ast-shield.js";
 import { refineJsCarrierForRuntimePaths } from "../shields/javascript/node-runtime-carrier.js";
 import {
@@ -1273,7 +1281,11 @@ export function hardenProject(
   // note measured against FINAL sibling bytes (after all protects wrote).
   // Per-artifact protect skips inject when harden did not pass explicit
   // sidecarEntanglePaths (avoids partial/double prepend). Only one entry is
-  // rewritten so sibling digests stay stable.
+  // rewritten so sibling digests stay stable — except when a same-directory
+  // Node CJS WASM loader is auto-wired: the WASM custom section is planted
+  // first (excluding the JS entry, which is still rewritten later) and the
+  // loader hook is prepended before the JS preamble, so both digests stay
+  // consistent.
   let sidecarEntangleError: string | undefined;
   if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
     try {
@@ -1285,6 +1297,170 @@ export function hardenProject(
       const jsEntry =
         jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
         jsLike[0];
+      const pyLike = summaries.filter(
+        (s) =>
+          s.success && /\.py$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const pyEntry =
+        !jsEntry
+          ? pyLike.find((s) => /policy\.py$/i.test(s.relativePath)) ?? pyLike[0]
+          : undefined;
+      const wasmLike = summaries.filter(
+        (s) =>
+          s.success && /\.wasm$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      const jsEntryAbs = jsEntry
+        ? join(outputRoot, jsEntry.relativePath)
+        : undefined;
+      const pyEntryAbs = pyEntry
+        ? join(outputRoot, pyEntry.relativePath)
+        : undefined;
+
+      let wasmSidecarLoaderHookApplied = false;
+      let wasmSectionPlanted = false;
+      const hookedLoaderAbs = new Set<string>();
+      const wasmPlantTargets: typeof wasmLike = [];
+      for (const wasmSum of wasmLike) {
+        const wasmAbs = join(outputRoot, wasmSum.relativePath);
+        if (!existsSync(wasmAbs)) continue;
+        const wasmDir = dirname(wasmAbs);
+        const siblingSidecars: { pathLabel: string; bytes: Buffer }[] = [];
+        for (const s of summaries) {
+          if (!s.success || s.relativePath === wasmSum.relativePath) continue;
+          const abs = join(outputRoot, s.relativePath);
+          if (jsEntryAbs && abs === jsEntryAbs) continue;
+          if (pyEntryAbs && abs === pyEntryAbs) continue;
+          const rel = relative(wasmDir, abs).split(sep).join("/");
+          if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+          siblingSidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+        }
+        // Predicate against the pre-protect input (shielded output is often
+        // bloated / already self-sealed). Rewrite the output file.
+        const loaderCandidates: {
+          name: string;
+          source: string;
+          absPath: string;
+        }[] = [];
+        for (const s of jsLike) {
+          const outAbs = join(outputRoot, s.relativePath);
+          if (dirname(outAbs) !== wasmDir) continue;
+          if (!isNodeWasmJsLoaderFilename(s.relativePath)) continue;
+          let predicateSource: string | null = null;
+          try {
+            if (s.inputPath && existsSync(s.inputPath)) {
+              predicateSource = readFileSync(s.inputPath, "utf8");
+            }
+          } catch {
+            predicateSource = null;
+          }
+          if (predicateSource === null && existsSync(outAbs)) {
+            try {
+              predicateSource = readFileSync(outAbs, "utf8");
+            } catch {
+              predicateSource = null;
+            }
+          }
+          if (predicateSource === null) continue;
+          loaderCandidates.push({
+            name: basename(outAbs),
+            source: predicateSource,
+            absPath: outAbs,
+          });
+        }
+        const selectedName = selectNodeWasmJsLoader(
+          basename(wasmAbs),
+          loaderCandidates,
+        );
+        const found = selectedName
+          ? loaderCandidates.find((c) => c.name === selectedName)
+          : undefined;
+        if (found) {
+          const otherPrimary =
+            (jsEntryAbs !== undefined && found.absPath !== jsEntryAbs) ||
+            (pyEntryAbs !== undefined && found.absPath !== pyEntryAbs);
+          const alreadyNoted = inspectWasmBinary(readFileSync(wasmAbs)).customSectionNames.includes(
+            WASM_SIDECAR_SECTION_NAME,
+          );
+          // A foreign JS/Python entry may already bake a digest of this
+          // module. Hooking without a section would fail-closed at
+          // instantiate; planting a new section would break that digest.
+          if (otherPrimary && !alreadyNoted) {
+            continue;
+          }
+          wasmPlantTargets.push(wasmSum);
+          const identity = computeWasmSidecarCodeIdentity(readFileSync(wasmAbs));
+          const existing = readFileSync(found.absPath, "utf8");
+          const already = existing.includes(WASM_SIDECAR_LOADER_MARKER);
+          const inject = already
+            ? null
+            : generateSidecarWasmLoaderSnippet({
+                codeIdentityHex: identity,
+                carrier: "commonjs",
+              });
+          const next = inject
+            ? prependWasmSidecarLoaderHook(existing, inject.preamble)
+            : existing;
+          if (next !== existing) {
+            writeFileAtomicSync(found.absPath, next, "utf8", {
+              allowLinkWriteThrough: false,
+            });
+          }
+          hookedLoaderAbs.add(found.absPath);
+          wasmSidecarLoaderHookApplied = true;
+        } else if (!jsEntry && !pyEntry) {
+          wasmPlantTargets.push(wasmSum);
+        }
+      }
+      // When a hook was auto-wired, plant the custom section now (before
+      // the JS preamble rewrites jsEntry). Without a hook, keep the
+      // historical one-primary-entry rule: only plant when no JS/Python
+      // entry will be bound, and only the preferred core.wasm / first file.
+      // Do not rewrite WASM bytes when some other JS/Python entry (e.g.
+      // license.cjs) may already have baked a digest of the module — that
+      // would fail-closed the protected program (red line). Plant a new
+      // custom section only for wasm-only projects or when the only JS/Python
+      // entry being bound is the dedicated auto-wired loader itself.
+      const foreignJsOrPy =
+        (jsEntryAbs !== undefined && !hookedLoaderAbs.has(jsEntryAbs)) ||
+        (pyEntryAbs !== undefined && !hookedLoaderAbs.has(pyEntryAbs));
+      const wasmToPlant = wasmSidecarLoaderHookApplied && !foreignJsOrPy
+        ? wasmPlantTargets
+        : !jsEntry && !pyEntry
+          ? (wasmLike.find((s) => /core\.wasm$/i.test(s.relativePath)) ??
+              wasmLike[0]
+            ? [wasmLike.find((s) => /core\.wasm$/i.test(s.relativePath)) ?? wasmLike[0]!]
+            : [])
+          : [];
+      for (const wasmSum of wasmToPlant) {
+        const entryAbs = join(outputRoot, wasmSum.relativePath);
+        if (!existsSync(entryAbs)) continue;
+        const entryDir = dirname(entryAbs);
+        const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+        for (const s of summaries) {
+          if (!s.success || s.relativePath === wasmSum.relativePath) continue;
+          const abs = join(outputRoot, s.relativePath);
+          if (jsEntryAbs && abs === jsEntryAbs) continue;
+          if (pyEntryAbs && abs === pyEntryAbs) continue;
+          const rel = relative(entryDir, abs).split(sep).join("/");
+          if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+          sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+        }
+        if (sidecars.length === 0 && !wasmSidecarLoaderHookApplied) continue;
+        const bound = entangleWasmEntryWithSidecars({
+          entryPath: basename(entryAbs),
+          entryBytes: readFileSync(entryAbs),
+          sidecars,
+          seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
+          allowEmptySidecars: wasmSidecarLoaderHookApplied,
+        });
+        if (bound) {
+          writeFileAtomicSync(entryAbs, bound.bytes, undefined, {
+            allowLinkWriteThrough: false,
+          });
+          wasmSectionPlanted = true;
+        }
+      }
+
       if (jsEntry) {
         const entryAbs = join(outputRoot, jsEntry.relativePath);
         if (existsSync(entryAbs)) {
@@ -1321,14 +1497,6 @@ export function hardenProject(
 
       // Python entry entanglement only when no JS entry was bound — rewriting
       // a Python sibling after the JS digest sealed would invalidate strip⇒fail.
-      const pyLike = summaries.filter(
-        (s) =>
-          s.success && /\.py$/i.test(s.relativePath.replaceAll("\\", "/")),
-      );
-      const pyEntry =
-        !jsEntry
-          ? pyLike.find((s) => /policy\.py$/i.test(s.relativePath)) ?? pyLike[0]
-          : undefined;
       if (pyEntry) {
         const entryAbs = join(outputRoot, pyEntry.relativePath);
         if (existsSync(entryAbs)) {
@@ -1359,15 +1527,14 @@ export function hardenProject(
       }
 
       // WASM entry entanglement only when no JS/Python entry was bound —
-      // custom-section note measured against FINAL sibling bytes.
-      const wasmLike = summaries.filter(
-        (s) =>
-          s.success && /\.wasm$/i.test(s.relativePath.replaceAll("\\", "/")),
-      );
+      // custom-section note measured against FINAL sibling bytes. Skipped
+      // when the auto-wire path already planted the section above.
       const wasmEntry =
-        !jsEntry && !pyEntry
-          ? wasmLike.find((s) => /core\.wasm$/i.test(s.relativePath)) ?? wasmLike[0]
-          : undefined;
+        wasmSectionPlanted
+          ? undefined
+          : !jsEntry && !pyEntry
+            ? wasmLike.find((s) => /core\.wasm$/i.test(s.relativePath)) ?? wasmLike[0]
+            : undefined;
       if (wasmEntry) {
         const entryAbs = join(outputRoot, wasmEntry.relativePath);
         if (existsSync(entryAbs)) {

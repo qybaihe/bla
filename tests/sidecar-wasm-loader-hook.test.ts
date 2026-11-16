@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   rmSync,
   readFileSync,
@@ -13,7 +14,10 @@ import {
   computeWasmSidecarCodeIdentity,
   entangleWasmLoaderWithSidecars,
   generateSidecarWasmLoaderSnippet,
+  isSafeNodeWasmJsLoader,
+  isWasmSidecarLoaderHookWired,
   prependWasmSidecarLoaderHook,
+  selectNodeWasmJsLoader,
   SIDECAR_ENTANGLE_SCHEMA,
   stripWasmSidecarCustomSection,
   WASM_SIDECAR_LOADER_MARKER,
@@ -21,6 +25,9 @@ import {
 } from "../src/shields/runtime/sidecar-entangle.js";
 import { inspectWasmBinary } from "../src/shields/formats/wasm.js";
 import { collectDefenseScoreGaps } from "../src/engine/defense-score-honesty.js";
+import { protectTarget } from "../src/engine/protector.js";
+import { hardenProject } from "../src/engine/harden.js";
+import { verifyTarget } from "../src/engine/verifier.js";
 
 /** Minimal WASM exporting compute_score(i32)->i32 = x*42+7 */
 function fixtureComputeScore(): Buffer {
@@ -272,4 +279,215 @@ describe("sidecar WASM JS-loader hook", () => {
     });
     expect(gaps.map((g) => g.id)).toContain("wasm-sidecar-host-verify-only");
   });
+  it("honesty: auto-wired loader hook clears wasm-sidecar-host-verify-only", () => {
+    const gaps = collectDefenseScoreGaps({
+      detectedFormat: "wasm",
+      sidecarEntangleEnabled: true,
+      wasmSidecarLoaderHookApplied: true,
+    });
+    expect(gaps.map((g) => g.id)).not.toContain("wasm-sidecar-host-verify-only");
+  });
+
+  it("selectNodeWasmJsLoader prefers stem/loader/index and refuses unsafe files", () => {
+    const nodeLoader = `
+"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const bytes = fs.readFileSync(path.join(__dirname, "core.wasm"));
+WebAssembly.instantiate(bytes);
+`;
+    const browserLoader = `
+fetch("./core.wasm").then((r) => WebAssembly.instantiateStreaming(r));
+`;
+    const esmLoader = `
+import fs from "node:fs";
+import path from "node:path";
+const bytes = fs.readFileSync(path.join(__dirname, "core.wasm"));
+WebAssembly.instantiate(bytes);
+`;
+    const otherWasm = `
+"use strict";
+const fs = require("node:fs");
+WebAssembly.instantiate(fs.readFileSync("./other.wasm"));
+`;
+    expect(
+      isSafeNodeWasmJsLoader({
+        source: nodeLoader,
+        filename: "loader.cjs",
+        wasmBasename: "core.wasm",
+      }),
+    ).toBe(true);
+    expect(
+      isSafeNodeWasmJsLoader({
+        source: browserLoader,
+        filename: "loader.js",
+        wasmBasename: "core.wasm",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeNodeWasmJsLoader({
+        source: esmLoader,
+        filename: "loader.js",
+        wasmBasename: "core.wasm",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeNodeWasmJsLoader({
+        source: otherWasm,
+        filename: "loader.cjs",
+        wasmBasename: "core.wasm",
+      }),
+    ).toBe(false);
+
+    expect(
+      selectNodeWasmJsLoader("core.wasm", [
+        { name: "helper.cjs", source: nodeLoader },
+        { name: "loader.cjs", source: nodeLoader },
+        { name: "index.cjs", source: nodeLoader },
+      ]),
+    ).toBe("loader.cjs");
+    expect(
+      selectNodeWasmJsLoader("core.wasm", [
+        { name: "core.cjs", source: nodeLoader },
+        { name: "loader.cjs", source: nodeLoader },
+      ]),
+    ).toBe("core.cjs");
+    expect(
+      selectNodeWasmJsLoader("core.wasm", [
+        { name: "a.cjs", source: nodeLoader },
+        { name: "b.cjs", source: nodeLoader },
+      ]),
+    ).toBeNull();
+    expect(
+      selectNodeWasmJsLoader("core.wasm", [
+        { name: "license.cjs", source: nodeLoader },
+      ]),
+    ).toBeNull();
+    expect(
+      selectNodeWasmJsLoader("core.wasm", [
+        { name: "helper.cjs", source: nodeLoader },
+      ]),
+    ).toBeNull();
+  });
+
+  it("protectTarget auto-wires a same-directory Node CJS loader and records wasm-sidecar-entangle", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-wasm-loader-protect-"));
+    try {
+      const entry = join(dir, "core.wasm");
+      const sibSrc = "sidecar-payload\n";
+      writeFileSync(entry, fixtureComputeScore());
+      writeFileSync(join(dir, "sib.bin"), sibSrc, "utf8");
+      writeFileSync(join(dir, "loader.cjs"), LOADER_BODY, "utf8");
+
+      const res = protectTarget({
+        inputPath: entry,
+        outputPath: entry,
+        intensity: "balanced",
+        seed: "pt-wasm-loader-hook",
+        wasmPreserveExports: ["compute_score"],
+        sidecarEntangle: true,
+        sidecarEntanglePaths: ["sib.bin"],
+        inPlace: true,
+      });
+      expect(res.sidecarEntangle).toBe(true);
+      expect(res.wasmSidecarLoaderHookApplied).toBe(true);
+      expect(res.counteredReaVectors).toContain("wasm-sidecar-entangle");
+
+      const hooked = readFileSync(join(dir, "loader.cjs"), "utf8");
+      expect(hooked).toContain(WASM_SIDECAR_LOADER_MARKER);
+      expect(
+        isWasmSidecarLoaderHookWired({
+          wasmBytes: readFileSync(entry),
+          wasmPath: entry,
+        }),
+      ).toBe(true);
+
+      const inspected = inspectWasmBinary(readFileSync(entry));
+      expect(inspected.validMagic).toBe(true);
+      expect(inspected.customSectionNames).toContain(WASM_SIDECAR_SECTION_NAME);
+      expect(inspected.exportNames).toContain("compute_score");
+
+      const ran = runLoader(dir, hooked);
+      expect(ran.status, ran.stderr || ran.stdout).toBe(0);
+      expect(ran.stdout).toMatch(/ok 49/);
+
+      const verification = verifyTarget(entry, undefined, {
+        sidecarEntangleEnabled: true,
+      });
+      const gapIds = (verification.defenseScoreGaps ?? []).map((g) => g.id);
+      expect(gapIds).not.toContain("wasm-sidecar-host-verify-only");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("protectTarget does not rewrite a browser fetch loader or record the vector", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-wasm-loader-browser-"));
+    try {
+      const entry = join(dir, "core.wasm");
+      writeFileSync(entry, fixtureComputeScore());
+      writeFileSync(join(dir, "sib.bin"), "sidecar-payload\n", "utf8");
+      const browser = `fetch("./core.wasm").then((r) => WebAssembly.instantiateStreaming(r));\n`;
+      writeFileSync(join(dir, "loader.js"), browser, "utf8");
+
+      const res = protectTarget({
+        inputPath: entry,
+        outputPath: entry,
+        intensity: "balanced",
+        seed: "pt-wasm-loader-browser",
+        wasmPreserveExports: ["compute_score"],
+        sidecarEntangle: true,
+        sidecarEntanglePaths: ["sib.bin"],
+        inPlace: true,
+      });
+      expect(res.sidecarEntangle).toBe(true);
+      expect(res.wasmSidecarLoaderHookApplied).toBeUndefined();
+      expect(res.counteredReaVectors).not.toContain("wasm-sidecar-entangle");
+      expect(readFileSync(join(dir, "loader.js"), "utf8")).toBe(browser);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hardenProject auto-wires dist/loader.cjs beside core.wasm", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-wasm-loader-harden-"));
+    try {
+      const dist = join(dir, "dist");
+      mkdirSync(dist, { recursive: true });
+      writeFileSync(join(dist, "core.wasm"), fixtureComputeScore());
+      writeFileSync(join(dist, "sib.bin"), "sidecar-payload\n", "utf8");
+      writeFileSync(join(dist, "loader.cjs"), LOADER_BODY, "utf8");
+
+      const report = hardenProject({
+        directory: dir,
+        intensity: "balanced",
+        seed: "harden-wasm-loader-hook",
+        sidecarEntangle: true,
+        wasmPreserveExports: ["compute_score"],
+      });
+      expect(report.overallSuccess).toBe(true);
+      expect(report.sidecarEntangleError).toBeUndefined();
+
+      const outDist = join(report.outputDirectory, "dist");
+      const hooked = readFileSync(join(outDist, "loader.cjs"), "utf8");
+      expect(hooked).toContain(WASM_SIDECAR_LOADER_MARKER);
+      const wasmBytes = readFileSync(join(outDist, "core.wasm"));
+      expect(inspectWasmBinary(wasmBytes).customSectionNames).toContain(
+        WASM_SIDECAR_SECTION_NAME,
+      );
+      expect(
+        isWasmSidecarLoaderHookWired({
+          wasmBytes,
+          wasmPath: join(outDist, "core.wasm"),
+        }),
+      ).toBe(true);
+
+      const ran = runLoader(outDist, hooked);
+      expect(ran.status, ran.stderr || ran.stdout).toBe(0);
+      expect(ran.stdout).toMatch(/ok 49/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });
