@@ -226,7 +226,9 @@ function withToolAnnotations(tool: McpToolDefinition): McpToolDefinition {
     ...tool,
     annotations: {
       readOnlyHint: !isMutating,
-      destructiveHint: false,
+      // Mutating tools write or overwrite files, so clients that honor the
+      // hint can prompt the operator before executing them.
+      destructiveHint: isMutating,
       idempotentHint: !isMutating || tool.name === "bla_redteam_report",
       openWorldHint: false,
     },
