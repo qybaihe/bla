@@ -11,6 +11,7 @@
  */
 
 import { basename, relative, resolve, sep } from "node:path";
+import { sanitizeTerminalText } from "../core/terminal-text.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import {
   discoverAndLintSealSidecars,
@@ -719,7 +720,7 @@ export function evaluateHardenProjectPackagingBlocks(
 /** Human-readable CLI/MCP text for a packaging-gates report. */
 export function formatPackagingGatesReport(report: PackagingGatesReport): string {
   const lines: string[] = [
-    `BLA packaging gates — ${report.directory}`,
+    `BLA packaging gates — ${sanitizeTerminalText(report.directory)}`,
     report.oneLineAdvice,
     report.honestyNote,
   ];
@@ -730,16 +731,16 @@ export function formatPackagingGatesReport(report: PackagingGatesReport): string
   for (const f of report.findings) {
     const tag = f.shouldRefuseBankrupt ? "refuse" : "info";
     lines.push(
-      `  [${tag}] ${f.gate} · ${f.relativePath} · ${f.findingCount} finding(s)`,
+      `  [${tag}] ${f.gate} · ${sanitizeTerminalText(f.relativePath)} · ${f.findingCount} finding(s)`,
     );
-    lines.push(`    ${f.oneLineAdvice}`);
+    lines.push(`    ${sanitizeTerminalText(f.oneLineAdvice)}`);
   }
   if (report.blocking.length > 0) {
     lines.push(`blocking (${report.blocking.length}):`);
     for (const b of report.blocking) {
-      lines.push(`  - ${b.gate} · ${b.relativePath}`);
+      lines.push(`  - ${b.gate} · ${sanitizeTerminalText(b.relativePath)}`);
       if (b.remediationRecipe) {
-        lines.push(`    recipe: ${b.remediationRecipe}`);
+        lines.push(`    recipe: ${sanitizeTerminalText(b.remediationRecipe)}`);
       }
     }
   }

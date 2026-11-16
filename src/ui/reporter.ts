@@ -1,4 +1,5 @@
 import { BLA_IDENTITY } from "../identity.js";
+import { sanitizeTerminalText } from "../core/terminal-text.js";
 import type {
   AuditReport,
   BenchmarkReport,
@@ -22,6 +23,13 @@ const ANSI = {
   white: "\x1b[37m",
 };
 
+/**
+ * Re-exported so existing consumers (and tests) keep importing it from the
+ * reporter; the implementation lives in `src/core/terminal-text.ts` because
+ * engine-level formatters need it too.
+ */
+export { sanitizeTerminalText };
+
 export function formatBanner(): string {
   return [
     `${ANSI.bold}${ANSI.cyan}╔══════════════════════════════════════════════════════════════════════════════╗${ANSI.reset}`,
@@ -43,7 +51,7 @@ export function formatAuditReport(report: AuditReport): string {
   const lines: string[] = [
     formatBanner(),
     "",
-    `${ANSI.bold}Target Artifact:${ANSI.reset}    ${report.targetPath}`,
+    `${ANSI.bold}Target Artifact:${ANSI.reset}    ${sanitizeTerminalText(report.targetPath)}`,
     `${ANSI.bold}Detected Format:${ANSI.reset}    ${ANSI.cyan}${report.detectedFormat}${ANSI.reset} (${report.byteSize.toLocaleString()} bytes, sha256: ${report.sha256.slice(0, 16)}...)`,
     `${ANSI.bold}Protection Status:${ANSI.reset}  ${statusColor}${ANSI.bold}${report.protectionStatus}${ANSI.reset} (REA Exposure Score: ${statusColor}${report.exposureScore}/100${ANSI.reset})`,
     `${ANSI.bold}REA Examination:${ANSI.reset}    ${report.reaSimulation.examinationStatus === "limited" ? `${ANSI.green}LIMITED (Semantic Budgets Exhausted)${ANSI.reset}` : `${ANSI.red}COMPLETE (100% Exposed to Static Pass)${ANSI.reset}`}`,
@@ -81,13 +89,13 @@ export function formatAuditReport(report: AuditReport): string {
   lines.push("");
   if (report.protectionStatus !== "BLA_PROTECTED") {
     lines.push(
-      `${ANSI.bold}${ANSI.red}⚠️  ${report.headlineWarning}${ANSI.reset}`,
+      `${ANSI.bold}${ANSI.red}⚠️  ${sanitizeTerminalText(report.headlineWarning)}${ANSI.reset}`,
     );
     lines.push(
-      `   ${ANSI.bold}Fix now:${ANSI.reset} ${ANSI.cyan}${report.recommendedCommand}${ANSI.reset}`,
+      `   ${ANSI.bold}Fix now:${ANSI.reset} ${ANSI.cyan}${sanitizeTerminalText(report.recommendedCommand)}${ANSI.reset}`,
     );
   } else {
-    lines.push(`${ANSI.bold}${ANSI.green}✅ ${report.headlineWarning}${ANSI.reset}`);
+    lines.push(`${ANSI.bold}${ANSI.green}✅ ${sanitizeTerminalText(report.headlineWarning)}${ANSI.reset}`);
   }
 
   if (est && report.exposedItems.length > 0) {
@@ -97,7 +105,7 @@ export function formatAuditReport(report: AuditReport): string {
     );
     for (const item of report.exposedItems.slice(0, 6)) {
       const badge = item.riskLevel === "critical" ? `${ANSI.red}[CRITICAL]${ANSI.reset}` : `${ANSI.green}[SHIELDED]${ANSI.reset}`;
-      lines.push(`  ${badge} ${ANSI.bold}${item.name}${ANSI.reset} (${item.kind}) — ${item.reason}`);
+      lines.push(`  ${badge} ${ANSI.bold}${sanitizeTerminalText(item.name)}${ANSI.reset} (${item.kind}) — ${sanitizeTerminalText(item.reason)}`);
     }
   }
 
@@ -115,9 +123,9 @@ export function formatProtectionResult(res: ProtectionResult): string {
     "",
     `${ANSI.bold}${ANSI.green}🛡️  BLA Adversarial Shield Successfully Injected!${ANSI.reset} (${res.elapsedMs} ms)`,
     "",
-    `  ${ANSI.bold}Input Target:${ANSI.reset}      ${res.inputPath}`,
-    `  ${ANSI.bold}Protected Output:${ANSI.reset}  ${ANSI.cyan}${res.outputPath}${ANSI.reset}`,
-    `  ${ANSI.bold}Format / Preset:${ANSI.reset}   ${res.detectedFormat} / ${ANSI.magenta}${res.intensity}${ANSI.reset} (seed: ${res.seed})`,
+    `  ${ANSI.bold}Input Target:${ANSI.reset}      ${sanitizeTerminalText(res.inputPath)}`,
+    `  ${ANSI.bold}Protected Output:${ANSI.reset}  ${ANSI.cyan}${sanitizeTerminalText(res.outputPath)}${ANSI.reset}`,
+    `  ${ANSI.bold}Format / Preset:${ANSI.reset}   ${sanitizeTerminalText(res.detectedFormat)} / ${ANSI.magenta}${res.intensity}${ANSI.reset} (seed: ${sanitizeTerminalText(res.seed)})`,
     "",
     `${ANSI.bold}${ANSI.yellow}── Counter-REA Defense Metrics ─────────────────────────────────────────────────${ANSI.reset}`,
     `  • Decoy Tarpit Functions Injected:    ${ANSI.bold}${res.metrics.decoyFunctionsInjected}${ANSI.reset} (${res.metrics.fakeCrossReferencesCreated} fake cross-references)`,
@@ -143,7 +151,7 @@ export function formatVerificationReport(report: VerificationReport): string {
   const lines: string[] = [
     formatBanner(),
     "",
-    `${ANSI.bold}Verification Target:${ANSI.reset} ${report.targetPath}`,
+    `${ANSI.bold}Verification Target:${ANSI.reset} ${sanitizeTerminalText(report.targetPath)}`,
     `${ANSI.bold}Defense Score:${ANSI.reset}       ${report.overallPassed ? ANSI.green : ANSI.yellow}${ANSI.bold}${report.defenseScore}/100${ANSI.reset} (${report.overallPassed ? "ALL COUNTER-REA GATES PASSED" : "PARTIAL PASS"})`,
     `${ANSI.bold}Amplification:${ANSI.reset}       ${ANSI.cyan}${report.tokenAmplificationFactor}x tokens${ANSI.reset} | ${ANSI.cyan}${report.costAmplificationFactor}x API cost${ANSI.reset} | ${ANSI.cyan}${report.obligationGraphExpansionFactor}x call-graph expansion${ANSI.reset}`,
     `${ANSI.dim}${report.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
@@ -162,7 +170,7 @@ export function formatVerificationReport(report: VerificationReport): string {
   if (report.defenseScoreGaps && report.defenseScoreGaps.length > 0) {
     lines.push(`${ANSI.bold}Known gaps (score honesty):${ANSI.reset}`);
     for (const gap of report.defenseScoreGaps) {
-      lines.push(`  • ${ANSI.yellow}${gap.id}${ANSI.reset} (cap ≤${gap.scoreCap}): ${gap.summary}`);
+      lines.push(`  • ${ANSI.yellow}${gap.id}${ANSI.reset} (cap ≤${gap.scoreCap}): ${sanitizeTerminalText(gap.summary)}`);
     }
   }
 
@@ -171,7 +179,7 @@ export function formatVerificationReport(report: VerificationReport): string {
   for (const check of report.checks) {
     const icon = check.passed ? `${ANSI.green}✓ PASS${ANSI.reset}` : `${ANSI.red}✗ FAIL${ANSI.reset}`;
     lines.push(`  [${icon}] ${ANSI.bold}${check.name}${ANSI.reset} (${ANSI.dim}${check.targetReaComponent}${ANSI.reset})`);
-    lines.push(`         ${check.details}`);
+    lines.push(`         ${sanitizeTerminalText(check.details)}`);
   }
 
   return lines.join("\n");
@@ -249,7 +257,7 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
   if (doc.issues.length > 0) {
     lines.push("", `${ANSI.bold}Issues (${doc.issues.length}):${ANSI.reset}`);
     for (const issue of doc.issues) {
-      lines.push(`  • ${ANSI.red}${issue}${ANSI.reset}`);
+      lines.push(`  • ${ANSI.red}${sanitizeTerminalText(issue)}${ANSI.reset}`);
     }
   }
 
@@ -268,9 +276,9 @@ export function formatSetupReport(res: SetupRunResult): string {
 
   for (const a of res.actions) {
     lines.push(`  • ${ANSI.bold}${a.displayName}${ANSI.reset} (${a.clientId})`);
-    lines.push(`      Config: ${a.configPath}`);
-    lines.push(`      Skill:  ${a.skillPath}`);
-    lines.push(`      MCP:    ${a.mcpCommand} ${a.mcpArgs.join(" ")}`);
+    lines.push(`      Config: ${sanitizeTerminalText(a.configPath)}`);
+    lines.push(`      Skill:  ${sanitizeTerminalText(a.skillPath)}`);
+    lines.push(`      MCP:    ${sanitizeTerminalText(a.mcpCommand)} ${sanitizeTerminalText(a.mcpArgs.join(" "))}`);
   }
 
   return lines.join("\n");
@@ -282,8 +290,8 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
     "",
     `${ANSI.bold}${ANSI.blue}⚡ BLA One-Click Counter-REA Defense Hardening Complete!${ANSI.reset}`,
     "",
-    `  ${ANSI.bold}Input Target:${ANSI.reset}      ${rep.inputPath}`,
-    `  ${ANSI.bold}Hardened Output:${ANSI.reset}   ${ANSI.cyan}${rep.outputPath}${ANSI.reset}`,
+    `  ${ANSI.bold}Input Target:${ANSI.reset}      ${sanitizeTerminalText(rep.inputPath)}`,
+    `  ${ANSI.bold}Hardened Output:${ANSI.reset}   ${ANSI.cyan}${sanitizeTerminalText(rep.outputPath)}${ANSI.reset}`,
     `  ${ANSI.bold}Intensity Preset:${ANSI.reset}  ${ANSI.magenta}${rep.intensity.toUpperCase()}${ANSI.reset} (Defense Score: ${ANSI.green}${ANSI.bold}${rep.verification.defenseScore}/100${ANSI.reset})`,
     `  ${ANSI.dim}${rep.verification.defenseScoreDisclaimer ?? "Score scope: Counter-REA gates + exposure drop — not a preimage-hardness claim (see issue #40)."}${ANSI.reset}`,
     `  ${ANSI.bold}Overall success scope:${ANSI.reset} Hardening + Counter-REA structural gates only`,
@@ -303,7 +311,7 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
       st.status === "passed"
         ? `${ANSI.green}✓ PASS${ANSI.reset}`
         : `${ANSI.yellow}! WARN${ANSI.reset}`;
-    lines.push(`  [${badge}] ${ANSI.bold}${st.stage}${ANSI.reset}: ${st.headline}`);
+    lines.push(`  [${badge}] ${ANSI.bold}${st.stage}${ANSI.reset}: ${sanitizeTerminalText(st.headline)}`);
   }
 
   lines.push(
@@ -323,7 +331,7 @@ export function formatOneClickDefenseReport(rep: OneClickDefenseReport): string 
   if (rep.manifestPath) {
     lines.push(
       "",
-      `  ${ANSI.bold}Manifest:${ANSI.reset}   ${ANSI.green}${rep.manifestPath}${ANSI.reset}`,
+      `  ${ANSI.bold}Manifest:${ANSI.reset}   ${ANSI.green}${sanitizeTerminalText(rep.manifestPath)}${ANSI.reset}`,
       ...(rep.manifestSigned
         ? [
             `  ${ANSI.bold}Signature:${ANSI.reset}   ${ANSI.green}ed25519${ANSI.reset}`,
