@@ -49,6 +49,8 @@ manifest.
 
 ## MCP Tools (`bla` Server)
 
+Argument bounds are enforced before any tool runs: count arguments (`max_artifacts`, `max_files`, `max_total_bytes`, `max_targets`, `offset`) must be integers, and string-list arguments (`wasm_preserve_exports`, `domains`) hold at most 1024 items. A violation is a `-32602` error naming the argument, and fractional drift thresholds (`same_threshold` / `different_threshold`) stay allowed because drift scores are not counts.
+
 - `bla_harden`: Preferred one-sentence harden of a project directory (`directory`, `intensity`, `emit_manifest` default false, `llm_directives` default false, `weave_decoys` default false, `self_seal` default false, `wasm_preserve_exports`, `allow_lane_independent`, `allow_plaintext_seal`, `allow_wasm_clear_params`, `allow_stable_panel_derive`, `seed`, `dry_run` default false, `max_artifacts` default 64, `confirm_overwrite` default false, `output_directory` optional). The report carries `dryRun`, `truncated`, `maxArtifacts`, `wouldOverwrite`, and `outputDirectory`.
 - `bla_discover`: Read-only inventory using the same discovery as `bla_harden` (`directory`, `max_artifacts`, `offset`) → `{ directory, artifacts[{path, relativePath, format}], truncated, maxArtifacts, offset, nextOffset? }`. When `truncated`, pass `nextOffset` as the next `offset` to page 64+ trees without losing the tail. Writes nothing.
 - `bla_init`: Writes a starter `bla.config.json` with a fresh per-project seed (`directory`, `overwrite` default false) so zero-argument `bla defend` has a config. Writes one file only.
