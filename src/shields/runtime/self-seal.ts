@@ -352,6 +352,12 @@ export function generateSelfSealSnippet(
   const bindingName =
     options.bindingName ??
     prng.identifier({ style: "camel", hint: "integrityDigest", entropy: 4 });
+  // The name is interpolated verbatim into `var <name> = …` declarations, so
+  // anything that is not a plain identifier would break or inject into the
+  // generated preamble.
+  if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(bindingName)) {
+    throw new Error("self-seal bindingName must be a valid JavaScript identifier");
+  }
   const envFingerprint = options.envFingerprint !== false;
   const siblings = (options.siblingPaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
