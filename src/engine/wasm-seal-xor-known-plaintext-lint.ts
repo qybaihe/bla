@@ -18,6 +18,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { extractWasmDataPayloads } from "./wasm-xor-mask-sidecar-lint.js";
 
@@ -307,24 +308,31 @@ export function wasmSealXorKnownPlaintextRefuseMessage(
 
 function walkWasmFiles(root: string, out: string[], depth: number): void {
   if (out.length >= MAX_WASM_FILES || depth > MAX_WALK_DEPTH) return;
-  let entries: string[] = [];
+  let entries: Dirent[];
   try {
-    entries = readdirSync(root);
+    entries = readdirSync(root, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const name of entries) {
-    if (out.length >= MAX_WASM_FILES) break;
-    if (SKIP_DIR_NAMES.has(name)) continue;
-    const full = join(root, name);
-    let st;
+  for (const entry of entries) {
+    if (out.length >= MAX_WASM_FILES) return;
+    // Same posture as the sibling wasm lints: never descend symlinked
+    // directories (Dirent.isDirectory() is false for links), and skip hidden
+    // directories so a planted tree cannot pull the lint outside its root.
+    if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) {
+      walkWasmFiles(full, out, depth + 1);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!/\.wasm$/i.test(entry.name)) continue;
     try {
-      st = statSync(full);
+      if (statSync(full).size > MAX_SCAN_BYTES) continue;
     } catch {
       continue;
     }
-    if (st.isDirectory()) walkWasmFiles(full, out, depth + 1);
-    else if (st.isFile() && /\.wasm$/i.test(name) && st.size <= MAX_SCAN_BYTES) out.push(full);
+    out.push(full);
   }
 }
 
