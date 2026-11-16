@@ -4,7 +4,7 @@ import type { ArtifactFormat } from "./types.js";
 
 /**
  * Format-aware detector that inspects both magic bytes and file extensions
- * to route targets accurately across all 19 REA-supported artifact formats.
+ * to route targets accurately across all 26 artifact formats.
  */
 export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   let stats;

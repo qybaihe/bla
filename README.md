@@ -194,7 +194,7 @@ These shields exist in-tree and are covered by unit tests / catalog drift checks
 
 ## 🛡️ Format Coverage
 
-All 19+ format shields are built directly into `bla-agents` with zero external packer dependencies:
+All 26 format shields are built directly into `bla-agents` with zero external packer dependencies:
 
 | Format | Canary + Diagnostic | Exhaustion / Budget Trip | Empirically vs. REA | Notes |
 | :--- | :---: | :---: | :---: | :--- |
@@ -287,7 +287,7 @@ No on the hot path. Exhaustion graphs sit behind $O(1)$ number-theoretic opaque 
 <details>
 <summary><strong>Do I need Ghidra, Hopper, IDA, or Wabt installed to protect files?</strong></summary>
 
-No. All 19+ format shields are built into `bla-agents` in pure TypeScript/Node.js. External tools (`Wabt`, `tshark`) are only used if you run the optional live REA red-team suite (`npm run redteam:rea`).
+No. All 26 format shields are built into `bla-agents` in pure TypeScript/Node.js. External tools (`Wabt`, `tshark`) are only used if you run the optional live REA red-team suite (`npm run redteam:rea`).
 </details>
 
 <details>
