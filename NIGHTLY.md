@@ -55,6 +55,7 @@
   summary, Node 22 pin, ESM import-hoist honesty, SEO).
 - Gates: build OK, tests **938 passed / 4 skipped**, benchmark **14/14**
   runtime-equivalent.
+- Pushed `origin/main`; release **bla-agents@3.4.2**.
 
 ### Next step (following night)
 1. `.pyc` import-time hook (only then record `pyc-sidecar-entangle` /
