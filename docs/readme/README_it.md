@@ -166,7 +166,7 @@ No. All semantic budget breakers and tarpits are guarded by $O(1)$ number-theore
 <details>
 <summary><strong>Do I need Hopper, Ghidra, IDA, or WABT installed?</strong></summary>
 
-No. All 19 format shields are built directly into `bla-agents` with zero external dependencies.
+No. All 26 format shields are built directly into `bla-agents` with zero external dependencies.
 
 </details>
 

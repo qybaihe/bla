@@ -92,6 +92,28 @@ describe("version and public-claim drift", () => {
     expect(index).not.toContain("22.13");
   });
 
+  it("keeps every documented artifact-format count equal to the real format registry", () => {
+    // Derive the count from the ArtifactFormat union minus the two sentinels.
+    const union = /export type ArtifactFormat =([^;]+);/.exec(read("src/core/types.ts"));
+    expect(union, "ArtifactFormat union not found").not.toBeNull();
+    const members = union![1]!.match(/"[a-z0-9-]+"/g) ?? [];
+    const count = members.length - 2; // directory + unknown sentinels
+    expect(count).toBeGreaterThan(0);
+
+    expect(read("src/core/detector.ts")).toContain(
+      `across all ${count} artifact formats`,
+    );
+    expect(read("README.md")).toContain(`All ${count} format shields`);
+    // Translated READMEs phrase the FAQ answer in their own language — assert
+    // that each still states the CURRENT derived count somewhere.
+    for (const entry of readdirSync(join(ROOT, "docs", "readme"))) {
+      expect(read(`docs/readme/${entry}`), entry).toContain(String(count));
+    }
+    expect(read("website/index.html")).toContain(
+      `${count} supported software`,
+    );
+  });
+
   it("keeps the documented MCP tool count and catalogue in step with the registry", () => {
     const tools = BLA_MCP_TOOLS.length;
     expect(tools).toBeGreaterThan(0);

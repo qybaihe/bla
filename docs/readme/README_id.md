@@ -168,7 +168,7 @@ Tidak. Semua mekanisme penguras anggaran semantik dan jebakan algoritmik dilindu
 <details>
 <summary><strong>Apakah saya harus memasang Hopper, Ghidra, IDA, atau WABT terlebih dahulu?</strong></summary>
 
-Tidak. Seluruh 19 perlindungan format sudah tersedia langsung di dalam `bla-agents` tanpa memerlukan dependensi eksternal.
+Tidak. Seluruh 26 perlindungan format sudah tersedia langsung di dalam `bla-agents` tanpa memerlukan dependensi eksternal.
 
 </details>
 
