@@ -210,6 +210,7 @@ function emitMeasureFunction(
   hardFailOnSiblingMismatch: boolean,
   envFingerprint: boolean,
   selfDigestCheck: boolean,
+  softTamperFlag: string | null,
   esmRequireHelperIdent?: string,
   esmMetaUrlIdent?: string,
 ): string[] {
@@ -328,7 +329,12 @@ function emitMeasureFunction(
   lines.push(`    digest = (parseInt(hex.slice(0, 8), 16) & 0xfffffffe) >>> 0;`);
   if (siteIndex === 0) {
     lines.push(`    if (digest === 0) digest = 0x40000002;`);
-    lines.push(`    if (_tampered) digest = (digest | 1) >>> 0;`);
+  }
+  if (softTamperFlag !== null) {
+    // One shared flag, applied once to the folded digest. Flipping a bit inside
+    // every site would XOR-cancel for an even number of sites, and flipping it
+    // at site 0 only lets a single-site patch disable soft-mode parity.
+    lines.push(`    if (_tampered) ${softTamperFlag} = true;`);
   }
   lines.push(`  } catch (_e4) {`);
   lines.push(
@@ -390,8 +396,15 @@ export function generateSelfSealSnippet(
     Object.fromEntries(expectedEntries.map(([k, v]) => [k, v.toLowerCase()])),
   );
 
+  // Soft mode collects tamper signals in one flag and applies them once to the
+  // folded digest. A per-site bit flip XOR-cancels on an even site count, and a
+  // site-0-only flip is disabled by patching that single helper.
+  const softTamperFlag = hardFailOnSiblingMismatch
+    ? null
+    : prng.identifier({ style: "camel", hint: "integrityTampered", entropy: 4 });
   const helperNames: string[] = [];
   const lines: string[] = [];
+  if (softTamperFlag !== null) lines.push(`var ${softTamperFlag} = false;`);
   for (let site = 0; site < interleavedSites; site++) {
     const helperName = prng.identifier({
       style: "camel",
@@ -410,6 +423,7 @@ export function generateSelfSealSnippet(
         hardFailOnSiblingMismatch,
         envFingerprint,
         selfDigestCheck,
+        softTamperFlag,
         options.esmRequireHelperIdent,
         options.esmMetaUrlIdent,
       ),
@@ -417,13 +431,10 @@ export function generateSelfSealSnippet(
   }
 
   // Invoke every site; fold digests so NOP-ing one still leaves others running
-  // (each already hard-fails independently on sibling mismatch before return).
-  if (interleavedSites === 1) {
-    lines.push(`var ${bindingName} = ${helperNames[0]}();`);
-  } else {
-    const parts = helperNames.map((h) => `${h}()`).join(" ^ ");
-    lines.push(`var ${bindingName} = (${parts}) >>> 0;`);
-  }
+  // (hard mode throws inside each helper; soft mode shares the tamper flag).
+  const folded = helperNames.map((h) => `${h}()`).join(" ^ ");
+  const tamperFold = softTamperFlag !== null ? ` ^ (${softTamperFlag} ? 1 : 0)` : "";
+  lines.push(`var ${bindingName} = ((${folded})${tamperFold}) >>> 0;`);
 
   const host = options.checkerHostPath ?? "entry.js";
   const fileNodes =

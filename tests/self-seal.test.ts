@@ -53,6 +53,20 @@ describe("self-seal helper (#40.5)", () => {
     ).not.toThrow();
   });
 
+  it("applies the soft-mode tamper flag once across interleaved sites", () => {
+    const snip = generateSelfSealSnippet(new SeededPrng("self-seal-soft-parity"), {
+      siblingPaths: ["./sib-a.js"],
+      expectedSiblingSha256: { "./sib-a.js": "a".repeat(64) },
+      hardFailOnSiblingMismatch: false,
+      interleavedSites: 2,
+    });
+    expect(snip.interleavedSites).toBe(2);
+    const assignments = snip.code.match(/if \(_tampered\) [A-Za-z_$][\w$]* = true;/g) ?? [];
+    expect(assignments).toHaveLength(2);
+    expect(snip.code).toMatch(/\^ \([A-Za-z_$][\w$]* \? 1 : 0\)/);
+    expect(snip.code).not.toContain("if (_tampered) digest =");
+  });
+
   it("offline digest helper is deterministic for identical inputs", () => {
     const a = measureSelfSealDigestOffline([
       { pathLabel: "main.js", bytes: Buffer.from("hello-module") },
