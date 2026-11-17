@@ -88,10 +88,11 @@ describe("parser shields fail closed on malformed input", () => {
     );
   });
 
-  it("appends to a binary plist without losing the original bytes", () => {
+  it("refuses a truncated binary plist that has no trailer room", () => {
     const raw = Buffer.from("bplist00", "latin1");
-    const out = protectApplePlistBuffer(raw, { intensity: "balanced", seed: "plist-contract" });
-    expect(out.buffer.subarray(0, raw.length).equals(raw)).toBe(true);
+    expect(() =>
+      protectApplePlistBuffer(raw, { intensity: "balanced", seed: "plist-contract" }),
+    ).toThrow(/binary Apple property list/i);
   });
 
   it("never loses PTX or managed-assembly input bytes and refuses empty PTX", () => {
