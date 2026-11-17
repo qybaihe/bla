@@ -1,4 +1,5 @@
 import { BLA_IDENTITY } from "../identity.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 import type { AuditReport } from "./types.js";
 import type { ReleaseExposureReport } from "./release-exposure.js";
 
@@ -85,13 +86,15 @@ export function buildSarifReport(
       ? item.location.slice(0, lineMatch.index)
       : item.location;
     const startLine = lineMatch ? Number.parseInt(lineMatch[1]!, 10) : undefined;
-    const normalizedUri = (uriPart || audit.targetPath).replace(/\\/g, "/");
+    const normalizedUri = sanitizeTerminalText(
+      (uriPart || audit.targetPath).replace(/\\/g, "/"),
+    );
 
     results.push({
       ruleId,
       level,
       message: {
-        text: `${item.name}: ${item.reason} (Est. reconstruction: ${item.estimatedTokensToReconstruct} tokens / $${item.estimatedCostUsd.toFixed(2)})`,
+        text: `${sanitizeTerminalText(item.name)}: ${sanitizeTerminalText(item.reason)} (Est. reconstruction: ${item.estimatedTokensToReconstruct} tokens / $${item.estimatedCostUsd.toFixed(2)})`,
       },
       locations: [
         {
@@ -121,12 +124,12 @@ export function buildSarifReport(
         ruleId,
         level,
         message: {
-          text: `${f.kind} (${f.representation}) in ${f.file} — Run "npx bla-agents defend" to replace with decoy source maps.`,
+          text: `${f.kind} (${f.representation}) in ${sanitizeTerminalText(f.file)} — Run "npx bla-agents defend" to replace with decoy source maps.`,
         },
         locations: [
           {
             physicalLocation: {
-              artifactLocation: { uri: f.file.replace(/\\/g, "/") },
+              artifactLocation: { uri: sanitizeTerminalText(f.file.replace(/\\/g, "/")) },
             },
           },
         ],

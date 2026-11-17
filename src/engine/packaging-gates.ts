@@ -787,12 +787,12 @@ export function buildPackagingGatesSarif(report: PackagingGatesReport): SarifLog
       ruleId,
       level,
       message: {
-        text: `${f.gate}: ${f.findingCount} finding(s) — ${f.oneLineAdvice}`,
+        text: `${f.gate}: ${f.findingCount} finding(s) — ${sanitizeTerminalText(f.oneLineAdvice)}`,
       },
       locations: [
         {
           physicalLocation: {
-            artifactLocation: { uri: f.relativePath.replace(/\\/g, "/") },
+            artifactLocation: { uri: sanitizeTerminalText(f.relativePath.replace(/\\/g, "/")) },
           },
         },
       ],
