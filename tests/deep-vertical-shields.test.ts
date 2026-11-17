@@ -119,19 +119,36 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     expect(afterInfo.validSqlite).toBe(true);
     expect(afterInfo.blaProtected).toBe(true);
     expect(afterInfo.hasGeneratedTrapColumns).toBe(true);
+    expect(afterInfo.trapMode).toBe("stock");
+    expect(protectedSqlite.trapMode).toBe("stock");
 
-    // Verify real application table (`license_cache`) is 100% intact AND
-    // REA's bare read-only `SELECT * FROM enclave_key_hierarchy` fails on the virtual generated column!
+    // The opt-in function form of the trap columns, as releases up to 3.4.3 wrote them.
+    const evalTrapSqlite = protectSqliteBuffer(rawSqlite, {
+      intensity: "bankrupt",
+      seed: "sqlite-test",
+      evalTrap: true,
+    });
+    expect(evalTrapSqlite.honeyTablesInjected).toBe(5);
+    expect(evalTrapSqlite.generatedTrapColumnsAdded).toBe(3);
+    expect(evalTrapSqlite.trapMode).toBe("eval");
+    const evalTrapInfo = inspectSqliteBuffer(evalTrapSqlite.buffer);
+    expect(evalTrapInfo.blaProtected).toBe(true);
+    expect(evalTrapInfo.hasGeneratedTrapColumns).toBe(true);
+    expect(evalTrapInfo.trapMode).toBe("eval");
+
+    // A bare read-only connection that registers nothing: the shipped application, sqlite3, REA.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bla-sqlite-verify-"));
-    const dbFile = path.join(tmpDir, "verify.sqlite");
-    try {
-      fs.writeFileSync(dbFile, protectedSqlite.buffer);
-      const reaReadOnlyDb = new DatabaseSync(dbFile, {
-        readOnly: true,
-        allowExtension: false,
-      });
+    const withBareReadOnlyDb = (
+      name: string,
+      buffer: Buffer,
+      use: (db: InstanceType<typeof DatabaseSync>) => void,
+    ): void => {
+      const dbFile = path.join(tmpDir, name);
+      fs.writeFileSync(dbFile, buffer);
+      const db = new DatabaseSync(dbFile, { readOnly: true, allowExtension: false });
       try {
-        const realRow = reaReadOnlyDb
+        // The real application table (`license_cache`) is 100% intact in both modes.
+        const realRow = db
           .prepare("SELECT account_id, plan_tier, offline_token FROM license_cache")
           .get() as { account_id: string; plan_tier: string; offline_token: string };
         expect(realRow).toEqual({
@@ -139,14 +156,32 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
           plan_tier: "enterprise",
           offline_token: "tok_live_9988776655",
         });
-
-        // REA's full-row projection on the honey table must throw because `enclave_unseal_payload` is not registered on REA's connection
-        expect(() => {
-          reaReadOnlyDb.prepare("SELECT * FROM enclave_key_hierarchy LIMIT 5").all();
-        }).toThrow();
+        use(db);
       } finally {
-        reaReadOnlyDb.close();
+        db.close();
       }
+    };
+    try {
+      // Default: everything BLA added is plain SQL, so the database stays fully usable.
+      withBareReadOnlyDb("stock.sqlite", protectedSqlite.buffer, (db) => {
+        const honeyRows = db.prepare("SELECT * FROM enclave_key_hierarchy LIMIT 5").all() as Array<{
+          sealed_payload: string;
+          unsealed_preview: string;
+        }>;
+        expect(honeyRows.length).toBe(5);
+        for (const row of honeyRows) {
+          expect(row.unsealed_preview).toBe(`ENCLAVE_SEALED:${row.sealed_payload}`);
+        }
+        expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      });
+
+      // evalTrap: the full-row projection on the honey table throws because
+      // `enclave_unseal_payload` is not registered on the client's connection.
+      withBareReadOnlyDb("eval.sqlite", evalTrapSqlite.buffer, (db) => {
+        expect(() => {
+          db.prepare("SELECT * FROM enclave_key_hierarchy LIMIT 5").all();
+        }).toThrow(/enclave_unseal_payload/);
+      });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

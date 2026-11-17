@@ -249,9 +249,38 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
 
   for (const c of doc.agentClients) {
     const det = c.detected ? `${ANSI.green}detected${ANSI.reset}` : `${ANSI.dim}not found${ANSI.reset}`;
-    const mcp = c.mcpRegistered ? `${ANSI.green}MCP registered${ANSI.reset}` : `${ANSI.yellow}MCP not registered${ANSI.reset}`;
+    const mcp = c.mcpRegistered
+      ? c.handshakeStatus === "verified"
+        ? `${ANSI.green}MCP registered, answers initialize${ANSI.reset}`
+        : c.versionSkew
+          ? `${ANSI.yellow}MCP registered (pinned ${c.pinnedVersion ?? "?"})${ANSI.reset}`
+          : `${ANSI.green}MCP registered${ANSI.reset}`
+      : c.handshakeStatus === "failed"
+        ? `${ANSI.red}MCP did not answer initialize${ANSI.reset}`
+        : `${ANSI.yellow}MCP not registered${ANSI.reset}`;
     const skill = c.skillInstalled ? `${ANSI.green}Skill installed${ANSI.reset}` : `${ANSI.dim}Skill not installed${ANSI.reset}`;
     lines.push(`  • ${c.displayName.padEnd(22)} (${c.id.padEnd(15)}) : ${det} | ${mcp} | ${skill}`);
+  }
+
+  if (doc.projectRegistrations !== undefined && doc.projectRegistrations.length > 0) {
+    lines.push("", `${ANSI.bold}Registered In This Project:${ANSI.reset}`);
+    for (const r of doc.projectRegistrations) {
+      const state =
+        r.status === "pass"
+          ? r.handshakeStatus === "verified"
+            ? `${ANSI.green}MCP registered, answers initialize${ANSI.reset}`
+            : `${ANSI.green}MCP registered${ANSI.reset}`
+          : r.status === "warn"
+            ? r.versionSkew
+              ? `${ANSI.yellow}MCP registered (pinned ${r.pinnedVersion ?? "?"})${ANSI.reset}`
+              : `${ANSI.yellow}not checked (file could not be parsed)${ANSI.reset}`
+            : r.handshakeStatus === "failed"
+              ? `${ANSI.red}MCP did not answer initialize${ANSI.reset}`
+              : `${ANSI.red}entry is broken${ANSI.reset}`;
+      lines.push(
+        `  • ${sanitizeTerminalText(r.relativePath).padEnd(22)} (${r.client.padEnd(15)}) : ${state}`,
+      );
+    }
   }
 
   if (doc.issues.length > 0) {
@@ -259,6 +288,13 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
     for (const issue of doc.issues) {
       lines.push(`  • ${ANSI.red}${sanitizeTerminalText(issue)}${ANSI.reset}`);
     }
+  }
+
+  if (doc.nextSteps !== undefined && doc.nextSteps.length > 0) {
+    lines.push("", `${ANSI.bold}Next:${ANSI.reset}`);
+    doc.nextSteps.forEach((step, index) => {
+      lines.push(`  ${index + 1}. ${sanitizeTerminalText(step)}`);
+    });
   }
 
   return lines.join("\n");

@@ -4,7 +4,11 @@ Load this when hardening `.wasm` modules.
 
 ## Intensity & rename
 
-At `maximum` / `bankrupt`, BLA renames **all** exports not listed in the preserve list (red-blue round-1: silent `mix`/`seal` ABI enabled preload hooks). Do **not** ship a stable public WASM ABI unless glue truly requires it — and then list names **explicitly**:
+At `maximum` / `bankrupt`, BLA renames exports (red-blue round-1: a silent `mix`/`seal` ABI enabled preload hooks). Three kinds of name stay:
+
+1. **Names a host looks up by specification** — `_start`, `_initialize`, `memory`, `__indirect_function_table`, wasm-ld linker symbols, and the wasm-bindgen / Emscripten / component-model glue (`__wbindgen_*`, `cabi_realloc`, `stackSave`, …). No caller can follow a rename of these and they carry no secret, so they are never renamed.
+2. **Names another file in the project refers to.** `bla_harden` keeps them and reports each as `artifacts[].wasmExportsAutoPreserved` `{ name, referencedBy }`. They remain a stable hook surface: if one guards entitlement logic, rename it in your own source and its callers.
+3. **Names you list.** Do **not** ship a stable public WASM ABI unless glue outside the project truly requires it — and then list the names **explicitly**:
 
 | Surface | How |
 | :--- | :--- |
@@ -12,7 +16,11 @@ At `maximum` / `bankrupt`, BLA renames **all** exports not listed in the preserv
 | CLI | `--wasm-preserve-exports main,add` |
 | Config | `.blarc` `"wasmPreserveExports": ["main","add"]` |
 
-Glue that imports renamed symbols should consume the rename map from the protect report.
+Everything else is renamed, and the old → new map comes back as `artifacts[].wasmExportRenames` (`bla_harden`), `protection.wasmExportRenames` (`bla_defend`) or `wasmExportRenames` (`bla_protect`). A caller outside the project has to be updated from that map. `balanced` and `stealth` rename nothing.
+
+## Size
+
+At `bankrupt` a module grows by megabytes — the decoy exports are the exhaustion mechanism, and a 41-byte module comes out near 7 MB. At `maximum` the same module is a few tens of kilobytes and still gets export renaming and decoys. The harden report states it (`outputSize`, per-artifact `inputBytes` / `outputBytes`) and `nextSteps` flags growth of a megabyte or more. For a module that is downloaded by browsers, choose `maximum`, or keep `bankrupt` for the rest of the build and harden the module separately at a lower intensity.
 
 ## Verify honesty
 

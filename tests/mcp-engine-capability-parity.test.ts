@@ -21,6 +21,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "llm_directives",
       "weave_decoys",
       "self_seal",
+      "sqlite_eval_trap",
       "require_agent_weave",
       "wasm_preserve_exports",
       "allow_lane_independent",
@@ -38,11 +39,14 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "max_artifacts",
       "confirm_overwrite",
       "output_directory",
+      "apply",
+      "restore",
+      "exclude",
     ],
   },
   {
     tool: "bla_discover",
-    params: ["directory", "max_artifacts"],
+    params: ["directory", "max_artifacts", "exclude"],
   },
   {
     tool: "bla_defend",
@@ -54,6 +58,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "llm_directives",
       "weave_decoys",
       "self_seal",
+      "sqlite_eval_trap",
       "require_agent_weave",
       "wasm_preserve_exports",
       "allow_lane_independent",
@@ -79,6 +84,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
       "intensity",
       "weave_decoys",
       "self_seal",
+      "sqlite_eval_trap",
       "wasm_preserve_exports",
       "allow_lane_independent",
       "allow_plaintext_seal",
@@ -199,7 +205,7 @@ const EXPECTED_MCP_ENGINE_CAPABILITIES: ReadonlyArray<{
   },
   {
     tool: "bla_verify_weave",
-    params: ["path", "max_targets"],
+    params: ["path", "max_targets", "scope", "verbose"],
   },
   {
     tool: "bla_redteam_report",

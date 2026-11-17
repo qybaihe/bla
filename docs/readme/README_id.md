@@ -128,7 +128,7 @@ npx bla-agents@latest setup
 | Flutter / Dart AOT | Menyisipkan 66 header snapshot Dart (`0xf5f5dcdc`) + 6 baris toolchain LLVM, melampaui batas 4 baris | `bla protect libapp.so` · Memicu `SnapshotHashScanner (capped: true)` |
 | Artefak WASM | Menghapus bagian debug; menyisipkan bagian `"name"` umpan (`tee_hardware_enclave_stub`) + data pengalih khusus | `bla protect core.wasm` · Parser biner LEB128 bawaan; validasi `WebAssembly.validate` tetap 100% |
 | Python & `.pyc` | Menyisipkan mesin status jebakan Python ke `.py` dan data pengalih marshal `TYPE_ASCII` ke kumpulan `.pyc` | `bla protect module.pyc` · Perlindungan marshal `.pyc` CPython 3.7–3.14 bawaan |
-| Basis Data SQLite | Menyisipkan 3 tabel enclave umpan dengan jebakan `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` | `bla protect data.sqlite` · Memicu `SqliteColumnEvaluationFailure` saat pratinjau REA |
+| Basis Data SQLite | Menyisipkan 3 tabel enclave umpan dengan jebakan `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` | `bla protect data.sqlite --sqlite-eval-trap` · Memicu `SqliteColumnEvaluationFailure` saat pratinjau REA |
 | Artefak Model AI | Menyisipkan `35 > 32` header JSON/ARRAY bertingkat ke header model `.safetensors` dan `.gguf` | `bla protect weights.safetensors` · Memicu `ModelFormatFailure (json-nesting / metadata-nesting > 32)` |
 | Android DEX & IL2CPP | Menyisipkan kelas umpan `Lcom/enclave/sgx/...` ke `classes.dex` (SHA-1/Adler32 tetap valid) dan `Il2Cpp` | `bla protect classes.dex` atau `global-metadata.dat` · Mengacaukan proses pemulihan JADX/JEB & IL2CPP |
 

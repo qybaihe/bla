@@ -52,10 +52,20 @@
       "default": false,
       "description": "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Parity with CLI --self-seal / MCP self_seal. For multi-artifact trees, bankrupt harden recommends this (selfSealRecommended) but never auto-enables for single-file projects."
     },
+    "sqliteEvalTrap": {
+      "type": "boolean",
+      "default": false,
+      "description": "SQLite only, opt-in. Honey-table columns call a function no stock connection has, so an inspector cannot read those rows — and the application cannot run PRAGMA integrity_check, VACUUM or a dump/restore on that database. Parity with CLI --sqlite-eval-trap / MCP sqlite_eval_trap."
+    },
     "wasmPreserveExports": {
       "type": "array",
       "items": { "type": "string" },
       "description": "WASM export names that must remain the public ABI when export rename runs at maximum/bankrupt (issue #40.3)."
+    },
+    "exclude": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Project-relative paths or globs that harden leaves out (parity with CLI --exclude / MCP exclude). A pattern with a slash is anchored at the project root and covers everything beneath a matching directory; one without matches any path segment (vendor, *.min.js). Excluded files ship unprotected and are listed in the report."
     },
     "allowWasmClearParamCarriers": {
       "type": "boolean",

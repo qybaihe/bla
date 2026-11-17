@@ -104,7 +104,7 @@ describe("Issue #40.6: defenseScore honesty", () => {
       sidecarEntangleEnabled: false,
     });
     expect(off.gaps.map((g) => g.id)).toContain("sidecar-entangle-not-enabled");
-    expect(off.cappedScore).toBe(93);
+    expect(off.gaps.find((g) => g.id === "sidecar-entangle-not-enabled")!.scoreCap).toBe(93);
 
     const hostOnly = applyDefenseScoreHonesty(99, {
       detectedFormat: "sqlite",
@@ -112,7 +112,35 @@ describe("Issue #40.6: defenseScore honesty", () => {
     });
     expect(hostOnly.gaps.map((g) => g.id)).toContain("sqlite-sidecar-host-verify-only");
     expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
-    expect(hostOnly.cappedScore).toBe(93);
+    expect(hostOnly.gaps.find((g) => g.id === "sqlite-sidecar-host-verify-only")!.scoreCap).toBe(93);
+  });
+
+  it("caps a SQLite database for what the shield does not do: hide the application's tables", () => {
+    // Default output: decoy columns any client evaluates.
+    const stock = applyDefenseScoreHonesty(99, { detectedFormat: "sqlite", sqliteTrapMode: "stock" });
+    expect(stock.gaps.map((g) => g.id)).toEqual(
+      expect.arrayContaining(["sqlite-business-data-readable", "sqlite-decoy-columns-evaluable"]),
+    );
+    expect(stock.cappedScore).toBe(68);
+    expect(stock.gaps.find((g) => g.id === "sqlite-business-data-readable")!.summary).toMatch(
+      /stored exactly as before: any SQLite client reads them/,
+    );
+
+    // Opt-in evaluation trap: an inspector's read of a honey table fails, the
+    // application's own tables still do not.
+    const evalTrap = applyDefenseScoreHonesty(99, { detectedFormat: "sqlite", sqliteTrapMode: "eval" });
+    expect(evalTrap.gaps.map((g) => g.id)).toContain("sqlite-business-data-readable");
+    expect(evalTrap.gaps.map((g) => g.id)).not.toContain("sqlite-decoy-columns-evaluable");
+    expect(evalTrap.cappedScore).toBe(78);
+
+    // A caller that does not know the mode gets the cautious answer.
+    expect(applyDefenseScoreHonesty(99, { detectedFormat: "sqlite" }).cappedScore).toBe(68);
+    // Other formats are untouched.
+    expect(
+      applyDefenseScoreHonesty(99, { detectedFormat: "model-gguf", sidecarEntangleEnabled: true }).gaps.map(
+        (g) => g.id,
+      ),
+    ).not.toContain("sqlite-business-data-readable");
   });
 
   it("keeps a DEX host-only string-pool note from closing the strip⇒fail gap", () => {

@@ -58,6 +58,13 @@ export interface DoctorClientDiagnostic {
   readonly args: readonly string[];
   readonly commandResolvable: boolean;
   readonly command_resolvable: boolean;
+  /**
+   * Release the client launches (`bla-agents@<version>` in its MCP entry), or
+   * null when the entry does not pin one.
+   */
+  readonly pinnedVersion: string | null;
+  /** True when `pinnedVersion` is not the release running this check. */
+  readonly versionSkew: boolean;
   readonly handshakeStatus: DoctorHandshakeStatus;
   readonly handshakeVerified: boolean;
   readonly handshake_verified: boolean;
@@ -72,8 +79,53 @@ export interface DoctorClientDiagnostic {
   readonly issues: readonly string[];
 }
 
+/**
+ * A BLA MCP entry found in a config file that lives in the project (and is
+ * usually checked in), as opposed to the per-user client configs.
+ */
+export interface DoctorProjectRegistration {
+  /** Project-relative config file, for example `.mcp.json`. */
+  readonly relativePath: string;
+  readonly configPath: string;
+  /** The client that reads this file. */
+  readonly client: string;
+  readonly configStatus: "valid" | "malformed" | "invalid_entry";
+  readonly command: string | null;
+  readonly args: readonly string[];
+  readonly commandResolvable: boolean;
+  /** Release the entry pins (`bla-agents@x.y.z` in its arguments), when it pins one. */
+  readonly pinnedVersion: string | null;
+  readonly versionSkew: boolean;
+  readonly handshakeStatus: DoctorHandshakeStatus;
+  readonly status: "pass" | "warn" | "fail";
+  readonly issues: readonly string[];
+}
+
+/**
+ * Project-scoped MCP config files the supported clients read. `bla setup`
+ * never writes these; teams check them in so everyone opening the project
+ * gets the server.
+ */
+const PROJECT_SCOPED_MCP_CONFIGS: ReadonlyArray<{
+  readonly relativePath: string;
+  readonly client: string;
+  readonly format: ClientConfigFormat;
+}> = Object.freeze([
+  { relativePath: ".mcp.json", client: "Claude Code", format: "json-mcpServers" },
+  { relativePath: ".cursor/mcp.json", client: "Cursor", format: "json-mcpServers" },
+  { relativePath: ".vscode/mcp.json", client: "VS Code", format: "json-vscode" },
+  { relativePath: ".gemini/settings.json", client: "Gemini CLI", format: "json-mcpServers" },
+  { relativePath: ".codex/config.toml", client: "Codex", format: "toml-codex" },
+  { relativePath: "opencode.json", client: "OpenCode", format: "json-opencode" },
+] as const);
+
 export interface DoctorOptions {
   readonly homeDir?: string;
+  /**
+   * Project to check for project-scoped MCP configs (`.mcp.json`,
+   * `.cursor/mcp.json`, `.vscode/mcp.json`, …). Not checked when absent.
+   */
+  readonly projectDirectory?: string;
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
   readonly pathEnv?: string;
@@ -111,7 +163,24 @@ export interface DoctorDiagnosticReport {
   readonly reaLimitsTargeted: typeof REA_INTERNAL_LIMITS;
   readonly agentClients: readonly DoctorClientDiagnostic[];
   readonly clients: readonly DoctorClientDiagnostic[];
+  /** BLA entries in the project's own MCP config files. Absent when there are none. */
+  readonly projectRegistrations?: readonly DoctorProjectRegistration[];
   readonly issues: readonly string[];
+  /** What to do about the state found, most important first. Absent when nothing is needed. */
+  readonly nextSteps?: readonly string[];
+}
+
+/** `bla-agents@3.4.1` / `blind-llm-agents@3.4.1` in an MCP entry's arguments. */
+export function pinnedBlaVersionOf(args: readonly string[]): string | null {
+  for (const arg of args) {
+    for (const name of [BLA_IDENTITY.packageName, BLA_IDENTITY.packageAlias]) {
+      const at = arg.lastIndexOf(`${name}@`);
+      if (at === -1) continue;
+      const version = arg.slice(at + name.length + 1).trim();
+      if (/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return version;
+    }
+  }
+  return null;
 }
 
 function sha256Hex(content: string | Buffer): string {
@@ -433,6 +502,131 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
   };
 }
 
+/**
+ * BLA entries in the project's own MCP config files. A file that is absent or
+ * does not mention BLA is not reported; a per-user config that happens to sit
+ * under the project directory (doctor run from the home directory) is skipped,
+ * since the client list already covers it.
+ */
+function inspectProjectRegistrations(
+  projectDirectory: string,
+  userConfigPaths: ReadonlySet<string>,
+  pathEnv: string,
+  platform: NodeJS.Platform,
+  options: DoctorOptions,
+): DoctorProjectRegistration[] {
+  const out: DoctorProjectRegistration[] = [];
+  for (const candidate of PROJECT_SCOPED_MCP_CONFIGS) {
+    const configPath = resolve(projectDirectory, ...candidate.relativePath.split("/"));
+    if (userConfigPaths.has(configPath)) continue;
+    const readRes = readClientMcpConfig(configPath, candidate.format, BLA_IDENTITY.mcpServerName);
+    if (readRes.status === "missing" || readRes.status === "not_configured") continue;
+
+    const issues: string[] = [];
+    if (readRes.status === "malformed") {
+      // Only worth a line when the file is about BLA at all; clients differ in
+      // how much non-JSON (comments, trailing commas) they tolerate, so this
+      // is a warning, not a verdict.
+      let mentionsBla = false;
+      try {
+        const raw = readFileSync(configPath, "utf8");
+        mentionsBla =
+          raw.includes(BLA_IDENTITY.packageName) || raw.includes(BLA_IDENTITY.packageAlias);
+      } catch {
+        mentionsBla = false;
+      }
+      if (!mentionsBla) continue;
+      issues.push(
+        `${candidate.relativePath} could not be parsed, so its BLA entry was not checked${readRes.error ? ` (${readRes.error})` : ""}`,
+      );
+      out.push({
+        relativePath: candidate.relativePath,
+        configPath,
+        client: candidate.client,
+        configStatus: "malformed",
+        command: null,
+        args: [],
+        commandResolvable: false,
+        pinnedVersion: null,
+        versionSkew: false,
+        handshakeStatus: "not_checked",
+        status: "warn",
+        issues,
+      });
+      continue;
+    }
+
+    if (readRes.status === "invalid_entry" || readRes.entry === null) {
+      issues.push(
+        readRes.error ??
+          `Invalid '${BLA_IDENTITY.mcpServerName}' MCP entry in ${candidate.relativePath}`,
+      );
+      out.push({
+        relativePath: candidate.relativePath,
+        configPath,
+        client: candidate.client,
+        configStatus: "invalid_entry",
+        command: null,
+        args: [],
+        commandResolvable: false,
+        pinnedVersion: null,
+        versionSkew: false,
+        handshakeStatus: "not_checked",
+        status: "fail",
+        issues,
+      });
+      continue;
+    }
+
+    const command = readRes.entry.command;
+    const args = readRes.entry.args;
+    const commandResolvable = isCommandResolvable(command, pathEnv, platform);
+    if (!commandResolvable) {
+      issues.push(
+        `${candidate.relativePath} starts BLA with '${command}', which is not resolvable on disk or PATH`,
+      );
+    }
+    const pinnedVersion = pinnedBlaVersionOf(args);
+    const versionSkew = pinnedVersion !== null && pinnedVersion !== BLA_IDENTITY.version;
+    if (versionSkew) {
+      issues.push(
+        `${candidate.relativePath} launches ${BLA_IDENTITY.packageName}@${pinnedVersion}, but this is ${BLA_IDENTITY.packageName} ${BLA_IDENTITY.version}; change the version in that file (setup does not rewrite project-scoped configs)`,
+      );
+    }
+    let handshakeStatus: DoctorHandshakeStatus = "not_checked";
+    if (options.verifyHandshake && commandResolvable && !versionSkew) {
+      handshakeStatus = probeLocalMcpHandshake(
+        command,
+        args,
+        resolveHandshakeTimeoutMs(options.handshakeTimeoutMs),
+      )
+        ? "verified"
+        : "failed";
+      if (handshakeStatus === "failed") {
+        issues.push(
+          `MCP stdio initialize handshake failed for the ${candidate.relativePath} entry`,
+        );
+      }
+    }
+    out.push({
+      relativePath: candidate.relativePath,
+      configPath,
+      client: candidate.client,
+      configStatus: "valid",
+      command,
+      args,
+      commandResolvable,
+      pinnedVersion,
+      versionSkew,
+      handshakeStatus,
+      status:
+        !commandResolvable || handshakeStatus === "failed" ? "fail" : versionSkew ? "warn" : "pass",
+      issues,
+    });
+  }
+  return out;
+}
+
 export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiagnosticReport {
   const options: DoctorOptions =
     typeof homeDirOrOptions === "string"
@@ -485,6 +679,17 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     if (configured && !commandResolvable) {
       clientIssues.push(
         `Configured MCP command '${command}' for ${c.displayName} is not resolvable on disk or PATH`,
+      );
+    }
+
+    // A client pinned to another release runs that release's tools next to
+    // whatever skill is on disk — the agent then follows a playbook for
+    // parameters its server does not have (or the reverse).
+    const pinnedVersion = configured ? pinnedBlaVersionOf(args) : null;
+    const versionSkew = pinnedVersion !== null && pinnedVersion !== BLA_IDENTITY.version;
+    if (versionSkew) {
+      clientIssues.push(
+        `${c.displayName} launches ${BLA_IDENTITY.packageName}@${pinnedVersion}, but this is ${BLA_IDENTITY.packageName} ${BLA_IDENTITY.version}; re-run \`npx ${BLA_IDENTITY.packageName}@${BLA_IDENTITY.version} setup --yes\` so its MCP entry and skill come from the same release`,
       );
     }
 
@@ -546,7 +751,16 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
 
     let handshakeStatus: DoctorHandshakeStatus = "not_checked";
     let handshakeVerified = false;
-    if (options.verifyHandshake && configured && commandResolvable && command !== null) {
+    // The probe never downloads: for an `npx` entry it starts this checkout's
+    // server instead. With another release pinned that proves nothing about
+    // what the client would launch, so it stays "not_checked".
+    if (
+      options.verifyHandshake &&
+      configured &&
+      commandResolvable &&
+      command !== null &&
+      !versionSkew
+    ) {
       handshakeVerified = probeLocalMcpHandshake(
         command,
         args,
@@ -572,7 +786,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
         handshakeStatus === "failed"
       ) {
         status = "fail";
-      } else if (skillStatus === "modified" || skillModifiedFiles.length > 0) {
+      } else if (skillStatus === "modified" || skillModifiedFiles.length > 0 || versionSkew) {
         status = "warn";
       } else {
         status = "pass";
@@ -599,6 +813,8 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       args,
       commandResolvable,
       command_resolvable: commandResolvable,
+      pinnedVersion,
+      versionSkew,
       handshakeStatus,
       handshakeVerified,
       handshake_verified: handshakeVerified,
@@ -612,9 +828,29 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     };
   });
 
+  const projectRegistrations =
+    options.projectDirectory !== undefined
+      ? inspectProjectRegistrations(
+          resolve(options.projectDirectory),
+          new Set(clients.map((c) => resolve(c.configPath))),
+          pathEnv,
+          platform,
+          options,
+        )
+      : [];
+  for (const reg of projectRegistrations) {
+    for (const issue of reg.issues) {
+      globalIssues.push(`[project:${reg.relativePath}] ${issue}`);
+    }
+  }
+
   const anyEngineUnavailable = Object.values(engines).some((s) => s === "unavailable");
-  const anyClientFailed = agentStatuses.some((c) => c.status === "fail");
-  const anyClientWarn = agentStatuses.some((c) => c.status === "warn");
+  const anyClientFailed =
+    agentStatuses.some((c) => c.status === "fail") ||
+    projectRegistrations.some((r) => r.status === "fail");
+  const anyClientWarn =
+    agentStatuses.some((c) => c.status === "warn") ||
+    projectRegistrations.some((r) => r.status === "warn");
 
   const healthy = !anyEngineUnavailable && !anyClientFailed;
   const overallStatus: DoctorDiagnosticReport["status"] = !healthy
@@ -622,6 +858,53 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     : anyClientWarn
       ? "warn"
       : "pass";
+
+  const nextSteps: string[] = [];
+  const setupCommand = `npx ${BLA_IDENTITY.packageName}@${BLA_IDENTITY.version} setup --yes`;
+  const configuredClients = agentStatuses.filter((c) => c.configured);
+  const usableProjectRegistrations = projectRegistrations.filter(
+    (r) => r.configStatus === "valid" && r.commandResolvable,
+  );
+  if (configuredClients.length === 0) {
+    const detected = agentStatuses.filter((c) => c.detected).map((c) => c.displayName);
+    if (usableProjectRegistrations.length > 0) {
+      // Registered where the team put it. Saying "not registered" here sends
+      // the agent off to register a second copy.
+      nextSteps.push(
+        `BLA is registered for this project only (${usableProjectRegistrations.map((r) => `${r.relativePath} → ${r.client}`).join(", ")}): an agent opened in this directory gets the MCP tools, the server's own instructions carry the core playbook, and the full guide is readable as the MCP resource bla://skill/SKILL.md. For other projects, and to install the skill in the client itself, run \`${setupCommand}\`.`,
+      );
+    } else {
+      nextSteps.push(
+        detected.length > 0
+          ? `No coding agent has the BLA MCP server registered yet (detected: ${detected.join(", ")}). Run \`${setupCommand}\`, then restart the agent.`
+          : `No supported coding agent was detected for this user. Install one, or register BLA by hand: command \`npx\`, args \`-y ${BLA_IDENTITY.packageName}@${BLA_IDENTITY.version} mcp\`.`,
+      );
+    }
+  }
+  const brokenProjectRegistrations = projectRegistrations.filter((r) => r.status !== "pass");
+  if (brokenProjectRegistrations.length > 0) {
+    nextSteps.push(
+      `Fix the project-scoped entry in ${brokenProjectRegistrations.map((r) => r.relativePath).join(", ")} by hand — setup only writes per-user configs. A working entry: command \`npx\`, args \`-y ${BLA_IDENTITY.packageName}@${BLA_IDENTITY.version} mcp\`. Restart the agent afterwards.`,
+    );
+  }
+  if (agentStatuses.some((c) => c.status === "fail" || c.versionSkew)) {
+    nextSteps.push(
+      `Re-run \`${setupCommand}\` to repair the registrations listed in issues, then restart the agent so it reloads the MCP server and skill.`,
+    );
+  }
+  if (anyEngineUnavailable) {
+    nextSteps.push(
+      `An engine is unavailable on Node ${process.version}: use Node ^22.23.4 or >=24 (SQLite needs node:sqlite).`,
+    );
+  }
+  if (
+    !options.verifyHandshake &&
+    (configuredClients.some((c) => c.commandResolvable) || usableProjectRegistrations.length > 0)
+  ) {
+    nextSteps.push(
+      "Registrations were read from disk only. Pass --verify-handshake (MCP: verify_handshake: true) to also start the server and check that it answers initialize.",
+    );
+  }
 
   return {
     healthy,
@@ -635,6 +918,8 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     reaLimitsTargeted: REA_INTERNAL_LIMITS,
     agentClients: agentStatuses,
     clients: agentStatuses,
+    ...(projectRegistrations.length > 0 ? { projectRegistrations } : {}),
     issues: globalIssues,
+    ...(nextSteps.length > 0 ? { nextSteps } : {}),
   };
 }

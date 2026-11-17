@@ -22,7 +22,7 @@ Also: `bla_harden` MCP tool with `{ "directory": "." }`.
 | WebAssembly | ✓ export decoys | **verified** — Wabt `WASM_INTERFACE_REPRESENTATION_BYTES` / partial | needs Wabt for REA path |
 | Python `.py` / `.pyc` | ✓ | designed-for | `.py` AST weave + `.pyc` remmarshal `co_consts` CODE weave when `weave_decoys` |
 | Native ELF (Go/Flutter/Electron fuses) | ✓ | **verified** — `MAX_BUILD_INFO_BYTES`, pool URIs/tokens, fuse sentinels | |
-| SQLite | ✓ honey + trap columns | **verified** on Node 24 — `SqliteColumnEvaluationFailure`; Node 22 soft `capability_gated` | |
+| SQLite | ✓ honey tables; eval-trap columns opt-in (`--sqlite-eval-trap`) | **verified** on Node 24 with the eval trap — `SqliteColumnEvaluationFailure`; Node 22 soft `capability_gated` | default output is decoys only and stays usable (`integrity_check`, `VACUUM`); application tables are never hidden |
 | Safetensors | ✓ nesting breaker | **verified** — `MODEL_JSON_NESTING` (HF-loadable) | |
 | GGUF | ✓ | **verified** — `MODEL_METADATA_NESTING` | |
 | Erlang BEAM | ✓ | **verified** — `max_chunks` | |

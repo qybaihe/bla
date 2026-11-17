@@ -1,6 +1,19 @@
 import { statSync, openSync, readSync, closeSync } from "node:fs";
-import { extname } from "node:path";
+import { basename, extname } from "node:path";
 import type { ArtifactFormat } from "./types.js";
+
+/**
+ * TypeScript declaration files (`index.d.ts`, `index.d.mts`, `index.d.cts`,
+ * and TS 5 arbitrary-extension declarations such as `styles.d.css.ts`).
+ *
+ * They are ambient: no statement in them ever executes, so there is nothing to
+ * protect, and injecting runtime code turns every line into a TS1036/TS1039
+ * error for the package's consumers. Every write path must leave them
+ * byte-identical.
+ */
+export function isTypeScriptDeclarationPath(targetPath: string): boolean {
+  return /\.d\.(?:[a-z0-9]+\.)?[cm]?ts$/i.test(basename(targetPath));
+}
 
 /**
  * Format-aware detector that inspects both magic bytes and file extensions

@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const WASM_PARAM_CARRIER_SCHEMA = "bla-wasm-param-carrier-lint/v1" as const;
 
@@ -259,7 +260,8 @@ export function discoverAndLintWasmParamCarriers(
   }
   const candidates: string[] = [];
   walkWasmCandidates(abs, 0, candidates);
-  return candidates.map((p) => lintWasmParamCarrierFile(p));
+  // Hardened output is decoys by design; lint what it was built from.
+  return withoutKnownBlaOutputs(candidates).map((p) => lintWasmParamCarrierFile(p));
 }
 
 export function wasmParamCarrierRefuseMessage(

@@ -91,7 +91,7 @@ export const REA_BUDGET_BREAKER_MATRIX: readonly ReaSubsystemBudgetSpec[] = [
     failureClassOrStatus:
       'SqliteColumnEvaluationFailure("column-evaluation") on read-only snapshot',
     counterStrategy:
-      "Inject VIRTUAL generated columns invoking application-defined scalar functions absent on REA's bare read-only connection.",
+      "Opt-in (sqliteEvalTrap): inject VIRTUAL generated columns invoking an application-defined scalar function absent on REA's bare read-only connection. The default decoy columns are plain SQL and do not trip this limit.",
   },
   {
     id: "safetensors-json-nesting",

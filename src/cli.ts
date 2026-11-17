@@ -17,7 +17,13 @@ import { protectTarget, resolveProtectOutputPath, writeFileAtomicSync } from "./
 import { expandSiblingGlobs } from "./core/sibling-globs.js";
 import { verifyTarget } from "./engine/verifier.js";
 import { defendTarget } from "./engine/defender.js";
-import { formatHardenProjectReport, hardenProject } from "./engine/harden.js";
+import {
+  formatHardenProjectReport,
+  hardenProject,
+  restoreHardenedProject,
+} from "./engine/harden.js";
+import { sanitizeTerminalText } from "./core/terminal-text.js";
+import { registerBlaOutput } from "./core/output-registry.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
 import { lintWasmParamCarrierFile } from "./engine/wasm-param-carrier-lint.js";
@@ -113,6 +119,8 @@ Options:
   --self-seal-sibling-glob <a,b>  Comma-separated globs (cwd-relative) expanded into self-seal sibling paths; requires --self-seal (protect only)
   --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for CommonJS & ESM JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40); ESM static imports still evaluate before the entry hook; OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
+  --exclude <a,b>             harden: comma-separated project-relative paths or globs to leave out (repeatable); for the
+                              one file that breaks or slows the program when hardened. Excluded files ship unprotected
   --allow-lane-independent    Allow harden/defend of lane-independent JS gates (issue #40.1); OFF by default
   --allow-plaintext-seal      Allow bankrupt harden despite plaintext/reversible seal JSON (round-2); OFF by default
   --allow-js-wasm-hydrate-dump  Allow bankrupt despite JS←WASM hydrate param-dump (round-5); OFF by default
@@ -125,6 +133,13 @@ Options:
   --all-clients               Configure all 10 supported coding agents (including undetected)
   --force                     Force setup/uninstall overwrite when custom SKILL.md or MCP entry conflicts
   --require-agent-weave       Enforce verified Stage-2 Agent source weave before harden/defend
+  --sqlite-eval-trap          SQLite: honey-table columns call a function no stock connection has, so an inspector
+                              cannot read those rows — and the application cannot run PRAGMA integrity_check,
+                              VACUUM or a dump/restore on that database. OFF by default
+  --verify-handshake          doctor: also start each registered MCP server locally and check it answers initialize
+  --apply                     harden: overwrite the build output with the hardened files (originals are backed up
+                              outside the project; source files are never overwritten); re-runs re-harden from the originals
+  --restore                   harden: undo --apply and put the original build output back
   --dry-run                   Preview planned setup/uninstall/harden changes without writing files
   -y, --yes                   Approve setup actions without interactive confirmation
   --json                      Emit structured JSON output
@@ -155,7 +170,10 @@ interface ParsedCliArgs {
   readonly selfSealSiblingGlobs: readonly string[];
   readonly sidecarEntangle: boolean;
   readonly requireAgentWeave: boolean;
+  readonly sqliteEvalTrap: boolean;
   readonly wasmPreserveExports: readonly string[];
+  /** `--exclude`: paths / globs `harden` leaves out. */
+  readonly exclude: readonly string[];
   readonly allowLaneIndependentGates: boolean;
   readonly allowPlaintextSeal: boolean;
   readonly allowWasmClearParamCarriers: boolean;
@@ -175,6 +193,9 @@ interface ParsedCliArgs {
   readonly allClients: boolean;
   readonly force: boolean;
   readonly dryRun: boolean;
+  readonly apply: boolean;
+  readonly restore: boolean;
+  readonly verifyHandshake: boolean;
   readonly yes: boolean;
   readonly json: boolean;
   readonly sarif: boolean;
@@ -203,6 +224,7 @@ const CLI_VALUE_FLAGS = new Set<string>([
   "--artifact",
   "--client",
   "--wasm-preserve-exports",
+  "--exclude",
   "--self-seal-sibling-glob",
   "--base-dir",
 ]);
@@ -229,7 +251,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let selfSealSiblingGlobs: string[] = [];
   let sidecarEntangle = false;
   let requireAgentWeave = false;
+  let sqliteEvalTrap = false;
   let wasmPreserveExports: string[] = [];
+  const exclude: string[] = [];
   let allowLaneIndependentGates = false;
   let allowPlaintextSeal = false;
   let allowWasmClearParamCarriers = false;
@@ -250,6 +274,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allClients = false;
   let force = false;
   let dryRun = false;
+  let apply = false;
+  let restore = false;
+  let verifyHandshake = false;
   let yes = false;
   let json = false;
   let sarif = false;
@@ -292,6 +319,12 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       yes = true;
     } else if (arg === "--dry-run") {
       dryRun = true;
+    } else if (arg === "--apply") {
+      apply = true;
+    } else if (arg === "--restore") {
+      restore = true;
+    } else if (arg === "--verify-handshake") {
+      verifyHandshake = true;
     } else if (arg === "--all-detected") {
       allDetected = true;
     } else if (arg === "--all-clients" || arg === "--include-undetected") {
@@ -350,6 +383,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       sidecarEntangle = true;
     } else if (arg === "--require-agent-weave") {
       requireAgentWeave = true;
+    } else if (arg === "--sqlite-eval-trap") {
+      sqliteEvalTrap = true;
     } else if (arg === "--allow-lane-independent") {
       allowLaneIndependentGates = true;
     } else if (arg === "--allow-plaintext-seal") {
@@ -385,6 +420,18 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
+      }
+    } else if (arg === "--exclude") {
+      const value = expandedArgs[++i];
+      if (value === undefined) {
+        argErrors.push("--exclude requires a value");
+      } else {
+        exclude.push(
+          ...value
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+        );
       }
     } else if (arg === "--mcp") {
       command = "mcp";
@@ -487,7 +534,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     selfSealSiblingGlobs,
     sidecarEntangle,
     requireAgentWeave,
+    sqliteEvalTrap,
     wasmPreserveExports,
+    exclude,
     allowLaneIndependentGates,
     allowPlaintextSeal,
     allowWasmClearParamCarriers,
@@ -507,6 +556,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allClients,
     force,
     dryRun,
+    apply,
+    restore,
+    verifyHandshake,
     yes,
     json,
     sarif,
@@ -603,7 +655,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       }
 
       case "doctor": {
-        const doc = runDoctor();
+        const doc = runDoctor({
+          verifyHandshake: parsed.verifyHandshake,
+          projectDirectory: process.cwd(),
+        });
         if (parsed.json) console.log(JSON.stringify(doc, null, 2));
         else console.log(formatDoctorReport(doc));
         return doc.healthy ? 0 : 1;
@@ -678,11 +733,42 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         // target directory here minted a fresh seed and persisted it as
         // `<target>/.blarc`, i.e. inside the build output the user is about to
         // package or publish.
+        if (parsed.restore) {
+          if (parsed.apply) {
+            console.error("Error: --apply and --restore cannot be combined");
+            return 1;
+          }
+          const restored = restoreHardenedProject(directory);
+          if (parsed.json) {
+            console.log(JSON.stringify(restored, null, 2));
+          } else if (restored.status === "restored") {
+            console.log(
+              `Restored ${restored.restored?.length ?? 0} original file(s):\n${(restored.restored ?? []).map((f) => `  ↩ ${sanitizeTerminalText(f)}`).join("\n")}`,
+            );
+          } else if (restored.status === "nothing-to-restore") {
+            console.log("Nothing to restore: no build output here currently holds applied hardened files.");
+          } else {
+            console.log(`Restore ${restored.status}: ${sanitizeTerminalText(restored.reason ?? "")}`);
+          }
+          if (!parsed.json && (restored.removed?.length ?? 0) > 0) {
+            console.log(
+              `Removed (created by apply): ${(restored.removed ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
+            );
+          }
+          if (!parsed.json && (restored.skippedModified?.length ?? 0) > 0) {
+            console.log(
+              `Left alone (changed since apply, e.g. rebuilt): ${(restored.skippedModified ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
+            );
+          }
+          return restored.status === "failed" ? 2 : 0;
+        }
         const seed = parsed.dryRun
           ? parsed.seed
           : resolveProjectSeed(process.cwd(), parsed.seed, parsed.configPath).seed;
         const report = hardenProject({
           directory,
+          ...(parsed.apply ? { apply: true } : {}),
+          ...(parsed.exclude.length > 0 ? { exclude: parsed.exclude } : {}),
           intensity: explicitIntensity,
           ...(seed !== undefined ? { seed } : {}),
           dryRun: parsed.dryRun,
@@ -696,6 +782,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
             ? { requireAgentWeave: true }
+            : {}),
+          ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
+            ? { sqliteEvalTrap: true }
             : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
@@ -774,6 +863,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
             ? { requireAgentWeave: true }
             : {}),
+          ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
+            ? { sqliteEvalTrap: true }
+            : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
@@ -806,6 +898,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             parsed.allowReleaseHygieneLeak ||
             loaded.config.allowReleaseHygieneLeak === true,
         });
+        // Later `bla harden` / `bla lint` runs must recognise this file as
+        // hardened output, not as a fresh artifact full of plaintext "secrets".
+        registerBlaOutput(report.outputPath);
         if (parsed.sarif) {
           console.log(
             JSON.stringify(buildSarifReport(report.beforeAudit, report.releaseExposure), null, 2),
@@ -1139,6 +1234,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
               }
             : {}),
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
+          ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
+            ? { sqliteEvalTrap: true }
+            : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
@@ -1171,6 +1269,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             parsed.allowReleaseHygieneLeak ||
             loaded.config.allowReleaseHygieneLeak === true,
         });
+        registerBlaOutput(res.outputPath);
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatProtectionResult(res));
         return 0;

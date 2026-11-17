@@ -12,6 +12,7 @@ import {
   DEFENSE_SCORE_DISCLAIMER,
 } from "./defense-score-honesty.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
+import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
 import { isWasmSidecarLoaderHookWired } from "../shields/runtime/sidecar-entangle.js";
@@ -196,8 +197,18 @@ export function verifyTarget(
     }
   }
 
+  let sqliteTrapMode: "none" | "stock" | "eval" | undefined;
+  if (afterAudit.detectedFormat === "sqlite") {
+    try {
+      sqliteTrapMode = inspectSqliteBuffer(readFileSync(absTarget)).trapMode;
+    } catch {
+      sqliteTrapMode = undefined;
+    }
+  }
+
   const honesty = applyDefenseScoreHonesty(rawDefenseScore, {
     detectedFormat: afterAudit.detectedFormat,
+    ...(sqliteTrapMode !== undefined ? { sqliteTrapMode } : {}),
     selfSealEnabled: effectiveSelfSealEnabled,
     sidecarEntangleEnabled: options.sidecarEntangleEnabled === true,
     wasmExportRenameApplied: options.wasmExportRenameApplied === true,

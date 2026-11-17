@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { findSiblingSealSidecars } from "./seal-commitment-lint.js";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const PANEL_DERIVE_ABI_SCHEMA = "bla-panel-derive-abi-lint/v1" as const;
 
@@ -382,5 +383,6 @@ export function discoverAndLintPanelDerive(
   }
   const candidates: string[] = [];
   walkPanelCandidates(abs, 0, candidates);
-  return candidates.map((p) => lintPanelDeriveAbiFile(p));
+  // Hardened output is decoys by design; lint what it was built from.
+  return withoutKnownBlaOutputs(candidates).map((p) => lintPanelDeriveAbiFile(p));
 }

@@ -252,7 +252,8 @@ export async function buildSampleMatrix() {
   };
   try {
     sqliteRaw = bla.buildSampleSqliteDatabase();
-    sqliteHard = bla.protectSqliteBuffer(sqliteRaw, { intensity, seed });
+    // The probe below validates the evaluation trap, which is opt-in.
+    sqliteHard = bla.protectSqliteBuffer(sqliteRaw, { intensity, seed, evalTrap: true });
   } catch (err) {
     sqliteHard = {
       buffer: sqliteRaw,

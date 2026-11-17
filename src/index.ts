@@ -161,6 +161,7 @@ export {
   protectSqliteBuffer,
   buildSampleSqliteDatabase,
   type SqliteInspectionSummary,
+  type SqliteTrapMode,
   type SqliteSensitivityRule,
   type SqliteSensitivityPolicy,
   type SqliteSensitiveColumnFinding,

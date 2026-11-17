@@ -1,13 +1,23 @@
 /**
- * Structural .pyc decoy weave — remmarshal code objects so unused decoy
- * TYPE_CODE entries sit in customer/module `co_consts` pools.
+ * Structural .pyc decoy weave — unused decoy TYPE_CODE entries are spliced
+ * into customer/module `co_consts` pools.
  *
  * REA `inspect_python_pyc` inventories them as real functions; CPython never
  * executes them (no MAKE_FUNCTION / call references them).
  *
  * Safety rules (engineering red line):
- * - Decode with a FLAG_REF intern table, then re-emit WITHOUT FLAG_REF so
- *   shared consts/filename refs expand to concrete copies (behavior-identical).
+ * - The customer's objects are never decoded and re-encoded. The marshal
+ *   stream is parsed into a tree of byte spans and every original object is
+ *   written back byte-for-byte: a `str` keeps its type code (`u`/`t` are UTF-8,
+ *   `a`/`A`/`z`/`Z` are one byte per character — re-typing one as the other
+ *   turns text into mojibake), its interning, and its FLAG_REF sharing.
+ * - The only edits are additions: decoy code objects after the last element
+ *   of a `co_consts` tuple, and — when that tuple is shared with other code
+ *   objects or used as a constant value — a new tuple for this code object
+ *   that references the original elements, so the shared object itself never
+ *   gains an element.
+ * - Reference indices are reassigned while writing, in the order CPython's
+ *   reader assigns them, so every TYPE_REF still designates the same object.
  * - Original co_code / arg counts / flags / names tables preserved.
  * - On unsupported marshal forms, abort and let caller keep trailer-only honey.
  */
@@ -45,6 +55,10 @@ const TYPE_ASCII_INTERNED = 0x41;
 const TYPE_SMALL_TUPLE = 0x29;
 const TYPE_SHORT_ASCII = 0x7a;
 const TYPE_SHORT_ASCII_INTERNED = 0x5a;
+const TYPE_SLICE = 0x3a; // marshal version 5 (CPython 3.14 constant slices)
+
+/** Deeper nesting than any compiler output; keeps hostile input off the JS stack limit. */
+const MAX_MARSHAL_DEPTH = 400;
 
 const MAGIC_LAYOUT: ReadonlyMap<number, PythonPycCodeLayout> = new Map([
   // CPython marshal CODE layout families (see Include/internal/pycore_magic_number.h).
@@ -107,302 +121,305 @@ export interface PythonPycWeaveResult {
   readonly layout: PythonPycCodeLayout;
 }
 
-type MarshalValue =
-  | { readonly kind: "none" }
-  | { readonly kind: "bool"; readonly value: boolean }
-  | { readonly kind: "ellipsis" }
-  | { readonly kind: "stopiter" }
-  | { readonly kind: "int"; readonly value: number }
-  | { readonly kind: "int64"; readonly bytes: Buffer }
-  | { readonly kind: "float"; readonly bytes: Buffer }
-  | { readonly kind: "complex"; readonly bytes: Buffer }
-  | { readonly kind: "float_text"; readonly text: string }
-  | { readonly kind: "complex_text"; readonly real: string; readonly imag: string }
-  | { readonly kind: "long"; readonly digits: Buffer; readonly negative: boolean }
-  | { readonly kind: "bytes"; readonly data: Buffer }
-  | { readonly kind: "str"; readonly data: string }
-  | { readonly kind: "tuple"; readonly items: MarshalValue[] }
-  | { readonly kind: "list"; readonly items: MarshalValue[] }
-  | { readonly kind: "set"; readonly items: MarshalValue[]; readonly frozen: boolean }
-  | { readonly kind: "dict"; readonly items: Array<[MarshalValue, MarshalValue]> }
-  | { readonly kind: "code"; readonly code: CodeValue };
+/** A byte range of the input that is copied to the output unchanged. */
+type RawRange = readonly [from: number, to: number];
 
-interface CodeValue {
-  argcount: number;
-  posonlyargcount: number | null;
-  kwonlyargcount: number;
-  nlocals: number | null;
-  stacksize: number;
-  flags: number;
-  bytecode: Buffer;
-  consts: MarshalValue[];
-  names: MarshalValue[];
-  localsplusnames: MarshalValue[] | null;
-  localspluskinds: Buffer | null;
-  varnames: MarshalValue[] | null;
-  freevars: MarshalValue[] | null;
-  cellvars: MarshalValue[] | null;
-  filename: string;
-  name: string;
-  qualname: string | null;
-  firstlineno: number;
-  linetable: Buffer;
-  exceptiontable: Buffer | null;
+/** One object of the marshal stream and where it sits in the input. */
+interface MarshalNode {
+  /** Type code without FLAG_REF. */
+  readonly type: number;
+  /** Offset of the type byte. */
+  readonly start: number;
+  /** Offset just past the object. */
+  end: number;
+  /** Everything after the type byte, in stream order. */
+  readonly parts: Array<MarshalNode | RawRange>;
+  /** The reader enters this object in its reference table. */
+  readonly registers: boolean;
+  /** How many TYPE_REF objects in the stream designate this object. */
+  refCount: number;
+  /** TYPE_REF: the object it designates. */
+  target: MarshalNode | null;
+  /** TYPE_CODE: where the fields the weave needs sit within `parts`. */
+  code: { readonly consts: number; readonly filename: number; readonly name: number } | null;
+  /** Still being read — a reference to it now would be a cycle. */
+  open: boolean;
+
+  // Weave edits, applied when the object is written back.
+  /** Write with FLAG_REF so that new references can designate it. */
+  promote: boolean;
+  /** Tuple: elements written after the original ones. */
+  appended: readonly OutputItem[] | null;
+  /** Code object: written in place of its `co_consts` field. */
+  constsOverride: OutputItem | null;
 }
 
-class Reader {
+/** Something written to the output stream. */
+type OutputItem =
+  | { readonly kind: "node"; readonly node: MarshalNode }
+  | { readonly kind: "ref"; readonly target: MarshalNode }
+  /** Bytes that contain no FLAG_REF object and no TYPE_REF. */
+  | { readonly kind: "raw"; readonly bytes: Buffer }
+  | { readonly kind: "sequence"; readonly items: readonly OutputItem[] }
+  /**
+   * A new tuple. With `identity` it is written with FLAG_REF and answers every
+   * reference to that original object from here on.
+   */
+  | {
+      readonly kind: "tuple";
+      readonly items: readonly OutputItem[];
+      readonly identity: MarshalNode | null;
+    };
+
+function isSingletonType(type: number): boolean {
+  return (
+    type === TYPE_NONE ||
+    type === TYPE_TRUE ||
+    type === TYPE_FALSE ||
+    type === TYPE_ELLIPSIS ||
+    type === TYPE_STOPITER
+  );
+}
+
+function isTupleType(type: number): boolean {
+  return type === TYPE_TUPLE || type === TYPE_SMALL_TUPLE;
+}
+
+function isStringType(type: number): boolean {
+  return (
+    type === TYPE_UNICODE ||
+    type === TYPE_INTERNED ||
+    type === TYPE_ASCII ||
+    type === TYPE_ASCII_INTERNED ||
+    type === TYPE_SHORT_ASCII ||
+    type === TYPE_SHORT_ASCII_INTERNED
+  );
+}
+
+function isRawRange(part: MarshalNode | RawRange): part is RawRange {
+  return Array.isArray(part);
+}
+
+function childrenOf(node: MarshalNode): MarshalNode[] {
+  const out: MarshalNode[] = [];
+  for (const part of node.parts) {
+    if (!isRawRange(part)) out.push(part);
+  }
+  return out;
+}
+
+/** Follow a TYPE_REF to the object it designates. */
+function resolve(node: MarshalNode): MarshalNode {
+  return node.type === TYPE_REF ? node.target! : node;
+}
+
+/**
+ * Parses a marshal stream into {@link MarshalNode}s without interpreting any
+ * payload. Reference-table bookkeeping mirrors CPython's `r_object`: an object
+ * with FLAG_REF takes the next index when its type byte is read (containers
+ * and code objects reserve theirs before their children), and the singletons
+ * and TYPE_REF itself never take one.
+ */
+class MarshalParser {
   offset = 0;
-  readonly refs: MarshalValue[] = [];
+  private readonly refs: MarshalNode[] = [];
+  private depth = 0;
+
   constructor(
-    readonly buf: Buffer,
-    readonly layout: PythonPycCodeLayout,
+    private readonly buf: Buffer,
+    private readonly layout: PythonPycCodeLayout,
   ) {}
 
-  u8(): number {
-    if (this.offset >= this.buf.length) throw new Error("truncated u8");
-    return this.buf[this.offset++]!;
-  }
-  i32(): number {
-    if (this.offset + 4 > this.buf.length) throw new Error("truncated i32");
-    const v = this.buf.readInt32LE(this.offset);
-    this.offset += 4;
-    return v;
-  }
-  u32(): number {
-    if (this.offset + 4 > this.buf.length) throw new Error("truncated u32");
-    const v = this.buf.readUInt32LE(this.offset);
-    this.offset += 4;
-    return v;
-  }
-  slice(n: number): Buffer {
-    if (n < 0 || this.offset + n > this.buf.length) throw new Error("truncated slice");
-    const s = this.buf.subarray(this.offset, this.offset + n);
-    this.offset += n;
-    return Buffer.from(s);
+  private need(count: number): void {
+    if (count < 0 || this.offset + count > this.buf.length) {
+      throw new Error("truncated marshal data");
+    }
   }
 
-  read(): MarshalValue {
-    const raw = this.u8();
-    const flagged = (raw & FLAG_REF) !== 0;
-    const type = raw & ~FLAG_REF;
-    if (type === TYPE_REF) {
-      const idx = this.u32();
-      const hit = this.refs[idx];
-      if (hit === undefined || hit === null) {
-        throw new Error(`bad TYPE_REF ${idx} (have ${this.refs.length})`);
-      }
-      return hit;
-    }
-    // CPython reserves FLAG_REF slots for containers BEFORE reading children so
-    // nested TYPE_REF indices stay stable (see Python/marshal.c r_object).
-    // Match CPython: tuples/lists/dicts/sets R_REF before children;
-    // CODE and non-empty frozenset use r_ref_reserve before body (marshal.c).
-    const earlyContainer =
-      type === TYPE_TUPLE ||
-      type === TYPE_SMALL_TUPLE ||
-      type === TYPE_LIST ||
-      type === TYPE_DICT ||
-      type === TYPE_SET ||
-      type === TYPE_FROZENSET ||
-      type === TYPE_CODE;
-    let slot = -1;
-    if (flagged && earlyContainer) {
-      slot = this.refs.length;
-      this.refs.push(null as unknown as MarshalValue);
-    }
-    const value = this.readType(type);
-    if (flagged) {
-      if (slot >= 0) this.refs[slot] = value;
-      else this.refs.push(value);
-    }
+  private u8(): number {
+    this.need(1);
+    return this.buf[this.offset++]!;
+  }
+
+  private u32(): number {
+    this.need(4);
+    const value = this.buf.readUInt32LE(this.offset);
+    this.offset += 4;
     return value;
   }
 
-  private readType(type: number): MarshalValue {
-    switch (type) {
-      case TYPE_NULL:
-        throw new Error("unexpected NULL");
+  private i32(): number {
+    this.need(4);
+    const value = this.buf.readInt32LE(this.offset);
+    this.offset += 4;
+    return value;
+  }
+
+  /** Consume `count` payload bytes as one raw part. */
+  private raw(node: MarshalNode, from: number, count: number): void {
+    this.need(count);
+    this.offset += count;
+    node.parts.push([from, this.offset]);
+  }
+
+  private child(node: MarshalNode): MarshalNode {
+    const child = this.parse();
+    node.parts.push(child);
+    return child;
+  }
+
+  parse(): MarshalNode {
+    if (++this.depth > MAX_MARSHAL_DEPTH) throw new Error("marshal data nested too deeply");
+    const start = this.offset;
+    const byte = this.u8();
+    const type = byte & ~FLAG_REF;
+    const node: MarshalNode = {
+      type,
+      start,
+      end: start,
+      parts: [],
+      registers:
+        (byte & FLAG_REF) !== 0 && type !== TYPE_REF && type !== TYPE_NULL && !isSingletonType(type),
+      refCount: 0,
+      target: null,
+      code: null,
+      open: true,
+      promote: false,
+      appended: null,
+      constsOverride: null,
+    };
+    if (node.registers) this.refs.push(node);
+    this.readBody(node);
+    node.end = this.offset;
+    node.open = false;
+    this.depth -= 1;
+    return node;
+  }
+
+  private readBody(node: MarshalNode): void {
+    const bodyStart = this.offset;
+    switch (node.type) {
       case TYPE_NONE:
-        return { kind: "none" };
-      case TYPE_FALSE:
-        return { kind: "bool", value: false };
       case TYPE_TRUE:
-        return { kind: "bool", value: true };
-      case TYPE_STOPITER:
-        return { kind: "stopiter" };
+      case TYPE_FALSE:
       case TYPE_ELLIPSIS:
-        return { kind: "ellipsis" };
+      case TYPE_STOPITER:
+        return;
       case TYPE_INT:
-        return { kind: "int", value: this.i32() };
+        return this.raw(node, bodyStart, 4);
       case TYPE_INT64:
-        return { kind: "int64", bytes: this.slice(8) };
       case TYPE_FLOAT:
-        return { kind: "float", bytes: this.slice(8) };
+        return this.raw(node, bodyStart, 8);
       case TYPE_COMPLEX:
-        return { kind: "complex", bytes: this.slice(16) };
+        return this.raw(node, bodyStart, 16);
       case TYPE_FLOAT_TEXT: {
-        const n = this.u8();
-        return { kind: "float_text", text: this.slice(n).toString("ascii") };
+        const length = this.u8();
+        return this.raw(node, bodyStart, length);
       }
       case TYPE_COMPLEX_TEXT: {
-        const n1 = this.u8();
-        const real = this.slice(n1).toString("ascii");
-        const n2 = this.u8();
-        const imag = this.slice(n2).toString("ascii");
-        return { kind: "complex_text", real, imag };
+        const real = this.u8();
+        this.need(real);
+        this.offset += real;
+        const imaginary = this.u8();
+        return this.raw(node, bodyStart, imaginary);
       }
       case TYPE_LONG: {
-        const n = this.i32();
-        const abs = Math.abs(n);
-        return {
-          kind: "long",
-          digits: this.slice(abs * 2),
-          negative: n < 0,
-        };
+        const digits = Math.abs(this.i32());
+        return this.raw(node, bodyStart, digits * 2);
       }
-      case TYPE_BYTES: {
-        const n = this.u32();
-        return { kind: "bytes", data: this.slice(n) };
-      }
+      case TYPE_BYTES:
       case TYPE_INTERNED:
       case TYPE_UNICODE:
       case TYPE_ASCII:
       case TYPE_ASCII_INTERNED: {
-        const n = this.u32();
-        return { kind: "str", data: this.slice(n).toString("utf8") };
+        const length = this.u32();
+        return this.raw(node, bodyStart, length);
       }
       case TYPE_SHORT_ASCII:
       case TYPE_SHORT_ASCII_INTERNED: {
-        const n = this.u8();
-        return { kind: "str", data: this.slice(n).toString("utf8") };
+        const length = this.u8();
+        return this.raw(node, bodyStart, length);
       }
-      case TYPE_SMALL_TUPLE: {
-        const n = this.u8();
-        const items: MarshalValue[] = [];
-        for (let i = 0; i < n; i++) items.push(this.read());
-        return { kind: "tuple", items };
-      }
-      case TYPE_TUPLE: {
-        const n = this.u32();
-        const items: MarshalValue[] = [];
-        for (let i = 0; i < n; i++) items.push(this.read());
-        return { kind: "tuple", items };
-      }
-      case TYPE_LIST: {
-        const n = this.u32();
-        const items: MarshalValue[] = [];
-        for (let i = 0; i < n; i++) items.push(this.read());
-        return { kind: "list", items };
-      }
+      case TYPE_SMALL_TUPLE:
+      case TYPE_TUPLE:
+      case TYPE_LIST:
       case TYPE_SET:
       case TYPE_FROZENSET: {
-        const n = this.u32();
-        const items: MarshalValue[] = [];
-        for (let i = 0; i < n; i++) items.push(this.read());
-        return { kind: "set", items, frozen: type === TYPE_FROZENSET };
+        const count = node.type === TYPE_SMALL_TUPLE ? this.u8() : this.i32();
+        // Every element takes at least one byte.
+        if (count < 0 || count > this.buf.length - this.offset) {
+          throw new Error("bad marshal sequence size");
+        }
+        node.parts.push([bodyStart, this.offset]);
+        for (let i = 0; i < count; i++) this.element(node);
+        return;
       }
       case TYPE_DICT: {
-        const items: Array<[MarshalValue, MarshalValue]> = [];
-        while (true) {
-          const raw = this.buf[this.offset];
-          if (raw === undefined) throw new Error("dict truncated");
-          if ((raw & ~FLAG_REF) === TYPE_NULL) {
-            this.u8();
-            break;
+        for (;;) {
+          this.need(1);
+          if ((this.buf[this.offset]! & ~FLAG_REF) === TYPE_NULL) {
+            return this.raw(node, this.offset, 1);
           }
-          const k = this.read();
-          const v = this.read();
-          items.push([k, v]);
+          this.element(node);
+          this.element(node);
         }
-        return { kind: "dict", items };
       }
+      case TYPE_SLICE:
+        this.element(node);
+        this.element(node);
+        this.element(node);
+        return;
       case TYPE_CODE:
-        return { kind: "code", code: this.readCode() };
+        return this.readCode(node, bodyStart);
+      case TYPE_REF: {
+        const index = this.u32();
+        const target = this.refs[index];
+        if (target === undefined || target.open) {
+          throw new Error(`invalid marshal reference ${index}`);
+        }
+        target.refCount += 1;
+        node.target = target;
+        node.parts.push([bodyStart, this.offset]);
+        return;
+      }
       default:
-        throw new Error(`unsupported marshal type 0x${type.toString(16)}`);
+        throw new Error(`unsupported marshal type 0x${node.type.toString(16)}`);
     }
   }
 
-  private readCode(): CodeValue {
-    const argcount = this.u32();
-    const posonlyargcount = this.layout === "py37" ? null : this.u32();
-    const kwonlyargcount = this.u32();
-    const nlocals = this.layout === "py311" ? null : this.u32();
-    const stacksize = this.i32();
-    const flags = this.i32();
-    const bytecodeVal = this.read();
-    if (bytecodeVal.kind !== "bytes") throw new Error("co_code not bytes");
-    const constsVal = this.read();
-    if (constsVal.kind !== "tuple") throw new Error("co_consts not tuple");
-    const namesVal = this.read();
-    if (namesVal.kind !== "tuple") throw new Error("co_names not tuple");
+  /** A container element: any object except the NULL terminator. */
+  private element(node: MarshalNode): MarshalNode {
+    const child = this.child(node);
+    if (child.type === TYPE_NULL) throw new Error("NULL object in marshal data");
+    return child;
+  }
 
-    let localsplusnames: MarshalValue[] | null = null;
-    let localspluskinds: Buffer | null = null;
-    let varnames: MarshalValue[] | null = null;
-    let freevars: MarshalValue[] | null = null;
-    let cellvars: MarshalValue[] | null = null;
+  private readCode(node: MarshalNode, bodyStart: number): void {
+    // argcount, [posonlyargcount], kwonlyargcount, [nlocals], stacksize, flags
+    const headerInts =
+      this.layout === "py37" ? 5 : this.layout === "py38" ? 6 : 5;
+    this.raw(node, bodyStart, headerInts * 4);
+    this.element(node); // co_code
+    const consts = node.parts.length;
+    this.element(node);
+    this.element(node); // co_names
     if (this.layout === "py311") {
-      const lp = this.read();
-      if (lp.kind !== "tuple") throw new Error("localsplusnames not tuple");
-      localsplusnames = lp.items;
-      const lk = this.read();
-      if (lk.kind !== "bytes") throw new Error("localspluskinds not bytes");
-      localspluskinds = lk.data;
+      this.element(node); // co_localsplusnames
+      this.element(node); // co_localspluskinds
     } else {
-      const vn = this.read();
-      const fv = this.read();
-      const cv = this.read();
-      if (vn.kind !== "tuple" || fv.kind !== "tuple" || cv.kind !== "tuple") {
-        throw new Error("var/free/cell names not tuples");
-      }
-      varnames = vn.items;
-      freevars = fv.items;
-      cellvars = cv.items;
+      this.element(node); // co_varnames
+      this.element(node); // co_freevars
+      this.element(node); // co_cellvars
     }
-
-    const filenameVal = this.read();
-    if (filenameVal.kind !== "str") throw new Error("co_filename not str");
-    const nameVal = this.read();
-    if (nameVal.kind !== "str") throw new Error("co_name not str");
-    let qualname: string | null = null;
-    if (this.layout === "py311") {
-      const q = this.read();
-      if (q.kind !== "str") throw new Error("co_qualname not str");
-      qualname = q.data;
-    }
-    const firstlineno = this.i32();
-    const lt = this.read();
-    if (lt.kind !== "bytes") throw new Error("co_linetable not bytes");
-    let exceptiontable: Buffer | null = null;
-    if (this.layout === "py311") {
-      const et = this.read();
-      if (et.kind !== "bytes") throw new Error("co_exceptiontable not bytes");
-      exceptiontable = et.data;
-    }
-
-    return {
-      argcount,
-      posonlyargcount,
-      kwonlyargcount,
-      nlocals,
-      stacksize,
-      flags,
-      bytecode: bytecodeVal.data,
-      consts: constsVal.items,
-      names: namesVal.items,
-      localsplusnames,
-      localspluskinds,
-      varnames,
-      freevars,
-      cellvars,
-      filename: filenameVal.data,
-      name: nameVal.data,
-      qualname,
-      firstlineno,
-      linetable: lt.data,
-      exceptiontable,
-    };
+    const filename = node.parts.length;
+    this.element(node);
+    const name = node.parts.length;
+    this.element(node);
+    if (this.layout === "py311") this.element(node); // co_qualname
+    this.raw(node, this.offset, 4); // co_firstlineno
+    this.element(node); // co_linetable / co_lnotab
+    if (this.layout === "py311") this.element(node); // co_exceptiontable
+    node.code = { consts, filename, name };
   }
 }
 
@@ -417,154 +434,139 @@ function i32(n: number): Buffer {
   return b;
 }
 
-function encode(value: MarshalValue, layout: PythonPycCodeLayout): Buffer {
-  switch (value.kind) {
-    case "none":
-      return Buffer.from([TYPE_NONE]);
-    case "bool":
-      return Buffer.from([value.value ? TYPE_TRUE : TYPE_FALSE]);
-    case "stopiter":
-      return Buffer.from([TYPE_STOPITER]);
-    case "ellipsis":
-      return Buffer.from([TYPE_ELLIPSIS]);
-    case "int":
-      return Buffer.concat([Buffer.from([TYPE_INT]), i32(value.value)]);
-    case "int64":
-      return Buffer.concat([Buffer.from([TYPE_INT64]), value.bytes]);
-    case "float":
-      return Buffer.concat([Buffer.from([TYPE_FLOAT]), value.bytes]);
-    case "complex":
-      return Buffer.concat([Buffer.from([TYPE_COMPLEX]), value.bytes]);
-    case "float_text": {
-      const t = Buffer.from(value.text, "ascii");
-      return Buffer.concat([Buffer.from([TYPE_FLOAT_TEXT, t.length]), t]);
+/**
+ * Writes nodes and additions back out. Reference indices are handed out in
+ * output order, so adding or removing FLAG_REF objects renumbers every later
+ * TYPE_REF consistently.
+ */
+class MarshalWriter {
+  private readonly chunks: Buffer[] = [];
+  private readonly refIndex = new Map<MarshalNode, number>();
+  private nextRef = 0;
+
+  constructor(private readonly input: Buffer) {}
+
+  finish(): Buffer {
+    return Buffer.concat(this.chunks);
+  }
+
+  private tupleHeader(count: number, flag: number, small: boolean): void {
+    if (small && count <= 255) {
+      this.chunks.push(Buffer.from([TYPE_SMALL_TUPLE | flag, count]));
+    } else {
+      this.chunks.push(Buffer.from([TYPE_TUPLE | flag]), u32(count));
     }
-    case "complex_text": {
-      const r = Buffer.from(value.real, "ascii");
-      const im = Buffer.from(value.imag, "ascii");
-      return Buffer.concat([
-        Buffer.from([TYPE_COMPLEX_TEXT, r.length]),
-        r,
-        Buffer.from([im.length]),
-        im,
-      ]);
+  }
+
+  private writeRef(target: MarshalNode, typeByte: number): void {
+    const index = this.refIndex.get(target);
+    if (index === undefined) throw new Error("marshal reference to an object not yet written");
+    this.chunks.push(Buffer.from([typeByte]), u32(index));
+  }
+
+  writeNode(node: MarshalNode): void {
+    const inputByte = this.input[node.start]!;
+    if (node.type === TYPE_REF) {
+      this.writeRef(node.target!, inputByte);
+      return;
     }
-    case "long": {
-      const n = value.digits.length / 2;
-      return Buffer.concat([
-        Buffer.from([TYPE_LONG]),
-        i32(value.negative ? -n : n),
-        value.digits,
-      ]);
+    const registers = node.registers || node.promote;
+    if (registers) this.refIndex.set(node, this.nextRef++);
+    const flag = registers ? FLAG_REF : inputByte & FLAG_REF;
+
+    if (node.appended) {
+      const elements = childrenOf(node);
+      this.tupleHeader(
+        elements.length + node.appended.length,
+        flag,
+        node.type === TYPE_SMALL_TUPLE,
+      );
+      for (const element of elements) this.writeNode(element);
+      for (const item of node.appended) this.write(item);
+      return;
     }
-    case "bytes":
-      return Buffer.concat([
-        Buffer.from([TYPE_BYTES]),
-        u32(value.data.length),
-        value.data,
-      ]);
-    case "str": {
-      const b = Buffer.from(value.data, "utf8");
-      if (b.length <= 255) {
-        return Buffer.concat([Buffer.from([TYPE_SHORT_ASCII, b.length]), b]);
+
+    this.chunks.push(Buffer.from([node.type | flag]));
+    for (let index = 0; index < node.parts.length; index++) {
+      const part = node.parts[index]!;
+      if (isRawRange(part)) {
+        this.chunks.push(this.input.subarray(part[0], part[1]));
+      } else if (node.constsOverride && node.code && index === node.code.consts) {
+        this.write(node.constsOverride);
+      } else {
+        this.writeNode(part);
       }
-      return Buffer.concat([Buffer.from([TYPE_ASCII]), u32(b.length), b]);
     }
-    case "tuple": {
-      const parts = value.items.map((it) => encode(it, layout));
-      if (value.items.length <= 255) {
-        return Buffer.concat([
-          Buffer.from([TYPE_SMALL_TUPLE, value.items.length]),
-          ...parts,
-        ]);
-      }
-      return Buffer.concat([Buffer.from([TYPE_TUPLE]), u32(value.items.length), ...parts]);
-    }
-    case "list": {
-      const parts = value.items.map((it) => encode(it, layout));
-      return Buffer.concat([Buffer.from([TYPE_LIST]), u32(value.items.length), ...parts]);
-    }
-    case "set": {
-      const parts = value.items.map((it) => encode(it, layout));
-      return Buffer.concat([
-        Buffer.from([value.frozen ? TYPE_FROZENSET : TYPE_SET]),
-        u32(value.items.length),
-        ...parts,
-      ]);
-    }
-    case "dict": {
-      const parts: Buffer[] = [Buffer.from([TYPE_DICT])];
-      for (const [k, v] of value.items) {
-        parts.push(encode(k, layout), encode(v, layout));
-      }
-      parts.push(Buffer.from([TYPE_NULL]));
-      return Buffer.concat(parts);
-    }
-    case "code":
-      return encodeCode(value.code, layout);
-    default: {
-      const _exhaustive: never = value;
-      return _exhaustive;
+  }
+
+  write(item: OutputItem): void {
+    switch (item.kind) {
+      case "node":
+        return this.writeNode(item.node);
+      case "ref":
+        return this.writeRef(item.target, TYPE_REF);
+      case "raw":
+        this.chunks.push(item.bytes);
+        return;
+      case "sequence":
+        for (const part of item.items) this.write(part);
+        return;
+      case "tuple":
+        if (item.identity) this.refIndex.set(item.identity, this.nextRef++);
+        this.tupleHeader(item.items.length, item.identity ? FLAG_REF : 0, true);
+        for (const part of item.items) this.write(part);
+        return;
     }
   }
 }
 
-function encodeCode(code: CodeValue, layout: PythonPycCodeLayout): Buffer {
-  const parts: Buffer[] = [Buffer.from([TYPE_CODE]), u32(code.argcount)];
-  if (layout !== "py37") parts.push(u32(code.posonlyargcount ?? 0));
-  parts.push(u32(code.kwonlyargcount));
-  if (layout !== "py311") parts.push(u32(code.nlocals ?? 0));
-  parts.push(i32(code.stacksize), i32(code.flags));
-  parts.push(encode({ kind: "bytes", data: code.bytecode }, layout));
-  parts.push(encode({ kind: "tuple", items: code.consts }, layout));
-  parts.push(encode({ kind: "tuple", items: code.names }, layout));
+/** Payload bytes of a string object (after its length prefix). */
+function stringPayload(buf: Buffer, node: MarshalNode): Buffer {
+  const short = node.type === TYPE_SHORT_ASCII || node.type === TYPE_SHORT_ASCII_INTERNED;
+  return buf.subarray(node.start + (short ? 2 : 5), node.end);
+}
+
+function shortAscii(text: string): Buffer {
+  const bytes = Buffer.from(text, "ascii");
+  return Buffer.concat([Buffer.from([TYPE_SHORT_ASCII, bytes.length]), bytes]);
+}
+
+/**
+ * A decoy code object: `return None`, no FLAG_REF anywhere inside, so adding it
+ * leaves the reference table of the surrounding stream untouched.
+ */
+function buildDecoyCode(
+  layout: PythonPycCodeLayout,
+  name: string,
+  filename: OutputItem,
+): OutputItem {
+  const emptyTuple = Buffer.from([TYPE_SMALL_TUPLE, 0]);
+  const emptyBytes = Buffer.concat([Buffer.from([TYPE_BYTES]), u32(0)]);
+  const head: Buffer[] = [Buffer.from([TYPE_CODE]), u32(0)]; // argcount
+  if (layout !== "py37") head.push(u32(0)); // posonlyargcount
+  head.push(u32(0)); // kwonlyargcount
+  if (layout !== "py311") head.push(u32(0)); // nlocals
+  head.push(i32(1), i32(0x40)); // stacksize, flags (CO_NOFREE)
+  // co_code: LOAD_CONST 0; RETURN_VALUE
+  head.push(Buffer.from([TYPE_BYTES]), u32(4), Buffer.from([0x64, 0x00, 0x53, 0x00]));
+  head.push(Buffer.from([TYPE_SMALL_TUPLE, 1, TYPE_NONE])); // co_consts
+  head.push(emptyTuple); // co_names
   if (layout === "py311") {
-    parts.push(encode({ kind: "tuple", items: code.localsplusnames ?? [] }, layout));
-    parts.push(
-      encode({ kind: "bytes", data: code.localspluskinds ?? Buffer.alloc(0) }, layout),
-    );
+    head.push(emptyTuple, emptyBytes); // co_localsplusnames, co_localspluskinds
   } else {
-    parts.push(encode({ kind: "tuple", items: code.varnames ?? [] }, layout));
-    parts.push(encode({ kind: "tuple", items: code.freevars ?? [] }, layout));
-    parts.push(encode({ kind: "tuple", items: code.cellvars ?? [] }, layout));
+    head.push(emptyTuple, emptyTuple, emptyTuple); // co_varnames, co_freevars, co_cellvars
   }
-  parts.push(encode({ kind: "str", data: code.filename }, layout));
-  parts.push(encode({ kind: "str", data: code.name }, layout));
-  if (layout === "py311") {
-    parts.push(encode({ kind: "str", data: code.qualname ?? code.name }, layout));
-  }
-  parts.push(i32(code.firstlineno));
-  parts.push(encode({ kind: "bytes", data: code.linetable }, layout));
-  if (layout === "py311") {
-    parts.push(
-      encode({ kind: "bytes", data: code.exceptiontable ?? Buffer.alloc(0) }, layout),
-    );
-  }
-  return Buffer.concat(parts);
-}
-
-function buildDecoyCode(layout: PythonPycCodeLayout, name: string, filename: string): CodeValue {
+  const tail: Buffer[] = [shortAscii(name)]; // co_name
+  if (layout === "py311") tail.push(shortAscii(name)); // co_qualname
+  tail.push(i32(1), emptyBytes); // co_firstlineno, co_linetable
+  if (layout === "py311") tail.push(emptyBytes); // co_exceptiontable
   return {
-    argcount: 0,
-    posonlyargcount: layout === "py37" ? null : 0,
-    kwonlyargcount: 0,
-    nlocals: layout === "py311" ? null : 0,
-    stacksize: 1,
-    flags: 0x40, // CO_NOFREE
-    bytecode: Buffer.from([0x64, 0x00, 0x53, 0x00]), // LOAD_CONST 0; RETURN_VALUE
-    consts: [{ kind: "none" }],
-    names: [],
-    localsplusnames: layout === "py311" ? [] : null,
-    localspluskinds: layout === "py311" ? Buffer.alloc(0) : null,
-    varnames: layout === "py311" ? null : [],
-    freevars: layout === "py311" ? null : [],
-    cellvars: layout === "py311" ? null : [],
-    filename,
-    name,
-    qualname: layout === "py311" ? name : null,
-    firstlineno: 1,
-    linetable: Buffer.alloc(0),
-    exceptiontable: layout === "py311" ? Buffer.alloc(0) : null,
+    kind: "sequence",
+    items: [
+      { kind: "raw", bytes: Buffer.concat(head) },
+      filename,
+      { kind: "raw", bytes: Buffer.concat(tail) },
+    ],
   };
 }
 
@@ -590,43 +592,140 @@ function pickDecoyName(prng: SeededPrng, index: number): string {
   return `${stem}_${prng.nextInt(1000, 9999)}`;
 }
 
-function injectDecoys(
-  code: CodeValue,
+interface WeavePlan {
+  readonly code: MarshalNode;
+  /** The object in the code's `co_consts` field (a tuple, or a reference to one). */
+  readonly constsField: MarshalNode;
+  /** The tuple object itself. */
+  readonly tuple: MarshalNode;
+  readonly decoys: readonly OutputItem[];
+}
+
+/** How a new tuple refers to an element of an existing one. */
+function referenceTo(element: MarshalNode): OutputItem {
+  if (isSingletonType(element.type)) {
+    return { kind: "raw", bytes: Buffer.from([element.type]) };
+  }
+  if (element.type === TYPE_REF) return { kind: "ref", target: element.target! };
+  element.promote = true;
+  return { kind: "ref", target: element };
+}
+
+/**
+ * Decide the decoys for every code object (children first, then the object
+ * itself — the order the PRNG has always been drawn in) and record them as
+ * edits on the tree.
+ */
+function planWeave(
+  root: MarshalNode,
+  buf: Buffer,
   layout: PythonPycCodeLayout,
   prng: SeededPrng,
   moduleDecoys: number,
-  stats: { injected: number; woven: number },
-  isRoot: boolean,
-): void {
-  // CPython interns identical co_consts tuples via FLAG_REF/TYPE_REF; our Reader
-  // returns the same array reference. Copy before mutating so sibling code objects
-  // that shared a const tuple do not inherit each other's decoys.
-  code.consts = code.consts.slice();
+): { injected: number; woven: number } {
+  const stats = { injected: 0, woven: 0 };
+  const plans: WeavePlan[] = [];
+  const planned = new Set<MarshalNode>();
 
-  // Snapshot nested codes before we push decoys into this consts list.
-  const nestedCodes: CodeValue[] = [];
-  for (const item of code.consts) {
-    if (item.kind === "code") nestedCodes.push(item.code);
-  }
-  for (const child of nestedCodes) {
-    injectDecoys(child, layout, prng, 0, stats, false);
+  const visit = (code: MarshalNode, isRoot: boolean): void => {
+    if (planned.has(code)) return;
+    planned.add(code);
+    const fields = code.code!;
+    const constsField = code.parts[fields.consts] as MarshalNode;
+    const tuple = resolve(constsField);
+    if (!isTupleType(tuple.type)) throw new Error("co_consts not tuple");
+    const filenameField = code.parts[fields.filename] as MarshalNode;
+    const filename = resolve(filenameField);
+    const name = resolve(code.parts[fields.name] as MarshalNode);
+    if (!isStringType(filename.type)) throw new Error("co_filename not str");
+    if (!isStringType(name.type)) throw new Error("co_name not str");
+
+    for (const element of childrenOf(tuple)) {
+      const nested = resolve(element);
+      if (nested.type === TYPE_CODE) visit(nested, false);
+    }
+
+    const isModule = stringPayload(buf, name).equals(Buffer.from("<module>", "ascii"));
+    const decoysToAdd = isRoot ? moduleDecoys : !isModule ? 1 : 0;
+    if (decoysToAdd === 0) return;
+    if (!isRoot) stats.woven += 1;
+
+    // The decoys reuse the customer's own filename object. They are written
+    // inside co_consts, i.e. before the code object's own filename field, so a
+    // reference is only possible when the string was defined before that point;
+    // otherwise they carry a copy of its bytes (same type code, no FLAG_REF).
+    let decoyFilename: OutputItem;
+    if (stringPayload(buf, filename).length === 0) {
+      decoyFilename = { kind: "raw", bytes: shortAscii("shielded.py") };
+    } else if (filename.registers && filename.start < constsField.end) {
+      decoyFilename = { kind: "ref", target: filename };
+    } else {
+      const copy = Buffer.from(buf.subarray(filename.start, filename.end));
+      copy[0] = filename.type;
+      decoyFilename = { kind: "raw", bytes: copy };
+    }
+
+    const decoys: OutputItem[] = [];
+    for (let i = 0; i < decoysToAdd; i++) {
+      const decoyName = pickDecoyName(prng, stats.injected + i);
+      decoys.push(buildDecoyCode(layout, decoyName, decoyFilename));
+      stats.injected += 1;
+    }
+    plans.push({ code, constsField, tuple, decoys });
+  };
+  visit(root, true);
+
+  // References to each tuple that disappear because the referring code object
+  // gets a tuple of its own.
+  const replacedRefs = new Map<MarshalNode, number>();
+  for (const plan of plans) {
+    if (plan.constsField !== plan.tuple) {
+      replacedRefs.set(plan.tuple, (replacedRefs.get(plan.tuple) ?? 0) + 1);
+    }
   }
 
-  const decoysToAdd = isRoot ? moduleDecoys : code.name !== "<module>" ? 1 : 0;
-  if (!isRoot && code.name !== "<module>" && decoysToAdd > 0) {
-    stats.woven += 1;
+  for (const { code, constsField, tuple, decoys } of plans) {
+    const elements = childrenOf(tuple);
+    if (constsField === tuple && tuple.refCount === 0) {
+      // Nothing else can see this tuple: grow it in place.
+      tuple.appended = decoys;
+      continue;
+    }
+    if (constsField !== tuple) {
+      // co_consts is a reference to a tuple defined elsewhere. Leave that
+      // object alone; this code object gets its own tuple of the same elements.
+      code.constsOverride = {
+        kind: "tuple",
+        identity: null,
+        items: [...elements.map(referenceTo), ...decoys],
+      };
+      continue;
+    }
+    // co_consts defines a tuple that other objects reference. The elements are
+    // written here as before, inside this code object's own tuple; if any
+    // reference to the original tuple remains, an equal tuple of the very same
+    // elements follows and takes over its place in the reference table.
+    const remaining = tuple.refCount - (replacedRefs.get(tuple) ?? 0);
+    const items: OutputItem[] = elements.map((node) => ({ kind: "node", node }));
+    items.push(...decoys);
+    if (remaining > 0) {
+      items.push({ kind: "tuple", identity: tuple, items: elements.map(referenceTo) });
+    }
+    code.constsOverride = { kind: "tuple", identity: null, items };
   }
-  for (let i = 0; i < decoysToAdd; i++) {
-    const nm = pickDecoyName(prng, stats.injected + i);
-    const decoy = buildDecoyCode(layout, nm, code.filename || "shielded.py");
-    code.consts.push({ kind: "code", code: decoy });
-    stats.injected += 1;
-  }
+  return stats;
+}
+
+function countCodeObjects(node: MarshalNode): number {
+  let count = node.type === TYPE_CODE ? 1 : 0;
+  for (const child of childrenOf(node)) count += countCodeObjects(child);
+  return count;
 }
 
 /**
  * Weave unused decoy CODE objects into a CPython .pyc buffer.
- * Returns null when magic/layout is unknown or marshal round-trip fails.
+ * Returns null when magic/layout is unknown or the marshal stream cannot be
+ * rewritten faithfully.
  */
 export function weavePythonPycBuffer(
   bytes: Buffer,
@@ -646,14 +745,28 @@ export function weavePythonPycBuffer(
 
   try {
     const header = bytes.subarray(0, 16);
-    const reader = new Reader(bytes.subarray(16), layout);
-    const root = reader.read();
-    if (root.kind !== "code") return null;
-    const trailing = bytes.subarray(16 + reader.offset);
+    const payload = bytes.subarray(16);
+    const parser = new MarshalParser(payload, layout);
+    const root = parser.parse();
+    if (root.type !== TYPE_CODE) return null;
+    const trailing = payload.subarray(parser.offset);
 
-    const stats = { injected: 0, woven: 0 };
-    injectDecoys(root.code, layout, prng, moduleDecoys, stats, true);
-    const wovenRoot = encode(root, layout);
+    const stats = planWeave(root, payload, layout, prng, moduleDecoys);
+    const writer = new MarshalWriter(payload);
+    writer.writeNode(root);
+    const wovenRoot = writer.finish();
+
+    // The output must read back as one code object holding exactly the
+    // original code objects plus the decoys.
+    const check = new MarshalParser(wovenRoot, layout);
+    const wovenTree = check.parse();
+    if (
+      check.offset !== wovenRoot.length ||
+      wovenTree.type !== TYPE_CODE ||
+      countCodeObjects(wovenTree) !== countCodeObjects(root) + stats.injected
+    ) {
+      return null;
+    }
 
     return {
       buffer: Buffer.concat([header, wovenRoot, trailing]),

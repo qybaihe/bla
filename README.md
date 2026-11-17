@@ -75,8 +75,12 @@ Point BLA at any project or release directory. It auto-discovers build outputs (
 
 ```bash
 # Node.js ^22.23.4 or >=24.0.0 recommended
-npx bla-agents harden .
+npx bla-agents harden .            # writes a partial mirror to .bla-hardened/ — nothing ships yet
+npx bla-agents harden . --apply    # ship it: replace the build output with the hardened files
+npx bla-agents harden . --restore  # undo: put the original build output back
 ```
+
+Build first — `harden` targets what your build produced and leaves the toolchain alone. `--apply` only overwrites build output (never source) and keeps the originals outside the project; run your own tests against the promoted build before releasing.
 
 ### 2. Agent-Driven Closed-Loop Defense (MCP + Skill)
 Register BLA once with your coding agent (**Claude Code, Cursor, Codex, Windsurf, Gemini CLI, GitHub Copilot CLI, VS Code, OpenCode, Antigravity**):
@@ -91,7 +95,7 @@ Then simply prompt your coding agent:
 Harden my software against REA
 ```
 
-Your host agent automatically orchestrates BLA's MCP tools (`bla_weave_plan` → source-level logic weaving & string encryption → `bla_verify_weave` → `bla_harden` → `bla_verify`) to harden both your source architecture and compiled artifacts.
+Your host agent automatically orchestrates BLA's MCP tools (`bla_weave_plan` → source-level logic weaving & string encryption → `bla_verify_weave` → `bla_harden` → `bla_verify`) to harden both your source architecture and compiled artifacts. Every result carries `nextSteps`, so the agent finishes the job: it asks before promoting the hardened files over the build output (`apply`), then runs your tests.
 
 ### 3. Build Bundler Plugin (Vite / Rollup / Webpack / esbuild)
 Protect JS chunks, strip/replace SourceMaps with VLQ v3 honey maps, and shield `.wasm` assets automatically at bundle time:
@@ -158,7 +162,7 @@ Recorded under **Node v24.22.1** with optional **Wabt 1.0.42** + **tshark 4.4** 
 | **PCAP** | 24 B → 1.29 MiB | ❌ Budget rejected | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` |
 | **Electron ASAR** | 607 B → **16.9 MiB** | ❌ Capacity error | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) |
 | **WASM + Wabt** | 54 B → **6.56 MiB** · 251 exports | ⚠️ `ifaceState=partial` | `WASM_INTERFACE_REPRESENTATION_BYTES` — *Typed WASM interface decoding exceeds WABT budget* |
-| **SQLite** (Node 24) | 12 KiB → 56 KiB | ❌ Redaction / eval trap | `SqliteColumnEvaluationFailure` — unknown `enclave_unseal_payload()` on virtual trap columns |
+| **SQLite** (Node 24, `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ Eval trap on the honey tables | `SqliteColumnEvaluationFailure` — unknown `enclave_unseal_payload()` on virtual trap columns. Opt-in (the default through 3.4.3): it also stops the application's own `PRAGMA integrity_check` / `VACUUM`. Default hardening adds honey tables REA can read; application tables are never hidden. |
 | **JavaScript** | 761 B → 116 KiB | ❌ Budget rejected | `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` |
 | **Safetensors** | 128 B → 10.1 KiB | ❌ Capacity error | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels* (HF-loadable; tensors intact) |
 | **GGUF** | 24 B → 7.7 KiB | ❌ Capacity error | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* |

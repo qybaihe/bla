@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { detectArtifactFormat } from "../core/detector.js";
+import { detectArtifactFormat, isTypeScriptDeclarationPath } from "../core/detector.js";
 import { assertSafeOutputPath } from "../core/output-path.js";
 import { withLlmDirectives } from "../core/llm-directives.js";
 import { SeededPrng } from "../core/prng.js";
@@ -518,6 +518,15 @@ function applyPanelDeriveRewrite(
   return rw.code;
 }
 
+/** WebAssembly export descriptor kinds (binary format §5.5.10). */
+const WASM_EXPORT_KIND_LABELS: Readonly<Record<number, string>> = Object.freeze({
+  0: "function",
+  1: "table",
+  2: "memory",
+  3: "global",
+  4: "tag",
+});
+
 export interface AtomicWriteOptions {
   /**
    * Allow following an existing symlink/hardlink at `targetPath`. Only set this
@@ -564,6 +573,12 @@ export function writeFileAtomicSync(
     // fail (EEXIST) instead of being followed.
     if (encoding) writeFileSync(tmpPath, content, { encoding, flag: "wx" });
     else writeFileSync(tmpPath, content, { flag: "wx" });
+    // Rewriting a file must not change who may run it: a temp file is created
+    // 0644, so an executable script (0755 + shebang) would come back unable to
+    // start. Carry the permission bits of the file being replaced.
+    if (linkState?.isFile() === true) {
+      chmodSync(tmpPath, Number(linkState.mode) & 0o7777);
+    }
     renameSync(tmpPath, targetPath);
   } catch (err) {
     try {
@@ -648,6 +663,13 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   if (format === "unknown") {
     throw new Error(`Unsupported or missing target path: ${absInput}`);
   }
+  if (format === "typescript" && isTypeScriptDeclarationPath(absInput)) {
+    // Fail before any output path is created: a "protected" declaration file is
+    // a broken one (runtime statements are illegal in ambient context).
+    throw new Error(
+      `Refusing to protect TypeScript declaration file ${basename(absInput)}: declaration files carry no runtime logic, and injected shield code would break type-checking for every consumer. Ship it unchanged next to the hardened JavaScript.`,
+    );
+  }
 
   // Signed APKs still fail closed inside protectZipOrApkBuffer; unsigned APKs
   // get member-level DEX/IL2CPP hardening. Do not early-throw here.
@@ -672,7 +694,9 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   }
   if (format === "electron-asar") validateAsarProtectionInput(readFileSync(absInput));
   if (format === "sqlite") validateSqliteFileInput(absInput);
-  if (format === "python-source") findPythonPrologueInsertionOffset(readFileSync(absInput, "utf8"));
+  // Bytes, not text: a module may declare a legacy encoding (PEP 263), and
+  // reading it as UTF-8 here would corrupt it before the shield sees it.
+  if (format === "python-source") findPythonPrologueInsertionOffset(readFileSync(absInput));
   if (format === "native-elf") validateElfLayout(readFileSync(absInput));
 
   const intensity = options.intensity ?? "balanced";
@@ -703,6 +727,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
   let wasmExportsRenamed = 0;
+  let wasmExportRenames: { from: string; to: string; kind: string }[] = [];
   let wasmExportOrderShuffled = false;
   let wasmExportDecoysInjected = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
@@ -1142,12 +1167,19 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = res.customSectionsAdded;
     wasmExportsRenamed = res.exportsRenamed.length;
+    wasmExportRenames = res.exportsRenamed.map((r) => ({
+      from: r.from,
+      to: r.to,
+      kind: WASM_EXPORT_KIND_LABELS[r.kind] ?? `kind-${r.kind}`,
+    }));
     wasmExportOrderShuffled = res.exportsOrderShuffled === true;
     wasmExportDecoysInjected = res.exportDecoysInjected;
     counteredVectors.add("wasm-wat-interface");
     counteredVectors.add("obligation-ledger-cloning");
   } else if (format === "python-source") {
-    const rawPy = readFileSync(absInput, "utf8");
+    // The shield decodes per BOM / coding declaration and returns UTF-8 text
+    // with the declaration rewritten to match, so the output is written as UTF-8.
+    const rawPy = readFileSync(absInput);
     const res = protectPythonSource(rawPy, {
       intensity,
       seed,
@@ -1272,7 +1304,11 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     }
   } else if (format === "sqlite") {
     const rawDb = readFileSync(absInput);
-    const res = protectSqliteBuffer(rawDb, { intensity, seed });
+    const res = protectSqliteBuffer(rawDb, {
+      intensity,
+      seed,
+      ...(options.sqliteEvalTrap === true ? { evalTrap: true } : {}),
+    });
     let finalSqlite = res.buffer;
     {
       const entangled = applySidecarEntangleToSqlite(finalSqlite, options, absOutput, seed);
@@ -1459,7 +1495,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           walkAndProtect(srcFull, dstFull);
         } else if (entry.isFile()) {
           const ext = extname(entry.name).toLowerCase();
-          if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(ext)) {
+          if (isTypeScriptDeclarationPath(entry.name)) {
+            // Ambient declarations ship byte-identical (see detector helper).
+            copyFileSync(srcFull, dstFull);
+          } else if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(ext)) {
             const raw = readFileSync(srcFull, "utf8");
             const res = transformJavaScriptWithBlaShield(raw, {
               intensity,
@@ -1590,6 +1629,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
+    ...(wasmExportRenames.length > 0 ? { wasmExportRenames } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),
     ...(wasmExportDecoysInjected > 0
       ? { wasmExportDecoysInjected }

@@ -17,7 +17,7 @@
 | 13 | `ElectronFuseReader.ts:36` | `maximumSentinelsPerSlice = 32` | `electron-fuses.ts` (hardens V1 fuses + appends 33 decoy sentinels) |
 | 14 | `CdpCaptureEvents.ts` | JSON body & WebSocket shape budget (`depth >= 760`) | `cdp-shape-budget-breaker.ts` (780+ nested JSON envelopes) |
 | 15 | `fridaCaptureLimits.ts:8` | `MAX_JSON_DEPTH = 64`, `MAX_MESSAGE_TEXT_BYTES = 32 KiB` | `frida-capture-saturation.ts` (68+ level JSON + 34 KiB message text) |
-| 16 | `SqliteDatabaseInspection.ts:792` | Bare `readOnly: true, allowExtension: false` snapshot | `sqlite.ts` (`GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL`) |
+| 16 | `SqliteDatabaseInspection.ts:792` | Bare `readOnly: true, allowExtension: false` snapshot | `sqlite.ts` (`GENERATED ALWAYS AS (enclave_unseal_payload(...)) VIRTUAL`) — opt-in `sqlite_eval_trap`; the default decoy columns are plain SQL |
 | 17 | `SafetensorsHeader.ts:74` | `MODEL_JSON_NESTING = 32` | `model.ts` (35-level nested JSON array under `_bla_nesting_breaker`) |
 | 18 | `GgufHeader.ts:121` | `MODEL_METADATA_NESTING = 32` | `model.ts` (35-frame nested GGUF `ARRAY` preserving existing KV/tensors) |
 | 19 | `wasmInterface.ts:90` | `WASM_INTERFACE_REPRESENTATION_BYTES = 32 MiB` | `wasm-interface-exhaustion.ts` + `wasm.ts` (`6x` string + `16x` signature charge) |

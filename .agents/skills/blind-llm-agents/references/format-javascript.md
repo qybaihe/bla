@@ -7,6 +7,15 @@ Load this when hardening JS/TS bundles, Node modules, HTML bundles, or Electron 
 - JS AST weave is **always on** during protect/defend/harden (not gated by `weave_decoys`).
 - Prefer `bla_harden` for a project/build dir; `bla_defend` / `bla_protect` for a named file.
 - Honey source maps default **on**. MCP: `honey_source_maps` (protect). CLI: `--no-honey-maps` to disable.
+- **Build first.** With a `dist/` / `build/` / `out/` directory present, `bla_harden` hardens what is in it and treats the JS/TS/HTML beside it as build inputs (`skippedSourceFiles`). Tool configs, tests, `.d.ts` declarations and the scripts `package.json` runs for build / test / release are never hardened (`skippedDevTooling`). A file `package.json` declares as `main` / `bin` / `exports` is product code wherever it lives.
+
+## What callers of a hardened module can still rely on
+
+- Exported and top-level function and class names: `fn.name`, `error.name`, `instance.constructor.name`, `instanceof`, inheritance and `super()`, and the module's export list are unchanged at every intensity. Logging, DI containers, ORMs and test frameworks that read names keep working.
+- Hardened TypeScript keeps its types and starts with `// @ts-nocheck`, so the injected code is not held to the project's `strict` settings. Prefer hardening the compiled JavaScript.
+- Hardened functions run extra code on every call (the shadow-heap churn that defeats memory diffing — about 60 ns per call, the same at every intensity). I/O-bound code does not notice; a tokenizer-style loop that calls a tiny function a million times measured about 26× slower. Measure the hot paths after `apply`, and leave a hot module out with `exclude` (`bla_harden` `{ "exclude": ["dist/vendor/codec.js"] }`, CLI `--exclude`, `.blarc` `"exclude"`) rather than lowering protection for the whole build.
+- Every hardened JS / HTML file carries a fixed decoy payload: roughly 50 KB at `stealth`, 80 KB at `balanced`, 110–180 KB at `maximum` and 150–210 KB at `bankrupt`, whatever the size of the original. A build with many small chunks grows accordingly; the report's `outputSize` has the totals.
+- A hardened file is a different file. Anything pinned to its bytes — Subresource Integrity hashes, a service-worker precache manifest, a CSP hash — has to be regenerated after `apply`.
 
 ## Stronger options (opt-in)
 
@@ -16,7 +25,40 @@ Load this when hardening JS/TS bundles, Node modules, HTML bundles, or Electron 
 | Structural decoys (also helps Python in the same tree) | `weave_decoys: true` | `--weave-decoys` |
 | Overwrite the input file | `in_place: true` **and** `confirm_overwrite: true` | `--in-place` |
 
-Self-seal soft-skips in pure browser builds (digest stays 0). Pair with weave when the tree also has Python customer defs.
+Pair with weave when the tree also has Python customer defs.
+
+### What the integrity binding covers
+
+`self_seal` and `sidecar_entangle` are Node programs: they read sibling files with `node:fs` and hash them with `node:crypto` when a module loads. The harden report says exactly what that reaches:
+
+- `integrityBindingEntry` — the one module that pins its hardened siblings and refuses to load when one was changed, replaced or removed. For a package that is both a library and a CLI the check is hosted where both ways in pass through (`bin` loads `main` ⇒ `main`).
+- `integrityBindingUncoveredEntries` — entry points `package.json` declares that never load that module. Started there, a replaced sibling goes unnoticed (each self-sealed file still checks its own bytes). Load the entry module from them and harden again.
+- `integrityBindingSkipped` — artifacts hardened **without** the binding: browser bundles (a page loads them, or they use `document` / `window` and no Node API — the preamble would stop the page from loading), and mutable data such as a SQLite database the application writes to. For a web build use server-side checks and Subresource Integrity instead.
+
+## Sensitive literals that survive
+
+`maximum` / `bankrupt` encode string literals and the static text of template literals that are 3 to 256 characters long; `stealth` / `balanced` do not encode strings at all. Whatever `bla_lint` would call a `plaintext-secret` and can still be read verbatim in the output is listed per artifact in `plaintextSurvivors` (source line + clipped preview). At `maximum` / `bankrupt` that is what the shield cannot reach — object keys, regular expressions, HTML attributes, and any string longer than 256 characters (an embedded PEM key, a long token, a JSON blob): move the value into a plain string literal of ordinary length, or better, off the client.
+
+`plaintextSurvivors` only lists what looks like a secret (a digest, a key, a generated token, a PEM header). An ordinary string that stays readable for one of the reasons above — a licence-format regular expression, a long message — is not listed: if its wording matters, check the hardened file for it yourself.
+
+Some strings are left readable on purpose, at every intensity, because the program or its tooling reads them as text:
+
+- what names a file — `import "…"`, `require("…")`, `import("…")`, `require.resolve("…")`, `import.meta.resolve("…")`, `new URL("…", import.meta.url)` — so a bundler, packager or deploy-time file tracer run after hardening still finds it;
+- `eval("…")` arguments, directives (`"use strict"`), non-computed property and method keys, ES2022 string import / export names;
+- the static text of tagged templates (the tag receives it), and TypeScript `enum` members, `namespace` / `declare module` blocks, type positions and `as const` values;
+- licence notices: `/*! … */` blocks and comments carrying `@license`, `@preserve`, `SPDX-License-Identifier` or a copyright line.
+
+Strings inside a template substitution (`` `${dev ? "http://…" : "https://…"}/v1` ``) are encoded like any other string.
+
+## What the JS shield does not change
+
+A hardened program is checked against the original by running both (`tests/fuzz-regression-js.test.ts`). To keep that true the shield holds back in a few places — know them when you judge how much a file gained:
+
+- **Classic scripts and UMD bundles keep every top-level name.** In a `<script>` those are the page's globals; only a file that can only be a module (ESM syntax, or unguarded `require` / `module.exports`) gets its program-level bindings renamed.
+- **Names the language makes observable stay:** exported and top-level function / class names (`fn.name`, `error.name`), sloppy-mode block functions, duplicate parameters, anything reachable through `with`, and a local `React` in a JSX file.
+- **`&` `|` `^` rewrites keep the original operator** as the path for operands that are not Numbers (BigInt, objects), so the operator is still visible next to the arithmetic form.
+- **Error messages and stack traces show the renamed identifiers**, and the runtime decoy adds one non-enumerable property to `globalThis` (`Object.keys(globalThis)` is unchanged; `Object.getOwnPropertyNames(globalThis)` shows it).
+- **In a classic script the shield's own declarations are globals too.** A `<script>` has no private top level, so its decoy functions and state land on `window` beside the page's own globals: about 160 extra properties per script at `bankrupt` (they are `var`s with generated names, so two hardened scripts on one page do not collide). Code that enumerates `window` sees them; module code adds none.
 
 ## Verify honesty
 

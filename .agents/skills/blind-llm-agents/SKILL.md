@@ -41,6 +41,8 @@ When hardening a repository with source code, follow this 4-stage closed loop so
 1. **Inventory**: Call `bla_discover` `{ "directory": "." }` (or `bla_harden` `{ "dry_run": true }`). Do not ask which files to protect — discover them.
 2. **Gate Scan**: Call `bla_lint` `{ "directory": "." }` (`bla-packaging-gates/v1`).
    - If `shouldRefuseBankrupt: true`, inspect `remediationPlan`! Every blocking finding includes `owner`, `sourceRefactorRecipe`, and `recommendedMcpTool`.
+   - Each finding carries `enforcedByHarden`. `true`: `bla_harden` refuses the run until it is fixed (or its lab `allow_*` flag is set). `false`: `bla_harden` still runs — the finding is either a warning that blocks nothing, or a lint-only gate (plaintext-secret, integrity-coverage, bind-scope) that fails this lint; fix it for a better result.
+   - Lint the project's own code, never BLA output: files BLA already wrote are skipped and listed in `skippedHardenedOutputs`.
 3. **Surgical Weave Plan**: Call `bla_weave_plan` `{ "path": "." }` (`bla-weave-plan/v1`) and read `bla://directives/weave-decoy`.
    - Inspect each source target's `surgicalWorkorder`: `entryFunctions`, `sharedStateSlots`, `branchCandidates`, **`crownJewelCandidates`**, **`dataFlowEntanglementPlan`**, `suggestedIdentifierStems`, and `agentRewriteRecipe`.
 
@@ -62,15 +64,21 @@ When hardening a repository with source code, follow this 4-stage closed loop so
    - For C/C++, Rust, or Go targets, call `bla_emit_headers` and include the emitted header in native sources.
 4. **Verify Source Weave**:
    - Call **`bla_verify_weave`** `{ "path": "." }` (`bla-weave-verify/v1`, 7 structural acceptance checks including `crown-jewel-entanglement`).
+   - For a directory the verdict rests on `requiredFiles` — the crown-jewel files holding gate / auth / license / entitlement logic. Everything in `advisoryFiles` (formatters, UI, data classes) never fails the run: do **not** weave decoys into files that guard nothing. Pass `scope: "all"` only when the user wants every source file held to the bar.
    - If `overallPassed: false`, execute each item in `agentActions` (fixing any unreferenced helpers, missing shared-state mutations, isolated boolean gates, or stem ratios) and re-run `bla_verify_weave` until `overallPassed: true`.
 
 ### Stage 3: Build & Post-Build Counter-REA Exhaustion Harden (`mcp-primary`)
 1. If the project has a build step (`npm run build`, `cargo build`, etc.), run it so compiled artifacts reflect your Stage 2 source surgery.
 2. Call **`bla_harden`** `{ "directory": ".", "require_agent_weave": true, "weave_decoys": true, "self_seal": true, "sidecar_entangle": true }` (pass `wasm_preserve_exports` when a public WASM ABI must keep specific export names).
-   - Passing **`require_agent_weave: true`** enforces the Agent-First Closed-Loop gate: if any source file was not woven in Stage 2 (`weaveVerified: false`), `bla_harden` refuses mechanical hardening and returns `agentWeaveAssessment` (`surgicalWorkorders` + `agentActions`) so you complete source surgery first.
+   - Passing **`require_agent_weave: true`** enforces the Agent-First Closed-Loop gate: if a crown-jewel source file was not woven in Stage 2 (`weaveVerified: false`), `bla_harden` refuses mechanical hardening and returns `agentWeaveAssessment` (`surgicalWorkorders` + `agentActions`) so you complete source surgery first.
+3. **Ship it — a plain run ships nothing.** `bla_harden` writes `.bla-hardened/`, a partial mirror of only the hardened files; the build output is still unprotected. Read **`nextSteps`** in the result and follow it:
+   - Call `bla_harden` again with `"apply": true`. It answers `confirmation_required` with `wouldOverwrite` — ask the user, then repeat with `"confirm_overwrite": true`. Only build output (`dist/`, `build/`, `out/`, …) is overwritten, never source; the originals are kept outside the project.
+   - `"restore": true` (with `"confirm_overwrite": true`) puts the originals back. Running `apply` again re-hardens from those originals, never hardened code twice.
+   - Hardened files that are source (a project with no build step) are listed in `notPromoted`: copy the project to a staging directory and overlay the mirror there. Never write hardened code over the user's source.
 
 ### Stage 4: Equivalence, Weave Acceptance & Bankruptcy Verification (`agent + mcp`)
-1. Run the project's own test suite (`npm test` / `pytest` / CrackMe harness) to verify 100% functional equivalence.
+1. Run the project's own test suite (`npm test` / `pytest` / CrackMe harness) **against the promoted build** to verify 100% functional equivalence. BLA checks structure, not behaviour — if a test fails, `restore`, report the failing case, and do not ship that build.
+   - **Recover, do not give up.** Find the artifact behind the failure (or the hot path that became too slow — hardened functions run extra code on every call) and harden again with only that file left out: `bla_harden` `{ "directory": ".", "apply": true, "exclude": ["dist/vendor/heavy.js"] }`, or at a lower `intensity`. Everything else stays protected; the result lists what ships as it was under `excluded`. Tell the user which files those are and why.
 2. Call `bla_verify` on hardened outputs (or inspect `bla_harden` verification results) and check `agentActions`:
    - Confirm `overallPassed: true`, `tokenAmplificationFactor >= 10`, and zero unresolved `agentActions`.
 
@@ -87,11 +95,37 @@ When the user says **"Harden my software"**, **"一键加固"**, or points at an
 | **MCP Prompt** | `bla-harden-project` |
 
 Auto-discovers protectable build outputs, detects formats, runs **audit → defend
-(bankrupt) → verify**. **Do not ask which files to protect — discover them.**
+(bankrupt) → verify**. **Do not ask which files to protect — discover them.** Build
+first: discovery targets the build output and leaves the toolchain alone (tool
+configs, tests, the scripts `package.json` runs for build / test / release, `.d.ts`).
+
+Then finish the job — the result's `nextSteps` lists exactly this:
+
+1. `bla_harden` `{ "directory": ".", "apply": true }` → `confirmation_required` → ask the
+   user → repeat with `"confirm_overwrite": true`. (CLI: `harden . --apply`.)
+2. Run the project's tests / a smoke run against the promoted build.
+3. Something broke? `bla_harden` `{ "directory": ".", "restore": true, "confirm_overwrite": true }`,
+   then harden again with the offending file in `"exclude"` (or at a lower `intensity`).
 
 Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 `llm_directives` (false — risky bait), `weave_decoys` (false), `self_seal` (false),
-`sidecar_entangle` (false), `wasm_preserve_exports`, `seed`, `output_directory`, `max_artifacts`, `dry_run`.
+`sidecar_entangle` (false), `wasm_preserve_exports`, `seed`, `output_directory`, `max_artifacts`, `dry_run`,
+`apply` (false), `restore` (false), `exclude` (paths / globs to leave out — also `"exclude"` in `.blarc`).
+
+### Reading the result (report these to the user, do not paper over them)
+
+| Field | What it tells you |
+| :--- | :--- |
+| `isError: true`, `artifacts[].error` | The run did not succeed. Read the error and `nextSteps`; never retry unchanged, never ship a partially hardened build. |
+| `skippedHardenedOutputs` | Already BLA output — not hardened twice. `discoveredCount: 0` with this set means "rebuild first". |
+| `skippedDevTooling`, `skippedSourceFiles` | Left alone on purpose. Use `bla_defend` on a named file only if it really ships. |
+| `excluded` | Files your `exclude` list left out. They ship **unprotected** — say so. |
+| `outputSize` (`inputBytes` → `outputBytes`, `largestGrowth`) | What the protection costs to download. Every hardened file grows (decoys are the mechanism); a WASM module grows by megabytes at `bankrupt`. For a web build tell the user the number, and offer `intensity: "maximum"` or an `exclude` for the largest file if size matters. |
+| `sqliteEvalTrapArtifacts` + the SQLite line in `nextSteps` | A hardened SQLite database holds decoy tables **beside** the application's own, which stay readable — BLA does not encrypt a database; tell the user. `sqlite_eval_trap: true` additionally makes a row read of the decoy tables fail, at the price of `PRAGMA integrity_check` / `VACUUM` / dump-restore failing for the application too: only for a database it just queries. |
+| `artifacts[].plaintextSurvivors` | Secret-looking literals (digests, keys, generated tokens) still readable in the output. `stealth`/`balanced` do not encode strings; `maximum`/`bankrupt` encode strings of 3–256 characters and cannot reach object keys, regular expressions, HTML attributes or longer strings — move the value into a plain string literal or off the client. |
+| `artifacts[].wasmExportRenames` / `wasmExportsAutoPreserved` | Renamed exports (old → new map for callers outside the project) and exports kept because a project file calls them. |
+| `integrityBindingEntry`, `integrityBindingUncoveredEntries`, `integrityBindingSkipped`, `pythonSidecarEntry`, `pythonSidecarUncoveredEntries` | What `self_seal` / `sidecar_entangle` really cover: the one module that pins its siblings, declared entry points (`package.json`; Python console scripts) that never load it, and artifacts bound to nothing (browser bundles, writable SQLite, files outside the checking module's directory). Bytecode-only / frozen Python starts without verifying. |
+| `defenseScore`, token / cost amplification | Structural checks and cost **estimates**, not measured attacker results. Say so. |
 
 ---
 
@@ -149,7 +183,10 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
 
 1. CLI: `npx bla-agents@latest setup`
 2. Then: `npx bla-agents@latest doctor` (or MCP `bla_doctor`) — checks the installed
-   skill bundle (this file + `references/`, including format appendices) is complete
+   skill bundle (this file + `references/`, including format appendices) is complete,
+   flags a client still pinned to an older release (`versionSkew` → re-run `setup --yes`),
+   and with `--verify-handshake` / `verify_handshake: true` starts each registered
+   server to confirm it answers
 
 ## Write safety (principles)
 
@@ -165,6 +202,11 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
   (`cancelled: true`, `written: [...]`); there is no silent half-harden.
   Same rule for `in_place: true` (overwrites the input).
 - Report writes from the tool receipt (`writeReceipt` / `wouldOverwrite`), not guesses.
+- Never edit, lint, or re-harden BLA's own output, and never copy it over source files:
+  it is unreadable by design. Change the source, rebuild, harden again.
+- `apply: true` is the only path that overwrites build output, and it always asks first
+  (`confirmation_required`). Originals live in the per-user state directory
+  (`BLA_STATE_DIR` overrides it); `restore: true` puts them back.
 - After a successful harden/defend/protect, keep the returned unsigned `runId` (and
   harden `summaryPath`). Re-check later with `bla_run_lookup` or `bla_verify` +
   `summary_path`/`run_id` — never invent a run id.
@@ -180,6 +222,8 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
 | Intent | Prefer |
 | :--- | :--- |
 | Project / build dir | **`bla_harden`** |
+| Ship the hardened build / undo it | **`bla_harden`** `{ "apply": true }` → confirm → `{ "restore": true }` to undo |
+| One hardened file breaks a test or a hot path | `restore` → **`bla_harden`** `{ "apply": true, "exclude": ["<that file>"] }` (or lower `intensity`) |
 | Named artifact | **`bla_defend`** (or granular `bla_audit` → `bla_protect` → `bla_verify`) |
 | Inventory only (page 64+ with `offset`/`nextOffset`) | **`bla_discover`** |
 | Surgical source weave & verification | Resource `bla://directives/weave-decoy` → **`bla_weave_plan`** (`surgicalWorkorder`) → Agent edits source → **`bla_verify_weave`** → `bla_harden` (`weave_decoys: true`) |
@@ -190,6 +234,7 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
 | Cross-build structural drift (seeded polymorphism) | **`bla_polymorph_report`** (driftScore only — not a cracking claim; prove equivalence with verify/REA) |
 | Cleartext panel/license secrets | **`bla_encrypt_strings`** + **`bla_lint_plaintext_secrets`** (XOR only — never JS AES) |
 | Optional public domain/date lock | **`bla_bind_scope`** + **`bla_lint_bind_scope`** (default OFF; never covert) |
+| Is BLA registered and current? | **`bla_doctor`** `{ "verify_handshake": true }` — `versionSkew`, `projectRegistrations` (the project's own `.mcp.json` and friends), `nextSteps` |
 | Format-specific knobs | Load the matching appendix under `references/` |
 
 ## FORBIDDEN
@@ -220,6 +265,8 @@ npx -y bla-agents@latest lint .
 npx -y bla-agents@latest weave-plan .
 npx -y bla-agents@latest verify-weave . --json
 npx -y bla-agents@latest harden . --weave-decoys --self-seal --sidecar-entangle
+npx -y bla-agents@latest harden . --apply      # promote over the build output
+npx -y bla-agents@latest harden . --restore    # put the originals back
 npx -y bla-agents@latest lint-lanes path/to/gate.js
 npx -y bla-agents@latest lint-js-wasm-hydrate-dump path/to/license.cjs
 npx -y bla-agents@latest defend /absolute/path/to/target --manifest --json

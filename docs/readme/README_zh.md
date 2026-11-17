@@ -75,8 +75,12 @@ AI 逆向代理（`REA` + 编程 Agent）可在单条命令内解包 `.asar`、�
 
 ```bash
 # 推荐 Node.js ^22.23.4 或 >=24.0.0
-npx bla-agents harden .
+npx bla-agents harden .            # 只写出部分镜像 .bla-hardened/，此时尚未交付
+npx bla-agents harden . --apply    # 交付：用加固后的文件替换构建产物
+npx bla-agents harden . --restore  # 撤销：恢复原始构建产物
 ```
+
+请先完成构建——`harden` 只处理构建产物，不会改动工具链文件。`--apply` 只覆盖构建产物（绝不覆盖源码），原始文件备份在项目之外；发布前请对替换后的产物运行你自己的测试。
 
 ### 方式二：Agent 主导的闭环源码织入与产物加固（MCP + Skill）
 一键将 BLA 注册到你的编程 Agent（支持 **Claude Code、Cursor、Codex、Windsurf、Gemini CLI、GitHub Copilot CLI、VS Code、OpenCode、Antigravity**）：
@@ -91,7 +95,7 @@ npx bla-agents setup
 使用 BLA 对当前项目进行防逆向闭环加固
 ```
 
-宿主 Agent 将自动编排 BLA 的 31 个 MCP 工具（`bla_weave_plan` → 源码级状态缠绕与字符串加密 → `bla_verify_weave` → `bla_harden` → `bla_verify`），从源码结构到最终产物完成全链路防护。
+宿主 Agent 将自动编排 BLA 的 31 个 MCP 工具（`bla_weave_plan` → 源码级状态缠绕与字符串加密 → `bla_verify_weave` → `bla_harden` → `bla_verify`），从源码结构到最终产物完成全链路防护。每个结果都带有 `nextSteps`，Agent 会据此把事情做完：先征得你同意，再用加固文件替换构建产物（`apply`），最后运行你的测试。
 
 ### 方式三：构建打包插件（Vite / Rollup / Webpack / esbuild）
 在前端或全栈构建阶段自动保护 JS 分包、注入 VLQ v3 诱饵 SourceMap 并加固 `.wasm` 模块：
@@ -152,7 +156,7 @@ flowchart LR
 | **PCAP 抓包** | 24 B → 1.29 MiB | ❌ 预算超限拒绝 | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` |
 | **Electron ASAR** | 607 B → **16.9 MiB** | ❌ 容量溢出拒绝 | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) |
 | **WASM + Wabt** | 54 B → **6.56 MiB** · 251 导出 | ⚠️ `ifaceState=partial` | `WASM_INTERFACE_REPRESENTATION_BYTES` — *Typed WASM interface decoding exceeds WABT budget* |
-| **SQLite** (Node 24) | 12 KiB → 56 KiB | ❌ 求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()` |
+| **SQLite** (Node 24，需 `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ 蜜罐表求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()`。该陷阱需显式开启（3.4.3 及之前为默认行为）：它同样会让宿主程序自己的 `PRAGMA integrity_check` / `VACUUM` 失败。默认加固只加入 REA 可读的蜜罐表；业务表从不被隐藏。 |
 | **JavaScript** | 761 B → 116 KiB | ❌ 语义预算拒绝 | 同时触发 `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` |
 | **Safetensors** | 128 B → 10.1 KiB | ❌ 容量溢出拒绝 | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels*（HF 正常加载，权重不变） |
 | **GGUF 模型** | 24 B → 7.7 KiB | ❌ 容量溢出拒绝 | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* |

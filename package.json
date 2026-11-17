@@ -77,7 +77,7 @@
     "node": "^22.23.4 || >=24.0.0"
   },
   "scripts": {
-    "build": "node scripts/sync-version.mjs && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "node scripts/sync-version.mjs && tsc -p tsconfig.build.json && chmod +x dist/cli.js && node scripts/link-self-bin.mjs",
     "dev": "tsx src/cli.ts",
     "pretest": "npm run build",
     "test": "vitest run",

@@ -1004,7 +1004,9 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("sqlite-database-inspection");
       const sqInfo = inspectSqliteBuffer(rawBytes);
       const limits: string[] = [];
-      if (sqInfo.hasGeneratedTrapColumns) {
+      // Only the function form of the trap columns makes an inspector's read
+      // of a honey table fail; the default form is plain SQL it evaluates.
+      if (sqInfo.trapMode === "eval") {
         limits.push("column-evaluation (SqliteColumnEvaluationFailure)");
       }
       if (sqInfo.honeyTablesCount > 0) {
@@ -1020,9 +1022,28 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: sqInfo.blaProtected ? 28_000 : 880,
         estimatedCostUsd: sqInfo.blaProtected ? 2.25 : 0.04,
         reason: sqInfo.blaProtected
-          ? `Protected by BLA SQLite Shield (${sqInfo.honeyTablesCount} honey tables + virtual generated column traps)`
+          ? `Decorated by the BLA SQLite shield: ${sqInfo.honeyTablesCount} honey tables with ${
+              sqInfo.trapMode === "eval"
+                ? "generated columns an inspector cannot evaluate"
+                : "generated decoy columns (plain SQL, readable)"
+            }`
           : "SQLite tables and rows directly readable by REA inspect-sqlite-database",
       });
+      if (sqInfo.blaProtected && sqInfo.businessTables.length > 0) {
+        // The shield decorates; it does not hide. Say so where the decoys are counted.
+        exposedItems.push({
+          id: `sqlite_business_${basename(absPath)}`,
+          name: `${sqInfo.businessTables.length} application table(s): ${sqInfo.businessTables.slice(0, 4).join(", ")}${sqInfo.businessTables.length > 4 ? ", …" : ""}`,
+          kind: "sqlite-table",
+          location: basename(absPath),
+          riskLevel: "critical",
+          reaToolUsed: "inspect_sqlite_database",
+          estimatedTokensToReconstruct: 880,
+          estimatedCostUsd: 0.04,
+          reason:
+            "Stored exactly as before hardening: any SQLite client reads these rows. BLA adds decoys beside them and does not encrypt a database.",
+        });
+      }
       sim = {
         ...sim,
         examinationStatus: sqInfo.blaProtected ? "limited" : "complete",

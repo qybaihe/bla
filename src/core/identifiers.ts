@@ -204,8 +204,15 @@ export function realisticIdentifier(
   const verb = prng.pick(VERBS);
   const noun = prng.pick(NOUNS);
   const adj = prng.pick(ADJECTIVES);
+  // A hint leads the name in the camel / pascal styles, and callers derive it
+  // from customer identifiers such as `$1`, `_0x1f` or `π2`. Whatever is left
+  // after stripping must not start with a digit, or the result is not an
+  // identifier at all; an emptied hint falls back to the vocabulary.
   const hint = options.hint
-    ? options.hint.replace(/[^A-Za-z0-9_]/g, "").slice(0, 24)
+    ? options.hint
+        .replace(/[^A-Za-z0-9_]/g, "")
+        .replace(/^[0-9]+/, "")
+        .slice(0, 24)
     : "";
 
   if (style === "snake") {
