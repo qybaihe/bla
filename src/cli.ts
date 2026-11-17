@@ -546,12 +546,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     return 0;
   }
 
-  if (parsed.command === "mcp") {
-    startMcpStdioServer();
-    return 0;
-  }
-
-  if (parsed.help || !parsed.command) {
+  // `--help` and `--version` short-circuit on purpose, but a bad flag must not
+  // be swallowed just because no subcommand was given: `bla --bogus` used to
+  // print help and exit 0, so a CI typo looked like success.
+  if (parsed.help) {
     printHelp();
     return 0;
   }
@@ -559,6 +557,16 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   if (parsed.argErrors.length > 0) {
     for (const message of parsed.argErrors) console.error(`Error: ${message}`);
     return 1;
+  }
+
+  if (parsed.command === "mcp") {
+    startMcpStdioServer();
+    return 0;
+  }
+
+  if (!parsed.command) {
+    printHelp();
+    return 0;
   }
 
   try {
@@ -1272,9 +1280,19 @@ const isDirectExecution =
     process.argv[1].endsWith("bla-agents") ||
     process.argv[1].endsWith("bla-shield"));
 
+/**
+ * The stdio server owns the process lifetime once it starts, so a zero exit
+ * from the `mcp` path must not be written to `process.exitCode`. A non-zero
+ * code means the server never started (bad flags), and that must still surface.
+ */
+export function shouldSetProcessExitCode(argv: readonly string[], code: number): boolean {
+  const stdioServerPath = argv[2] === "mcp" || argv.includes("--mcp");
+  return !stdioServerPath || code !== 0;
+}
+
 if (isDirectExecution) {
   runCli().then((code) => {
-    if (process.argv[2] !== "mcp" && !process.argv.includes("--mcp")) {
+    if (shouldSetProcessExitCode(process.argv, code)) {
       process.exitCode = code;
     }
   });
