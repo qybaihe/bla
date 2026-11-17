@@ -8,6 +8,7 @@ import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js"
 import { verifyTarget, type VerifyTargetOptions } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { discoverHardenTargets, hardenProject } from "../engine/harden.js";
 import {
@@ -2772,13 +2773,39 @@ export async function handleMcpRequest(
         content: [
           {
             type: "text",
-            text: err instanceof Error ? err.message : String(err),
+            text: redactAbsolutePaths(err instanceof Error ? err.message : String(err)),
           },
         ],
         isError: true,
       },
     };
   }
+}
+
+/**
+ * Roots whose absolute spellings must never reach an MCP client: engine error
+ * messages embed resolved paths, and the client is untrusted relative to the
+ * operator's filesystem. Relative fragments stay readable for debugging.
+ */
+const ERROR_PATH_REDACT_ROOTS: ReadonlySet<string> = new Set(
+  [process.cwd(), tmpdir(), homedir()]
+    .filter((root): root is string => typeof root === "string")
+    .map((root) => resolvePath(root).toLowerCase()),
+);
+
+function redactAbsolutePaths(text: string): string {
+  let out = text;
+  for (const root of ERROR_PATH_REDACT_ROOTS) {
+    let searchIndex = out.toLowerCase().indexOf(root);
+    while (searchIndex >= 0) {
+      out = out.slice(0, searchIndex) + "<path>" + out.slice(searchIndex + root.length);
+      searchIndex = out.toLowerCase().indexOf(root, searchIndex + "<path>".length);
+    }
+  }
+  // Windows drive-letter absolute paths outside the known roots (POSIX
+  // absolute paths under the known roots are already covered above).
+  out = out.replace(/[A-Za-z]:[\\/][^\s"'`,;)\]}]*/g, "<path>");
+  return out;
 }
 
 /** Queued bla_harden requests cancelled before their serial turn started. */
