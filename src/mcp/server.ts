@@ -147,6 +147,11 @@ export interface McpPropertySchema {
   readonly maxItems?: number;
   /** Present for count-like numbers: reject fractional values. */
   readonly integer?: boolean;
+  /**
+   * Optional per-property upper bound on string length (JSON Schema
+   * `maxLength`). When absent, MAX_STRING_ARG_CHARS applies.
+   */
+  readonly maxLength?: number;
 }
 
 export interface McpToolAnnotations {
@@ -243,6 +248,21 @@ function withToolAnnotations(tool: McpToolDefinition): McpToolDefinition {
  * client the ability to push one call into unbounded work.
  */
 export const MAX_STRING_ARRAY_ITEMS = 1024;
+
+/**
+ * Default upper bound for a single string tool argument (paths, seeds, key
+ * paths, hex digests — all short operator-authored values). Far above real
+ * use; bounds the hashing/copy work a buggy or hostile client can trigger
+ * with one call. A property schema may declare a tighter `maxLength`.
+ */
+export const MAX_STRING_ARG_CHARS = 65_536;
+
+/**
+ * Upper bound for numeric tool arguments (counts, offsets, thresholds). Every
+ * real value is far smaller; the cap keeps a huge magnitude from flowing into
+ * engine loops or report math as a plausible input.
+ */
+export const MAX_NUMERIC_ARG = 1_000_000_000;
 
 const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
@@ -1875,6 +1895,14 @@ export function validateMcpToolCall(
           message: `Invalid params for '${tool.name}': argument '${key}' must be a non-empty string`,
         };
       }
+      const maxLen = propSchema.maxLength ?? MAX_STRING_ARG_CHARS;
+      if (val.length > maxLen) {
+        return {
+          ok: false,
+          code: -32602,
+          message: `Invalid params for '${tool.name}': argument '${key}' exceeds the ${maxLen}-character limit (received ${val.length})`,
+        };
+      }
       if (propSchema.enum && !propSchema.enum.includes(val)) {
         return {
           ok: false,
@@ -1906,6 +1934,13 @@ export function validateMcpToolCall(
           message: `Invalid params for '${tool.name}': argument '${key}' must be a ${allowZero ? "non-negative" : "positive"} ${
             integerOnly ? "integer" : "finite number"
           }`,
+        };
+      }
+      if (val > MAX_NUMERIC_ARG) {
+        return {
+          ok: false,
+          code: -32602,
+          message: `Invalid params for '${tool.name}': argument '${key}' exceeds the ${MAX_NUMERIC_ARG} magnitude limit (received ${val})`,
         };
       }
     } else if (propSchema.type === "array") {
