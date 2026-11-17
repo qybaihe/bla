@@ -284,8 +284,11 @@ export function rewriteStablePanelDeriveSymbols(
   let code = source;
   for (const { from, to } of [...renames].sort((a, b) => b.from.length - a.from.length)) {
     if (from === "deriveLocal") {
-      // Word-boundary safe replace for the local identifier.
-      code = code.replace(/\bderiveLocal\b/g, to);
+      // Word-boundary safe replace for the local identifier. A preceding dot is
+      // a property access on some other object — legal alongside a local
+      // function of the same name — and renaming it would change the program's
+      // behavior instead of just hiding the stable ABI.
+      code = code.replace(/(?<![\w$.])deriveLocal\b/g, to);
     } else {
       code = code.split(from).join(to);
     }
