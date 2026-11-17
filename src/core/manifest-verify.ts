@@ -36,7 +36,7 @@ export function verifyManifestFile(
   manifestPath: string,
   publicKeyPath?: string,
   artifactPath?: string,
-  options: { readonly requirePinnedKey?: boolean } = {},
+  options: { readonly requirePinnedKey?: boolean; readonly requireArtifact?: boolean } = {},
 ): ManifestVerifyResult {
   const absManifest = resolve(manifestPath);
   let manifest: Record<string, unknown>;
@@ -156,6 +156,16 @@ export function verifyManifestFile(
   }
 
   let artifactVerified = false;
+  if (options.requireArtifact === true && resolvedArtifactPath === undefined) {
+    return {
+      ok: false,
+      signed: true,
+      pinned,
+      artifactVerified: false,
+      reason:
+        "artifact verification required but no protected artifact was found; pass --artifact <path> or place the artifact next to the manifest",
+    };
+  }
   if (resolvedArtifactPath !== undefined) {
     const expectedSha = manifest.protectedSha256;
     if (typeof expectedSha !== "string" || !/^[0-9a-f]{64}$/i.test(expectedSha)) {
@@ -206,7 +216,11 @@ export function verifyManifestFile(
   const keyNote = pinned
     ? "pinned key"
     : "embedded key only — pass --public-key to authenticate";
-  const artifactNote = artifactVerified ? ", artifact SHA-256 verified" : "";
+  const artifactNote = artifactVerified
+    ? ", artifact SHA-256 verified"
+    : typeof manifest.protectedSha256 === "string"
+      ? ", artifact NOT verified — pass --artifact <path> or --require-artifact"
+      : "";
   return {
     ok: true,
     signed: true,
