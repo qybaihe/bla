@@ -109,6 +109,7 @@ import {
   entangleWasmEntryWithSidecars,
   entangleWasmLoaderWithSidecars,
   discoverNodeWasmJsLoader,
+  detectWasmJsLoaderCarrier,
   WASM_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
@@ -298,6 +299,8 @@ function applySidecarWasmLoaderAutoWire(options: {
     if (found) break;
   }
   if (!found) return { applied: false };
+  const carrier = detectWasmJsLoaderCarrier(found.name, found.source);
+  if (!carrier) return { applied: false };
   let destPath = found.absPath;
   const foundDir = dirname(found.absPath);
   if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
@@ -310,7 +313,7 @@ function applySidecarWasmLoaderAutoWire(options: {
   const entangled = entangleWasmLoaderWithSidecars({
     loaderSource: found.source,
     wasmBytes: options.wasmBytes,
-    carrier: "commonjs",
+    carrier,
   });
   if (entangled.code === found.source && destPath === found.absPath) {
     return found.source.includes(WASM_SIDECAR_LOADER_MARKER)
@@ -1128,7 +1131,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalWasm = entangled.buffer;
       if (entangled.applied) sidecarEntangleApplied = true;
       // Only record the load-time vector when the section was planted AND
-      // a Node CJS loader was actually auto-wired (honesty: do not claim
+      // a Node CJS/ESM loader was actually auto-wired (honesty: do not claim
       // strip⇒fail if the hook never shipped).
       if (entangled.applied && wasmSidecarLoaderHookApplied) {
         counteredVectors.add("wasm-sidecar-entangle");

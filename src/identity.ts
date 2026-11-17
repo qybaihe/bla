@@ -37,6 +37,10 @@ export const BLA_IDENTITY = Object.freeze({
  * - `src/domain/native/nativeAotPe.ts` (`NATIVE_AOT_MAX_*`, REA #10067/#10094)
  * - `src/il2cpp/Il2cppMetadataV108.ts` + `Il2cppMetadataProvider.ts` (REA #9925)
  * - `src/domain/android/dexTypes.ts` (`dexTypeSchema` 255-dimension cap, REA #10227)
+ * - `src/domain/native/dwarfUnits.ts` + `elfDebugLink.ts` + `elfDependencies.ts`
+ *   (REA tip 05be423ac: DWARF units, ELF debug-link, ELF DT_NEEDED)
+ * - `src/domain/java/mavenGradleMetadata.ts` + `src/domain/nuget/nupkg.ts`
+ * - `src/domain/firmware/androidOtaPayload.ts` + `src/artifacts/AndroidBootImageFormat.ts`
  */
 export const REA_INTERNAL_LIMITS = Object.freeze({
   /** Maximum distinct alternatives retained in one normalized primitive value (`SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT`). */
@@ -278,4 +282,58 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
    * native command output, etc.) rather than adding new trip-able budgets.
    */
   SQLITE_WORKER_HEAP_BYTES: 268_435_456,
+  /**
+   * New REA analyzers on tip 05be423ac (Android OTA / boot image, Maven POM
+   * + Gradle module metadata, NuGet .nupkg, DWARF compile units, ELF
+   * `.gnu_debuglink` / `.gnu_debugaltlink`, ELF DT_NEEDED / versions /
+   * imports). Honesty catalog only — not densify trip targets:
+   *
+   * - File-byte and report/pagination ceilings (`MAX_INSPECT_*_FILE_BYTES`,
+   *   `MAX_INSPECT_DWARF_UNITS_LIMIT` / default page 32, NuGet nuspec 16 MiB)
+   *   are caller-selected admission or walk caps, not plantable budgets.
+   * - DWARF abbrev/form-decode and unit walk caps (8,192 abbrevs; 1,048,576
+   *   form-decode steps; 100,000 units) sit in optional `.debug_*` sections,
+   *   but planting tens of thousands of units or a 256 MiB decompressed
+   *   section would massively bloat the image; a stop is an incomplete
+   *   census / per-unit issue, not a 1:1 refuse that BLA can trip without
+   *   that bloat. 256-row pages are caller-recoverable.
+   * - ELF DT_NEEDED / version / import ceilings cannot be planted without
+   *   breaking the dynamic linker of the protected image.
+   * - Maven/Gradle dependency-row, variant, and XML-node allowances cannot
+   *   be planted in a published POM / module file without perturbing
+   *   resolution of the protected build.
+   * - Extra `.nupkg` ZIP members at the 65,536-entry inventory cap would
+   *   balloon the package; NuGet restore may also consume unexpected
+   *   `lib`/`build` members.
+   * - Android OTA partition/operation and boot-image ramdisk/header bounds
+   *   cannot be planted without breaking the update or boot image.
+   * - PE certificate-table alignment padding reject (#11823) is analyzer
+   *   validation (same class as #9666), not a densify target. CycloneDX
+   *   Go/Rust projection, HAR body-identity (#11829), and LimitRef typed
+   *   refusals re-own existing allowances.
+   */
+  MAX_INSPECT_DWARF_UNITS_FILE_BYTES: 536_870_912,
+  MAX_DWARF_DECOMPRESSED_SECTION_BYTES: 268_435_456,
+  MAX_INSPECT_DWARF_UNITS_LIMIT: 256,
+  DEFAULT_INSPECT_DWARF_UNITS_LIMIT: 32,
+  MAX_DWARF_UNITS: 100_000,
+  MAX_DWARF_ABBREV_ENTRIES: 8_192,
+  MAX_DWARF_FORM_DECODE_STEPS: 1_048_576,
+  MAX_INSPECT_ELF_DEBUG_LINK_FILE_BYTES: 536_870_912,
+  MAX_INSPECT_ELF_DEBUG_LINK_ENTRIES: 256,
+  MAX_INSPECT_ELF_DEPENDENCY_FILE_BYTES: 536_870_912,
+  MAX_INSPECT_ELF_DEPENDENCY_NEEDED: 65_536,
+  MAX_INSPECT_ELF_DEPENDENCY_VERSIONS: 65_536,
+  MAX_INSPECT_ELF_DEPENDENCY_IMPORTS: 262_144,
+  MAX_INSPECT_MAVEN_GRADLE_METADATA_FILE_BYTES: 16_777_216,
+  MAVEN_GRADLE_METADATA_DEPENDENCY_ROWS: 65_536,
+  MAVEN_GRADLE_METADATA_VARIANTS: 4_096,
+  MAX_INSPECT_NUGET_NUPKG_FILE_BYTES: 536_870_912,
+  MAX_INSPECT_NUGET_NUPKG_ENTRIES: 65_536,
+  MAX_INSPECT_NUGET_NUPKG_NUSPEC_BYTES: 16_777_216,
+  ANDROID_OTA_MAX_MANIFEST_BYTES: 16_777_216,
+  ANDROID_OTA_MAX_PARTITIONS: 4_096,
+  ANDROID_OTA_MAX_OPERATIONS: 65_536,
+  ANDROID_BOOT_MAX_VENDOR_RAMDISKS: 4_096,
+  ANDROID_BOOT_MAX_HEADER_SIZE: 1_048_576,
 });

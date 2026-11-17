@@ -61,6 +61,18 @@ describe("jsModuleHasHoistedDependencyGraph", () => {
     expect(jsModuleHasHoistedDependencyGraph('export const n = 1;\n', "app.mjs")).toBe(
       false,
     );
+    expect(
+      jsModuleHasHoistedDependencyGraph(
+        'import fs from "node:fs";\nimport path from "node:path";\nimport { fileURLToPath } from "node:url";\nconst bytes = fs.readFileSync("core.wasm");\n',
+        "loader.mjs",
+      ),
+    ).toBe(false);
+    expect(
+      jsModuleHasHoistedDependencyGraph(
+        'import fs from "node:fs";\nimport { helper } from "./util.js";\n',
+        "loader.mjs",
+      ),
+    ).toBe(true);
   });
 });
 
