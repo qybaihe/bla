@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
@@ -331,7 +331,10 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
       let targetFile = full;
       if (rawPath && rawPath.length > 0) {
         const candidate = resolve(pageDir, rawPath);
-        if (!candidate.startsWith(absRoot)) {
+        // startsWith() would accept a same-prefix sibling such as
+        // "<parent>/website-evil" for a root of "<parent>/website".
+        const toRoot = relative(absRoot, candidate);
+        if (toRoot === ".." || toRoot.startsWith(`..${sep}`) || isAbsolute(toRoot)) {
           errors.push(`${rel}: link escapes website root (${ref})`);
           continue;
         }
