@@ -37,6 +37,22 @@ describe("self-seal helper (#40.5)", () => {
     expect(snip.code.toLowerCase()).not.toMatch(/\bbla[_-]?seal\b/);
   });
 
+  it("rejects a bindingName that is not a JavaScript identifier", () => {
+    const prng = new SeededPrng("self-seal-unit-hostile");
+    expect(() =>
+      generateSelfSealSnippet(prng, {
+        siblingPaths: ["./sib-a.js"],
+        bindingName: "x; alert(1);//",
+      }),
+    ).toThrow(/identifier/);
+    // PRNG-derived names stay valid.
+    expect(() =>
+      generateSelfSealSnippet(new SeededPrng("self-seal-unit-derived"), {
+        siblingPaths: ["./sib-a.js"],
+      }),
+    ).not.toThrow();
+  });
+
   it("offline digest helper is deterministic for identical inputs", () => {
     const a = measureSelfSealDigestOffline([
       { pathLabel: "main.js", bytes: Buffer.from("hello-module") },

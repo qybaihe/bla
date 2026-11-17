@@ -58,6 +58,27 @@ describe("sidecar JS inject strip⇒fail (vertical slice)", () => {
     ).toThrow(/64-char/);
   });
 
+  it("generateSidecarJsPreamble rejects a bindingName that is not a JS identifier", () => {
+    const hex = "a".repeat(64);
+    expect(() =>
+      generateSidecarJsPreamble({
+        entryPath: "main.js",
+        sidecarPaths: ["sib.js"],
+        expectedHex: hex,
+        bindingName: "x; alert(1);//",
+      }),
+    ).toThrow(/identifier/);
+    // Valid identifiers stay accepted.
+    expect(() =>
+      generateSidecarJsPreamble({
+        entryPath: "main.js",
+        sidecarPaths: ["sib.js"],
+        expectedHex: hex,
+        bindingName: "_verifySiblingDigest_ok1",
+      }),
+    ).not.toThrow();
+  });
+
   it("bindSidecarEntanglement returns status bound with inject + digest", () => {
     const entryBytes = new TextEncoder().encode("module.exports = { ok: true };\n");
     const sibBytes = new TextEncoder().encode("sidecar-payload\n");

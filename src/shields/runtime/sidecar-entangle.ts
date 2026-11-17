@@ -464,6 +464,11 @@ export function generateSidecarJsPreamble(
   }
   const tag = expectedHex.slice(0, 8);
   const bindingName = options.bindingName ?? `_verifySiblingDigest_${tag}`;
+  // Interpolated verbatim into `var <name> = …` declarations — require a plain
+  // identifier so an override cannot break or inject into the preamble.
+  if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(bindingName)) {
+    throw new Error("sidecar bindingName must be a valid JavaScript identifier");
+  }
   const expectedU32 = parseInt(tag, 16) >>> 0;
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
