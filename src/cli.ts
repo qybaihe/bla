@@ -10,6 +10,7 @@ import {
 } from "./core/config.js";
 import { inspectReleaseExposure } from "./core/release-exposure.js";
 import { buildSarifReport } from "./core/sarif.js";
+import { sanitizeTerminalText } from "./core/terminal-text.js";
 import { verifyManifestFile } from "./core/manifest-verify.js";
 import type { ProtectionIntensity } from "./core/types.js";
 import { auditTarget } from "./engine/auditor.js";
@@ -553,6 +554,12 @@ function mergeWasmPreserveExports(
     ...new Set([...(config.wasmPreserveExports ?? []), ...parsed.wasmPreserveExports]),
   ];
   return merged.length > 0 ? { wasmPreserveExports: merged } : {};
+}
+
+/** Single choke point for engine errors: artifact-derived names must not reach the terminal raw. */
+export function formatCliError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return `Error: ${sanitizeTerminalText(message)}`;
 }
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
@@ -1284,7 +1291,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         return 1;
     }
   } catch (err) {
-    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(formatCliError(err));
     return 1;
   }
 }
