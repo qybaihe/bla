@@ -657,14 +657,13 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         )
           ? parsed.intensity
           : (loaded.config.intensity ?? "bankrupt");
-        // Dry-run must write zero bytes: skip seed persistence into .blarc.
+        // Resolve the seed against the same root the config is loaded from. Using the
+        // target directory here minted a fresh seed and persisted it as
+        // `<target>/.blarc`, i.e. inside the build output the user is about to
+        // package or publish.
         const seed = parsed.dryRun
           ? parsed.seed
-          : resolveProjectSeed(
-              typeof directory === "string" ? directory : process.cwd(),
-              parsed.seed,
-              parsed.configPath,
-            ).seed;
+          : resolveProjectSeed(process.cwd(), parsed.seed, parsed.configPath).seed;
         const report = hardenProject({
           directory,
           intensity: explicitIntensity,
