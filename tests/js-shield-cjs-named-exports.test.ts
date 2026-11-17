@@ -141,7 +141,8 @@ import { own, starValue as viaBabel } from './babel-style.cjs';
 import * as literal from './literal.cjs';
 import * as bundled from './esbuild-style.cjs';
 import { compute, LIMIT } from './esbuild-style.cjs';
-const names = (ns) => Object.keys(ns).sort().join(',');
+// ('module.exports' is a namespace key only in newer Node releases.)
+const names = (ns) => Object.keys(ns).filter((name) => name !== 'module.exports').sort().join(',');
 console.log('ts      ', names(ts), '|', greet('x'), VERSION, lazyValue, starValue, starFn(1), ts['quoted-name']);
 console.log('babel   ', names(babel), '|', own(), viaBabel);
 console.log('literal ', names(literal), '|', literal.alpha(), literal.default.label, literal.default.port, literal.default.digest);
@@ -177,10 +178,10 @@ describe("an ES module importing names from a hardened CommonJS file", () => {
   it("the fixtures export what the comments say, before any hardening", () => {
     expect(runImporter("original", COMMONJS_FILES)).toBe(
       [
-        "ts       VERSION,__esModule,default,greet,lazyValue,module.exports,quoted-name,starFn,starValue | hello x 1.2.3-build 42 from-star 2 q",
-        "babel    __esModule,default,module.exports,own,starFn,starValue | own from-star",
-        `literal  alpha,beta,default,module.exports | a object-literal 8080 ${LITERAL_DIGEST}`,
-        "esbuild  LIMIT,compute,default,module.exports | 4098 4096",
+        "ts       VERSION,__esModule,default,greet,lazyValue,quoted-name,starFn,starValue | hello x 1.2.3-build 42 from-star 2 q",
+        "babel    __esModule,default,own,starFn,starValue | own from-star",
+        `literal  alpha,beta,default | a object-literal 8080 ${LITERAL_DIGEST}`,
+        "esbuild  LIMIT,compute,default | 4098 4096",
         "",
       ].join("\n"),
     );
@@ -216,7 +217,7 @@ describe("a UMD bundle, which Node loads as CommonJS", () => {
 `;
   const IMPORTER = `import * as ns from './umd.js';
 import { own, lazyValue } from './umd.js';
-console.log(Object.keys(ns).sort().join(','), '|', own(), lazyValue);
+console.log(Object.keys(ns).filter((name) => name !== 'module.exports').sort().join(','), '|', own(), lazyValue);
 `;
 
   function runUmd(label: string, umd: string, dep: string): string {
@@ -233,7 +234,7 @@ console.log(Object.keys(ns).sort().join(','), '|', own(), lazyValue);
 
   it("exports the same names from inside its factory function at every intensity", () => {
     const original = runUmd("umd-original", UMD, DEP);
-    expect(original).toBe("__esModule,default,lazyValue,module.exports,own | own 42\n");
+    expect(original).toBe("__esModule,default,lazyValue,own | own 42\n");
 
     for (const intensity of ["stealth", "balanced", "maximum", "bankrupt"] as const) {
       const hardened = runUmd(
@@ -340,8 +341,8 @@ exports.seen = seen;
     const out = harden(source, "paren.cjs", "stealth");
 
     expect(out).toMatch(/first: \(\w+\),/);
-    expect(namesNodeFinds(source, "paren-original")).toBe("default,module.exports");
-    expect(namesNodeFinds(out, "paren-hardened")).toBe("default,module.exports");
+    expect(namesNodeFinds(source, "paren-original")).toBe("default");
+    expect(namesNodeFinds(out, "paren-hardened")).toBe("default");
   });
 
   it("leaves an ES module and a classic script as they were handled before", () => {
@@ -370,7 +371,7 @@ function namesNodeFinds(code: string, label: string): string {
     [
       "--input-type=module",
       "-e",
-      "import * as ns from './lib.cjs'; process.stdout.write(Object.keys(ns).sort().join(','));",
+      "import * as ns from './lib.cjs'; process.stdout.write(Object.keys(ns).filter((name) => name !== 'module.exports').sort().join(','));",
     ],
     { cwd: dir, encoding: "utf8" },
   );
