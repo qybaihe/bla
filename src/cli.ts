@@ -101,9 +101,9 @@ Options:
   --intensity <preset>        stealth | balanced | maximum | bankrupt
                             (harden/defend default: bankrupt; protect default: balanced)
   --seed <seed>               Deterministic PRNG seed (default: per-project random in .blarc)
-  --manifest                  Emit .bla-manifest.json next to protected artifacts (opt-in; unsigned by default)
-  --sign-manifest             Ed25519-sign the emitted manifest (implies --manifest; requires --manifest-key)
-  --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest
+  --manifest                  Emit .bla-manifest.json next to protected artifacts (harden/defend; opt-in)
+  --sign-manifest             Ed25519-sign the emitted manifest (harden/defend; implies --manifest)
+  --manifest-key <path>       Ed25519 private key PEM file used by --sign-manifest (harden/defend)
   --public-key <path>         Trusted ed25519 public key PEM for verify-manifest
   --require-pinned-key        verify-manifest: exit 2 unless --public-key authenticated the manifest
   --require-artifact          verify-manifest: exit 2 unless the protected artifact's SHA-256 was verified
@@ -452,6 +452,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     if (command !== "protect") {
       argErrors.push("--self-seal-sibling-glob is only supported for the protect command");
     }
+  }
+
+  // protect has no manifest stage: ProtectionOptions carries no manifest field,
+  // so accepting the flags here would silently produce nothing.
+  if (
+    command === "protect" &&
+    (manifest || signManifest || manifestKey !== undefined)
+  ) {
+    argErrors.push(
+      "--manifest / --sign-manifest / --manifest-key are not supported by the protect command; use harden or defend",
+    );
   }
 
   return {
