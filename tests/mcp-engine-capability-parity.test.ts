@@ -223,4 +223,29 @@ describe("MCP ↔ engine capability parity (agent-facing)", () => {
     const names = BLA_MCP_TOOLS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
   });
+
+  it("declares destructiveHint on mutating tools so clients can prompt", () => {
+    const mutating = [
+      "bla_harden",
+      "bla_defend",
+      "bla_protect",
+      "bla_init",
+      "bla_encrypt_strings",
+      "bla_bind_scope",
+      "bla_redteam_report",
+    ];
+    for (const name of mutating) {
+      const tool = BLA_MCP_TOOLS.find((t) => t.name === name);
+      expect(tool, `missing MCP tool ${name}`).toBeDefined();
+      expect(tool!.annotations?.readOnlyHint, name).toBe(false);
+      expect(tool!.annotations?.destructiveHint, name).toBe(true);
+    }
+    // Read-only tools must stay non-destructive.
+    for (const name of ["bla_audit", "bla_verify", "bla_doctor"]) {
+      const tool = BLA_MCP_TOOLS.find((t) => t.name === name);
+      expect(tool, `missing MCP tool ${name}`).toBeDefined();
+      expect(tool!.annotations?.readOnlyHint, name).toBe(true);
+      expect(tool!.annotations?.destructiveHint, name).toBe(false);
+    }
+  });
 });
