@@ -157,6 +157,22 @@ export function extractStringLiterals(source: string): string[] {
 }
 
 /**
+ * Re-escape a literal the way `extractStringLiterals` unescapes it, so a
+ * literal written with `\\n`-style escapes in the raw source can still be
+ * recognized as present. Order matters: backslashes first.
+ */
+function escapeForSourceSearch(literal: string): string {
+  return literal
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/`/g, "\\`");
+}
+
+/**
  * True when a literal already lives inside the XOR encrypt-strings table
  * (opaque payload / index calls) — do not re-flag.
  */
@@ -168,7 +184,16 @@ export function looksAlreadyEncrypted(source: string, literal: string): boolean 
     }
   }
   // Combinatorial AST leaves chunks but not the full literal as one piece ≥8.
-  if (literal.length >= 8 && !source.includes(literal)) return true;
+  // The literal was unescaped on extraction, so also accept its escaped
+  // spelling — otherwise a secret written with one escape sequence would be
+  // treated as "absent from source" and silently skipped.
+  if (
+    literal.length >= 8 &&
+    !source.includes(literal) &&
+    !source.includes(escapeForSourceSearch(literal))
+  ) {
+    return true;
+  }
   return false;
 }
 

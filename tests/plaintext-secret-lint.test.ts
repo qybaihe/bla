@@ -37,6 +37,17 @@ describe("plaintext-secret lint (Direction-2)", () => {
     expect(report.findings.filter((f) => f.severity === "error")).toEqual([]);
   });
 
+  it("flags a sensitive literal written with an escaped byte (bypass guard)", () => {
+    // The raw source carries a backslash-n escape, so the unescaped literal
+    // can never appear in the raw source. The "literal absent from source"
+    // suppression must not hide a real secret just because it was written
+    // with an escape sequence.
+    const src = `const api = "sk_live_A1\\nB2C3D4E5F6G7H8";`;
+    const report = lintPlaintextSecretsSource(src);
+    expect(report.findings.length).toBeGreaterThan(0);
+    expect(report.shouldRefuseBankrupt).toBe(true);
+  });
+
   it("treats http(s) URLs as warning, not bankrupt refuse", () => {
     const src = `const ep = "https://enclave.internal/v1/slot/demo";`;
     const report = lintPlaintextSecretsSource(src);
