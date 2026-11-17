@@ -127,6 +127,7 @@ export {
 } from "./shields/formats/python.js";
 export {
   InvalidNativeBinaryError,
+  validateElfLayout,
   validateElf64Layout,
   inspectNativeBinary,
   protectNativeBinary,

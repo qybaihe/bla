@@ -242,11 +242,12 @@ export function generateAndroidR8Counter(
 
   const lines: string[] = [
     "# compiler: R8",
-    "# compiler_version: 8.7.18-bla-enclave",
+    "# compiler_version: 8.7.18",
     "# min_api: 24",
+    "# common_typos_disable",
+    `# {"id":"com.android.tools.r8.mapping","version":"2.2"}`,
     `# pg_map_id: ${prng.hex(8)}`,
     `# pg_map_hash: sha-256 ${prng.hex(32)}`,
-    "# bla-shield: decoy mapping — applying this file poisons REA residual resolution",
     "",
   ];
 

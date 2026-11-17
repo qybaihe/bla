@@ -113,6 +113,65 @@ function locateClassAttributeTable(
   return { attrsCountOffset, attrsCount };
 }
 
+export interface JvmClassInspectionSummary {
+  readonly validClass: boolean;
+  readonly stateNodeCount: number;
+  readonly blaProtected: boolean;
+}
+
+/**
+ * Structurally inspects a JVM `.class` buffer (`0xCAFEBABE`), verifying constant-pool
+ * `CONSTANT_Utf8` entries and class-attribute framing so raw bytes appended past EOF
+ * cannot spoof protection status.
+ */
+export function inspectJvmClass(rawBuffer: Buffer): JvmClassInspectionSummary {
+  if (rawBuffer.length < 24 || rawBuffer.readUInt32BE(0) !== 0xcafebabe) {
+    return { validClass: false, stateNodeCount: 0, blaProtected: false };
+  }
+  const cpCount = rawBuffer.readUInt16BE(8);
+  let offset = 10;
+  let validCp = cpCount >= 1;
+  let index = 1;
+  let hasDelegationUtf8 = false;
+  let stateNodeCount = 0;
+
+  while (validCp && index < cpCount) {
+    const measured = measureConstantPoolEntry(rawBuffer, offset);
+    if (!measured) {
+      validCp = false;
+      break;
+    }
+    if (rawBuffer[offset] === 1) {
+      const len = rawBuffer.readUInt16BE(offset + 1);
+      const str = rawBuffer.subarray(offset + 3, offset + 3 + len).toString("utf8");
+      if (str === "BlaEnclaveDelegation") {
+        hasDelegationUtf8 = true;
+      } else if (/^com\/enclave\/tarpit\/StateNode_[0-9a-f]+_pc_\d+$/.test(str)) {
+        stateNodeCount += 1;
+      }
+    }
+    offset += measured.size;
+    index += measured.slots;
+  }
+
+  if (!validCp) {
+    return { validClass: false, stateNodeCount: 0, blaProtected: false };
+  }
+
+  const attrTableLoc = locateClassAttributeTable(rawBuffer, offset, cpCount);
+  const hasSyntheticStubTrailer =
+    attrTableLoc === null &&
+    offset + 16 <= rawBuffer.length &&
+    rawBuffer.indexOf(Buffer.from('{"schema":"bla-jvm-enclave-v1"'), offset) !== -1;
+  const validFraming = attrTableLoc !== null || hasSyntheticStubTrailer;
+
+  return {
+    validClass: validFraming || offset + 8 <= rawBuffer.length,
+    stateNodeCount: validFraming ? stateNodeCount : 0,
+    blaProtected: validFraming && hasDelegationUtf8 && stateNodeCount >= 6,
+  };
+}
+
 /**
  * Protects a Java / Kotlin JVM `.class` bytecode buffer (`0xCAFEBABE`).
  * - When the class file is structurally complete through `attributes[]` (exact EOF,

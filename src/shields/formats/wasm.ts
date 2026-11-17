@@ -12,6 +12,7 @@ export interface WasmSection {
 
 export interface WasmInspectionSummary {
   readonly validMagic: boolean;
+  readonly exactFraming: boolean;
   readonly version: number;
   readonly sectionCount: number;
   readonly customSectionNames: readonly string[];
@@ -445,6 +446,7 @@ export function inspectWasmBinary(bytes: Buffer): WasmInspectionSummary {
   ) {
     return {
       validMagic: false,
+      exactFraming: false,
       version: 0,
       sectionCount: 0,
       customSectionNames: [],
@@ -462,13 +464,20 @@ export function inspectWasmBinary(bytes: Buffer): WasmInspectionSummary {
   let importCount = 0;
   let debugModuleName: string | null = null;
 
+  let truncatedSection = false;
   while (offset < bytes.length) {
     const sectionId = bytes[offset++]!;
     const header = tryDecodeUnsignedLeb128(bytes, offset);
-    if (header === null) break; // truncated section-size header → stop defensively
+    if (header === null) {
+      truncatedSection = true;
+      break; // truncated section-size header → stop defensively
+    }
     const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
-    if (sectionEnd > bytes.length) break;
+    if (sectionEnd > bytes.length) {
+      truncatedSection = true;
+      break;
+    }
     sectionCount++;
 
     const payload = bytes.subarray(nextOffset, sectionEnd);
@@ -518,6 +527,7 @@ export function inspectWasmBinary(bytes: Buffer): WasmInspectionSummary {
 
   return {
     validMagic: true,
+    exactFraming: !truncatedSection && offset === bytes.length,
     version,
     sectionCount,
     customSectionNames,

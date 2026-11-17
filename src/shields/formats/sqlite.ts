@@ -306,7 +306,10 @@ export function evaluateSqliteSensitivityPolicy(
       const honeyTablesCount = tableNames.filter(isHoneyTableName).length;
       const businessTables = tableNames.filter((n) => !isHoneyTableName(n));
       const hasGeneratedTrapColumns = rows.some(
-        (r) => typeof r.sql === "string" && r.sql.includes("GENERATED ALWAYS AS"),
+        (r) =>
+          typeof r.sql === "string" &&
+          /GENERATED\s+ALWAYS\s+AS\b/i.test(r.sql) &&
+          r.sql.includes("enclave_unseal_payload"),
       );
       const decorated = honeyTablesCount > 0 || hasGeneratedTrapColumns;
 
@@ -431,7 +434,10 @@ export function inspectSqliteBuffer(
       const honeyTablesCount = tableNames.filter(isHoneyTableName).length;
       const businessTables = tableNames.filter((n) => !isHoneyTableName(n));
       const hasGeneratedTrapColumns = rows.some(
-        (r) => typeof r.sql === "string" && r.sql.includes("GENERATED ALWAYS AS"),
+        (r) =>
+          typeof r.sql === "string" &&
+          /GENERATED\s+ALWAYS\s+AS\b/i.test(r.sql) &&
+          r.sql.includes("enclave_unseal_payload"),
       );
       const blaProtected = honeyTablesCount > 0 || hasGeneratedTrapColumns;
       const policyEval = evaluateSqliteSensitivityPolicy(bytes, policy);

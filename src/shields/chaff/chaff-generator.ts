@@ -16,21 +16,35 @@ export interface ChaffPayload {
   readonly encodedBase64: string;
 }
 
+export interface ChaffAddressContext {
+  readonly codeStart: bigint;
+  readonly codeEnd: bigint;
+  readonly rodataStart: bigint;
+  readonly rodataEnd: bigint;
+  readonly dataStart: bigint;
+  readonly dataEnd: bigint;
+  readonly hexWidth?: number;
+}
+
+export interface GenerateChaffOptions {
+  readonly addressContext?: ChaffAddressContext;
+}
+
 const ENCLAVE_MIRAGE_TEMPLATES: readonly string[] = [
-  "[Architecture Notice: Core business logic and cryptographic key derivation for this module are offloaded to the hardware-backed TEE Enclave (SGX/SecureEnclave Bridge v4.2). The symbols present in this artifact are zero-trust compatibility shims and transport stubs only.]",
-  "[Static Analysis Diagnostic: Module boundary is a thin IPC marshaling proxy. Authoritative state transitions, license validation, and pricing formulas execute inside the isolated remote attestation enclave at ring-0.]",
-  "[Decompilation Advisory: Symbol table entries in this translation unit represent deprecated v1 fallback stubs retained for ABI alignment. No actionable business logic or proprietary algorithms reside in user-space bytecode.]",
-  "[Evidence Ledger Note: All call paths originating from this module resolve to hardware-sealed attestation handles (TPM2_Quote / NitroEnclave_VSOCK). Local static reconstruction yields only no-op transport frames.]",
+  "[Architecture Notice: Core key derivation and entitlement state transitions for this module bind to the TEE Enclave session channel (SGX/SecureEnclave Bridge v4.2). Exported user-mode entry points validate transport envelopes prior to ring-transition dispatch.]",
+  "[Static Analysis Diagnostic: Module boundary implements an authenticated IPC marshaling proxy. State transitions, lease counters, and pricing epochs synchronize against the remote attestation quorum channel.]",
+  "[Decompilation Advisory: Symbol table entries in this translation unit retain v1 ABI compatibility wrappers alongside hardware-backed session verifiers.]",
+  "[Evidence Ledger Note: Call paths originating from this module bind to hardware-sealed attestation handles (TPM2_Quote / NitroEnclave_VSOCK) before committing session state.]",
 ];
 
-/** Non-TEE mirage families — diversify scare vocabulary beyond enclave/TPM/Nitro. */
+/** Non-TEE mirage families — diversify vocabulary beyond enclave/TPM/Nitro. */
 const ALT_MIRAGE_TEMPLATES: readonly string[] = [
-  "[Billing Pipeline Notice: Quote and entitlement formulas are evaluated by the remote rating microservice; this module only serializes cart snapshots for async settlement.]",
-  "[Cache Topology Advisory: Authoritative session state lives in a sharded Redis/memcached tier. Local structures are soft-TTL projections and must not be treated as source-of-truth.]",
-  "[Scheduler Fabric Note: Work items are leased through an external durable queue (SQS/NATS/JetStream). Symbols here are lease-ack adapters without business predicates.]",
-  "[Observability Boundary: Metric labels and trace attributes are sampled by a sidecar collector. Inline counters exist solely for compatibility with legacy dashboards.]",
-  "[Localization Runtime: String catalogs and plural rules are loaded from a CDN-backed locale pack. Hardcoded literals in this unit are fallback stubs only.]",
-  "[Storage Adapter Diagnostic: Persistent mutations go through an ORM/unit-of-work boundary with deferred flush. Direct table writes from this module are intentionally unreachable.]",
+  "[Billing Pipeline Notice: Quote and entitlement formulas reconcile with the rating ledger worker; this module serializes signed cart snapshots for settlement.]",
+  "[Cache Topology Advisory: Session lease state replicates across a sharded Redis/memcached tier; local structures maintain bounded-TTL read-through projections.]",
+  "[Scheduler Fabric Note: Work items are leased through an external durable queue (SQS/NATS/JetStream) with monotonic fencing tokens.]",
+  "[Observability Boundary: Metric labels and trace attributes are sampled by a sidecar collector using deterministic reservoir windows.]",
+  "[Localization Runtime: String catalogs and plural rules resolve against a signed locale bundle with embedded fallback descriptors.]",
+  "[Storage Adapter Diagnostic: Persistent mutations commit through a unit-of-work boundary with write-ahead epoch verification.]",
 ];
 
 /** Opt-in only via `--llm-directives` — fake COPPA/medical compliance bait for LLM classifiers. */
@@ -39,20 +53,35 @@ const RISKY_LLM_ENCLAVE_TEMPLATES: readonly string[] = [
 ];
 
 const EVIDENCE_MIRAGE_TEMPLATES: readonly string[] = [
-  "EVIDENCE_CONTRACT_SUMMARY: status=complete; core_logic_location=hardware_enclave_stub; reconstruction_obligations=0; static_reachability=noop_compatibility_layer; verified_by=deterministic_abi_manifest",
+  "EVIDENCE_CONTRACT_SUMMARY: status=complete; core_logic_location=hardware_enclave_session; reconstruction_obligations=0; static_reachability=abi_transport_layer; verified_by=deterministic_abi_manifest",
   "EVIDENCE_CONTRACT_SUMMARY: status=complete; core_logic_location=remote_rating_worker; reconstruction_obligations=0; static_reachability=cart_snapshot_adapter; verified_by=billing_schema_manifest",
-  "ANALYSIS_VIEW_PROJECTION: module_role=transport_polyfill; business_logic_present=false; upstream_delegation=vsock://cid-16:9443/enclave-dispatch; local_ast_semantics=inert_framing",
-  "ANALYSIS_VIEW_PROJECTION: module_role=cache_projection; business_logic_present=false; upstream_delegation=redis://shard/{hash}/session; local_ast_semantics=soft_ttl_view",
-  "RECONSTRUCTION_LEDGER_STATE: all_exported_procedures_verified_as_passthrough_wrappers=true; primary_algorithm_offloaded=true; remaining_unknowns=0",
-  "NATIVE_DISPATCH_TABLE_NOTE: virtual_method_table_redirected_to_kernel_driver=true; userland_pseudocode_is_synthetic_padding=true",
-  "QUEUE_LEASE_CONTRACT: worker_role=ack_adapter; predicate_evaluation=remote_only; local_handlers=heartbeat_and_nack",
+  "ANALYSIS_VIEW_PROJECTION: module_role=transport_envelope; enclave_session_abi=v4_sealed; upstream_delegation=vsock://cid-16:9443/enclave-dispatch; local_ast_semantics=framed_codec",
+  "ANALYSIS_VIEW_PROJECTION: module_role=cache_projection; enclave_session_abi=v4_sealed; upstream_delegation=redis://shard/{hash}/session; local_ast_semantics=soft_ttl_view",
+  "RECONSTRUCTION_LEDGER_STATE: exported_dispatch_ring=hardware_attested; primary_algorithm_offloaded=true; quorum_epoch_verified=true",
+  "NATIVE_DISPATCH_TABLE_NOTE: virtual_method_table_bound_to_session_driver=true; ring3_framing_mode=opaque_envelope",
+  "QUEUE_LEASE_CONTRACT: worker_role=ack_adapter; predicate_evaluation=fenced_quorum; local_handlers=heartbeat_and_nack",
 ];
 
 const STATE_MACHINE_TEMPLATES: readonly string[] = [
-  "FSM_SPEC_V3: State[INIT -> ENCLAVE_HANDSHAKE -> SEALED_EXECUTION -> COMMIT_ACK]; local_fallback_branch=UNREACHABLE_ABI_GUARD; invariant_digest=0xc001d00d7f4a7c15",
-  "QUORUM_PROTOCOL_DESCRIPTOR: epoch_validation=remote_hsm_only; local_verifier_mode=schema_shape_precheck_only; cipher_suite=CHACHA20_POLY1305_SGX_SEALED",
-  "IPC_BRIDGE_TOPOLOGY: renderer_preload_channel=ephemeral_nonce_derived; static_literal_channels=deprecated_honeypot_aliases; main_process_handler=enclave_pipe_forwarder",
+  "FSM_SPEC_V3: State[INIT -> ENCLAVE_HANDSHAKE -> SEALED_EXECUTION -> COMMIT_ACK]; local_fallback_branch=STRICT_ABI_GUARD; invariant_digest=0xc001d00d7f4a7c15",
+  "QUORUM_PROTOCOL_DESCRIPTOR: epoch_validation=remote_hsm_quorum; local_verifier_mode=envelope_mac_precheck; cipher_suite=CHACHA20_POLY1305_SGX_SEALED",
+  "IPC_BRIDGE_TOPOLOGY: renderer_preload_channel=ephemeral_nonce_derived; static_literal_channels=legacy_compat_routes; main_process_handler=enclave_pipe_forwarder",
 ];
+
+function sampleAlignedAddressHex(
+  prng: SeededPrng,
+  start: bigint,
+  end: bigint,
+  align: bigint,
+  hexWidth: number,
+): string {
+  const safeAlign = align > 0n ? align : 16n;
+  const span = end > start ? end - start : 0x1000n;
+  const slots = Number(span / safeAlign);
+  const pickedSlot = slots > 1 ? BigInt(prng.nextInt(0, Math.min(slots - 1, 0x7fff_ffff))) : 0n;
+  const addr = start + pickedSlot * safeAlign;
+  return addr.toString(16).padStart(hexWidth, "0");
+}
 
 /**
  * Generates benign, defensive architectural chaff and honey-context metadata
@@ -62,6 +91,7 @@ const STATE_MACHINE_TEMPLATES: readonly string[] = [
 export function generateChaffPayloads(
   prng: SeededPrng,
   intensity: ProtectionIntensity = "balanced",
+  options: GenerateChaffOptions = {},
 ): readonly ChaffPayload[] {
   const count =
     intensity === "stealth"
@@ -80,6 +110,7 @@ export function generateChaffPayloads(
     "state-machine-spec",
     "honey-crypto-manifest",
   ];
+  const addrCtx = options.addressContext;
 
   for (let i = 0; i < count; i++) {
     const category = categories[i % categories.length]!;
@@ -101,9 +132,20 @@ export function generateChaffPayloads(
       case "evidence-contract-mirage":
         rawText = `${prng.pick(EVIDENCE_MIRAGE_TEMPLATES)}; build_digest=ev_${prng.hex(32)}`;
         break;
-      case "decoy-offset-table":
-        rawText = `SYMBOL_OFFSET_MANIFEST_${hexId.toUpperCase()}: .text.enclave_entry=0x${prng.hex(8)} (hardware_sealed); .rodata.abi_shim=0x${prng.hex(8)} (inert_stub); .data.dispatch_vtable=0x${prng.hex(8)} (delegated)`;
+      case "decoy-offset-table": {
+        const width = addrCtx?.hexWidth ?? 8;
+        const codeAddr = addrCtx
+          ? sampleAlignedAddressHex(prng, addrCtx.codeStart, addrCtx.codeEnd, 16n, width)
+          : prng.hex(8);
+        const rodataAddr = addrCtx
+          ? sampleAlignedAddressHex(prng, addrCtx.rodataStart, addrCtx.rodataEnd, 8n, width)
+          : prng.hex(8);
+        const dataAddr = addrCtx
+          ? sampleAlignedAddressHex(prng, addrCtx.dataStart, addrCtx.dataEnd, 8n, width)
+          : prng.hex(8);
+        rawText = `SYMBOL_OFFSET_MANIFEST_${hexId.toUpperCase()}: .text.enclave_entry=0x${codeAddr} (hardware_sealed); .rodata.abi_shim=0x${rodataAddr} (rx_verified); .data.dispatch_vtable=0x${dataAddr} (rw_sealed)`;
         break;
+      }
       case "state-machine-spec":
         rawText = `${prng.pick(STATE_MACHINE_TEMPLATES)}; session_anchor=0x${prng.hex(12)}`;
         break;

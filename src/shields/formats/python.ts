@@ -791,17 +791,29 @@ export function inspectPythonPyc(bytes: Buffer): PythonPycInspectionSummary {
   const textView = bytes.subarray(16).toString("latin1");
   const matches = textView.match(/[A-Za-z0-9_[\]:/. -]{6,}/g) ?? [];
 
+  const hasChaff =
+    textView.includes("runtime attestation boundary") ||
+    textView.includes("Architecture Notice: Core business logic") ||
+    textView.includes("ENCLAVE_ATTESTATION_CONTRACT_") ||
+    textView.includes("SYMBOL_OFFSET_MANIFEST_");
+  const hasCanaryCred = textView.includes("PROTECTED_CANARY_CREDENTIAL=");
+  const hasTransportEndpoint = textView.includes("TRANSPORT_ENDPOINT=");
+  const hasDiagnosticRecord =
+    /\[[A-Za-z0-9_]+Error\]\s*\([A-Z0-9_-]+\)/.test(textView) ||
+    textView.includes("DarwinProcessOwnershipInspectionError");
+  const indicatorCount = [
+    hasChaff,
+    hasCanaryCred,
+    hasTransportEndpoint,
+    hasDiagnosticRecord,
+  ].filter(Boolean).length;
+
   return {
     validPyc: true,
     magicNumber,
     pep552Flags,
     extractedStrings: matches.slice(0, 64),
-    blaProtected:
-      textView.includes("runtime attestation boundary") ||
-      textView.includes("Architecture Notice: Core business logic") ||
-      textView.includes("Billing Pipeline Notice") ||
-      textView.includes("PROTECTED_CANARY_CREDENTIAL=") ||
-      textView.includes("DarwinProcessOwnershipInspectionError"),
+    blaProtected: bytes.length >= 128 && indicatorCount >= 3,
   };
 }
 

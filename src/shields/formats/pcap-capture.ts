@@ -11,9 +11,11 @@ const TSHARK_JSON_EXPANSION = 8;
 
 export interface PcapInspection {
   readonly validMagic: boolean;
+  readonly exactFraming: boolean;
   readonly versionMajor: number;
   readonly versionMinor: number;
   readonly packetCount: number;
+  readonly decoyPacketCount: number;
   readonly blaProtected: boolean;
 }
 
@@ -138,6 +140,9 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
   let versionMajor = 0;
   let versionMinor = 0;
   let packetCount = 0;
+  let decoyPacketCount = 0;
+  let exactFraming = false;
+  const marker = Buffer.from("[BLA-PCAP-SHIELD]", "utf8");
   if (validMagic && bytes.length >= 24) {
     const le =
       bytes.readUInt32LE(0) === PCAP_MAGIC_LE ||
@@ -145,20 +150,32 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
     versionMajor = le ? bytes.readUInt16LE(4) : bytes.readUInt16BE(4);
     versionMinor = le ? bytes.readUInt16LE(6) : bytes.readUInt16BE(6);
     let at = 24;
+    let truncated = false;
     while (at + 16 <= bytes.length) {
       const incl = le ? bytes.readUInt32LE(at + 8) : bytes.readUInt32BE(at + 8);
-      at += 16 + incl;
-      if (at > bytes.length) break;
+      const dataStart = at + 16;
+      const nextAt = dataStart + incl;
+      if (nextAt > bytes.length) {
+        truncated = true;
+        break;
+      }
+      if (bytes.subarray(dataStart, nextAt).includes(marker)) {
+        decoyPacketCount++;
+      }
+      at = nextAt;
       packetCount++;
       if (packetCount > 100_000) break;
     }
+    exactFraming = !truncated && at === bytes.length;
   }
   return {
     validMagic,
+    exactFraming,
     versionMajor,
     versionMinor,
     packetCount,
-    blaProtected: bytes.includes(Buffer.from("[BLA-PCAP-SHIELD]", "utf8")),
+    decoyPacketCount,
+    blaProtected: validMagic && exactFraming && decoyPacketCount >= 8,
   };
 }
 

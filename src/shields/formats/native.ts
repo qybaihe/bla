@@ -6,7 +6,10 @@ import { deflateSync } from "node:zlib";
 import { REA_INTERNAL_LIMITS } from "../../identity.js";
 import { SeededPrng } from "../../core/prng.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../../core/types.js";
-import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import {
+  generateChaffPayloads,
+  type ChaffAddressContext,
+} from "../chaff/chaff-generator.js";
 import { generateCanaryHoneypot } from "../deception/canary-honeypot.js";
 import { generateSystemDiagnosticDecoy } from "../deception/system-diagnostic-decoy.js";
 import { generateCognitiveArmorTrigger } from "../deception/cognitive-armor-trigger.js";
@@ -339,6 +342,87 @@ export function validateElf64Layout(bytes: Buffer): Elf64LayoutSummary {
   };
 }
 
+/**
+ * Validates either ELF64 or ELF32 little-endian layout so 32-bit x86/ARM ELF
+ * binaries validate cleanly instead of failing on `EI_CLASS !== 2`.
+ */
+export function validateElfLayout(bytes: Buffer): {
+  readonly bits: 32 | 64;
+  readonly elf64?: Elf64LayoutSummary;
+} {
+  if (
+    bytes.length < 52 ||
+    bytes[0] !== 0x7f ||
+    bytes[1] !== 0x45 ||
+    bytes[2] !== 0x4c ||
+    bytes[3] !== 0x46
+  ) {
+    throw new InvalidNativeBinaryError(
+      "Invalid or truncated ELF header (minimum 52 bytes required)",
+    );
+  }
+  if (bytes[4] === 2) {
+    return { bits: 64, elf64: validateElf64Layout(bytes) };
+  }
+  if (bytes[4] !== 1 || bytes[5] !== 1) {
+    throw new InvalidNativeBinaryError(
+      "Unsupported ELF class or endianness (expected little-endian ELF32 or ELF64)",
+    );
+  }
+  const phoff = bytes.readUInt32LE(28);
+  const shoff = bytes.readUInt32LE(32);
+  const ehsize = bytes.readUInt16LE(40);
+  const phentsize = bytes.readUInt16LE(42);
+  const phnum = bytes.readUInt16LE(44);
+  const shentsize = bytes.readUInt16LE(46);
+  const shnum = bytes.readUInt16LE(48);
+  const shstrndx = bytes.readUInt16LE(50);
+
+  if (ehsize !== 0 && (ehsize < 52 || ehsize > bytes.length)) {
+    throw new InvalidNativeBinaryError(`Invalid ELF32 e_ehsize: ${ehsize}`);
+  }
+  if (phnum > 0) {
+    if (phentsize < 32 || phoff < 52 || phoff + phnum * phentsize > bytes.length) {
+      throw new InvalidNativeBinaryError(
+        "ELF32 program header table out of bounds or malformed",
+      );
+    }
+    for (let i = 0; i < phnum; i++) {
+      const ph = phoff + i * phentsize;
+      const pOffset = bytes.readUInt32LE(ph + 4);
+      const pFilesz = bytes.readUInt32LE(ph + 16);
+      const pMemsz = bytes.readUInt32LE(ph + 20);
+      if (pFilesz > pMemsz || pOffset + pFilesz > bytes.length) {
+        throw new InvalidNativeBinaryError(
+          `ELF32 program header ${i} out of file bounds or filesz > memsz`,
+        );
+      }
+    }
+  }
+  if (shnum > 0) {
+    if (shentsize < 40 || shoff < 52 || shoff + shnum * shentsize > bytes.length) {
+      throw new InvalidNativeBinaryError(
+        "ELF32 section header table out of bounds or malformed",
+      );
+    }
+    if (shstrndx !== 0 && shstrndx >= shnum) {
+      throw new InvalidNativeBinaryError(
+        `ELF32 e_shstrndx (${shstrndx}) out of bounds for e_shnum (${shnum})`,
+      );
+    }
+    for (let s = 0; s < shnum; s++) {
+      const sh = shoff + s * shentsize;
+      const shType = bytes.readUInt32LE(sh + 4);
+      const shOffset = bytes.readUInt32LE(sh + 16);
+      const shSize = bytes.readUInt32LE(sh + 20);
+      if (shType !== 0 && shType !== 8 && shSize > 0 && shOffset + shSize > bytes.length) {
+        throw new InvalidNativeBinaryError(`ELF32 section ${s} exceeds file bounds`);
+      }
+    }
+  }
+  return { bits: 32 };
+}
+
 export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
   let format: NativeBinaryInspection["format"] = "unknown";
   let bits: 32 | 64 = 64;
@@ -460,6 +544,36 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
       }
     } catch {
       // Truncated / synthetic ELF headers fall back to unmapped inspection
+    }
+  } else if (format === "native-elf" && bits === 32 && bytes.length >= 52) {
+    try {
+      validateElfLayout(bytes);
+      const phoff = bytes.readUInt32LE(28);
+      const phentsize = bytes.readUInt16LE(42);
+      const phnum = bytes.readUInt16LE(44);
+      const itaniumMatches = new Set<string>();
+      for (let i = 0; i < phnum; i++) {
+        const ph = phoff + i * phentsize;
+        if (ph + 32 > bytes.length) break;
+        const pType = bytes.readUInt32LE(ph);
+        const pOffset = bytes.readUInt32LE(ph + 4);
+        const pFilesz = bytes.readUInt32LE(ph + 16);
+        if (pType === 1 && pFilesz > 0 && pOffset + pFilesz <= bytes.length) {
+          const sliceLatin1 = bytes
+            .subarray(pOffset, pOffset + pFilesz)
+            .toString("latin1");
+          const zts = sliceLatin1.match(/_ZTS\d+[A-Za-z0-9_]+/g);
+          if (zts) {
+            for (const m of zts) itaniumMatches.add(m);
+          }
+          if (sliceLatin1.includes("_ZTS31EnclaveRing0AttestationVerifier")) {
+            elfMappedSectionInjected = true;
+          }
+        }
+      }
+      elfItaniumRttiClassesCount = itaniumMatches.size;
+    } catch {
+      // Truncated / synthetic ELF32 headers fall back to unmapped inspection
     }
   }
   const nativeMappedSectionInjected = Boolean(
@@ -768,6 +882,142 @@ function deriveOddMixPrime32(prng: SeededPrng): number {
  * POSIX OpenSSL/PKCS#11/SGX dynamic dispatch strings for mapped ELF64 `.enclave`
  * segments (Issue #176).
  */
+const ISLAND_STRIDE = 64;
+
+function writeInt32BytesLE(val: number): [number, number, number, number] {
+  const u = val >>> 0;
+  return [u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, (u >>> 24) & 0xff];
+}
+
+function encodeArm64AdrX1(deltaBytes: number): number {
+  const immlo = deltaBytes & 0x3;
+  const immhi = (deltaBytes >> 2) & 0x7ffff;
+  return (0x10000001 | (immlo << 29) | (immhi << 5)) >>> 0;
+}
+
+function encodeArm64Bl(deltaBytes: number): number {
+  const imm26 = (deltaBytes >> 2) & 0x03ffffff;
+  return (0x94000000 | imm26) >>> 0;
+}
+
+function buildArchMatchedIsland64(params: {
+  readonly index: number;
+  readonly fnCount: number;
+  readonly arch: "x64" | "x86" | "arm64";
+  readonly abi: "windows" | "sysv";
+  readonly dataTargetOff: number;
+  readonly prng: SeededPrng;
+}): Buffer {
+  const { index, fnCount, arch, abi, dataTargetOff, prng } = params;
+  const islandOff = index * ISLAND_STRIDE;
+  const hasCallEdge = index < fnCount - 2;
+  const calleeIdx = hasCallEdge
+    ? Math.min(fnCount - 1, index + 1 + prng.nextInt(0, 1))
+    : index;
+
+  if (arch === "arm64") {
+    const island = Buffer.alloc(ISLAND_STRIDE, 0);
+    const imm16 = prng.nextInt(1, 0xfffe) & 0xffff;
+    const adrDelta = dataTargetOff - (islandOff + 0x10);
+    const blDelta = calleeIdx * ISLAND_STRIDE - (islandOff + 0x28);
+    const insns = [
+      0xd503245f, // bti c
+      0xa9be7bfd, // stp x29, x30, [sp, #-32]!
+      0x910003fd, // mov x29, sp
+      0xf9000fa0, // str x0, [x29, #24]
+      encodeArm64AdrX1(adrDelta), // adr x1, <rtti/dispatch target> (real DATA XREF)
+      0x39400029, // ldrb w9, [x1]
+      0xb9401ba8, // ldr w8, [x29, #24]
+      0x4a090100, // eor w0, w8, w9
+      (0x52800009 | (imm16 << 5)) >>> 0, // mov w9, #imm16
+      0x4a090000, // eor w0, w0, w9
+      hasCallEdge ? encodeArm64Bl(blDelta) : 0xd503201f, // bl <callee> or nop
+      0xa8c27bfd, // ldp x29, x30, [sp], #32
+      0xd65f03c0, // ret
+      0xd503201f, // nop
+      0xd503201f, // nop
+      0xd503201f, // nop
+    ];
+    for (let k = 0; k < insns.length; k++) {
+      island.writeUInt32LE(insns[k]!, k * 4);
+    }
+    return island;
+  }
+
+  if (arch === "x86") {
+    // True 32-bit i386 cdecl ABI (zero 0x48 REX.W `dec eax` giveaways!)
+    const island = Buffer.alloc(ISLAND_STRIDE, 0xcc);
+    const imm = (0x9e3779b1 ^ prng.nextUint32()) >>> 0;
+    const mix = deriveOddMixPrime32(prng);
+    // `call $+5; pop edx; lea edx, [edx + disp32]` — PIC base is islandOff + 0x0e
+    const leaDisp = dataTargetOff - (islandOff + 0x0e);
+    const callDisp = calleeIdx * ISLAND_STRIDE - (islandOff + 0x25);
+    const middleBytes = hasCallEdge
+      ? [
+          0x89, 0x04, 0x24, // mov [esp], eax (cdecl arg0)
+          0xe8, ...writeInt32BytesLE(callDisp), // call callee (real intra-island CALL edge)
+        ]
+      : [
+          0x69, 0xc0, ...writeInt32BytesLE(mix), // imul eax, eax, mix
+          0x66, 0x90, // 2-byte nop
+        ];
+    const frameBytes = Buffer.from([
+      0x55, // push ebp
+      0x89, 0xe5, // mov ebp, esp
+      0x83, 0xec, 0x18, // sub esp, 0x18 (16-byte aligned stack)
+      0x8b, 0x45, 0x08, // mov eax, [ebp + 8]
+      0xe8, 0x00, 0x00, 0x00, 0x00, // call $+5
+      0x5a, // pop edx
+      0x8d, 0x92, ...writeInt32BytesLE(leaDisp), // lea edx, [edx + disp32] (PIC DATA XREF)
+      0x89, 0x55, 0xf8, // mov [ebp - 8], edx
+      0x35, ...writeInt32BytesLE(imm), // xor eax, imm32
+      ...middleBytes,
+      0x0f, 0xb6, 0x0a, // movzx ecx, byte ptr [edx]
+      0x31, 0xc8, // xor eax, ecx
+      0x83, 0xc4, 0x18, // add esp, 0x18
+      0x5d, // pop ebp
+      0xc3, // ret
+    ]);
+    frameBytes.copy(island, 0);
+    return island;
+  }
+
+  // 64-bit x86-64 (Win64 / System V AMD64) with CET endbr64, RIP-relative LEA DATA XREF, and CALL DAG
+  const island = Buffer.alloc(ISLAND_STRIDE, 0xcc);
+  const imm = (0x9e3779b1 ^ prng.nextUint32()) >>> 0;
+  const mix = deriveOddMixPrime32(prng);
+  const leaDisp = dataTargetOff - (islandOff + 0x17);
+  const callDisp = calleeIdx * ISLAND_STRIDE - (islandOff + 0x29);
+  const saveArg0 = abi === "windows" ? [0x48, 0x89, 0x4d, 0xf8] : [0x48, 0x89, 0x7d, 0xf8];
+  const passArg0 = abi === "windows" ? [0x89, 0xc1] : [0x89, 0xc7];
+  const middleBytes = hasCallEdge
+    ? [
+        ...passArg0, // mov ecx/edi, eax
+        0xe8, ...writeInt32BytesLE(callDisp), // call callee (real intra-section CALL DAG)
+      ]
+    : [
+        0x69, 0xc0, ...writeInt32BytesLE(mix), // imul eax, eax, mix
+        0x90, // nop
+      ];
+  const frameBytes = Buffer.from([
+    0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+    0x55, // push rbp
+    0x48, 0x89, 0xe5, // mov rbp, rsp
+    0x48, 0x83, 0xec, 0x30, // sub rsp, 0x30 (16-byte aligned + Win64 shadow space)
+    ...saveArg0, // mov [rbp - 8], rcx / rdi
+    0x48, 0x8d, 0x15, ...writeInt32BytesLE(leaDisp), // lea rdx, [rip + disp32] (real DATA XREF)
+    0x0f, 0xb6, 0x02, // movzx eax, byte ptr [rdx]
+    0x33, 0x45, 0xf8, // xor eax, dword ptr [rbp - 8]
+    0x35, ...writeInt32BytesLE(imm), // xor eax, imm32
+    ...middleBytes,
+    0x48, 0x83, 0xc4, 0x30, // add rsp, 0x30
+    0x5d, // pop rbp
+    0xc3, // ret
+  ]);
+  frameBytes.copy(island, 0);
+  return island;
+}
+
 export function buildLinuxElfDecoyCodeAndRttiPayload(
   prng: SeededPrng,
   intensity: ProtectionIntensity,
@@ -786,54 +1036,6 @@ export function buildLinuxElfDecoyCodeAndRttiPayload(
           ? 24
           : 32;
 
-  const codeIslands: Buffer[] = [];
-  for (let i = 0; i < fnCount; i++) {
-    if (machine === 0xb7) {
-      const island = Buffer.alloc(48, 0);
-      const imm16 = prng.nextInt(1, 0xfffe) & 0xffff;
-      const insns = [
-        0xd503245f, // bti c
-        0xa9be7bfd, // stp x29, x30, [sp, #-32]!
-        0x910003fd, // mov x29, sp
-        0xf9000fa0, // str x0, [x29, #24]
-        0xb9401ba8, // ldr w8, [x29, #24]
-        (0x52800009 | (imm16 << 5)) >>> 0, // mov w9, #imm16
-        0x4a090100, // eor w0, w8, w9
-        0xa8c27bfd, // ldp x29, x30, [sp], #32
-        0xd65f03c0, // ret
-        0xd503201f, // nop
-        0xd503201f, // nop
-        0xd503201f, // nop
-      ];
-      for (let k = 0; k < insns.length; k++) {
-        island.writeUInt32LE(insns[k]!, k * 4);
-      }
-      codeIslands.push(island);
-    } else {
-      const island = Buffer.alloc(48, 0xcc);
-      const imm = prng.nextUint32();
-      const mix = deriveOddMixPrime32(prng);
-      const frameBytes = Buffer.from([
-        0xf3, 0x0f, 0x1e, 0xfa, // endbr64
-        0x55, // push rbp
-        0x48, 0x89, 0xe5, // mov rbp, rsp
-        0x48, 0x83, 0xec, 0x20, // sub rsp, 0x20
-        0x48, 0x89, 0x7d, 0xf8, // mov [rbp-0x8], rdi
-        0x48, 0x89, 0x75, 0xf0, // mov [rbp-0x10], rsi
-        0x8b, 0x45, 0xf8, // mov eax, [rbp-0x8]
-        0x35, imm & 0xff, (imm >>> 8) & 0xff, (imm >>> 16) & 0xff, (imm >>> 24) & 0xff, // xor eax, imm32
-        0x85, 0xc0, // test eax, eax
-        0x74, 0x06, // jz +6
-        0x69, 0xc0, mix & 0xff, (mix >>> 8) & 0xff, (mix >>> 16) & 0xff, (mix >>> 24) & 0xff, // imul eax, eax, mix
-        0x48, 0x83, 0xc4, 0x20, // add rsp, 0x20
-        0x5d, // pop rbp
-        0xc3, // ret
-      ]);
-      frameBytes.copy(island, 0);
-      codeIslands.push(island);
-    }
-  }
-
   const itaniumRttiSymbols = [
     "_ZTS31EnclaveRing0AttestationVerifier",
     "_ZTS28Tpm2Pcr0MonotonicQuoteSealer",
@@ -845,18 +1047,44 @@ export function buildLinuxElfDecoyCodeAndRttiPayload(
     "_ZTS29OpenSslEvpSealEnvelopeAdapter",
   ];
 
-  const posixDispatchStrings = [
-    "libcrypto.so.3\0EVP_DecryptInit_ex2\0EVP_DecryptUpdate\0EVP_DecryptFinal_ex\0EVP_PKEY_derive\0",
-    "libpcsclite.so.1\0C_Initialize\0C_OpenSession\0C_Decrypt\0C_SignFinal\0",
-    "libsgx_dcap_ql.so.1\0sgx_qe_get_quote\0sgx_tvl_verify_qve_report_and_identity\0",
-    "libc.so.6\0dlopen\0dlsym\0dl_iterate_phdr\0prctl\0",
-  ].join("");
+  const posixDispatchEntries = [
+    "libcrypto.so.3\0EVP_DecryptInit_ex2\0EVP_DecryptUpdate\0EVP_DecryptFinal_ex\0EVP_PKEY_derive",
+    "libpcsclite.so.1\0C_Initialize\0C_OpenSession\0C_Decrypt\0C_SignFinal",
+    "libsgx_dcap_ql.so.1\0sgx_qe_get_quote\0sgx_tvl_verify_qve_report_and_identity",
+    "libc.so.6\0dlopen\0dlsym\0dl_iterate_phdr\0prctl",
+  ];
 
   const rttiPaddingAlign = Buffer.alloc(16, 0);
-  const rttiBuf = Buffer.from(
-    `${itaniumRttiSymbols.join("\0")}\0${posixDispatchStrings}`,
-    "latin1",
-  );
+  const dataStartOff = fnCount * ISLAND_STRIDE + rttiPaddingAlign.length;
+  const allStrings = [...itaniumRttiSymbols, ...posixDispatchEntries];
+  const dataOffsets: number[] = [];
+  const dataChunks: Buffer[] = [];
+  let runningOff = dataStartOff;
+  for (const s of allStrings) {
+    dataOffsets.push(runningOff);
+    const b = Buffer.from(`${s}\0`, "latin1");
+    dataChunks.push(b);
+    runningOff += b.length;
+  }
+  const rttiBuf = Buffer.concat(dataChunks);
+  const arch: "x64" | "x86" | "arm64" =
+    machine === 0xb7 ? "arm64" : machine === 0x03 ? "x86" : "x64";
+
+  const codeIslands: Buffer[] = [];
+  for (let i = 0; i < fnCount; i++) {
+    const dataTargetOff = dataOffsets[i % dataOffsets.length]!;
+    codeIslands.push(
+      buildArchMatchedIsland64({
+        index: i,
+        fnCount,
+        arch,
+        abi: "sysv",
+        dataTargetOff,
+        prng,
+      }),
+    );
+  }
+
   const tailPadLen = (16 - ((rttiBuf.length + rttiPaddingAlign.length) % 16)) % 16;
 
   return {
@@ -1084,13 +1312,288 @@ function injectMappedElf64DecoySegment(
 }
 
 /**
- * Generates a realistic Windows x86-64 machine-code function island block +
+ * Appends a mapped `PF_R | PF_X` `PT_LOAD` + `.enclave` `SHT_PROGBITS` section to a
+ * 32-bit `ELFCLASS32` `ET_DYN` shared library (`.so`, x86 `0x03` / ARM32 `0x28`).
+ */
+function injectMappedElf32DecoySegment(
+  working: Buffer,
+  elfPayload: Buffer,
+): {
+  readonly buffer: Buffer;
+  readonly segmentAdded: boolean;
+  readonly sectionAdded: boolean;
+} {
+  if (working.length < 52 || working[4] !== 1 || elfPayload.length === 0) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+  const eType = working.readUInt16LE(16);
+  const eMachine = working.readUInt16LE(18);
+  const phoff = working.readUInt32LE(28);
+  const shoff = working.readUInt32LE(32);
+  const phentsize = working.readUInt16LE(42);
+  const phnum = working.readUInt16LE(44);
+  const shentsize = working.readUInt16LE(46);
+  const shnum = working.readUInt16LE(48);
+  const shstrndx = working.readUInt16LE(50);
+
+  if (
+    eType !== 3 ||
+    (eMachine !== 0x03 && eMachine !== 0x28) ||
+    phentsize !== 32 ||
+    phnum < 2 ||
+    phnum >= 512 ||
+    phoff + phnum * 32 > working.length ||
+    working.includes(Buffer.from("_ZTS31EnclaveRing0AttestationVerifier", "ascii"))
+  ) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  let hasPtDynamic = false;
+  let hasPtInterp = false;
+  let maxLoadVaddrEnd = 0;
+  let lastLoadVaddr = -1;
+  for (let i = 0; i < phnum; i++) {
+    const ph = phoff + i * 32;
+    const pType = working.readUInt32LE(ph);
+    const pVaddr = working.readUInt32LE(ph + 8);
+    const pMemsz = working.readUInt32LE(ph + 20);
+    if (pType === 2) hasPtDynamic = true;
+    if (pType === 3) hasPtInterp = true;
+    if (pType === 1) {
+      if (pVaddr < lastLoadVaddr) {
+        return { buffer: working, segmentAdded: false, sectionAdded: false };
+      }
+      lastLoadVaddr = pVaddr;
+      const end = pVaddr + pMemsz;
+      if (end > maxLoadVaddrEnd) maxLoadVaddrEnd = end;
+    }
+  }
+  if (!hasPtDynamic || hasPtInterp || maxLoadVaddrEnd === 0) {
+    return { buffer: working, segmentAdded: false, sectionAdded: false };
+  }
+
+  let canExtendShdr = false;
+  let origShstrBytes: Buffer = Buffer.alloc(0);
+  if (
+    shnum > 0 &&
+    shentsize === 40 &&
+    shstrndx > 0 &&
+    shstrndx < shnum &&
+    shoff + shnum * 40 <= working.length
+  ) {
+    const shstrOff = shoff + shstrndx * 40;
+    const sType = working.readUInt32LE(shstrOff + 4);
+    const sFlags = working.readUInt32LE(shstrOff + 8);
+    const sFileOff = working.readUInt32LE(shstrOff + 16);
+    const sSize = working.readUInt32LE(shstrOff + 20);
+    if (sType === 3 && (sFlags & 2) === 0 && sSize > 0 && sFileOff + sSize <= working.length) {
+      origShstrBytes = working.subarray(sFileOff, sFileOff + sSize);
+      if (!origShstrBytes.includes(Buffer.from(".enclave\0", "ascii"))) {
+        canExtendShdr = true;
+      }
+    }
+  }
+
+  const pageAlign = 0x1000;
+  const newSegOffset = alignUpU32(working.length, pageAlign);
+  const newSegVaddr = alignUpU32(maxLoadVaddrEnd, pageAlign);
+  const preSegPad = Buffer.alloc(newSegOffset - working.length, 0);
+
+  const newPhnum = phnum + 1;
+  const newPhTableBytes = newPhnum * 32;
+  const enclaveRelOff = alignUpU32(newPhTableBytes, 16);
+  const interPhEnclavePad = Buffer.alloc(enclaveRelOff - newPhTableBytes, 0);
+  const enclaveOffset = newSegOffset + enclaveRelOff;
+  const enclaveVaddr = newSegVaddr + enclaveRelOff;
+  const mappedSegmentBytes = enclaveRelOff + elfPayload.length;
+
+  const newPhTable = Buffer.alloc(newPhTableBytes, 0);
+  working.copy(newPhTable, 0, phoff, phoff + phnum * 32);
+  for (let i = 0; i < phnum; i++) {
+    const off = i * 32;
+    if (newPhTable.readUInt32LE(off) === 6) {
+      newPhTable.writeUInt32LE(newSegOffset, off + 4);
+      newPhTable.writeUInt32LE(newSegVaddr, off + 8);
+      newPhTable.writeUInt32LE(newSegVaddr, off + 12);
+      newPhTable.writeUInt32LE(newPhTableBytes, off + 16);
+      newPhTable.writeUInt32LE(newPhTableBytes, off + 20);
+    }
+  }
+  const lastPhOff = phnum * 32;
+  newPhTable.writeUInt32LE(1, lastPhOff + 0); // PT_LOAD
+  newPhTable.writeUInt32LE(newSegOffset, lastPhOff + 4);
+  newPhTable.writeUInt32LE(newSegVaddr, lastPhOff + 8);
+  newPhTable.writeUInt32LE(newSegVaddr, lastPhOff + 12);
+  newPhTable.writeUInt32LE(mappedSegmentBytes, lastPhOff + 16);
+  newPhTable.writeUInt32LE(mappedSegmentBytes, lastPhOff + 20);
+  newPhTable.writeUInt32LE(5, lastPhOff + 24); // PF_R | PF_X
+  newPhTable.writeUInt32LE(pageAlign, lastPhOff + 28);
+
+  const chunks: Buffer[] = [
+    Buffer.from(working),
+    preSegPad,
+    newPhTable,
+    interPhEnclavePad,
+    elfPayload,
+  ];
+  let cursor = newSegOffset + mappedSegmentBytes;
+  let newShoff = shoff;
+  let newShnum = shnum;
+
+  if (canExtendShdr) {
+    const enclaveNameOffset = origShstrBytes.length;
+    const extShstr = Buffer.concat([origShstrBytes, Buffer.from(".enclave\0", "ascii")]);
+    const shstrPadLen = alignUpU32(cursor, 16) - cursor;
+    if (shstrPadLen > 0) {
+      chunks.push(Buffer.alloc(shstrPadLen, 0));
+      cursor += shstrPadLen;
+    }
+    const extShstrOffset = cursor;
+    chunks.push(extShstr);
+    cursor += extShstr.length;
+
+    const shTablePadLen = alignUpU32(cursor, 16) - cursor;
+    if (shTablePadLen > 0) {
+      chunks.push(Buffer.alloc(shTablePadLen, 0));
+      cursor += shTablePadLen;
+    }
+    newShoff = cursor;
+    newShnum = shnum + 1;
+    const newShTable = Buffer.alloc(newShnum * 40, 0);
+    working.copy(newShTable, 0, shoff, shoff + shnum * 40);
+
+    const shstrEntryOff = shstrndx * 40;
+    newShTable.writeUInt32LE(extShstrOffset, shstrEntryOff + 16);
+    newShTable.writeUInt32LE(extShstr.length, shstrEntryOff + 20);
+
+    const encSecOff = shnum * 40;
+    newShTable.writeUInt32LE(enclaveNameOffset, encSecOff + 0);
+    newShTable.writeUInt32LE(1, encSecOff + 4); // SHT_PROGBITS
+    newShTable.writeUInt32LE(6, encSecOff + 8); // SHF_ALLOC | SHF_EXECINSTR
+    newShTable.writeUInt32LE(enclaveVaddr, encSecOff + 12);
+    newShTable.writeUInt32LE(enclaveOffset, encSecOff + 16);
+    newShTable.writeUInt32LE(elfPayload.length, encSecOff + 20);
+    newShTable.writeUInt32LE(16, encSecOff + 32);
+
+    chunks.push(newShTable);
+    cursor += newShTable.length;
+  }
+
+  const out = Buffer.concat(chunks);
+  out.writeUInt32LE(newSegOffset, 28); // e_phoff
+  out.writeUInt16LE(newPhnum, 44); // e_phnum
+  if (canExtendShdr) {
+    out.writeUInt32LE(newShoff, 32); // e_shoff
+    out.writeUInt16LE(newShnum, 48); // e_shnum
+  }
+  return { buffer: out, segmentAdded: true, sectionAdded: canExtendShdr };
+}
+
+export interface PeHeaderInspection {
+  readonly machine: number;
+  readonly optMagic: number;
+  readonly imageBase: bigint;
+  readonly sectionAlignment: number;
+  readonly nextSectionRva: number;
+  readonly addressContext: ChaffAddressContext;
+}
+
+function inspectPeHeaderForDecoys(bytes: Buffer): PeHeaderInspection | undefined {
+  if (bytes.length < 0x100 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
+    return undefined;
+  }
+  const lfanew = bytes.readUInt32LE(0x3c);
+  if (
+    lfanew < 0x40 ||
+    lfanew + 24 > bytes.length ||
+    bytes.readUInt32LE(lfanew) !== 0x00004550
+  ) {
+    return undefined;
+  }
+  const machine = bytes.readUInt16LE(lfanew + 4);
+  const numSections = bytes.readUInt16LE(lfanew + 6);
+  const sizeOfOptionalHeader = bytes.readUInt16LE(lfanew + 20);
+  const optOff = lfanew + 24;
+  const secTableOff = optOff + sizeOfOptionalHeader;
+  if (
+    numSections === 0 ||
+    numSections > 64 ||
+    sizeOfOptionalHeader < 96 ||
+    secTableOff + numSections * 40 > bytes.length
+  ) {
+    return undefined;
+  }
+  const optMagic = bytes.readUInt16LE(optOff);
+  if (optMagic !== 0x10b && optMagic !== 0x20b) {
+    return undefined;
+  }
+  const imageBase =
+    optMagic === 0x20b
+      ? bytes.readBigUInt64LE(optOff + 24)
+      : BigInt(bytes.readUInt32LE(optOff + 28));
+  const sectionAlignment = bytes.readUInt32LE(optOff + 32);
+  const sizeOfHeaders = bytes.readUInt32LE(optOff + 60);
+  const safeAlign = isPowerOfTwoU32(sectionAlignment) ? sectionAlignment : 0x1000;
+  let maxVirtualEnd = alignUpU32(sizeOfHeaders, safeAlign);
+  let codeStart = imageBase + 0x1000n;
+  let codeEnd = imageBase + 0x2000n;
+  let rodataStart = imageBase + 0x2000n;
+  let rodataEnd = imageBase + 0x3000n;
+  let dataStart = imageBase + 0x3000n;
+  let dataEnd = imageBase + 0x4000n;
+
+  for (let i = 0; i < numSections; i++) {
+    const shOff = secTableOff + i * 40;
+    const vSize = bytes.readUInt32LE(shOff + 8);
+    const vAddr = bytes.readUInt32LE(shOff + 12);
+    const rawSize = bytes.readUInt32LE(shOff + 16);
+    const chars = bytes.readUInt32LE(shOff + 36);
+    const span = Math.max(vSize, rawSize, 0x100);
+    const vEnd = alignUpU32(vAddr + span, safeAlign);
+    if (vEnd > maxVirtualEnd) maxVirtualEnd = vEnd;
+    const secStart = imageBase + BigInt(vAddr);
+    const secEnd = imageBase + BigInt(vAddr + span);
+    if ((chars & 0x20000020) !== 0) {
+      codeStart = secStart;
+      codeEnd = secEnd;
+    } else if ((chars & 0x80000000) !== 0) {
+      dataStart = secStart;
+      dataEnd = secEnd;
+    } else if ((chars & 0x40000000) !== 0) {
+      rodataStart = secStart;
+      rodataEnd = secEnd;
+    }
+  }
+
+  const enclaveStart = imageBase + BigInt(maxVirtualEnd);
+  const enclaveEnd = enclaveStart + 0x1000n;
+  return {
+    machine,
+    optMagic,
+    imageBase,
+    sectionAlignment: safeAlign,
+    nextSectionRva: maxVirtualEnd,
+    addressContext: {
+      codeStart: enclaveStart,
+      codeEnd: enclaveEnd,
+      rodataStart: rodataStart < enclaveEnd ? rodataStart : codeStart,
+      rodataEnd: rodataEnd > rodataStart ? rodataEnd : codeEnd,
+      dataStart,
+      dataEnd,
+      hexWidth: optMagic === 0x20b ? 12 : 8,
+    },
+  };
+}
+
+/**
+ * Generates architecture-matched Windows PE32 / PE32+ / ARM64 function islands +
  * MSVC C++ RTTI type descriptors + CodeView `RSDS` PDB debug records + Win32
  * BCrypt/NCrypt/DPAPI/WinHTTP dispatch symbols (Issue #157).
  */
 export function buildWindowsPeDecoyCodeAndRttiPayload(
   prng: SeededPrng,
   intensity: ProtectionIntensity,
+  machine: number = 0x8664,
 ): {
   readonly buffer: Buffer;
   readonly decoyFunctionIslandsCount: number;
@@ -1105,31 +1608,6 @@ export function buildWindowsPeDecoyCodeAndRttiPayload(
           ? 24
           : 32;
 
-  // 16-byte aligned x86-64 ABI function islands (`endbr64; push rbp; mov rbp, rsp; ...; pop rbp; ret; int3`)
-  const codeIslands: Buffer[] = [];
-  for (let i = 0; i < fnCount; i++) {
-    const island = Buffer.alloc(48, 0xcc);
-    const imm = (0x9e3779b1 ^ prng.nextUint32()) >>> 0;
-    const frameBytes = Buffer.from([
-      0xf3, 0x0f, 0x1e, 0xfa, // endbr64
-      0x55, // push rbp
-      0x48, 0x89, 0xe5, // mov rbp, rsp
-      0x48, 0x83, 0xec, 0x30, // sub rsp, 0x30
-      0x48, 0x89, 0x4d, 0xe8, // mov [rbp-0x18], rcx
-      0x48, 0x89, 0x55, 0xe0, // mov [rbp-0x20], rdx
-      0x8b, 0x45, 0xe8, // mov eax, [rbp-0x18]
-      0x35, imm & 0xff, (imm >>> 8) & 0xff, (imm >>> 16) & 0xff, (imm >>> 24) & 0xff, // xor eax, imm32
-      0x85, 0xc0, // test eax, eax
-      0x74, 0x06, // jz +6
-      0x69, 0xc0, 0x93, 0x01, 0x00, 0x01, // imul eax, eax, 0x01000193 (FNV prime)
-      0x48, 0x83, 0xc4, 0x30, // add rsp, 0x30
-      0x5d, // pop rbp
-      0xc3, // ret
-    ]);
-    frameBytes.copy(island, 0);
-    codeIslands.push(island);
-  }
-
   const msvcRttiDescriptors = [
     ".?AVEnclaveRing0Transport@sgx@security@@",
     ".?AVTpm2Pcr0MonotonicUnsealer@vault@kms@@",
@@ -1141,16 +1619,22 @@ export function buildWindowsPeDecoyCodeAndRttiPayload(
     ".?AVZeroKnowledgeSchnorrVerifier@attest@tee@@",
   ];
 
-  const win32ApiDispatchStrings = [
-    "bcrypt.dll\0BCryptOpenAlgorithmProvider\0BCryptGenerateSymmetricKey\0BCryptDecrypt\0BCryptDeriveKeyPBKDF2\0",
-    "ncrypt.dll\0NCryptOpenStorageProvider\0NCryptOpenKey\0NCryptUnprotectSecret\0NCryptSignHash\0",
-    "crypt32.dll\0CryptUnprotectData\0CertVerifyCertificateChainPolicy\0",
-    "winhttp.dll\0WinHttpOpen\0WinHttpConnect\0WinHttpOpenRequest\0WinHttpSendRequest\0WinHttpReceiveResponse\0",
-    "advapi32.dll\0RegOpenKeyExW\0RegQueryValueExW\0",
-    "kernel32.dll\0DeviceIoControl\0IsDebuggerPresent\0CheckRemoteDebuggerPresent\0",
-  ].join("");
+  const win32ApiEntries = [
+    "bcrypt.dll\0BCryptOpenAlgorithmProvider\0BCryptGenerateSymmetricKey\0BCryptDecrypt\0BCryptDeriveKeyPBKDF2",
+    "ncrypt.dll\0NCryptOpenStorageProvider\0NCryptOpenKey\0NCryptUnprotectSecret\0NCryptSignHash",
+    "crypt32.dll\0CryptUnprotectData\0CertVerifyCertificateChainPolicy",
+    "winhttp.dll\0WinHttpOpen\0WinHttpConnect\0WinHttpOpenRequest\0WinHttpSendRequest\0WinHttpReceiveResponse",
+    "advapi32.dll\0RegOpenKeyExW\0RegQueryValueExW",
+    "kernel32.dll\0DeviceIoControl\0IsDebuggerPresent\0CheckRemoteDebuggerPresent",
+  ];
 
-  // CodeView RSDS PDB debug directory record
+  const targetTriple =
+    machine === 0x014c
+      ? "i686-pc-windows-msvc"
+      : machine === 0xaa64
+        ? "aarch64-pc-windows-msvc"
+        : "x86_64-pc-windows-msvc";
+
   const rsdsHeader = Buffer.alloc(24);
   rsdsHeader.write("RSDS", 0, "ascii");
   for (let b = 4; b < 20; b++) {
@@ -1158,17 +1642,52 @@ export function buildWindowsPeDecoyCodeAndRttiPayload(
   }
   rsdsHeader.writeUInt32LE(1, 20); // age = 1
   const pdbPath = Buffer.from(
-    `C:\\build\\agent\\work\\enclave-ring0-runtime\\target\\x86_64-pc-windows-msvc\\release\\enclave_quorum_${prng.hex(4)}.pdb\0`,
+    `C:\\build\\agent\\work\\enclave-ring0-runtime\\target\\${targetTriple}\\release\\enclave_quorum_${prng.hex(4)}.pdb\0`,
     "ascii",
   );
+  const enclavePrefix = Buffer.from("\0.enclave\0", "latin1");
+  const preRttiBytes = rsdsHeader.length + pdbPath.length + enclavePrefix.length;
+  const rttiStartOff = fnCount * ISLAND_STRIDE + preRttiBytes;
 
-  const rttiBuf = Buffer.from(
-    `\0.enclave\0${msvcRttiDescriptors.join("\0")}\0${win32ApiDispatchStrings}`,
-    "latin1",
-  );
+  const allTargets = [...msvcRttiDescriptors, ...win32ApiEntries];
+  const dataOffsets: number[] = [];
+  const dataChunks: Buffer[] = [];
+  let runningOff = rttiStartOff;
+  for (const entry of allTargets) {
+    dataOffsets.push(runningOff);
+    const b = Buffer.from(`${entry}\0`, "latin1");
+    dataChunks.push(b);
+    runningOff += b.length;
+  }
+
+  const arch: "x64" | "x86" | "arm64" =
+    machine === 0x014c ? "x86" : machine === 0xaa64 ? "arm64" : "x64";
+  const codeIslands: Buffer[] = [];
+  for (let i = 0; i < fnCount; i++) {
+    const dataTargetOff = dataOffsets[i % dataOffsets.length]!;
+    codeIslands.push(
+      buildArchMatchedIsland64({
+        index: i,
+        fnCount,
+        arch,
+        abi: "windows",
+        dataTargetOff,
+        prng,
+      }),
+    );
+  }
+
+  const rawOut = Buffer.concat([
+    ...codeIslands,
+    rsdsHeader,
+    pdbPath,
+    enclavePrefix,
+    ...dataChunks,
+  ]);
+  const padLen = (16 - (rawOut.length % 16)) % 16;
 
   return {
-    buffer: Buffer.concat([...codeIslands, rsdsHeader, pdbPath, rttiBuf]),
+    buffer: padLen > 0 ? Buffer.concat([rawOut, Buffer.alloc(padLen, 0)]) : rawOut,
     decoyFunctionIslandsCount: fnCount,
     msvcRttiClassesCount: msvcRttiDescriptors.length,
   };
@@ -1230,10 +1749,11 @@ function injectMappedWindowsPeDecoySection(
   }
 
   const out = Buffer.from(working);
-  let slackPlanted = false;
   let minRawPtr = sizeOfHeaders > 0 ? sizeOfHeaders : out.length;
   let maxRawEnd = sizeOfHeaders;
   let maxVirtualEnd = alignUpU32(sizeOfHeaders, sectionAlignment);
+  let candidateSlackStart = -1;
+  let candidateSlackLen = 0;
 
   for (let i = 0; i < numSections; i++) {
     const shOff = secTableOff + i * 40;
@@ -1253,11 +1773,10 @@ function injectMappedWindowsPeDecoySection(
       if (rawEnd > maxRawEnd) {
         maxRawEnd = rawEnd;
       }
-      // Check for zero-padded alignment slack at the tail of this section
       if (
-        !slackPlanted &&
+        candidateSlackStart < 0 &&
         virtualSize > 0 &&
-        virtualSize + 64 <= sizeOfRawData
+        virtualSize + ISLAND_STRIDE <= sizeOfRawData
       ) {
         const slackStart = ptrToRawData + virtualSize;
         const slackLen = sizeOfRawData - virtualSize;
@@ -1269,9 +1788,8 @@ function injectMappedWindowsPeDecoySection(
           }
         }
         if (allZero) {
-          const toCopy = Math.min(slackLen, pePayload.length);
-          pePayload.copy(out, slackStart, 0, toCopy);
-          slackPlanted = true;
+          candidateSlackStart = slackStart;
+          candidateSlackLen = slackLen;
         }
       }
     }
@@ -1283,19 +1801,31 @@ function injectMappedWindowsPeDecoySection(
   }
 
   const newShOff = secTableOff + numSections * 40;
-  const headerSlotAvailable =
+  let headerSlotZero =
     newShOff + 40 <= sizeOfHeaders &&
     newShOff + 40 <= minRawPtr &&
     maxRawEnd === out.length;
-
-  if (!headerSlotAvailable) {
-    return { buffer: out, sectionAdded: false, slackPlanted };
+  if (headerSlotZero) {
+    for (let k = newShOff; k < newShOff + 40; k++) {
+      if (out[k] !== 0) {
+        headerSlotZero = false;
+        break;
+      }
+    }
   }
 
-  for (let k = newShOff; k < newShOff + 40; k++) {
-    if (out[k] !== 0) {
-      return { buffer: out, sectionAdded: false, slackPlanted };
+  if (!headerSlotZero) {
+    let slackPlanted = false;
+    if (candidateSlackStart >= 0 && candidateSlackLen >= ISLAND_STRIDE) {
+      const wholeIslandsBytes =
+        Math.floor(Math.min(candidateSlackLen, pePayload.length) / ISLAND_STRIDE) *
+        ISLAND_STRIDE;
+      if (wholeIslandsBytes >= ISLAND_STRIDE) {
+        pePayload.copy(out, candidateSlackStart, 0, wholeIslandsBytes);
+        slackPlanted = true;
+      }
     }
+    return { buffer: out, sectionAdded: false, slackPlanted };
   }
 
   const newRawPtr = alignUpU32(maxRawEnd, fileAlignment);
@@ -1310,8 +1840,8 @@ function injectMappedWindowsPeDecoySection(
   out.writeUInt32LE(maxVirtualEnd, newShOff + 12); // VirtualAddress
   out.writeUInt32LE(rawSize, newShOff + 16); // SizeOfRawData
   out.writeUInt32LE(newRawPtr, newShOff + 20); // PointerToRawData
-  // IMAGE_SCN_CNT_CODE | IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ (0x40000060)
-  out.writeUInt32LE(0x40000060, newShOff + 36);
+  // IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ (0x60000020, strict W^X R-X)
+  out.writeUInt32LE(0x60000020, newShOff + 36);
 
   // Update NumberOfSections (+1), SizeOfImage, and clear CheckSum (0)
   out.writeUInt16LE(numSections + 1, lfanew + 6);
@@ -1325,7 +1855,7 @@ function injectMappedWindowsPeDecoySection(
   return {
     buffer: Buffer.concat([out, prePad, secData]),
     sectionAdded: true,
-    slackPlanted: true,
+    slackPlanted: false,
   };
 }
 
@@ -1568,11 +2098,11 @@ export function protectNativeBinary(
     bytes[2] === 0x4c &&
     bytes[3] === 0x46;
 
-  const elfBefore = isElfMagic ? validateElf64Layout(bytes) : undefined;
+  const elfValidated = isElfMagic ? validateElfLayout(bytes) : undefined;
+  const elfBefore = elfValidated?.elf64;
 
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-native-shield-v1");
-  const chaffPayloads = generateChaffPayloads(prng, intensity);
 
   let workingInput = Buffer.from(bytes);
   let electronHardeningReport: ElectronHardeningReport | undefined;
@@ -1588,11 +2118,111 @@ export function protectNativeBinary(
       electronHardeningReport.mutatedFuses.length > 0 ? 1 : 0;
   }
 
+  const isPeMagic =
+    workingInput.length >= 2 &&
+    workingInput[0] === 0x4d &&
+    workingInput[1] === 0x5a;
+  const peHeaderInfo = isPeMagic ? inspectPeHeaderForDecoys(workingInput) : undefined;
+
+  let elfAddressContext: ChaffAddressContext | undefined;
+  if (elfBefore) {
+    const loads = elfBefore.programHeaders.filter((ph) => ph.type === 1);
+    if (loads.length > 0) {
+      const firstVaddr = loads[0]!.vaddr;
+      const lastEnd = loads.reduce(
+        (acc, ph) => (ph.vaddr + ph.memsz > acc ? ph.vaddr + ph.memsz : acc),
+        firstVaddr + 0x1000n,
+      );
+      elfAddressContext = {
+        codeStart: firstVaddr,
+        codeEnd: lastEnd,
+        rodataStart: firstVaddr,
+        rodataEnd: lastEnd,
+        dataStart: firstVaddr,
+        dataEnd: lastEnd,
+        hexWidth: 12,
+      };
+    }
+  }
+
+  const chaffAddrCtx = peHeaderInfo?.addressContext ?? elfAddressContext;
+  const chaffPayloads = generateChaffPayloads(
+    prng,
+    intensity,
+    chaffAddrCtx ? { addressContext: chaffAddrCtx } : {},
+  );
+
   const decoySentinelsInjected = 34;
   const decoySentinelsBuffer = buildDecoyElectronFuseSentinels(
     prng,
     decoySentinelsInjected,
   );
+
+  // 1. Generate 68 distinct `/rustc/<40-hex>/` strings (> REA's MAX_RUSTC_HASHES = 64!)
+  const rustcCount = 68;
+  const rustcLines: string[] = [];
+  for (let i = 0; i < rustcCount; i++) {
+    const hash = i.toString(16).padStart(8, "0") + prng.hex(32);
+    rustcLines.push(`/rustc/${hash}/library/core/src/enclave_guard.rs\0`);
+  }
+
+  // 2. Framed Go buildinfo + compact mapped Go plant (avoids 1.1 MB unmapped EOF bloat when .enclave is mapped)
+  const goBuildInfo = buildGoBuildInfoExhaustionPayload(prng, intensity, {
+    omitBanner: true,
+  });
+  const compactMappedGoFramed = buildGoBuildInfoExhaustionPayload(
+    prng,
+    "balanced",
+    { omitBanner: true },
+  ).buffer;
+
+  // 3. Architectural chaff + Canary + OS-matched System-Diagnostic Rabbit Holes
+  const chaffBlock = chaffPayloads
+    .map((p) => `${p.symbolName}: ${p.rawText}\0`)
+    .join("");
+  const canaryHoneypot = generateCanaryHoneypot(prng, intensity);
+  const diagPlatform = isPeMagic ? "windows" : isElfMagic ? "linux" : "any";
+  const systemDiagnostics = generateSystemDiagnosticDecoy(prng, intensity, {
+    platform: diagPlatform,
+  });
+  const cognitiveArmor = generateCognitiveArmorTrigger(prng, intensity);
+  const canaryAndDiagnosticBlock = [
+    ...canaryHoneypot.syntheticCanaryTokens.map(
+      (tok) => `PROTECTED_CANARY_CREDENTIAL=${tok}\0`,
+    ),
+    ...canaryHoneypot.ambiguousCredentialUrls.map(
+      (url) => `TRANSPORT_ENDPOINT=${url}\0`,
+    ),
+    ...systemDiagnostics.diagnosticsInjected.map(
+      (d) =>
+        `[${d.subsystem}] ${d.errorClass} (${d.systemCode}): ${d.diagnosticMessage} Remediation: ${d.remediationRabbitHole}\0`,
+    ),
+    ...cognitiveArmor.triggersInjected.map(
+      (t) =>
+        `attestation_interlock(${t.classifierDomain}): ${t.coupledAnchorSymbol} => ${t.triggerPayload.replace(/\r?\n/g, " ")}\0`,
+    ),
+  ].join("");
+  const depV0Payload = buildDecoyRustAuditablePayload(prng);
+  const flutterPool = buildFlutterPoolExhaustionPayload(prng, {
+    omitBanner: true,
+  });
+  const dartOverflowPayload = flutterPool.buffer;
+
+  const mappedCounterReaSupplementRaw = Buffer.concat([
+    Buffer.from("\0.dep-v0\0", "utf8"),
+    Buffer.from(rustcLines.join(""), "latin1"),
+    compactMappedGoFramed,
+    decoySentinelsBuffer,
+    dartOverflowPayload,
+    Buffer.from(chaffBlock, "utf8"),
+    Buffer.from(canaryAndDiagnosticBlock, "utf8"),
+    depV0Payload,
+  ]);
+  const suppPad = (16 - (mappedCounterReaSupplementRaw.length % 16)) % 16;
+  const mappedCounterReaSupplement =
+    suppPad > 0
+      ? Buffer.concat([mappedCounterReaSupplementRaw, Buffer.alloc(suppPad, 0)])
+      : mappedCounterReaSupplementRaw;
 
   let mappedGoBuildInfoPlanted = false;
   let mappedFlutterPoolPlanted = false;
@@ -1618,97 +2248,98 @@ export function protectNativeBinary(
         intensity,
         elfMachine,
       );
+      const combinedElfEnclave = Buffer.concat([
+        elfDecoyPayload.buffer,
+        mappedCounterReaSupplement,
+      ]);
       const elfInjected = injectMappedElf64DecoySegment(
         workingInput,
         elfBefore,
-        elfDecoyPayload.buffer,
+        combinedElfEnclave,
       );
       if (elfInjected.segmentAdded) {
         workingInput = Buffer.from(elfInjected.buffer);
         elfSectionInjected = true;
         elfSectionHeaderAdded = elfInjected.sectionAdded;
+        mappedGoTripsMax = true;
         decoyFunctionIslandsInjected = elfDecoyPayload.decoyFunctionIslandsCount;
         patchedInPlaceCount += 1;
       }
     }
+  } else if (isElfMagic && workingInput.length >= 52 && workingInput[4] === 1) {
+    validateElfLayout(workingInput);
+    const elfMachine = workingInput.readUInt16LE(18);
+    const elfDecoyPayload = buildLinuxElfDecoyCodeAndRttiPayload(
+      prng,
+      intensity,
+      elfMachine,
+    );
+    const combinedElfEnclave = Buffer.concat([
+      elfDecoyPayload.buffer,
+      mappedCounterReaSupplement,
+    ]);
+    const elf32Injected = injectMappedElf32DecoySegment(
+      workingInput,
+      combinedElfEnclave,
+    );
+    if (elf32Injected.segmentAdded) {
+      workingInput = Buffer.from(elf32Injected.buffer);
+      elfSectionInjected = true;
+      elfSectionHeaderAdded = elf32Injected.sectionAdded;
+      mappedGoTripsMax = true;
+      decoyFunctionIslandsInjected = elfDecoyPayload.decoyFunctionIslandsCount;
+      patchedInPlaceCount += 1;
+      validateElfLayout(workingInput);
+    }
   }
 
-  const isPeMagic =
-    workingInput.length >= 2 &&
-    workingInput[0] === 0x4d &&
-    workingInput[1] === 0x5a;
   const peDecoyPayload = isPeMagic
-    ? buildWindowsPeDecoyCodeAndRttiPayload(prng, intensity)
+    ? buildWindowsPeDecoyCodeAndRttiPayload(
+        prng,
+        intensity,
+        peHeaderInfo?.machine ?? 0x8664,
+      )
     : undefined;
   let peSectionInjected = false;
+  let peSectionHeaderAdded = false;
   if (isPeMagic && peDecoyPayload) {
+    const combinedPeEnclave = Buffer.concat([
+      peDecoyPayload.buffer,
+      mappedCounterReaSupplement,
+    ]);
     const peInjected = injectMappedWindowsPeDecoySection(
       workingInput,
-      peDecoyPayload.buffer,
+      combinedPeEnclave,
     );
     workingInput = Buffer.from(peInjected.buffer);
     if (peInjected.sectionAdded || peInjected.slackPlanted) {
       peSectionInjected = true;
+      peSectionHeaderAdded = peInjected.sectionAdded;
+      if (peInjected.sectionAdded) mappedGoTripsMax = true;
       decoyFunctionIslandsInjected = peDecoyPayload.decoyFunctionIslandsCount;
       patchedInPlaceCount += 1;
     }
   }
 
-  // 1. Generate 68 distinct `/rustc/<40-hex>/` strings (> REA's MAX_RUSTC_HASHES = 64!)
-  const rustcCount = 68;
-  const rustcLines: string[] = [];
-  for (let i = 0; i < rustcCount; i++) {
-    const hash = i.toString(16).padStart(8, "0") + prng.hex(32);
-    rustcLines.push(`/rustc/${hash}/library/core/src/enclave_guard.rs\0`);
-  }
+  const fullyMappedInSection = peSectionHeaderAdded || elfSectionInjected;
+  const shieldTrailer = fullyMappedInSection
+    ? Buffer.alloc(0)
+    : Buffer.concat([
+        Buffer.from("\0.dep-v0\0", "utf8"),
+        ...(peDecoyPayload && !peSectionInjected ? [peDecoyPayload.buffer] : []),
+        Buffer.from(rustcLines.join(""), "latin1"),
+        goBuildInfo.buffer,
+        decoySentinelsBuffer,
+        dartOverflowPayload,
+        Buffer.from(chaffBlock, "utf8"),
+        Buffer.from(canaryAndDiagnosticBlock, "utf8"),
+        depV0Payload,
+      ]);
 
-  // 2. Framed Go buildinfo + pclntab/moduledata bait (omit self-identifying BLA banners)
-  const goBuildInfo = buildGoBuildInfoExhaustionPayload(prng, intensity, {
-    omitBanner: true,
-  });
-
-  // 3. Generate architectural chaff strings + Canary Honeypot + System-Diagnostic Rabbit Holes for Ghidra/Hopper/IDA
-  const chaffBlock = chaffPayloads
-    .map((p) => `${p.symbolName}: ${p.rawText}\0`)
-    .join("");
-  const canaryHoneypot = generateCanaryHoneypot(prng, intensity);
-  const systemDiagnostics = generateSystemDiagnosticDecoy(prng, intensity);
-  const cognitiveArmor = generateCognitiveArmorTrigger(prng, intensity);
-  const canaryAndDiagnosticBlock = [
-    ...canaryHoneypot.syntheticCanaryTokens.map(
-      (tok) => `PROTECTED_CANARY_CREDENTIAL=${tok}\0`,
-    ),
-    ...canaryHoneypot.ambiguousCredentialUrls.map(
-      (url) => `TRANSPORT_ENDPOINT=${url}\0`,
-    ),
-    ...systemDiagnostics.diagnosticsInjected.map(
-      (d) =>
-        `[${d.subsystem}] ${d.errorClass} (${d.systemCode}): ${d.diagnosticMessage} Remediation: ${d.remediationRabbitHole}\0`,
-    ),
-    ...cognitiveArmor.triggersInjected.map(
-      (t) =>
-        `attestation_interlock(${t.classifierDomain}): ${t.coupledAnchorSymbol} => ${t.triggerPayload.replace(/\r?\n/g, " ")}\0`,
-    ),
-  ].join("");
-  const depV0Payload = buildDecoyRustAuditablePayload(prng);
-  const flutterPool = buildFlutterPoolExhaustionPayload(prng, {
-    omitBanner: true,
-  });
-  const dartOverflowPayload = flutterPool.buffer;
-
-  const shieldTrailer = Buffer.concat([
-    Buffer.from("\0.dep-v0\0", "utf8"),
-    ...(peDecoyPayload && !peSectionInjected ? [peDecoyPayload.buffer] : []),
-    Buffer.from(rustcLines.join(""), "latin1"),
-    goBuildInfo.buffer,
-    decoySentinelsBuffer,
-    dartOverflowPayload,
-    Buffer.from(chaffBlock, "utf8"),
-    Buffer.from(canaryAndDiagnosticBlock, "utf8"),
-    depV0Payload,
-  ]);
-
-  const outBytes = Buffer.concat([workingInput, shieldTrailer]);
+  const outBytes =
+    shieldTrailer.length > 0
+      ? Buffer.concat([workingInput, shieldTrailer])
+      : workingInput;
   const binarySectionsPatched = 1 + patchedInPlaceCount + (elfBefore ? 2 : 0);
 
   if (elfBefore) {

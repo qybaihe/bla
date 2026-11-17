@@ -125,13 +125,13 @@ describe("v3.2.3 Counter-Critique Reinforcements & Issue #157 PE Hardening", () 
     const numSections = outPe.readUInt16LE(peOffset + 4 + 2);
     expect(numSections).toBe(3);
 
-    // Verify the 3rd section header is `.enclave` with READ | INITIALIZED_DATA | CODE (0x40000060)
+    // Verify the 3rd section header is `.enclave` with EXECUTE | READ | CODE (0x60000020, strict W^X)
     const optHeaderSize = outPe.readUInt16LE(peOffset + 4 + 16);
     const sec2Offset = peOffset + 24 + optHeaderSize + 2 * 40;
     const sec2Name = outPe.subarray(sec2Offset, sec2Offset + 8).toString("ascii");
     expect(sec2Name).toBe(".enclave");
     const sec2Chars = outPe.readUInt32LE(sec2Offset + 36);
-    expect(sec2Chars).toBe(0x40000060);
+    expect(sec2Chars).toBe(0x60000020);
 
     // Verify x86-64 ABI function prologue (`endbr64; push rbp; mov rbp, rsp` = f3 0f 1e fa 55 48 89 e5)
     const prologue = Buffer.from([0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5]);

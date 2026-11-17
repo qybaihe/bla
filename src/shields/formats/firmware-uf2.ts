@@ -56,6 +56,7 @@ const NAMED_DECOY_FAMILIES: readonly number[] = [
 export interface Uf2Inspection {
   readonly validMagic: boolean;
   readonly blockCount: number;
+  readonly decoyBlockCount: number;
   readonly blaProtected: boolean;
   readonly notMainFlashDecoyHint: boolean;
 }
@@ -75,16 +76,37 @@ export function isUf2Container(bytes: Buffer): boolean {
 }
 
 export function inspectUf2Firmware(bytes: Buffer): Uf2Inspection {
-  const validMagic = isUf2Container(bytes);
-  const blockCount = validMagic
-    ? Math.floor(bytes.length / UF2_BLOCK_BYTES)
-    : 0;
+  const exactBlocks =
+    bytes.length >= UF2_BLOCK_BYTES && bytes.length % UF2_BLOCK_BYTES === 0;
+  let allBlocksValid = exactBlocks;
+  let decoyBlockCount = 0;
   const marker = Buffer.from(UF2_SHIELD_MARKER, "utf8");
+  if (exactBlocks) {
+    for (let off = 0; off < bytes.length; off += UF2_BLOCK_BYTES) {
+      if (!readBlockMagicsOk(bytes, off)) {
+        allBlocksValid = false;
+        break;
+      }
+      const flags = bytes.readUInt32LE(off + 8);
+      const payloadLen = Math.min(bytes.readUInt32LE(off + 16), UF2_DATA_BYTES);
+      if (
+        (flags & (UF2_FLAG_NOT_MAIN_FLASH | UF2_FLAG_FILE_CONTAINER)) !== 0 &&
+        bytes
+          .subarray(off + UF2_DATA_OFFSET, off + UF2_DATA_OFFSET + payloadLen)
+          .includes(marker)
+      ) {
+        decoyBlockCount += 1;
+      }
+    }
+  }
+  const validMagic = allBlocksValid;
+  const blockCount = validMagic ? bytes.length / UF2_BLOCK_BYTES : 0;
   return {
     validMagic,
     blockCount,
-    blaProtected: bytes.includes(marker),
-    notMainFlashDecoyHint: bytes.includes(marker),
+    decoyBlockCount: validMagic ? decoyBlockCount : 0,
+    blaProtected: validMagic && decoyBlockCount >= 3,
+    notMainFlashDecoyHint: validMagic && decoyBlockCount > 0,
   };
 }
 

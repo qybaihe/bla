@@ -62,21 +62,25 @@ export interface EvmBytecodeInspection {
 export function inspectEvmBytecode(bytes: Buffer): EvmBytecodeInspection {
   let hasSolidityMetadata = false;
   let metadataBytes = 0;
+  let trailerText = "";
   if (bytes.length >= 3) {
     const length = bytes[bytes.length - 2]! * 256 + bytes[bytes.length - 1]!;
     const offset = bytes.length - 2 - length;
     if (length > 0 && offset >= 0 && bytes[offset]! >> 5 === 5) {
       hasSolidityMetadata = true;
       metadataBytes = length;
+      trailerText = bytes.subarray(offset, bytes.length - 2).toString("utf8");
     }
   }
-  const text = bytes.toString("utf8");
   return {
     byteLength: bytes.length,
     hasSolidityMetadata,
     metadataBytes,
     blaProtected:
-      text.includes("[BLA-EVM-SHIELD]") || text.includes("bla_evm_canary"),
+      hasSolidityMetadata &&
+      metadataBytes >= 96 &&
+      trailerText.includes("[BLA-EVM-SHIELD]") &&
+      trailerText.includes("bla_evm_canary"),
   };
 }
 

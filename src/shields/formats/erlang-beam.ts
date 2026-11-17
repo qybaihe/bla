@@ -194,24 +194,27 @@ function encodeAtU8Body(
 
 export function inspectErlangBeam(bytes: Buffer): ErlangBeamInspection {
   const parsed = parseBeamChunks(bytes);
+  const exactFraming = parsed.valid && 8 + parsed.formSize === bytes.length;
+  const marker = Buffer.from("[BLA-BEAM-SHIELD]", "utf8");
   let atomCount = 0;
+  let decoyChunkCount = 0;
   for (const chunk of parsed.chunks) {
     if (chunk.name === "AtU8" || chunk.name === "Atom") {
       if (chunk.payload.length >= 4) {
         atomCount = Math.abs(chunk.payload.readInt32BE(0));
       }
     }
+    if (chunk.payload.includes(marker)) {
+      decoyChunkCount += 1;
+    }
   }
-  const text = bytes.toString("latin1");
   return {
-    validMagic: parsed.valid,
+    validMagic: exactFraming,
     formSize: parsed.formSize,
     chunkCount: parsed.chunks.length,
     chunkNames: parsed.chunks.map((c) => c.name),
     atomCount,
-    blaProtected:
-      text.includes("[BLA-BEAM-SHIELD]") ||
-      parsed.chunks.some((c) => c.name.startsWith("Bla")),
+    blaProtected: exactFraming && decoyChunkCount >= 4,
   };
 }
 

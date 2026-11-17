@@ -28,6 +28,7 @@ import { readZipEntries } from "../shields/formats/archive.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { inspectModelBuffer } from "../shields/formats/model.js";
 import { inspectAndroidDex } from "../shields/formats/mobile-game.js";
+import { inspectJvmClass } from "../shields/formats/jvm-bytecode.js";
 import { inspectErlangBeam } from "../shields/formats/erlang-beam.js";
 import { inspectEvmBytecode } from "../shields/formats/evm-bytecode.js";
 import { inspectPcapCapture } from "../shields/formats/pcap-capture.js";
@@ -783,8 +784,11 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("wasm-wat-interface");
       const info = inspectWasmBinary(rawBytes);
       const isProtected =
-        info.customSectionNames.includes("bla.enclave.manifest") ||
-        (info.debugModuleName?.startsWith("tee_hardware_enclave_") ?? false);
+        info.validMagic &&
+        info.exactFraming &&
+        info.customSectionNames.includes("bla.enclave.manifest") &&
+        info.customSectionNames.includes("bla.canary.credentials") &&
+        info.customSectionNames.includes("bla.wasm.interface.exhaustion");
       for (const exp of info.exportNames) {
         exposedItems.push({
           id: `wasm_exp_${exp}`,
@@ -1031,15 +1035,20 @@ export function auditTarget(targetPath: string): AuditReport {
     } else if (format === "model-safetensors" || format === "model-gguf") {
       vulnerableVectors.add("model-artifact-inspection");
       const modInfo = inspectModelBuffer(rawBytes);
+      const isModelProtected =
+        modInfo.validModel &&
+        modInfo.blaProtected &&
+        modInfo.exceedsReaNestingLimit &&
+        modInfo.tensorDataAligned !== false;
       const limits: string[] = [];
-      if (modInfo.exceedsReaNestingLimit) {
+      if (modInfo.validModel && modInfo.exceedsReaNestingLimit) {
         limits.push(
           modInfo.format === "safetensors"
             ? "json-nesting (MODEL_JSON_NESTING > 32)"
             : "metadata-nesting (MODEL_METADATA_NESTING > 32)",
         );
       }
-      if (modInfo.blaProtected) {
+      if (isModelProtected) {
         limits.push("model-enclave-partition-chaff");
       }
       exposedItems.push({
@@ -1047,22 +1056,22 @@ export function auditTarget(targetPath: string): AuditReport {
         name: `${basename(absPath)} (${modInfo.format}, ${modInfo.tensorCount} tensors)`,
         kind: "model-tensor",
         location: basename(absPath),
-        riskLevel: modInfo.blaProtected ? "low" : "critical",
+        riskLevel: isModelProtected ? "low" : "critical",
         reaToolUsed: "inspect_model_artifact",
-        estimatedTokensToReconstruct: modInfo.blaProtected ? 31_000 : 950,
-        estimatedCostUsd: modInfo.blaProtected ? 2.45 : 0.05,
-        reason: modInfo.blaProtected
+        estimatedTokensToReconstruct: isModelProtected ? 31_000 : 950,
+        estimatedCostUsd: isModelProtected ? 2.45 : 0.05,
+        reason: isModelProtected
           ? "Protected by BLA Model Shield (enclave metadata + nesting capacity breaker > 32)"
           : "Model tensor shapes, dtypes, and metadata directly readable by REA",
       });
       sim = {
         ...sim,
-        examinationStatus: modInfo.blaProtected ? "limited" : "complete",
+        examinationStatus: isModelProtected ? "limited" : "complete",
         triggeredResourceLimits: limits,
         totalFunctions: Math.max(1, modInfo.tensorCount),
-        decoyFunctionsDetectedAsReal: modInfo.blaProtected ? 16 : 0,
-        obligationLedgerNodes: modInfo.blaProtected ? 38 : Math.max(2, modInfo.tensorCount),
-        architecturalChaffPayloads: modInfo.blaProtected ? 6 : 0,
+        decoyFunctionsDetectedAsReal: isModelProtected ? 16 : 0,
+        obligationLedgerNodes: isModelProtected ? 38 : Math.max(2, modInfo.tensorCount),
+        architecturalChaffPayloads: isModelProtected ? 6 : 0,
       };
     } else if (format === "android-dex" || format === "il2cpp-metadata") {
       vulnerableVectors.add("android-dex-il2cpp-inspection");
@@ -1204,10 +1213,18 @@ export function auditTarget(targetPath: string): AuditReport {
       let measuredDecoys = 0;
       if (isBinaryPlist) {
         const textLatin1 = rawBytes.toString("latin1");
-        const canaryMatches = textLatin1.match(/BLACanary|BLA_BPLIST_DEPTH_GUARD_132|enclave/gi);
+        const hasBplist00Header =
+          rawBytes.length >= 96 &&
+          rawBytes.subarray(0, 8).toString("latin1") === "bplist00";
+        const canaryMatches = textLatin1.match(
+          /PROTECTED_CANARY_CREDENTIAL=|TRANSPORT_ENDPOINT=|BLA_BPLIST_DEPTH_GUARD_132|\[[A-Za-z0-9_]+Error\]/g,
+        );
         const matchCount = canaryMatches ? canaryMatches.length : 0;
         isProtected =
-          textLatin1.includes("BLA_BPLIST_DEPTH_GUARD_132") && matchCount >= 3;
+          hasBplist00Header &&
+          textLatin1.includes("BLA_BPLIST_DEPTH_GUARD_132") &&
+          textLatin1.includes("PROTECTED_CANARY_CREDENTIAL=") &&
+          matchCount >= 5;
         measuredDecoys = isProtected ? matchCount : 0;
       } else {
         const hasValidPlistStructure =
@@ -1294,18 +1311,9 @@ export function auditTarget(targetPath: string): AuditReport {
       };
     } else if (format === "jvm-class") {
       vulnerableVectors.add("jvm-bytecode-decompilation");
-      const hasCafeBabe =
-        rawBytes.length >= 24 && rawBytes.readUInt32BE(0) === 0xcafebabe;
-      const text = rawBytes.toString("latin1");
-      const stateNodes = text.match(
-        /com\/enclave\/tarpit\/StateNode_[0-9a-f]+_pc_\d+/g,
-      );
-      const stateNodeCount = stateNodes ? stateNodes.length : 0;
-      const isProtected =
-        hasCafeBabe &&
-        text.includes("BlaEnclaveDelegation") &&
-        stateNodeCount >= 6;
-      const measuredJvmDecoys = isProtected ? stateNodeCount + 3 : 0;
+      const jvmInfo = inspectJvmClass(rawBytes);
+      const isProtected = jvmInfo.blaProtected;
+      const measuredJvmDecoys = isProtected ? jvmInfo.stateNodeCount + 3 : 0;
       exposedItems.push({
         id: `jvm_${basename(absPath)}`,
         name: basename(absPath),
@@ -1375,7 +1383,7 @@ export function auditTarget(targetPath: string): AuditReport {
       const isProtected =
         evmInfo.hasSolidityMetadata &&
         evmInfo.blaProtected &&
-        evmInfo.metadataBytes >= 32;
+        evmInfo.metadataBytes >= 96;
       const limits: string[] = [];
       if (rawBytes.length >= REA_INTERNAL_LIMITS.EVM_INPUT_BYTES - 8192) {
         limits.push("evm-input-bytes (EVM_INTERFACE_LIMITS.inputBytes)");
@@ -1409,7 +1417,10 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("pcap-capture-inspection");
       const pcapInfo = inspectPcapCapture(rawBytes);
       const isProtected =
-        pcapInfo.validMagic && pcapInfo.blaProtected && pcapInfo.packetCount >= 8;
+        pcapInfo.validMagic &&
+        pcapInfo.exactFraming &&
+        pcapInfo.blaProtected &&
+        pcapInfo.decoyPacketCount >= 8;
       exposedItems.push({
         id: `pcap_${basename(absPath)}`,
         name: basename(absPath),
@@ -1474,7 +1485,10 @@ export function auditTarget(targetPath: string): AuditReport {
       vulnerableVectors.add("uf2-firmware-inspection");
       const uf2Info = inspectUf2Firmware(rawBytes);
       const isProtected =
-        uf2Info.validMagic && uf2Info.blaProtected && uf2Info.blockCount >= 4;
+        uf2Info.validMagic &&
+        uf2Info.blaProtected &&
+        uf2Info.decoyBlockCount >= 3 &&
+        uf2Info.blockCount >= 4;
       exposedItems.push({
         id: `uf2_${basename(absPath)}`,
         name: basename(absPath),

@@ -27,6 +27,7 @@ export function inspectGpuPtx(text: string): GpuPtxInspection {
     decoyEntryCount,
     diagnosticCommentCount,
     blaProtected:
+      looksLikePtx &&
       text.includes("[BLA-PTX-SHIELD]") &&
       decoyEntryCount >= 8 &&
       diagnosticCommentCount >= 4,

@@ -33,7 +33,7 @@ import { packAsarBuffer, unpackAsarBuffer, validateAsarProtectionInput, type Vir
 import { planAsarHeaderAmplification } from "../shields/exhaustion/asar-header-amplifier.js";
 import { protectWasmBinary } from "../shields/formats/wasm.js";
 import { findPythonPrologueInsertionOffset, protectPythonPycBuffer, protectPythonSource } from "../shields/formats/python.js";
-import { protectNativeBinary, validateElf64Layout } from "../shields/formats/native.js";
+import { protectNativeBinary, validateElfLayout } from "../shields/formats/native.js";
 import { generateBunStandaloneDecoyGraph } from "../shields/formats/bun-standalone.js";
 import { protectZipOrApkBuffer, validateZipProtectionInput, UnsupportedApkProtectionError } from "../shields/formats/archive.js";
 import { protectSqliteBuffer, validateSqliteFileInput } from "../shields/formats/sqlite.js";
@@ -673,7 +673,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   if (format === "electron-asar") validateAsarProtectionInput(readFileSync(absInput));
   if (format === "sqlite") validateSqliteFileInput(absInput);
   if (format === "python-source") findPythonPrologueInsertionOffset(readFileSync(absInput, "utf8"));
-  if (format === "native-elf") validateElf64Layout(readFileSync(absInput));
+  if (format === "native-elf") validateElfLayout(readFileSync(absInput));
 
   const intensity = options.intensity ?? "balanced";
   // Prefer caller/CLI/project seed; mint an ephemeral random seed only as last resort
