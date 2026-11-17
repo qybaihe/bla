@@ -177,3 +177,23 @@ describe("MCP bla_verify honesty metadata passthrough", () => {
     );
   });
 });
+
+describe("MCP bla_inspect_release bounds forwarding", () => {
+  it("forwards max_files / max_total_bytes to the engine scan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-inspect-bounds-"));
+    tempDirs.push(dir);
+    for (const name of ["a.js", "b.js", "c.js"]) {
+      writeFileSync(join(dir, name), "const x = 1;\n", "utf8");
+    }
+    const full = await call("bla_inspect_release", { path: dir });
+    expect(full.isError).toBe(false);
+    expect(full.structuredContent.filesInspected).toBe(3);
+    const capped = await call("bla_inspect_release", {
+      path: dir,
+      max_files: 1,
+    });
+    expect(capped.isError).toBe(false);
+    expect(capped.structuredContent.filesInspected).toBe(1);
+    expect(capped.structuredContent.status).toBe("partial");
+  });
+});

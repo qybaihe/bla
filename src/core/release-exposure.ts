@@ -58,11 +58,28 @@ function isSameRealPath(path: string): boolean {
 }
 
 /** Read-only bounded inspection of a stable local release tree. */
-export function inspectReleaseExposure(target: string): ReleaseExposureReport {
+export function inspectReleaseExposure(
+  target: string,
+  options: { readonly maxFiles?: number; readonly maxTotalBytes?: number } = {},
+): ReleaseExposureReport {
   const root = resolve(target);
   if (!isSameRealPath(root) || lstatSync(root).isSymbolicLink()) {
     throw new Error("Release inspection requires a non-symlink target path and ancestors.");
   }
+  // Caller-supplied caps (MCP max_files / max_total_bytes) may only tighten the
+  // built-in limits — they never widen them.
+  const maxFiles =
+    typeof options.maxFiles === "number" &&
+    Number.isFinite(options.maxFiles) &&
+    options.maxFiles > 0
+      ? Math.floor(options.maxFiles)
+      : Number.POSITIVE_INFINITY;
+  const maxTotalBytes =
+    typeof options.maxTotalBytes === "number" &&
+    Number.isFinite(options.maxTotalBytes) &&
+    options.maxTotalBytes > 0
+      ? Math.min(Math.floor(options.maxTotalBytes), MAX_TOTAL_BYTES)
+      : MAX_TOTAL_BYTES;
   const report: ReleaseExposureReport = {
     evidenceBasis: "static-file-observation",
     status: "complete",
@@ -147,7 +164,11 @@ export function inspectReleaseExposure(target: string): ReleaseExposureReport {
         limit(path, "non-regular-file");
         return;
       }
-      if (stat.size > MAX_FILE_BYTES || report.bytesRead + stat.size + 1 > MAX_TOTAL_BYTES) {
+      if (report.filesInspected >= maxFiles) {
+        limit(path, "file-count-limit");
+        return;
+      }
+      if (stat.size > MAX_FILE_BYTES || report.bytesRead + stat.size + 1 > maxTotalBytes) {
         limit(path, "read-size-limit");
         return;
       }
