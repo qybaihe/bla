@@ -27,6 +27,13 @@ const MAX_KV_COUNT = 100_000n;
 const MAX_TENSOR_COUNT = 1_000_000n;
 const MAX_TENSOR_DIMS = 8;
 const MAX_VALUE_DEPTH = 64;
+/**
+ * Upper bound on `general.alignment`. Real GGUF writers use 32 (some use 64 or
+ * 128). A hostile file can claim up to 2^31, which makes `alignUp` request a
+ * multi-gigabyte zeroed pad and pushes `dataStart` past the end of the file —
+ * dropping every tensor while still producing a parseable container.
+ */
+const MAX_ALIGNMENT = 1_048_576;
 
 export interface GgufKvEntry {
   readonly key: string;
@@ -145,8 +152,13 @@ export function parseGgufLayout(input: Uint8Array): GgufLayout | null {
     if (next === null) return null;
     if (key === "general.alignment" && valueType === GGUF_TYPE_UINT32) {
       const a = bytes.readUInt32LE(valueStart);
-      // Spec: a non-zero multiple of 8. Ignore nonsensical values.
-      if (a > 0 && a % 8 === 0) alignment = a;
+      // Spec: a non-zero multiple of 8. Out-of-range values are treated as
+      // malformed rather than silently clamped, so the caller never rebuilds a
+      // file whose declared data section lies beyond the file itself.
+      if (a > 0 && a % 8 === 0) {
+        if (a > MAX_ALIGNMENT) return null;
+        alignment = a;
+      }
     }
     kvs.push({ key, start, end: next, valueType });
     offset = next;
@@ -236,9 +248,18 @@ export function rebuildGguf(
   ]);
   if (!layout.hasDataRegion) return metaAndInfos;
 
+  // A declared data section that starts past the end of the input means the
+  // tensor bytes cannot be preserved. Fail closed instead of emitting a
+  // container whose tensors silently resolve to nothing.
+  if (layout.dataStart > bytes.length) {
+    throw new Error(
+      `Refusing to rebuild GGUF: declared tensor-data start ${layout.dataStart} exceeds the ${bytes.length}-byte input`,
+    );
+  }
+
   const newDataStart = alignUp(metaAndInfos.length, layout.alignment);
   const pad = Buffer.alloc(newDataStart - metaAndInfos.length, 0);
-  const data = bytes.subarray(Math.min(layout.dataStart, bytes.length));
+  const data = bytes.subarray(layout.dataStart);
   return Buffer.concat([metaAndInfos, pad, data]);
 }
 

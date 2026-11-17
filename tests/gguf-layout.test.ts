@@ -68,6 +68,74 @@ print(json.dumps({
 }
 
 describe("gguf-layout alignment-safe rewrite", () => {
+  function makeGgufWithAlignment(alignment: number, dataBytes = 32): Buffer {
+    const u32 = (n: number): Buffer => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32LE(n >>> 0, 0);
+      return b;
+    };
+    const u64 = (n: bigint | number): Buffer => {
+      const b = Buffer.alloc(8);
+      b.writeBigUInt64LE(BigInt(n), 0);
+      return b;
+    };
+    const str = (text: string): Buffer => {
+      const encoded = Buffer.from(text, "utf8");
+      return Buffer.concat([u64(encoded.length), encoded]);
+    };
+    return Buffer.concat([
+      Buffer.from("GGUF", "ascii"),
+      u32(3),
+      u64(1), // tensorCount
+      u64(1), // kvCount
+      str("general.alignment"),
+      u32(4), // UINT32
+      u32(alignment),
+      str("w"),
+      u32(1), // nDims
+      u64(1), // dim
+      u32(0), // ggml_type
+      u64(0), // offset
+      Buffer.alloc(dataBytes, 7),
+    ]);
+  }
+
+  it("accepts a sane alignment and preserves the tensor bytes", () => {
+    const bytes = makeGgufWithAlignment(GGUF_DEFAULT_ALIGNMENT);
+    const layout = parseGgufLayout(bytes);
+    expect(layout).not.toBeNull();
+    expect(layout!.alignment).toBe(GGUF_DEFAULT_ALIGNMENT);
+    const rebuilt = rebuildGguf(bytes, layout!, { appendKvs: [] });
+    expect(rebuilt.length).toBeGreaterThan(layout!.dataStart);
+  });
+
+  it("rejects an out-of-range general.alignment instead of allocating a huge pad", () => {
+    // 2 GiB alignment: previously accepted, which made rebuildGguf allocate a
+    // ~2 GiB zeroed pad and slice away the whole tensor region.
+    expect(parseGgufLayout(makeGgufWithAlignment(0x80000000))).toBeNull();
+    expect(parseGgufLayout(makeGgufWithAlignment(0x2000000))).toBeNull();
+    expect(parseGgufLayout(makeGgufWithAlignment(64))).not.toBeNull();
+  });
+
+  it("refuses to rebuild when the declared data section starts past the input", () => {
+    const bytes = makeGgufWithAlignment(GGUF_DEFAULT_ALIGNMENT, 2);
+    const layout = parseGgufLayout(bytes);
+    expect(layout).not.toBeNull();
+    expect(layout!.dataStart).toBeGreaterThan(bytes.length);
+    expect(() => rebuildGguf(bytes, layout!, { appendKvs: [] })).toThrow(
+      /exceeds the .* input/,
+    );
+  });
+
+  it("protectGgufBuffer fails closed when a tensor-bearing GGUF has no layout", () => {
+    expect(() =>
+      protectGgufBuffer(makeGgufWithAlignment(0x80000000), {
+        intensity: "balanced",
+        seed: "gguf-alignment-test",
+      }),
+    ).toThrow(/tensor-bearing GGUF has no preservable tensor layout/);
+  });
+
   it("parses a real GGUF and reports the default alignment", () => {
     if (!HAS_GGUF_READER) return;
     const bytes = makeRealGguf();
