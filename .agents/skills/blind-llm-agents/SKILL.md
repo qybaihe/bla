@@ -43,6 +43,7 @@ When hardening a repository with source code, follow this 4-stage closed loop so
    - If `shouldRefuseBankrupt: true`, inspect `remediationPlan`! Every blocking finding includes `owner`, `sourceRefactorRecipe`, and `recommendedMcpTool`.
    - Each finding carries `enforcedByHarden`. `true`: `bla_harden` refuses the run until it is fixed (or its lab `allow_*` flag is set). `false`: `bla_harden` still runs — the finding is either a warning that blocks nothing, or a lint-only gate (plaintext-secret, integrity-coverage, bind-scope) that fails this lint; fix it for a better result.
    - Lint the project's own code, never BLA output: files BLA already wrote are skipped and listed in `skippedHardenedOutputs`.
+   - A finding with `sameFindingInSource` is in the build output and in the source it was made from. Change the value in the source and rebuild; run `bla_encrypt_strings` only on build output — never rewrite a source file with it.
 3. **Surgical Weave Plan**: Call `bla_weave_plan` `{ "path": "." }` (`bla-weave-plan/v1`) and read `bla://directives/weave-decoy`.
    - Inspect each source target's `surgicalWorkorder`: `entryFunctions`, `sharedStateSlots`, `branchCandidates`, **`crownJewelCandidates`**, **`dataFlowEntanglementPlan`**, `suggestedIdentifierStems`, and `agentRewriteRecipe`.
 
@@ -122,10 +123,11 @@ Optional args (safe defaults): `intensity` (bankrupt), `emit_manifest` (false),
 | `excluded` | Files your `exclude` list left out. They ship **unprotected** — say so. |
 | `outputSize` (`inputBytes` → `outputBytes`, `largestGrowth`) | What the protection costs to download. Every hardened file grows (decoys are the mechanism); a WASM module grows by megabytes at `bankrupt`. For a web build tell the user the number, and offer `intensity: "maximum"` or an `exclude` for the largest file if size matters. |
 | `sqliteEvalTrapArtifacts` + the SQLite line in `nextSteps` | A hardened SQLite database holds decoy tables **beside** the application's own, which stay readable — BLA does not encrypt a database; tell the user. `sqlite_eval_trap: true` additionally makes a row read of the decoy tables fail, at the price of `PRAGMA integrity_check` / `VACUUM` / dump-restore failing for the application too: only for a database it just queries. |
-| `artifacts[].plaintextSurvivors` | Secret-looking literals (digests, keys, generated tokens) still readable in the output. `stealth`/`balanced` do not encode strings; `maximum`/`bankrupt` encode strings of 3–256 characters and cannot reach object keys, regular expressions, HTML attributes or longer strings — move the value into a plain string literal or off the client. |
+| `artifacts[].plaintextSurvivors` | Secret-looking literals (digests, keys, generated tokens) still readable in the output. `stealth`/`balanced` do not encode strings; `maximum`/`bankrupt` split strings of 3–256 characters and secret-looking values of up to 4,096 characters wherever they are written (object key and regular expression included), and cannot reach HTML attributes, tagged templates, class member names, TypeScript object keys / `as const` values or longer values — move the value into a plain string literal or off the client. A split value is hidden from a text search, not from someone who runs the code: a real credential does not belong in a shipped file. |
 | `artifacts[].wasmExportRenames` / `wasmExportsAutoPreserved` | Renamed exports (old → new map for callers outside the project) and exports kept because a project file calls them. |
 | `integrityBindingEntry`, `integrityBindingUncoveredEntries`, `integrityBindingSkipped`, `pythonSidecarEntry`, `pythonSidecarUncoveredEntries` | What `self_seal` / `sidecar_entangle` really cover: the one module that pins its siblings, declared entry points (`package.json`; Python console scripts) that never load it, and artifacts bound to nothing (browser bundles, writable SQLite, files outside the checking module's directory). Bytecode-only / frozen Python starts without verifying. |
 | `defenseScore`, token / cost amplification | Structural checks and cost **estimates**, not measured attacker results. Say so. |
+| A `bla_redteam_report` row, "trips REA's budget" | Measured against REA **as it runs by default**. Most of REA's budgets are per-call inputs and REA's own error names the one to raise (`asar.max_header_bytes`, `max_interface_bytes`, `max_chunks`, `semantic_precision`), so a size-based plant costs an attacker one retry — it does not block REA. Measured with budgets raised: the JavaScript string encoding of `maximum` / `bankrupt` (no known value in REA's result at 1× / 4× / 64×). Say which of the two you are reporting. |
 
 ---
 
@@ -211,9 +213,11 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
   harden `summaryPath`). Re-check later with `bla_run_lookup` or `bla_verify` +
   `summary_path`/`run_id` — never invent a run id.
 - `bla_rea_drift` / `bla_redteam_report` may return `status: unverified` when sibling
-  REA is absent; treat that as **not proven**, never as a pass. An on-disk
-  `bla_redteam_report` without `execute:true` is `status: available` — readable
-  evidence, not a fresh REA verdict.
+  REA is absent, or when the harness could not call that REA checkout for a probe (REA
+  moved or renamed something; the harness needs updating). Treat it as **not proven**:
+  never a pass, and never a failed defense either — `fail` is the status for REA reading
+  a hardened sample. An on-disk `bla_redteam_report` without `execute:true` is
+  `status: available` — readable evidence, not a fresh REA verdict.
 - `bla_harden` `{ "dry_run": true }` always has `overallSuccess: false`; only real
   writes return `writeReceipt`.
 

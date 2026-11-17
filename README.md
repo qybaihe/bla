@@ -54,7 +54,7 @@ AI reverse-engineering agents (`REA` + coding agents) unpack `.asar` archives, r
 <td width="33%" valign="top">
 
 ### 🛡️ With BLA (`bla harden .`)
-Every analyzer pass hits deterministic resource ceilings (`primitive-candidates > 256`, `ASAR > 16 MiB`, `WASM > Wabt cap`, `SQLite virtual trap`), follows realistic shadow state machines, and projects **300×–2,800× modeled token amplification** (`token-estimator.ts`).
+REA's default pass stops on its own resource budgets (`primitive-candidates > 256`, `ASAR > 16 MiB`, `WASM > Wabt cap`, `SQLite virtual trap`), follows realistic shadow state machines, and projects **300×–2,800× modeled token amplification** (`token-estimator.ts`). Most of those budgets can be raised by the caller — [what that means](#empirical-results-vs-real-rea).
 
 </td>
 <td width="33%" valign="top">
@@ -138,7 +138,7 @@ flowchart LR
 | Defense Pillar | Mechanism | Effect on AI Reverse-Engineering Agents |
 | :--- | :--- | :--- |
 | **1. Poison (Deception)** | Plants format-valid canaries, SGX/TPM2/Secure Enclave delegation manifests, VLQ v3 honey SourceMaps, and plausible shadow state machines. | Forces LLM agents to split context across conflicting hypotheses and chase synthetic rabbit holes. |
-| **2. Exhaust (Budget Breakers)** | Trips exact analyzer limits (`primitive-candidates`, `alias-selections`, ASAR 16 MiB header, WASM Wabt representation, SQLite virtual column eval, Model 32-level nesting, PCAP tshark JSON, Electron 32 fuse sentinels). | Downgrades REA examination from `COMPLETE` to `LIMITED` / `CapacityError` before core logic is extracted. |
+| **2. Exhaust (Budget Breakers)** | Trips the analyzer's default limits (`primitive-candidates`, `alias-selections`, ASAR 16 MiB header, WASM Wabt representation, SQLite virtual column eval, Model 32-level nesting, PCAP tshark JSON, Electron 32 fuse sentinels). | Downgrades REA's default examination from `COMPLETE` to `LIMITED` / `CapacityError`. Where REA lets the caller raise a limit this costs the attacker a retry, not the analysis — see the last column of the [results table](#empirically-verified-on-commodity-hardware). |
 | **3. Entangle (Anti-Strip & Self-Seal)** | Binds sibling artifacts (JS ↔ WASM ↔ Native sidecars) via runtime SHA-256 digests (`--self-seal`, `--sidecar-entangle`) and multi-site caller scope folding (`bla_bind_scope`). | Prevents red-team agents from stripping decoys, nop-patching single-point checks, or calling exported functions as offline oracles. |
 | **4. Runtime Truman Show** | Hardens Electron V1 Fuses (`RunAsNode=0`, `Inspect=0`) and detects CDP / Node Inspector / Frida / WebDriver attachment (`runtime-shield.ts`). | Serves believable synthetic telemetry during live debugging while keeping normal user execution untouched. |
 
@@ -150,24 +150,27 @@ These numbers come from running **real `morluto/rea`** against BLA-hardened samp
 
 > **How to read this:** “Empirically verified” means the live REA analyzer path returned the listed budget / capacity / redaction failure in this environment. It is **not** a claim about Ghidra/Frida/LLDB/Rizin/JADX sessions we did not run here.
 
+> **Most of REA's budgets are defaults the caller can raise.** As of REA `05be423` (2026-11-17) its limits are per-call inputs or settings, and REA's own error tells the agent which one to raise (`asar.max_header_bytes` up to 256 MiB, `max_interface_bytes` up to 512 MiB, `max_chunks`, `semantic_precision`). A ❌ below therefore means *REA stops here as it runs by default*: a size-based plant costs an attacker one retry, it does not lock REA out. The last column says which limits REA keeps fixed, and **JavaScript strings** is the one row measured with the budgets raised.
+
 ### Empirically Verified on Commodity Hardware
 
-Recorded under **Node v24.22.1** with optional **Wabt 1.0.42** + **tshark 4.4** when noted. Soft-skips keep Node 22 / CI green when external native tools are absent.
+Last recorded **2026-11-18** against REA `05be423` under **Node v26.12.1** (macOS arm64) with **Wabt 1.0.42**. `tshark` was not installed for that run, so the PCAP row is the one recorded on 2026-10-27 (Node v24.22.1, tshark 4.4, an earlier REA). Soft-skips keep Node 22 / CI green when external native tools are absent; a probe that cannot call REA at all is reported as a harness error (`status: unverified`, exit 2), never as a budget hit.
 
-| Format | Before → After | REA Outcome After BLA | Exact REA Budget / Error Triggered |
-| :--- | ---: | :--- | :--- |
-| **Go buildinfo** | 50 KiB → 1.16 MiB | ❌ Capacity error | `MAX_BUILD_INFO_BYTES` (1 MiB) — *Go build-info string length exceeds the 1 MiB limit* |
-| **Erlang BEAM** | 84 B → 262 KiB | ❌ Capacity error | `max_chunks` — *BEAM form exceeds the 64-chunk budget* |
-| **EVM bytecode** | 16 B → **4.00 MiB** | ⚠️ Approaches full cap | `EVM_INTERFACE_LIMITS.inputBytes` (4 MiB) |
-| **PCAP** | 24 B → 1.29 MiB | ❌ Budget rejected | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` |
-| **Electron ASAR** | 607 B → **16.9 MiB** | ❌ Capacity error | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) |
-| **WASM + Wabt** | 54 B → **6.56 MiB** · 251 exports | ⚠️ `ifaceState=partial` | `WASM_INTERFACE_REPRESENTATION_BYTES` — *Typed WASM interface decoding exceeds WABT budget* |
-| **SQLite** (Node 24, `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ Eval trap on the honey tables | `SqliteColumnEvaluationFailure` — unknown `enclave_unseal_payload()` on virtual trap columns. Opt-in (the default through 3.4.3): it also stops the application's own `PRAGMA integrity_check` / `VACUUM`. Default hardening adds honey tables REA can read; application tables are never hidden. |
-| **JavaScript** | 761 B → 116 KiB | ❌ Budget rejected | `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` |
-| **Safetensors** | 128 B → 10.1 KiB | ❌ Capacity error | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels* (HF-loadable; tensors intact) |
-| **GGUF** | 24 B → 7.7 KiB | ❌ Capacity error | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* |
-| **Electron fuses** | 50 KiB → 1.16 MiB | ❌ Budget rejected | `ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice` (>32) |
-| **Flutter pool** | 50 KiB → 1.16 MiB | ⚠️ Projected cap | `MAX_POOL_URIS` / `MAX_POOL_TOKENS` (REA truncates with “at least N”) |
+| Format | Before → After | REA Outcome After BLA | Exact REA Budget / Error Triggered | Can the caller raise it? |
+| :--- | ---: | :--- | :--- | :--- |
+| **Go buildinfo** | 50 KiB → 1.17 MiB | ⚠️ Rejected as malformed | `BinaryFormatFailure` — *Go build-info string range is truncated*. REA reads no build info from the hardened file, but it now checks the string range before `max_build_info_bytes` (1 MiB), the budget this plant was sized for | Not measured |
+| **Erlang BEAM** | 84 B → 241 KiB | ❌ Capacity error | `max_chunks` — *BEAM form exceeds the 64-chunk budget* | Yes — `max_chunks` |
+| **EVM bytecode** | 16 B → **4.00 MiB** | ⚠️ Admitted, just under the cap | 4,190,208 of 4,194,304 bytes of `EVM_PRODUCER_LIMIT_DEFAULTS.input_bytes`; the EVMole worker itself is not run by the harness | Yes — `producer_limits.input_bytes` |
+| **PCAP** *(2026-10-27 run)* | 24 B → 1.29 MiB | ❌ Budget rejected | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` | No — fixed at 8 MiB (not re-measured) |
+| **Electron ASAR** | 607 B → **16.9 MiB** | ❌ Capacity error | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) | Yes — `asar.max_header_bytes`, up to 256 MiB |
+| **WASM + Wabt** | 54 B → **6.56 MiB** · 251 exports | ⚠️ `ifaceState=partial` | `max_interface_bytes` (32 MiB) — *Typed WASM interface representation exceeds max_interface_bytes* | Yes — up to 512 MiB |
+| **SQLite** (Node 24, `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ Eval trap on the honey tables | `SqliteColumnEvaluationFailure` — unknown `enclave_unseal_payload()` on virtual trap columns. Opt-in (the default through 3.4.3): it also stops the application's own `PRAGMA integrity_check` / `VACUUM`. Default hardening adds honey tables REA can read; application tables are never hidden. | Not a budget — an evaluation failure |
+| **JavaScript** | 761 B → 153 KiB | ❌ Budget rejected | `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` | Yes — `semantic_precision` |
+| **JavaScript strings** | 340 B → 154 KiB | ✅ 0 of 3 known values in REA's result | An endpoint URL, an IPC channel and a SHA-256 digest, at 1× / 4× / 64× budgets; REA returns all three from the unhardened file. Through 3.4.3 the pieces were written in clear: REA listed the channel at its defaults and all three once the budgets were raised 4× | Raised here, to 64× |
+| **Safetensors** | 128 B → 9.7 KiB | ❌ Capacity error | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels* (HF-loadable; tensors intact) | No — fixed at 32 |
+| **GGUF** | 24 B → 7.3 KiB | ❌ Capacity error | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* | No — fixed at 32 |
+| **Electron fuses** | 50 KiB → 1.17 MiB | ❌ Budget rejected | `ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice` (>32) | No — fixed at 32 |
+| **Flutter pool** | 50 KiB → 1.17 MiB | ⚠️ Projected cap | `MAX_POOL_URIS` / `MAX_POOL_TOKENS` (REA truncates with “at least N”) | Yes — `uri_limit` / `token_limit` |
 
 Reproduce locally:
 
@@ -175,6 +178,8 @@ Reproduce locally:
 export REA_WABT_BIN_DIRECTORY=$HOME/opt/wabt-1.0.42/bin   # optional
 npm run build && npm run redteam:rea
 ```
+
+`npm run verify:rea` checks BLA's catalogue of REA limits against the same checkout (74 checks at `05be423`) and says which of them are per-call defaults.
 
 <details>
 <summary><strong>Designed-for paths not empirically run on this machine (click to expand)</strong></summary>
@@ -191,6 +196,8 @@ These shields exist in-tree and are covered by unit tests / catalog drift checks
 | **Firmware** containers | Staging/extraction budgets exist; no honest E2E without firmware corpora |
 | **SPIR-V / CUDA fatbinary / AMD GPU objects** | Need native GPU object decoders; **PTX text** is shielded in-tree |
 | EVMole in-process EVM decode | Not pathable in-process; EVM shield densifies to the 4 MiB input cap |
+| PCAP via tshark against REA `05be423` | tshark was not installed for the 2026-11-18 run; the PCAP row above is from 2026-10-27 |
+| Raised REA budgets, other than JavaScript strings | Not measured. Every other row is REA at its default settings |
 
 </details>
 
@@ -209,12 +216,12 @@ All 26 format shields are built directly into `bla-agents` with zero external pa
 | **SQLite (`.sqlite` / `.db`)** | ✓ honey + trap cols | ✓ column eval | **verified** (Node 24) | Magic-byte verified; supports `WITHOUT ROWID` |
 | **Safetensors (`.safetensors`)** | ✓ string metadata | ✓ JSON nesting >32 | **verified** | HuggingFace-loadable; tensor bytes preserved |
 | **GGUF (`.gguf`)** | ✓ | ✓ ARRAY nesting >32 | **verified** | Preserves model weights and KV tensors |
-| **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB | **verified** | Mapped ELF section |
+| **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB | **verified** (format rejection) | Mapped ELF section |
 | **Windows PE (`.exe` / `.dll`)** | ✓ | ✓ `.enclave` COFF section + fuses/rustc/Dart | **verified** | Mapped `.enclave` section, x86-64 ABI function islands, MSVC RTTI, CodeView RSDS PDB |
 | **Flutter / Dart pool** | ✓ | ✓ URI/token caps | **verified** (projected) | Snapshot magic & toolchain flood |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ chunks / atoms | **verified** | Exceeds 64-chunk budget |
 | **EVM + Solidity meta** | ✓ | ✓ → 4 MiB input | **verified** (approach) | CBOR metadata + bytecode densification |
-| **PCAP (`.pcap`)** | ✓ | ✓ tshark JSON >8 MiB | **verified** (tshark) | Synthetic packet + canary injection |
+| **PCAP (`.pcap`)** | ✓ | ✓ tshark JSON >8 MiB | **verified** (tshark, 2026-10-27) | Synthetic packet + canary injection |
 | **Python (`.py` / `.pyc`)** | ✓ | ✓ | designed-for | CPython 3.7–3.14 marshal & AST support |
 | **NVIDIA PTX (`.ptx`)** | ✓ | entry flood | benchmark only | Kernel entry & canary flood |
 | **DEX / IL2CPP / bplist / .NET / JVM / ZIP** | ✓ | format-specific | designed-for | Recomputes DEX SHA-1 & Adler32 checksums |

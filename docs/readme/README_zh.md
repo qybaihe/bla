@@ -54,7 +54,7 @@ AI 逆向代理（`REA` + 编程 Agent）可在单条命令内解包 `.asar`、�
 <td width="33%" valign="top">
 
 ### 🛡️ 接入 BLA（`bla harden .`）后
-静态与语义分析器直接撞上确定性资源配额上限（`primitive-candidates > 256`、`ASAR > 16 MiB`、`WASM > Wabt 上限`、`SQLite 虚拟生成列陷阱`），陷入高拟真影子状态机，模型化估算 Token 消耗放大 **300×–2,800×**（基于 `token-estimator.ts` 内部成本模型）。
+REA 的默认分析流程直接撞上它自己的资源配额（`primitive-candidates > 256`、`ASAR > 16 MiB`、`WASM > Wabt 上限`、`SQLite 虚拟生成列陷阱`），陷入高拟真影子状态机，模型化估算 Token 消耗放大 **300×–2,800×**（基于 `token-estimator.ts` 内部成本模型）。这些配额大多可由调用方调高，含义见[实测结果](#真机对抗实测结果vs-真实-rea)。
 
 </td>
 <td width="33%" valign="top">
@@ -138,7 +138,7 @@ flowchart LR
 | 四大防御支柱 | 核心技术机制 | 对 AI 逆向代理的实际打击效果 |
 | :--- | :--- | :--- |
 | **1. Poison（认知投毒）** | 植入符合格式规范的蜜罐凭据、SGX/TPM2/Secure Enclave 硬件飞地清单、VLQ v3 诱饵 SourceMap 与高拟真影子状态机。 | 迫使大模型在相互冲突的证据假说间分裂注意力，沿合成诊断线索陷入死胡同。 |
-| **2. Exhaust（预算爆破）** | 精确触发分析器内部硬编码配额上限（`primitive-candidates`、ASAR 16 MiB 头部、WASM Wabt 表达上限、SQLite 虚拟生成列求值、AI 模型 32 层嵌套、PCAP 8 MiB JSON、Electron 32 个 Fuse 哨兵）。 | 在触及真实业务前将 REA 分析状态从 `COMPLETE` 强制降级为 `LIMITED` 或直接抛出容量异常。 |
+| **2. Exhaust（预算爆破）** | 精确触发分析器的默认配额上限（`primitive-candidates`、ASAR 16 MiB 头部、WASM Wabt 表达上限、SQLite 虚拟生成列求值、AI 模型 32 层嵌套、PCAP 8 MiB JSON、Electron 32 个 Fuse 哨兵）。 | 将 REA 的默认分析状态从 `COMPLETE` 降级为 `LIMITED` 或直接抛出容量异常。凡是 REA 允许调用方调高的配额，这只让攻击者多重试一次，而不是挡住分析——见实测表最后一列。 |
 | **3. Entangle（反剥离缠绕）** | 通过运行时 SHA-256 摘要（`--self-seal`、`--sidecar-entangle`）与多点调用域折叠（`bla_bind_scope`）将 JS ↔ WASM ↔ 原生二进制深度绑定。 | 阻止红队直接裁剪诱饵分支、NOP 单点校验或将导出函数当作离线解密 Oracle 调用。 |
 | **4. Runtime（楚门世界）** | 原地加固 Electron V1 Fuse 位（`RunAsNode=0`、`Inspect=0`），并检测 CDP、Inspector、Frida 与 WebDriver 挂载（`runtime-shield.ts`）。 | 在动态调试会话中返回可信的合成遥测数据，同时保证正常用户运行零感知。 |
 
@@ -148,20 +148,25 @@ flowchart LR
 
 以下数据来自在标准硬件上直接运行**真实 `morluto/rea`** 分析 BLA 加固产物的实测记录（`npm run redteam:rea`）。完整机器可读报告见 [`docs/redteam/empirical-rea-validation.md`](../redteam/empirical-rea-validation.md) / [`.json`](../redteam/empirical-rea-validation.json)。
 
-| 产物格式 | 加固前 → 加固后体积 | REA 实测分析结果 | 实际触发的 REA 内部预算阈值 / 异常信息 |
-| :--- | ---: | :--- | :--- |
-| **Go buildinfo** | 50 KiB → 1.16 MiB | ❌ 容量溢出拒绝 | `MAX_BUILD_INFO_BYTES` (1 MiB) — *Go build-info string length exceeds the 1 MiB limit* |
-| **Erlang BEAM** | 84 B → 262 KiB | ❌ 容量溢出拒绝 | `max_chunks` — *BEAM form exceeds the 64-chunk budget* |
-| **EVM 字节码** | 16 B → **4.00 MiB** | ⚠️ 逼近输入上限 | `EVM_INTERFACE_LIMITS.inputBytes` (4 MiB) |
-| **PCAP 抓包** | 24 B → 1.29 MiB | ❌ 预算超限拒绝 | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` |
-| **Electron ASAR** | 607 B → **16.9 MiB** | ❌ 容量溢出拒绝 | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) |
-| **WASM + Wabt** | 54 B → **6.56 MiB** · 251 导出 | ⚠️ `ifaceState=partial` | `WASM_INTERFACE_REPRESENTATION_BYTES` — *Typed WASM interface decoding exceeds WABT budget* |
-| **SQLite** (Node 24，需 `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ 蜜罐表求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()`。该陷阱需显式开启（3.4.3 及之前为默认行为）：它同样会让宿主程序自己的 `PRAGMA integrity_check` / `VACUUM` 失败。默认加固只加入 REA 可读的蜜罐表；业务表从不被隐藏。 |
-| **JavaScript** | 761 B → 116 KiB | ❌ 语义预算拒绝 | 同时触发 `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` |
-| **Safetensors** | 128 B → 10.1 KiB | ❌ 容量溢出拒绝 | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels*（HF 正常加载，权重不变） |
-| **GGUF 模型** | 24 B → 7.7 KiB | ❌ 容量溢出拒绝 | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* |
-| **Electron Fuses** | 50 KiB → 1.16 MiB | ❌ 预算超限拒绝 | `ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice` (>32) |
-| **Flutter 常量池** | 50 KiB → 1.16 MiB | ⚠️ 触发截断上限 | `MAX_POOL_URIS` / `MAX_POOL_TOKENS`（REA 输出被截断） |
+> **REA 的预算大多是调用方可以调高的默认值。** 截至 REA `05be423`（2026-11-17），这些上限是每次调用的入参或设置项，REA 自己的报错会告诉 Agent 该调哪一个（`asar.max_header_bytes` 最高 256 MiB、`max_interface_bytes` 最高 512 MiB、`max_chunks`、`semantic_precision`）。因此下表的 ❌ 表示 *REA 按默认配置运行时在此止步*：靠体积触发的诱饵只让攻击者多重试一次，并不能把 REA 挡在门外。最后一列标明哪些上限在 REA 中是写死的；**JavaScript 字符串**是唯一在调高预算后实测的一行。
+
+最近一次记录：**2026-11-18**，REA `05be423`，**Node v26.12.1**（macOS arm64），**Wabt 1.0.42**。该次运行未安装 `tshark`，PCAP 一行沿用 2026-10-27 的记录（Node v24.22.1、tshark 4.4、更早的 REA）。探针调不通 REA 时记为脚手架错误（`status: unverified`，退出码 2），不会算作预算命中。
+
+| 产物格式 | 加固前 → 加固后体积 | REA 实测分析结果 | 实际触发的 REA 内部预算阈值 / 异常信息 | 调用方能否调高？ |
+| :--- | ---: | :--- | :--- | :--- |
+| **Go buildinfo** | 50 KiB → 1.17 MiB | ⚠️ 判为格式损坏而拒绝 | `BinaryFormatFailure` — *Go build-info string range is truncated*。REA 读不到加固产物的构建信息，但它现在先检查字符串范围，再检查 `max_build_info_bytes`（1 MiB）——后者才是该诱饵瞄准的预算 | 未实测 |
+| **Erlang BEAM** | 84 B → 241 KiB | ❌ 容量溢出拒绝 | `max_chunks` — *BEAM form exceeds the 64-chunk budget* | 能 — `max_chunks` |
+| **EVM 字节码** | 16 B → **4.00 MiB** | ⚠️ 被接受，仅略低于上限 | 占用 `EVM_PRODUCER_LIMIT_DEFAULTS.input_bytes` 4,194,304 字节中的 4,190,208 字节；脚手架不运行 EVMole worker 本身 | 能 — `producer_limits.input_bytes` |
+| **PCAP 抓包**（2026-10-27 记录） | 24 B → 1.29 MiB | ❌ 预算超限拒绝 | `TSHARK_JSON_MAX_BYTES` (>8 MiB) → `AnalysisResourceConstraintError` | 不能 — 固定 8 MiB（本次未重测） |
+| **Electron ASAR** | 607 B → **16.9 MiB** | ❌ 容量溢出拒绝 | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) | 能 — `asar.max_header_bytes`，最高 256 MiB |
+| **WASM + Wabt** | 54 B → **6.56 MiB** · 251 导出 | ⚠️ `ifaceState=partial` | `max_interface_bytes` (32 MiB) — *Typed WASM interface representation exceeds max_interface_bytes* | 能 — 最高 512 MiB |
+| **SQLite** (Node 24，需 `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ 蜜罐表求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()`。该陷阱需显式开启（3.4.3 及之前为默认行为）：它同样会让宿主程序自己的 `PRAGMA integrity_check` / `VACUUM` 失败。默认加固只加入 REA 可读的蜜罐表；业务表从不被隐藏。 | 不是预算——是求值失败 |
+| **JavaScript** | 761 B → 153 KiB | ❌ 语义预算拒绝 | 同时触发 `alias-selections` + `getter-expansion` + `primitive-bytes` + `primitive-candidates` | 能 — `semantic_precision` |
+| **JavaScript 字符串** | 340 B → 154 KiB | ✅ 3 个已知值均不在 REA 的结果中 | 一个接口 URL、一个 IPC 通道名、一个 SHA-256 摘要，分别在 1× / 4× / 64× 预算下测试；未加固时 REA 三个全部读出。3.4.3 及之前分片以明文写出：REA 在默认预算下就列出通道名，预算调高 4× 后三个全部列出 | 本行已调高至 64× |
+| **Safetensors** | 128 B → 9.7 KiB | ❌ 容量溢出拒绝 | `MODEL_JSON_NESTING` — *Safetensors JSON nesting exceeds 32 levels*（HF 正常加载，权重不变） | 不能 — 固定 32 |
+| **GGUF 模型** | 24 B → 7.3 KiB | ❌ 容量溢出拒绝 | `MODEL_METADATA_NESTING` — *GGUF metadata nesting exceeds 32 array frames* | 不能 — 固定 32 |
+| **Electron Fuses** | 50 KiB → 1.17 MiB | ❌ 预算超限拒绝 | `ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice` (>32) | 不能 — 固定 32 |
+| **Flutter 常量池** | 50 KiB → 1.17 MiB | ⚠️ 触发截断上限 | `MAX_POOL_URIS` / `MAX_POOL_TOKENS`（REA 输出被截断） | 能 — `uri_limit` / `token_limit` |
 
 ---
 
@@ -178,12 +183,12 @@ flowchart LR
 | **SQLite (`.sqlite` / `.db`)** | ✓ 蜜罐表 + 虚拟列 | ✓ 生成列求值阻断 | **已验证** (Node 24) | 魔数精准校验；支持 `WITHOUT ROWID` 业务表 |
 | **Safetensors (`.safetensors`)** | ✓ 元数据诱饵 | ✓ JSON 嵌套 >32 层 | **已验证** | 兼容 HuggingFace 加载，张量数据零改动 |
 | **GGUF (`.gguf`)** | ✓ | ✓ 数组嵌套 >32 层 | **已验证** | 保持模型权重与 KV 张量完整 |
-| **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB 构建信息 | **已验证** | 映射 ELF 节区注入 |
+| **Go buildinfo (ELF)** | ✓ | ✓ >1 MiB 构建信息 | **已验证**（格式拒绝） | 映射 ELF 节区注入 |
 | **Windows PE (`.exe` / `.dll`)** | ✓ | ✓ `.enclave` COFF 映射节区 + Fuse/Rust/Dart | **已验证** | 注入映射 `.enclave` 节区、x86-64 函数序言岛、MSVC RTTI 与 CodeView RSDS 调试记录 |
 | **Flutter / Dart Pool** | ✓ | ✓ URI/Token 阈值填充 | **已验证** | 快照魔数与工具链标识填充 |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ Chunk / Atom 填充 | **已验证** | 突破 64-chunk 预算上限 |
 | **EVM + Solidity 元数据** | ✓ | ✓ 逼近 4 MiB 上限 | **已验证** | CBOR 元数据与字节码致密化 |
-| **PCAP (`.pcap`)** | ✓ | ✓ tshark JSON >8 MiB | **已验证** | 合成流量包与金丝雀凭据注入 |
+| **PCAP (`.pcap`)** | ✓ | ✓ tshark JSON >8 MiB | **已验证**（tshark，2026-10-27） | 合成流量包与金丝雀凭据注入 |
 | **Python (`.py` / `.pyc`)** | ✓ | ✓ | 设计支持 | 支持 CPython 3.7–3.14 字节码与源码保护 |
 | **NVIDIA PTX (`.ptx`)** | ✓ | 入口洪泛 | 基准测试验证 | GPU PTX 文本核函数洪泛 |
 | **DEX / IL2CPP / bplist / .NET / JVM / ZIP** | ✓ | 格式专属护盾 | 设计支持 | 自动重算 DEX SHA-1 与 Adler32 校验和 |

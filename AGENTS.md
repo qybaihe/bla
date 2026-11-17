@@ -44,6 +44,6 @@ Tests run with `BLA_STATE_DIR` pointed at a throwaway directory (`vitest.config.
 
 ## Contracts worth keeping
 
-- **A hardened program must still run.** Changes to a shield need an equivalence test that executes the hardened output (`tests/js-shield-consumer-contract.test.ts`, `tests/harden-integrity-honesty.test.ts`, the `fuzz-regression-*` suites), not only a structural assertion.
+- **A hardened program must still run.** Changes to a shield need an equivalence test that executes the hardened output (`tests/js-shield-consumer-contract.test.ts`, `tests/js-shield-cjs-named-exports.test.ts`, `tests/harden-integrity-honesty.test.ts`, the `fuzz-regression-*` suites), not only a structural assertion.
 - **Reports say what was not done.** When a binding, rename, or encoding cannot reach something, the harden report names it (`integrityBindingSkipped`, `integrityBindingUncoveredEntries`, `plaintextSurvivors`, `skippedDevTooling`, …) and `nextSteps` tells the caller what to do about it.
 - **Lints that refuse must be precise.** A gate that blocks `bla_harden` is measured against ordinary code first (`tests/lane-independence-precision.test.ts`).

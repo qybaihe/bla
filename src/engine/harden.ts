@@ -15,6 +15,7 @@ import { classifyBrowserBundles } from "./browser-bundle.js";
 import { isKnownBlaOutput, registerBlaOutput } from "../core/output-registry.js";
 import { lintPlaintextSecretsFile } from "./plaintext-secret-lint.js";
 import {
+  BLA_BUILD_OUTPUT_DIR_NAMES,
   applyHardenedOutputs,
   collectApplyCandidates,
   isInsideBuildOutput,
@@ -119,20 +120,7 @@ import {
   type WeaveVerifyScope,
 } from "../shields/weave/weave-decoy.js";
 
-/** Preferred build-output directory names, searched first under a project root. */
-export const BLA_BUILD_OUTPUT_DIR_NAMES = Object.freeze([
-  "dist",
-  "build",
-  "out",
-  "release",
-  "Release",
-  "Debug",
-  "x64",
-  "Win32",
-  "bin",
-  ".next",
-  "target",
-] as const);
+export { BLA_BUILD_OUTPUT_DIR_NAMES };
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -274,10 +262,13 @@ export interface HardenArtifactSummary {
   /**
    * JS/TS/HTML only: sensitive-looking literals of the input (digests, keys,
    * tokens — what `bla_lint` reports as `plaintext-secret`) that can still be
-   * read verbatim in the hardened output. `maximum`/`bankrupt` encode string
-   * and template literals, so what is left there is what the shield cannot
-   * reach (object keys, regular expressions, HTML attributes); `stealth` and
-   * `balanced` do not encode strings at all. Previews are clipped.
+   * read verbatim in the hardened output. `maximum`/`bankrupt` split string
+   * and template text, and a secret-looking value wherever it is written
+   * (object key, regular expression, a string of up to 4,096 characters), so
+   * what is left there is what the shield cannot reach — HTML attributes,
+   * tagged templates, class member names, the keys and `as const` values of a
+   * TypeScript source, anything longer. `stealth` and `balanced` do not
+   * encode strings at all. Previews are clipped.
    */
   readonly plaintextSurvivors?: {
     readonly count: number;
@@ -1776,7 +1767,7 @@ function withNextSteps(
         .map((a) => a.relativePath)
         .join(", ")}${withSurvivors.length > 3 ? ", …" : ""} — artifacts[].plaintextSurvivors lists them with source lines. ` +
         (encodes
-          ? "The shield encodes string and template literals of 3 to 256 characters but cannot reach object keys, regular expressions, HTML attributes or longer strings: move the value into a plain string literal of ordinary length (or off the client) and rebuild."
+          ? "The shield splits string and template text of 3 to 256 characters, and a secret-looking value of up to 4,096 characters wherever it is written (string, template, object key, regular expression). It cannot reach HTML attributes, tagged templates, class member names, the keys and `as const` values of a TypeScript source, or anything longer: move the value into a plain string literal (or off the client) and rebuild."
           : `Intensity ${report.intensity} does not encode string literals: harden at maximum or bankrupt, or mask them first with bla_encrypt_strings.`),
     );
   }

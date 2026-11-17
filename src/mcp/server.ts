@@ -1426,7 +1426,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_redteam_report",
     description:
-      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report, unready REA, or a harness that could not call this REA checkout for a probe → status unverified (nothing measured; not a verdict on a shield). Pass execute:true only when sibling REA dist is built.",
     inputSchema: {
       type: "object",
       properties: {

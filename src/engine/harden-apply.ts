@@ -346,6 +346,21 @@ export function restoreAppliedOriginals(
   };
 }
 
+/** Preferred build-output directory names, searched first under a project root. */
+export const BLA_BUILD_OUTPUT_DIR_NAMES = Object.freeze([
+  "dist",
+  "build",
+  "out",
+  "release",
+  "Release",
+  "Debug",
+  "x64",
+  "Win32",
+  "bin",
+  ".next",
+  "target",
+] as const);
+
 /** True when `relativePath` (POSIX, project-relative) lies in a build-output directory. */
 export function isInsideBuildOutput(
   relativePath: string,

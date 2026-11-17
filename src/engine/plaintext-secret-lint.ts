@@ -324,13 +324,7 @@ function extractLiteralsFromJsAst(source: string): ExtractedLiteral[] | null {
         // expression, so only a run that is unmistakably a digest or an
         // encoded blob is offered as a literal.
         if (typeof rec.pattern === "string") {
-          // Character classes spell out alphabets and ranges, not values.
-          const outsideClasses = rec.pattern.replace(/\[(?:\\[\s\S]|[^\]\\])*\]/g, " ");
-          for (const run of outsideClasses.split(/[^A-Za-z0-9+/]+/)) {
-            if ((isHexish(run) || isBase64ish(run)) && !isSequentialAlphabet(run)) {
-              push(run, rec, true);
-            }
-          }
+          for (const run of regexPatternSecretRuns(rec.pattern)) push(run, rec, true);
         }
         break;
       }
@@ -625,6 +619,29 @@ export function looksAlreadyEncrypted(source: string, literal: string): boolean 
   return false;
 }
 
+/**
+ * Runs inside a regular-expression pattern that are unmistakably a digest or
+ * an encoded blob (`/^5e88…42d8$/`). Character classes spell out alphabets and
+ * ranges, not values, so they are skipped; a pattern's metacharacters would
+ * trip the entropy rule on any ordinary expression, so only hex / Base64 runs
+ * count.
+ */
+export function regexPatternSecretRuns(pattern: string): string[] {
+  const outsideClasses = pattern.replace(/\[(?:\\[\s\S]|[^\]\\])*\]/g, " ");
+  return outsideClasses
+    .split(/[^A-Za-z0-9+/]+/)
+    .filter((run) => (isHexish(run) || isBase64ish(run)) && !isSequentialAlphabet(run));
+}
+
+/**
+ * `true` for a value this lint reports at `error` severity — the ones a harden
+ * report lists as `plaintextSurvivors` when they are still readable.
+ */
+export function isShippedSecretLiteral(value: string): boolean {
+  const id = classifySensitiveLiteral(value);
+  return id !== null && severityFor(id) === "error";
+}
+
 export function classifySensitiveLiteral(
   literal: string,
 ): PlaintextSecretFindingId | null {
@@ -698,7 +715,7 @@ export function lintPlaintextSecretsSource(
       severity: severityFor(id),
       summary:
         inRegex === true
-          ? `Cleartext sensitive value inside a regular expression (${id}) — nothing encodes a regex literal: build it with new RegExp(<string literal>) or move the value out of the shipped file`
+          ? `Cleartext sensitive value inside a regular expression (${id}) — bla_harden rebuilds such a regex from a split string at maximum / bankrupt only; bla_encrypt_strings and the lower intensities leave it readable: build it with new RegExp(<string literal>) or move the value out of the shipped file`
           : `Cleartext sensitive literal (${id})`,
       evidence: lit.slice(0, 120),
       literal: lit.length > 200 ? `${lit.slice(0, 200)}…` : lit,

@@ -135,6 +135,34 @@ export const REDTEAM_REPORT_JSON = join(
   "empirical-rea-validation.json",
 );
 
+/**
+ * `scripts/redteam/run.mjs` exits with this when a probe could not call REA at
+ * all. Nothing was measured for that format, so it is not a verdict on a shield.
+ */
+const REDTEAM_EXIT_UNVERIFIED = 2;
+
+/**
+ * A report written by a run in which a probe could not call REA says so in its
+ * own `status`. Reading it back must not turn that into "available".
+ */
+function describeUnmeasuredReport(report: unknown): string | null {
+  if (typeof report !== "object" || report === null) return null;
+  const record = report as { status?: unknown; harnessErrors?: unknown };
+  if (record.status !== "unverified") return null;
+  const errors = Array.isArray(record.harnessErrors) ? record.harnessErrors : [];
+  const named = errors.slice(0, 8).map((entry) => {
+    const item = (typeof entry === "object" && entry !== null ? entry : {}) as {
+      format?: unknown;
+      reason?: unknown;
+    };
+    const format = typeof item.format === "string" ? item.format : "unknown format";
+    const reason = typeof item.reason === "string" ? ` (${item.reason.slice(0, 160)})` : "";
+    return `${format}${reason}`;
+  });
+  const which = named.length > 0 ? `: ${named.join("; ")}` : "";
+  return `This report was written by a run in which the harness could not call REA for ${errors.length > 0 ? String(errors.length) : "at least one"} probe${errors.length > 1 ? "s" : ""}${which}. Those formats were not measured — their rows are not evidence about the shield.`;
+}
+
 export interface RedteamReportResult {
   readonly schema: "bla-redteam-report/v1";
   readonly status: ReaObservabilityStatus;
@@ -154,6 +182,9 @@ export interface RedteamReportResult {
  * - Default: return the on-disk JSON when present (`status: available` — not a live pass).
  * - `execute: true`: spawn `scripts/redteam/run.mjs` when REA dist is ready (`pass`/`fail`).
  * - Missing report AND missing/unready REA → explicit `unverified`.
+ * - The harness could not call REA for a probe (this run, or the run that wrote
+ *   the report on disk) → `unverified`: that is the harness being out of date
+ *   with the REA checkout, not REA reading a hardened sample (`fail`).
  */
 export function getRedteamReport(options: {
   readonly reaRoot?: string;
@@ -215,13 +246,26 @@ export function getRedteamReport(options: {
       };
     }
     const exitCode = result.status ?? 1;
+    if (exitCode === REDTEAM_EXIT_UNVERIFIED) {
+      return {
+        ...base,
+        status: "unverified",
+        executed: true,
+        exitCode,
+        reason:
+          "redteam:rea could not call REA for at least one probe (stderr names the format and the missing export or module). The harness is out of date with this REA checkout; nothing was measured for those formats, and this is not a verdict on a shield.",
+        stdout,
+        stderr,
+      };
+    }
     if (exitCode !== 0) {
       return {
         ...base,
         status: "fail",
         executed: true,
         exitCode,
-        reason: "redteam:rea exited non-zero",
+        reason:
+          "redteam:rea exited non-zero: REA read a hardened sample it was expected to stop on, or the harness crashed (see stderr)",
         stdout,
         stderr,
       };
@@ -245,8 +289,21 @@ export function getRedteamReport(options: {
   }
 
   try {
-    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    const report: unknown = JSON.parse(readFileSync(reportPath, "utf8"));
     const executed = options.execute === true;
+    const unmeasured = describeUnmeasuredReport(report);
+    if (unmeasured !== null) {
+      return {
+        ...base,
+        status: "unverified",
+        executed,
+        exitCode: executed ? 0 : null,
+        reason: unmeasured,
+        report,
+        stdout: "",
+        stderr: "",
+      };
+    }
     return {
       ...base,
       // Live execute → pass; plain on-disk read → available (not a fresh REA verdict).

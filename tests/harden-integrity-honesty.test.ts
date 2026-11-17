@@ -17,7 +17,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { generateManifestSigningKeyPair } from "../src/core/manifest-signing.js";
 import { verifyManifestFile } from "../src/core/manifest-verify.js";
 import { getDatabaseSyncClass } from "../src/core/sqlite-runtime.js";
-import { hardenProject, type HardenProjectOptions } from "../src/engine/harden.js";
+import {
+  hardenProject,
+  type HardenProjectOptions,
+  type HardenProjectReport,
+} from "../src/engine/harden.js";
 import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 /**
@@ -379,20 +383,15 @@ describe("plaintext survivors", () => {
     expect(hardened).toContain(DIGEST_IN_STRING);
   }, 240000);
 
-  it("maximum encodes string literals and reports only what it cannot reach", () => {
+  it("maximum splits a secret wherever it is written, and then has nothing left to report", () => {
     const dir = licenseProject();
     const report = harden(dir, { intensity: "maximum" });
     expect(report.overallSuccess).toBe(true);
     const hardened = readFileSync(report.artifacts[0]!.outputPath, "utf8");
     expect(hardened).not.toContain(DIGEST_IN_STRING);
-    expect(hardened).toContain(DIGEST_IN_KEY); // an object key is not a string the shield encodes
-
-    const survivors = report.artifacts[0]!.plaintextSurvivors!;
-    expect(survivors.count).toBe(1);
-    expect(survivors.samples[0]).toMatchObject({ line: 3 });
-    expect(report.nextSteps?.join("\n")).toMatch(
-      /of 3 to 256 characters but cannot reach object keys, regular expressions, HTML attributes or longer strings: move the value into a plain string literal/,
-    );
+    expect(hardened).not.toContain(DIGEST_IN_KEY); // an object key is split like any other secret
+    expect(report.artifacts[0]!.plaintextSurvivors).toBeUndefined();
+    expect(report.nextSteps?.join("\n")).not.toMatch(/still readable/);
 
     // The hardened module still decides the same way.
     const out = dirname(report.artifacts[0]!.outputPath);
@@ -403,34 +402,82 @@ describe("plaintext survivors", () => {
     expect(run).toMatchObject({ status: 0, stdout: "true true false\n" });
   }, 240000);
 
-  it("reports a digest that sits in a regular expression, which no intensity encodes", () => {
+  it("rebuilds a regular expression that holds a digest — at maximum and bankrupt only", () => {
+    function gateProject(): string {
+      const dir = tempDir("bla-int-surv-");
+      put(
+        dir,
+        "dist/gate.cjs",
+        [
+          "const crypto = require('node:crypto');",
+          `const PRO = /^${DIGEST_IN_STRING}$/;`,
+          "const check = (key) => PRO.test(crypto.createHash('sha256').update(String(key)).digest('hex'));",
+          "module.exports = { check };",
+          "",
+        ].join("\n"),
+      );
+      return dir;
+    }
+    const decides = (report: HardenProjectReport): void => {
+      const run = node(
+        ["-e", "const { check } = require('./gate.cjs'); console.log(check('password'), check('nope'))"],
+        dirname(report.artifacts[0]!.outputPath),
+      );
+      expect(run).toMatchObject({ status: 0, stdout: "true false\n" });
+    };
+
+    const bankrupt = harden(gateProject(), { intensity: "bankrupt" });
+    expect(bankrupt.overallSuccess).toBe(true);
+    expect(readFileSync(bankrupt.artifacts[0]!.outputPath, "utf8")).not.toContain(DIGEST_IN_STRING);
+    expect(bankrupt.artifacts[0]!.plaintextSurvivors).toBeUndefined();
+    decides(bankrupt);
+
+    // Below maximum nothing is rewritten, and the report says the digest is still there.
+    const balanced = harden(gateProject(), { intensity: "balanced" });
+    expect(readFileSync(balanced.artifacts[0]!.outputPath, "utf8")).toContain(DIGEST_IN_STRING);
+    const survivors = balanced.artifacts[0]!.plaintextSurvivors!;
+    expect(survivors.count).toBe(1);
+    expect(survivors.samples[0]).toMatchObject({ line: 2 });
+    expect(balanced.nextSteps?.join("\n")).toMatch(/Intensity balanced does not encode string literals/);
+    expect(JSON.stringify(balanced)).not.toContain(DIGEST_IN_STRING);
+    decides(balanced);
+  }, 240000);
+
+  it("reports what maximum still cannot reach: a class member name, a value over 4,096 characters", () => {
     const dir = tempDir("bla-int-surv-");
+    const oversized = DIGEST_IN_STRING.repeat(70); // 4,480 hex characters
     put(
       dir,
-      "dist/gate.cjs",
+      "dist/tiers.cjs",
       [
-        "const crypto = require('node:crypto');",
-        `const PRO = /^${DIGEST_IN_STRING}$/;`,
-        "const check = (key) => PRO.test(crypto.createHash('sha256').update(String(key)).digest('hex'));",
-        "module.exports = { check };",
+        `class Tiers { static '${DIGEST_IN_KEY}' = 'pro'; }`,
+        `const BLOB = '${oversized}';`,
+        "module.exports = { tier: (h) => Tiers[h] ?? 'free', size: BLOB.length };",
         "",
       ].join("\n"),
     );
-    const report = harden(dir, { intensity: "bankrupt" });
+    const report = harden(dir, { intensity: "maximum" });
     expect(report.overallSuccess).toBe(true);
     const hardened = readFileSync(report.artifacts[0]!.outputPath, "utf8");
-    expect(hardened).toContain(DIGEST_IN_STRING);
+    expect(hardened).toContain(DIGEST_IN_KEY);
+    expect(hardened).toContain(oversized);
+
     const survivors = report.artifacts[0]!.plaintextSurvivors!;
-    expect(survivors.count).toBe(1);
-    expect(survivors.samples[0]).toMatchObject({ line: 2 });
-    expect(report.nextSteps?.join("\n")).toMatch(/regular expressions/);
-    expect(JSON.stringify(report)).not.toContain(DIGEST_IN_STRING);
+    expect(survivors.count).toBe(2);
+    expect(survivors.samples.map((s) => s.line)).toEqual([1, 2]);
+    expect(report.nextSteps?.join("\n")).toMatch(
+      /a secret-looking value of up to 4,096 characters wherever it is written \(string, template, object key, regular expression\)\. It cannot reach HTML attributes, tagged templates, class member names, .* or anything longer: move the value into a plain string literal/,
+    );
+    expect(JSON.stringify(report)).not.toContain(DIGEST_IN_KEY);
 
     const run = node(
-      ["-e", "const { check } = require('./gate.cjs'); console.log(check('password'), check('nope'))"],
+      [
+        "-e",
+        `const t = require('./tiers.cjs'); console.log(t.tier('${DIGEST_IN_KEY}'), t.tier('nope'), t.size)`,
+      ],
       dirname(report.artifacts[0]!.outputPath),
     );
-    expect(run).toMatchObject({ status: 0, stdout: "true false\n" });
+    expect(run).toMatchObject({ status: 0, stdout: "pro free 4480\n" });
   }, 240000);
 
   it("says nothing when there is nothing sensitive to find", () => {

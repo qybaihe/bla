@@ -44,6 +44,11 @@ function compareToEstimates(pair) {
         ? `AGREE with BLA goBuildInfoExceedsLimit=${expect}`
         : `DIVERGE: BLA estimated trips=${expect}, empirical budgetHit=${hit}`,
     );
+    if (expect && !hit && after.status === "error") {
+      notes.push(
+        `REA rejected the planted build-info before its size budget applied (${after.errorName}: ${after.errorMessage}). It still reads no build info from the hardened file, but this is a format rejection, not the budget the shield was sized for.`,
+      );
+    }
   }
   if (format === "flutter_pool") {
     const hit = after.budgetHit === true;
@@ -144,6 +149,30 @@ function compareToEstimates(pair) {
         : "Wabt tools absent — soft-skipped to in-process WasmInterfaceBudget with projected descriptors",
     );
   }
+  if (format === "javascript_strings") {
+    const names = Object.keys(sampleMeta?.values ?? {});
+    const line = (run) =>
+      `${run.budgetMultiplier}x budgets (${run.ms} ms, coverage=${run.coverage}, limits=[${(run.limits ?? []).join(", ")}]): ` +
+      names
+        .map((name) => {
+          const n = run.recovered?.[name] ?? 0;
+          return `${name} ${n === 0 ? "not in REA's result" : n === 1 ? "RECOVERED" : `one of ${n} candidates`}`;
+        })
+        .join("; ");
+    for (const run of before.metrics?.budgetRuns ?? []) {
+      if (run.budgetMultiplier === 1) notes.push(`unhardened, ${line(run)}`);
+    }
+    for (const run of after.metrics?.budgetRuns ?? []) notes.push(`hardened, ${line(run)}`);
+    notes.push(
+      after.metrics?.valuesHiddenAtDefaultBudgets === true &&
+        after.metrics?.valuesHiddenAtRaisedBudgets === true
+        ? "AGREE: no known value reaches REA's result, with its budgets raised or not"
+        : "DIVERGE: REA's result holds a known value — the string encoding was read through",
+    );
+    notes.push(
+      "REA's JavaScript budgets are per-call inputs (semantic_precision); a sample that only trips the defaults is read by whoever raises them, which is why this row measures both.",
+    );
+  }
   if (format === "sqlite_db") {
     notes.push(
       after.status === "capability_gated"
@@ -181,8 +210,16 @@ export function buildReportDocument(run) {
   lines.push("# Empirical REA red-team validation");
   lines.push("");
   lines.push(`Generated: ${run.generatedAt} (Asia/Shanghai)`);
-  lines.push(`BLA root: \`${run.blaRoot}\``);
+  lines.push(`BLA: \`bla-agents ${run.blaVersion ?? "(unknown version)"}\` (working tree at \`${run.blaRoot}\`)`);
   lines.push(`REA root: \`${run.reaRoot}\``);
+  if (run.reaProvenance?.commit) {
+    lines.push(`REA commit: \`${run.reaProvenance.commit}\` (${run.reaProvenance.date ?? "unknown"})`);
+  }
+  lines.push(
+    run.status === "measured"
+      ? "Harness: **measured** — every probe that can run on this machine called REA itself (rows marked `skipped` name the tool that was missing)."
+      : `Harness: **${run.status ?? "unknown"}** — at least one probe could not call REA (see \`harnessErrors\`); those formats were not measured.`,
+  );
   lines.push(`Intensity: \`${run.intensity}\` · seed: \`${run.seed}\``);
   lines.push(`Node: \`${run.nodeVersion}\``);
   lines.push(`tshark: ${run.tshark.available ? `\`${run.tshark.version}\`` : "not available"}`);

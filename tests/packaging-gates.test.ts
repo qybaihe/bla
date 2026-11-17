@@ -120,3 +120,90 @@ module.exports = { check };
     expect(oracle!.refuseMessage).toContain("panel offline oracle");
   });
 });
+
+describe("a finding on a build-output file and on the source it was made from", () => {
+  // Assembled here so no digest-shaped literal sits in the repository.
+  const DIGEST = ["2f0f6f0d4c6f0b8c", "1a0e2f6d7f3a9a51", "f1c2b7d5e8a4c3b2", "a1908f7e6d5c4b3a"].join("");
+  const license = (quote: string): string =>
+    `const EXPECTED = ${quote}${DIGEST}${quote};\nmodule.exports = { check: (h) => h === EXPECTED };\n`;
+  function project(files: Readonly<Record<string, string>>): string {
+    const dir = mkdtempSync(join(tmpdir(), "bla-pg-twin-"));
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text);
+    }
+    return dir;
+  }
+
+  it("is listed once, on the file that ships, and names the source", () => {
+    const dir = project({
+      "src/license.cjs": license("'"),
+      "dist/license.cjs": license("'"),
+    });
+    const report = scanPackagingGates({ directory: dir, intensity: "bankrupt" });
+    const secrets = report.findings.filter((f) => f.gate === "plaintext-secret");
+    expect(secrets.map((f) => f.relativePath)).toEqual(["dist/license.cjs"]);
+    expect(secrets[0]!.sameFindingInSource).toEqual(["src/license.cjs"]);
+    expect(report.gateCounts["plaintext-secret"]).toBe(1);
+
+    // The plan no longer sends anyone to rewrite the source file.
+    const plan = report.remediationPlan.filter((p) => p.gate === "plaintext-secret");
+    expect(plan.map((p) => p.relativePath)).toEqual(["dist/license.cjs"]);
+    expect(plan[0]!.sourceRefactorRecipe).toContain("`bla_encrypt_strings` on `dist/license.cjs`");
+    expect(plan[0]!.sourceRefactorRecipe).not.toContain("on `src/license.cjs`");
+    expect(plan[0]!.sourceRefactorRecipe).toMatch(
+      /Also in `src\/license\.cjs` — the source this file is built from, not listed as a finding of its own\. A fix made there needs a rebuild; .* belong on the build output, never on the source\./,
+    );
+    expect(report.oneLineAdvice).toMatch(
+      /1 finding\(s\) repeat in the source a build-output file was made from; they are listed once, on the file that ships \(sameFindingInSource\)\./,
+    );
+    expect(formatPackagingGatesReport(report)).toContain("same finding in its source: src/license.cjs");
+
+    // The raw per-file reports still hold both: that is what harden refuses on.
+    const raw = report.details.plaintextSecrets.filter((r) => r.findings.length > 0);
+    expect(raw.map((r) => r.path.split(/[\\/]/).slice(-2).join("/")).sort()).toEqual([
+      "dist/license.cjs",
+      "src/license.cjs",
+    ]);
+  });
+
+  it("matches a transpiled file by stem: the extension and the line numbers may differ", () => {
+    const dir = project({
+      "src/license.ts": `// licence check\n\nexport const EXPECTED: string = "${DIGEST}";\n`,
+      "dist/license.js": `"use strict";\nexports.EXPECTED = "${DIGEST}";\n`,
+    });
+    const secrets = scanPackagingGates({ directory: dir, intensity: "bankrupt" }).findings.filter(
+      (f) => f.gate === "plaintext-secret",
+    );
+    expect(secrets.map((f) => f.relativePath)).toEqual(["dist/license.js"]);
+    expect(secrets[0]!.sameFindingInSource).toEqual(["src/license.ts"]);
+  });
+
+  it("keeps findings that are not the same finding", () => {
+    const other = DIGEST.split("").reverse().join("");
+    // Different value in the source, and a source file with no build output of that name.
+    const dir = project({
+      "src/license.cjs": `const EXPECTED = '${other}';\nmodule.exports = { EXPECTED };\n`,
+      "dist/license.cjs": license("'"),
+      "src/vault.cjs": license("'"),
+    });
+    const secrets = scanPackagingGates({ directory: dir, intensity: "bankrupt" }).findings.filter(
+      (f) => f.gate === "plaintext-secret",
+    );
+    expect(secrets.map((f) => f.relativePath).sort()).toEqual([
+      "dist/license.cjs",
+      "src/license.cjs",
+      "src/vault.cjs",
+    ]);
+    for (const f of secrets) expect(f.sameFindingInSource).toBeUndefined();
+  });
+
+  it("a project with no build output is reported file by file, as before", () => {
+    const dir = project({ "src/license.cjs": license("'"), "lib/license.cjs": license("'") });
+    const secrets = scanPackagingGates({ directory: dir, intensity: "bankrupt" }).findings.filter(
+      (f) => f.gate === "plaintext-secret",
+    );
+    expect(secrets.map((f) => f.relativePath).sort()).toEqual(["lib/license.cjs", "src/license.cjs"]);
+    expect(secrets.every((f) => f.sameFindingInSource === undefined)).toBe(true);
+  });
+});

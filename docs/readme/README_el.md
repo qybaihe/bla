@@ -4,13 +4,13 @@
 
 # BLA: Blind LLM Agents
 
-### Ένα ενιαίο MCP για την προστασία εκτελέσιμων αρχείων, εφαρμογών και συμπεριφοράς εκτέλεσης από αντίστροφηวิศวกรรม AI.
+### Ένα ενιαίο MCP για την προστασία εκτελέσιμων αρχείων, εφαρμογών και συμπεριφοράς εκτέλεσης από αντίστροφη μηχανική AI.
 
 **Προστατέψτε τις λειτουργίες που δημιουργήσατε. Τυφλώστε τους πράκτορες AI που προσπαθούν να τις κλωνοποιήσουν σε δυαδικό επίπεδο.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
+[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.23.4_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#showcases)
 [![MIT license](https://img.shields.io/badge/license-MIT-38bdf8?style=flat-square)](../../LICENSE)
 

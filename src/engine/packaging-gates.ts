@@ -12,6 +12,7 @@
 
 import { basename, relative, resolve, sep } from "node:path";
 import { listKnownBlaOutputs } from "../core/output-registry.js";
+import { BLA_BUILD_OUTPUT_DIR_NAMES, isInsideBuildOutput } from "./harden-apply.js";
 import { sanitizeTerminalText } from "../core/terminal-text.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import {
@@ -139,6 +140,13 @@ export interface PackagingGateFinding {
    * hygiene gate: this scan fails on it, but a harden run still goes ahead.
    */
   readonly enforcedByHarden?: boolean;
+  /**
+   * Source files (project-relative) that carry this same finding because this
+   * build-output file was made from them. They are not listed as findings of
+   * their own: fix the value there and rebuild — never rewrite the source
+   * file with a masking tool.
+   */
+  readonly sameFindingInSource?: readonly string[];
 }
 
 /**
@@ -237,6 +245,67 @@ const HONESTY_NOTE =
 
 function relPath(absDir: string, filePath: string): string {
   return (relative(absDir, filePath) || basename(filePath)).split(sep).join("/");
+}
+
+/** JS / TS / HTML: the files a build copies, transpiles or bundles into its output. */
+const BUILD_INPUT_EXT_RE = /\.(?:[cm]?[jt]sx?|html?)$/i;
+
+/**
+ * A copy or transpile build leaves the same finding twice: on
+ * `dist/license.cjs`, which ships, and on the `src/license.cjs` it was made
+ * from. Listed as two findings, the remediation plan sends an agent to run a
+ * rewriting tool on a source file. The build output keeps the finding and
+ * names its source (`sameFindingInSource`); the source is not listed again.
+ *
+ * Two findings are the same when gate, file stem and evidence agree — line
+ * numbers do not have to, a transpiler moves them. Only this presentation is
+ * folded: `details` keeps every file, and that is what `bla_harden` refuses on.
+ */
+function foldBuildInputTwins(
+  findings: readonly PackagingGateFinding[],
+  absDir: string,
+  counts: Record<PackagingGateId, number>,
+): PackagingGateFinding[] {
+  const shipped = (f: PackagingGateFinding): boolean =>
+    isInsideBuildOutput(f.relativePath, absDir, BLA_BUILD_OUTPUT_DIR_NAMES);
+  const keyOf = (f: PackagingGateFinding): string =>
+    JSON.stringify([
+      f.gate,
+      (basename(f.relativePath).split(".")[0] ?? "").toLowerCase(),
+      f.shouldRefuseBankrupt,
+      f.findingCount,
+      (f.evidence ?? []).map((e) => [e.id, e.severity ?? "", e.detail ?? ""]),
+    ]);
+  const outputByKey = new Map<string, number>();
+  findings.forEach((f, index) => {
+    if (!BUILD_INPUT_EXT_RE.test(f.relativePath) || !shipped(f)) return;
+    const key = keyOf(f);
+    if (!outputByKey.has(key)) outputByKey.set(key, index);
+  });
+  if (outputByKey.size === 0) return [...findings];
+
+  const sourcesOf = new Map<number, string[]>();
+  const folded = new Set<number>();
+  findings.forEach((f, index) => {
+    if (!BUILD_INPUT_EXT_RE.test(f.relativePath) || shipped(f)) return;
+    const target = outputByKey.get(keyOf(f));
+    if (target === undefined) return;
+    sourcesOf.set(target, [...(sourcesOf.get(target) ?? []), f.relativePath]);
+    folded.add(index);
+    counts[f.gate] -= 1;
+  });
+  return findings.flatMap((f, index) => {
+    if (folded.has(index)) return [];
+    const sources = sourcesOf.get(index);
+    return [sources !== undefined ? { ...f, sameFindingInSource: sources } : f];
+  });
+}
+
+/** What a recipe adds for a finding that also sits in the file's source. */
+function sourceTwinNote(f: PackagingGateFinding): string {
+  const sources = f.sameFindingInSource;
+  if (sources === undefined || sources.length === 0) return "";
+  return ` Also in ${sources.map((s) => `\`${s}\``).join(", ")} — the source this file is built from, not listed as a finding of its own. A fix made there needs a rebuild; a fix made only in the build output lasts until the next build. Tools that rewrite a file (\`bla_encrypt_strings\`, \`bla_harden\`) belong on the build output, never on the source.`;
 }
 
 function emptyCounts(): Record<PackagingGateId, number> {
@@ -383,7 +452,7 @@ function buildGateRemediationMeta(
       return {
         owner: "mcp-tool-call",
         recommendedMcpTool: "bla_encrypt_strings",
-        sourceRefactorRecipe: `Call MCP \`bla_encrypt_strings\` on \`${rel}\` with your project seed to XOR-mask the cleartext literals listed in \`evidence\`, then re-run \`bla_lint\`. It replaces whole string literals and \`\`…\`\` templates without \`\${}\`; a secret inside an interpolated template, a regular expression or an HTML attribute must be moved into a plain string literal (or out of the shipped file) by hand first. This gate is lint-only: \`bla_harden\` does not refuse on it, encodes string and template literals of 3–256 characters itself at \`maximum\`/\`bankrupt\`, and lists any literal it could not reach (object keys, regular expressions, HTML attributes, longer strings) in \`artifacts[].plaintextSurvivors\`.`,
+        sourceRefactorRecipe: `Call MCP \`bla_encrypt_strings\` on \`${rel}\` with your project seed to XOR-mask the cleartext literals listed in \`evidence\`, then re-run \`bla_lint\`. It replaces whole string literals and \`\`…\`\` templates without \`\${}\`; a secret inside an interpolated template, a regular expression or an HTML attribute must be moved into a plain string literal (or out of the shipped file) by hand first. This gate is lint-only: \`bla_harden\` does not refuse on it. At \`maximum\`/\`bankrupt\` it splits string and template text of 3–256 characters itself, and a secret-looking value of up to 4,096 characters wherever it is written (string, template, object key, regular expression); whatever it could not reach (HTML attributes, tagged templates, class member names, TypeScript object keys and \`as const\` values, longer values) is listed in \`artifacts[].plaintextSurvivors\`.`,
       };
     case "integrity-coverage":
       return {
@@ -676,11 +745,12 @@ export function scanPackagingGates(
     return new Set((raw ?? f.evidence ?? []).map((e) => e.id));
   };
 
-  const enrichedFindings: PackagingGateFinding[] = findings.map((f) => {
+  const listedFindings = foldBuildInputTwins(findings, absDir, counts);
+  const enrichedFindings: PackagingGateFinding[] = listedFindings.map((f) => {
     const meta = buildGateRemediationMeta(f.gate, f.relativePath, evidenceIdsOf(f));
     return {
       ...f,
-      remediationRecipe: meta.sourceRefactorRecipe,
+      remediationRecipe: `${meta.sourceRefactorRecipe}${sourceTwinNote(f)}`,
       ...(meta.recommendedMcpTool !== undefined
         ? { recommendedMcpTool: meta.recommendedMcpTool }
         : {}),
@@ -720,16 +790,23 @@ export function scanPackagingGates(
       ...(meta.recommendedMcpTool !== undefined
         ? { recommendedMcpTool: meta.recommendedMcpTool }
         : {}),
-      sourceRefactorRecipe: meta.sourceRefactorRecipe,
+      sourceRefactorRecipe: `${meta.sourceRefactorRecipe}${sourceTwinNote(f)}`,
       verifyCommand: "bla_lint",
     };
   });
 
   const skippedHardenedOutputs = listKnownBlaOutputs(absDir);
+  const foldedSources = enrichedFindings.reduce(
+    (n, f) => n + (f.sameFindingInSource?.length ?? 0),
+    0,
+  );
   const skippedNote =
-    skippedHardenedOutputs.length > 0
+    (skippedHardenedOutputs.length > 0
       ? ` ${skippedHardenedOutputs.length} BLA-hardened output file(s) were not linted (see skippedHardenedOutputs) — lint the files they were built from.`
-      : "";
+      : "") +
+    (foldedSources > 0
+      ? ` ${foldedSources} finding(s) repeat in the source a build-output file was made from; they are listed once, on the file that ships (sameFindingInSource).`
+      : "");
   // Say which failures actually stop `bla_harden`: an agent told "harden would
   // refuse" about a lint-only gate goes off fixing something that blocks nothing.
   const hardenRefusing = blocking.filter((f) => f.enforcedByHarden !== false).length;
@@ -943,6 +1020,11 @@ export function formatPackagingGatesReport(report: PackagingGatesReport): string
       `  [${tag}] ${f.gate} · ${sanitizeTerminalText(f.relativePath)} · ${f.findingCount} finding(s)`,
     );
     lines.push(`    ${sanitizeTerminalText(f.oneLineAdvice)}`);
+    if (f.sameFindingInSource !== undefined && f.sameFindingInSource.length > 0) {
+      lines.push(
+        `    same finding in its source: ${f.sameFindingInSource.map((s) => sanitizeTerminalText(s)).join(", ")}`,
+      );
+    }
   }
   if (report.blocking.length > 0) {
     lines.push(`blocking (${report.blocking.length}):`);

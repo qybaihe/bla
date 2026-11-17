@@ -12,7 +12,7 @@ import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
 import * as t from "@babel/types";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 import {
   detectArtifactFormat,
   isTypeScriptDeclarationPath,
@@ -20,6 +20,15 @@ import {
 import { isDevToolingFile, readPackageToolingScripts } from "../../core/dev-tooling.js";
 import type { ArtifactFormat } from "../../core/types.js";
 import { lintLaneIndependence } from "../../engine/lane-independence-lint.js";
+
+/**
+ * Project-relative path as reports spell it: forward slashes on every
+ * platform, so a plan or verdict reads the same on Windows and matches the
+ * paths `bla_harden` reports.
+ */
+function posixRelative(from: string, to: string): string {
+  return relative(from, to).split(sep).join("/");
+}
 
 type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
 type TraverseFn = UnwrapDefault<typeof _traverse>;
@@ -1966,7 +1975,7 @@ function buildTargetEntry(
 ): WeaveTargetEntry {
   const format = detectArtifactFormat(absPath);
   const rawMaturity = maturityForFormat(format);
-  const relPath = relative(rootAbs, absPath) || basename(absPath) || ".";
+  const relPath = posixRelative(rootAbs, absPath) || basename(absPath) || ".";
   const surgicalWorkorder = buildSurgicalWorkorderForFile(
     absPath,
     relPath,
@@ -3920,7 +3929,7 @@ export function verifyWeaveTarget(
   for (const file of candidateFiles) {
     const format = detectArtifactFormat(file);
     const ext = extname(file).toLowerCase();
-    const relPath = relative(rootAbs, file) || basename(file);
+    const relPath = posixRelative(rootAbs, file) || basename(file);
     if (
       format === "javascript" ||
       format === "typescript" ||

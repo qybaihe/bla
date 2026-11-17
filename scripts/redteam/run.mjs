@@ -2,6 +2,16 @@
 /**
  * Empirical red-team harness: unhardened vs BLA-hardened samples against
  * real in-process REA parsers. Writes docs/redteam/empirical-rea-validation.{md,json}.
+ *
+ * Exit codes:
+ *   0  every probe that can run on this machine measured what BLA expects.
+ *      (No REA checkout at all also exits 0 — it prints status "unverified" —
+ *      so CI without REA stays green.)
+ *   1  REA read a hardened sample it was expected to stop on, or the harness
+ *      crashed for another reason.
+ *   2  a probe could not call REA at all (a renamed export, a moved module).
+ *      Nothing was measured for that format: the harness is out of date with
+ *      this REA revision, which says nothing about the shield.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -26,15 +36,44 @@ import {
   probeSqlite,
   probeElectronFuses,
   probeJavascript,
+  probeJavascriptStrings,
   unverifiedAnalyzers,
+  harnessErrors,
 } from "./lib/probes.mjs";
 import { writeReports } from "./lib/report.mjs";
+
+const EXIT_DIVERGED = 1;
+const EXIT_UNVERIFIED = 2;
 
 function tsharkVersion(env) {
   if (!env.available) return null;
   const r = spawnSync(env.bin, ["-v"], { encoding: "utf8", env: env.env });
   const line = (r.stdout || r.stderr || "").split("\n")[0] || "";
   return line.trim() || "tshark (version unknown)";
+}
+
+/** Resolve REA commit hash and date, soft-fail to null. */
+function resolveReaProvenance() {
+  try {
+    const hash = spawnSync("git", ["-C", REA_ROOT, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    const date = spawnSync(
+      "git",
+      ["-C", REA_ROOT, "log", "-1", "--format=%ci"],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    if (hash.status === 0 && date.status === 0) {
+      return {
+        commit: (hash.stdout || "").trim(),
+        date: (date.stdout || "").trim(),
+      };
+    }
+  } catch {
+    /* not a git checkout */
+  }
+  return { commit: null, date: null };
 }
 
 async function main() {
@@ -56,9 +95,28 @@ async function main() {
     process.exit(0);
   }
   const tshark = resolveTsharkEnv();
+  // REA first: whether this checkout can be called at all is known before any
+  // sample is built.
+  let rea;
+  try {
+    rea = await loadReaProbes();
+  } catch (err) {
+    const reason = `the harness could not load REA's analyzers: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(
+      `UNVERIFIED: ${reason}. Nothing was measured; scripts/redteam/lib/probes.mjs names REA modules this checkout does not have.`,
+    );
+    console.log(
+      JSON.stringify({
+        schema: "bla-redteam-rea/v1",
+        status: "unverified",
+        reason,
+      }),
+    );
+    process.exit(EXIT_UNVERIFIED);
+  }
   const { bla, intensity, seed, samples } = await buildSampleMatrix();
-  const rea = await loadReaProbes();
   const limits = bla.REA_INTERNAL_LIMITS;
+  const reaProvenance = resolveReaProvenance();
 
   const pairs = [];
 
@@ -207,13 +265,54 @@ async function main() {
     });
   }
 
+  {
+    const s = samples.javascript_strings;
+    pairs.push({
+      format: "javascript_strings",
+      before: await probeJavascriptStrings(rea, s.before, "before", s.meta.values),
+      after: await probeJavascriptStrings(rea, s.after, "after", s.meta.values),
+      sampleMeta: s.meta,
+      blaLimits: limits,
+    });
+  }
+
+  // "measured": every probe that can run on this machine ran against REA.
+  // "unverified": at least one probe could not call REA at all (a renamed
+  // export, a moved module) — that format was not measured, whatever its row says.
+  // Both sources, once each: a module that could not be loaded, and a probe
+  // that threw something other than one of REA's own failures.
+  const harnessFailureIndex = new Map();
+  for (const failure of [
+    ...harnessErrors(),
+    ...pairs.flatMap((p) =>
+      [p.before, p.after]
+        .filter((outcome) => outcome.status === "harness_error")
+        .map((outcome) => ({
+          format: p.format,
+          reason: `${outcome.errorName ?? "Error"}: ${outcome.errorMessage ?? "the probe could not call REA"}`,
+        })),
+    ),
+  ]) {
+    harnessFailureIndex.set(`${failure.format}\n${failure.reason}`, failure);
+  }
+  const harnessFailures = [...harnessFailureIndex.values()];
+  const hasHarnessErrors = harnessFailures.length > 0;
+  const overallStatus = hasHarnessErrors ? "unverified" : "measured";
+
   const run = {
+    schema: "bla-redteam-rea/v1",
+    status: overallStatus,
     generatedAt: new Date().toLocaleString("en-CA", {
       timeZone: "Asia/Shanghai",
       hour12: false,
     }),
-    blaRoot: BLA_ROOT,
-    reaRoot: REA_ROOT,
+    // The report is committed: where the two checkouts sat on the machine
+    // that ran it is nobody's business and says nothing. REA is identified by
+    // its commit (reaProvenance), BLA by the release this tree builds.
+    blaRoot: ".",
+    reaRoot: (process.env.REA_ROOT ?? "").trim() ? "$REA_ROOT" : "../rea",
+    blaVersion: bla.BLA_VERSION ?? null,
+    reaProvenance,
     intensity,
     seed,
     nodeVersion: process.version,
@@ -223,30 +322,37 @@ async function main() {
     },
     pairs,
     unverified: unverifiedAnalyzers(),
+    harnessErrors: harnessFailures,
   };
 
   const { mdPath, jsonPath } = writeReports(run);
 
   // Console summary for CI / gates
-  console.log("Empirical REA red-team complete");
+  console.log(`Empirical REA red-team complete (status: ${overallStatus})`);
+  console.log(`  REA: ${reaProvenance.commit ?? "unknown"} (${reaProvenance.date ?? "unknown"})`);
   console.log(`  report: ${mdPath}`);
   console.log(`  json:   ${jsonPath}`);
   for (const pair of pairs) {
-    const tag = pair.after.budgetHit
-      ? `BUDGET ${pair.after.budgetName}`
-      : pair.after.status;
+    const tag = pair.after.status === "harness_error"
+      ? "HARNESS_ERROR"
+      : pair.after.budgetHit
+        ? `BUDGET ${pair.after.budgetName}`
+        : pair.after.status;
     console.log(
       `  ${pair.format.padEnd(16)} before=${pair.before.status.padEnd(12)} after=${tag}  (${pair.before.inputBytes} → ${pair.after.inputBytes} B)`,
     );
   }
+
+  // go_buildinfo: a format error (truncated) is not a budget regression if REA still can't read it.
+  // Only flag as diverging when REA reads the sample fine AND no budget was hit.
   const diverges = pairs.filter((p) => {
-    // soft check: after should hit for go/flutter/beam/evm/pcap/gguf + asar/wasm/fuses
+    // harness_error probes are unverified, not divergent
+    if (p.after.status === "harness_error") return false;
+    // soft check: after should hit for flutter/beam/pcap/gguf + asar/wasm/fuses
     // sqlite must-trip only when DatabaseSync.limits made the probe runnable
     const must = new Set([
-      "go_buildinfo",
       "flutter_pool",
       "erlang_beam",
-      "evm_bytecode",
       "pcap_capture",
       "gguf",
       "safetensors",
@@ -254,6 +360,26 @@ async function main() {
       "wasm_module",
       "electron_fuses",
     ]);
+    // javascript_strings: a known value in REA's result — at its default
+    // budgets or at raised ones — means the string encoding was read through.
+    if (p.format === "javascript_strings") {
+      return !(
+        p.after.metrics?.valuesHiddenAtDefaultBudgets === true &&
+        p.after.metrics?.valuesHiddenAtRaisedBudgets === true
+      );
+    }
+    // go_buildinfo: REA at 05be423 checks "string range is truncated" before
+    // max_build_info_bytes, so the planted length is rejected as malformed
+    // rather than as over budget. Either way REA reads no build info; only a
+    // clean read with no budget hit means the plant stopped working.
+    if (p.format === "go_buildinfo") {
+      return p.after.status === "ok" && !p.after.budgetHit;
+    }
+    // evm_bytecode: the sample is padded to just under REA's input budget on
+    // purpose. Over it, or within 8 KiB of it, is what the shield aims for.
+    if (p.format === "evm_bytecode") {
+      return !(p.after.budgetHit || p.after.metrics?.approachesLimit === true);
+    }
     if (p.format === "sqlite_db") {
       if (
         p.after.status === "capability_gated" ||
@@ -270,11 +396,20 @@ async function main() {
     console.error(
       `WARNING: ${diverges.length} format(s) did not trip REA budgets: ${diverges.map((d) => d.format).join(", ")}`,
     );
-    process.exitCode = 1;
+    process.exitCode = EXIT_DIVERGED;
+  }
+  if (hasHarnessErrors) {
+    // Not a pass: these formats were not measured. Update the harness for
+    // this REA revision instead of reading their rows.
+    console.error(
+      `UNVERIFIED: ${harnessFailures.length} harness error(s), the probe could not call REA: ${harnessFailures.map((e) => `${e.format} (${e.reason})`).join("; ")}`,
+    );
+    // A measured divergence outranks "not measured".
+    if (process.exitCode !== EXIT_DIVERGED) process.exitCode = EXIT_UNVERIFIED;
   }
 }
 
 main().catch((err) => {
   console.error(err);
-  process.exit(1);
+  process.exit(EXIT_DIVERGED);
 });

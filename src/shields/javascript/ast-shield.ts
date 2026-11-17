@@ -24,6 +24,7 @@ import {
 } from "../runtime/self-seal.js";
 import { generateCounterReaExhaustionSuite } from "../exhaustion/index.js";
 import { generateCounterReaDeceptionSuite } from "../deception/index.js";
+import { isShippedSecretLiteral, regexPatternSecretRuns } from "../../engine/plaintext-secret-lint.js";
 
 // Handle ESM/CJS default export interop in NodeNext (Babel 7 & Babel 8)
 type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
@@ -223,6 +224,244 @@ function isStaticModuleStringPosition(parent: t.Node, node: t.Node): boolean {
     t.isIdentifier(callee.object, { name: "require" }) &&
     t.isIdentifier(callee.property, { name: "resolve" })
   );
+}
+
+/**
+ * What Node reads from a CommonJS file, without running it, to decide which
+ * names an ES module may import from it (`import { x } from "./lib.cjs"`).
+ * Its scanner (`cjs-module-lexer`) recognises a fixed set of shapes in the
+ * file's text — the ones TypeScript, Babel and esbuild emit. A shape the shield
+ * rewrites is an export the importer no longer has: a `SyntaxError` at link
+ * time, before a line of the program runs. The rest of the file is hardened as
+ * usual; of these, only the part the scanner matches is left as written:
+ *
+ *   Object.defineProperty(exports, "x", { enumerable: true, get: function () { return m.x; } });
+ *   Object.defineProperty(exports, "__esModule", { value: true });    // the name
+ *   exports["x"] = …;                                                  // the name
+ *   __exportStar(require("./m"), exports);   __export(require("./m")); // the helper's name
+ *   var _m = _interopRequireWildcard(require("./m"));                  // the helper's name
+ *   Object.keys(_m).forEach(function (key) { … exports[key] = _m[key]; … });
+ *   module.exports = { a, b: c, label: "…" };                          // see `literalMembers`
+ */
+interface CjsExportSurface {
+  /** Subtrees no pass enters: a re-export getter, Babel's export-star loop. */
+  readonly glue: WeakSet<t.Node>;
+  /** String literals that are an export's name. */
+  readonly nameLiterals: t.StringLiteral[];
+  /** Helper bindings the scanner knows by name. */
+  readonly helperBindings: t.Identifier[];
+  /**
+   * Members of a `module.exports = { … }` literal, with whether the value
+   * began with an identifier in the source. The scanner counts a member as an
+   * export exactly when it does, and stops at the first value that is more
+   * than a bare identifier.
+   */
+  readonly literalMembers: Map<t.ObjectProperty, boolean>;
+}
+
+const CJS_STAR_EXPORT_HELPERS: ReadonlySet<string> = new Set([
+  "__exportStar",
+  "__export",
+  "_interopRequireWildcard",
+]);
+const IDENTIFIER_START_RE = /[\p{ID_Start}$_\\]/u;
+/** Babel's loop has at most four statements; anything longer is the program's own code. */
+const BABEL_EXPORT_STAR_LOOP_MAX_STATEMENTS = 6;
+
+function isObjectStaticCall(callee: t.Node | null | undefined, method: string): boolean {
+  return (
+    t.isMemberExpression(callee) &&
+    !callee.computed &&
+    t.isIdentifier(callee.object, { name: "Object" }) &&
+    t.isIdentifier(callee.property, { name: method })
+  );
+}
+
+function isRequireOfLiteral(node: t.Node | null | undefined): boolean {
+  return (
+    t.isCallExpression(node) &&
+    t.isIdentifier(node.callee, { name: "require" }) &&
+    node.arguments.length === 1 &&
+    t.isStringLiteral(node.arguments[0])
+  );
+}
+
+/**
+ * `exports` or `module.exports`, by name. The scanner reads text and knows
+ * nothing of scopes, so the `exports` parameter of a UMD factory or of a
+ * bundled module counts for it exactly like the free variable of a file.
+ */
+function isCommonJsExportsObject(node: t.Node | null | undefined): boolean {
+  if (t.isIdentifier(node, { name: "exports" })) return true;
+  return (
+    t.isMemberExpression(node) &&
+    !node.computed &&
+    t.isIdentifier(node.object, { name: "module" }) &&
+    t.isIdentifier(node.property, { name: "exports" })
+  );
+}
+
+/**
+ * The getter of a re-export — `get: function () { return m.x; }` or
+ * `get() { return m["x"]; }`, last in its descriptor — and nothing with more
+ * in it than that one `return`: a getter that computes something is the
+ * program's code and is hardened like the rest.
+ */
+function reexportGetterOf(descriptor: t.ObjectExpression): t.Node | null {
+  const last = descriptor.properties[descriptor.properties.length - 1];
+  let getter: t.FunctionExpression | t.ObjectMethod | null = null;
+  if (
+    t.isObjectProperty(last) &&
+    !last.computed &&
+    t.isIdentifier(last.key, { name: "get" }) &&
+    t.isFunctionExpression(last.value)
+  ) {
+    getter = last.value;
+  } else if (
+    t.isObjectMethod(last) &&
+    last.kind === "method" &&
+    !last.computed &&
+    t.isIdentifier(last.key, { name: "get" })
+  ) {
+    getter = last;
+  }
+  if (getter === null || getter.params.length > 0 || getter.async || getter.generator) {
+    return null;
+  }
+  const statements = getter.body.body;
+  const only = statements[0];
+  if (statements.length !== 1 || !t.isReturnStatement(only)) return null;
+  const value = only.argument;
+  if (t.isIdentifier(value)) return getter;
+  if (
+    t.isMemberExpression(value) &&
+    t.isIdentifier(value.object) &&
+    (value.computed ? t.isStringLiteral(value.property) : t.isIdentifier(value.property))
+  ) {
+    return getter;
+  }
+  return null;
+}
+
+/** `Object.keys(_m).forEach(function (key) { … })` that copies `_m[key]` onto `exports`. */
+function isBabelExportStarLoop(node: t.CallExpression): boolean {
+  const callee = node.callee;
+  if (
+    !t.isMemberExpression(callee) ||
+    callee.computed ||
+    !t.isIdentifier(callee.property, { name: "forEach" })
+  ) {
+    return false;
+  }
+  const keysCall = callee.object;
+  if (
+    !t.isCallExpression(keysCall) ||
+    !isObjectStaticCall(keysCall.callee, "keys") ||
+    keysCall.arguments.length !== 1 ||
+    !t.isIdentifier(keysCall.arguments[0])
+  ) {
+    return false;
+  }
+  const callback = node.arguments[0];
+  if (
+    node.arguments.length !== 1 ||
+    !t.isFunctionExpression(callback) ||
+    callback.params.length !== 1
+  ) {
+    return false;
+  }
+  const param = callback.params[0];
+  if (
+    !t.isIdentifier(param) ||
+    callback.body.body.length > BABEL_EXPORT_STAR_LOOP_MAX_STATEMENTS
+  ) {
+    return false;
+  }
+  let copiesOntoExports = false;
+  t.traverseFast(callback.body, (inner) => {
+    if (
+      t.isMemberExpression(inner) &&
+      inner.computed &&
+      t.isIdentifier(inner.property, { name: param.name }) &&
+      isCommonJsExportsObject(inner.object)
+    ) {
+      copiesOntoExports = true;
+    }
+    if (
+      t.isCallExpression(inner) &&
+      isObjectStaticCall(inner.callee, "defineProperty") &&
+      isCommonJsExportsObject(inner.arguments[0]) &&
+      t.isIdentifier(inner.arguments[1], { name: param.name })
+    ) {
+      copiesOntoExports = true;
+    }
+  });
+  return copiesOntoExports;
+}
+
+function collectCjsExportSurface(ast: t.File, source: string): CjsExportSurface {
+  const glue = new WeakSet<t.Node>();
+  const nameLiterals: t.StringLiteral[] = [];
+  const helperBindings: t.Identifier[] = [];
+  const literalMembers = new Map<t.ObjectProperty, boolean>();
+  traverse(ast, {
+    CallExpression(path) {
+      const { callee, arguments: args } = path.node;
+      if (isObjectStaticCall(callee, "defineProperty")) {
+        const [target, name, descriptor] = args;
+        if (
+          args.length === 3 &&
+          isCommonJsExportsObject(target) &&
+          t.isStringLiteral(name) &&
+          t.isObjectExpression(descriptor)
+        ) {
+          nameLiterals.push(name);
+          const getter = reexportGetterOf(descriptor);
+          if (getter !== null) glue.add(getter);
+        }
+        return;
+      }
+      if (
+        t.isIdentifier(callee) &&
+        CJS_STAR_EXPORT_HELPERS.has(callee.name) &&
+        isRequireOfLiteral(args[0])
+      ) {
+        const binding = path.scope.getBinding(callee.name);
+        if (binding !== undefined) helperBindings.push(binding.identifier);
+        return;
+      }
+      if (isBabelExportStarLoop(path.node)) {
+        glue.add(path.node);
+        path.skip();
+      }
+    },
+    AssignmentExpression(path) {
+      const { left, right, operator } = path.node;
+      if (operator !== "=" || !t.isMemberExpression(left)) return;
+      if (
+        left.computed &&
+        t.isStringLiteral(left.property) &&
+        isCommonJsExportsObject(left.object)
+      ) {
+        nameLiterals.push(left.property);
+        return;
+      }
+      if (!t.isObjectExpression(right) || !isCommonJsExportsObject(left)) return;
+      for (const member of right.properties) {
+        if (!t.isObjectProperty(member) || member.computed) continue;
+        const value = member.value;
+        const extra = value.extra as { parenthesized?: boolean; parenStart?: number } | undefined;
+        const start = extra?.parenthesized === true ? extra.parenStart : value.start;
+        if (typeof start !== "number") continue;
+        const first = source.codePointAt(start);
+        literalMembers.set(
+          member,
+          first !== undefined && IDENTIFIER_START_RE.test(String.fromCodePoint(first)),
+        );
+      }
+    },
+  });
+  return { glue, nameLiterals, helperBindings, literalMembers };
 }
 
 /** `import.meta.<name>`, written without a computed key. */
@@ -455,6 +694,214 @@ function seedRead(seed: SeedSource): t.Expression {
 }
 
 /**
+ * Longest piece of a finely split secret. The plaintext lint needs 16
+ * characters to call a string a generated token and 24 for a digest or an
+ * encoded blob, so a piece this short is never a finding on its own.
+ */
+const FINE_CHUNK_MAX_LENGTH = 12;
+/**
+ * The same bound for a masked piece, counted in the letters it is written
+ * with (two per character, four once the string holds a character above
+ * U+00FF).
+ */
+const FINE_MASKED_PIECE_MAX_LETTERS = 24;
+/** A masked unit is spelled in sixteen letters, `a` for 0 to `p` for 15. */
+const MASK_LETTER_BASE = 97;
+/** Shortest string whose pieces are masked; below it a string is split in clear. */
+const MASK_MIN_LENGTH = 4;
+/**
+ * A short plain word — `"function"`, `"string"`, `"click"`, `"POST"` — is what
+ * hot code compares and looks up on every pass, and says nothing once read.
+ * Up to this length such a word keeps clear pieces and skips the decode.
+ */
+const MASK_PLAIN_WORD_MAX_LENGTH = 10;
+const PLAIN_WORD_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * Decoders the string pass builds — `(function (s, m, c) { … })(pieces, m, c)`.
+ * The rename pass leaves their six local names alone.
+ */
+const MASK_DECODER_FUNCTIONS = new WeakSet<t.Node>();
+
+function wantsMask(value: string): boolean {
+  if (value.length < MASK_MIN_LENGTH) return false;
+  return value.length > MASK_PLAIN_WORD_MAX_LENGTH || !PLAIN_WORD_RE.test(value);
+}
+
+/** Letters per UTF-16 unit: two while every unit fits a byte, otherwise four. */
+function maskWidthOf(value: string): 2 | 4 {
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0xff) return 4;
+  }
+  return 2;
+}
+
+/**
+ * `text` as it is written in the file: each UTF-16 unit XORed with a byte that
+ * depends on where the unit sits in the whole string, four bits to a letter
+ * (`a`–`p`). `unitOffset` is the index of the piece's first unit, so real and
+ * wrong pieces of one position share their key bytes. Letters rather than hex
+ * digits: the decoder turns them back with arithmetic alone, and a run of
+ * them does not read as a digest.
+ */
+function maskPiece(text: string, unitOffset: number, width: 2 | 4, m: number, c: number): string {
+  let out = "";
+  for (let j = 0; j < text.length; j++) {
+    const position = (unitOffset + j) * width;
+    const masked = text.charCodeAt(j) ^ ((position * m + c) & 255);
+    for (let shift = (width - 1) * 4; shift >= 0; shift -= 4) {
+      out += String.fromCharCode(MASK_LETTER_BASE + ((masked >> shift) & 15));
+    }
+  }
+  return out;
+}
+
+/**
+ * The inverse of {@link maskPiece}, applied to the concatenated pieces where
+ * the string is used:
+ *
+ *   (function (s, m, c) {
+ *     var r = "", f = r.constructor.fromCharCode, i = 0;
+ *     for (; i < s.length; i += 2)
+ *       r += f((s.charCodeAt(i) - 97 << 4 | s.charCodeAt(i + 1) - 97) ^ (i * m + c & 255));
+ *     return r;
+ *   })(pieces, m, c)
+ *
+ * It is written out at every use and reads nothing but its arguments — no
+ * helper to hoist, no global whose name the program may have taken (`String`
+ * is reached through a string's own `constructor`). So it works wherever an
+ * expression does: a classic script, a function rebuilt from its source text,
+ * a parameter default, a field initialiser.
+ *
+ * The parentheses are part of the node, not left to the printer: `{ kind:
+ * function (s, m, c) {…}(…) }` is the same expression, but a tool that reads
+ * text — Node's CommonJS export scanner is one — takes a value that starts
+ * with a word for a name, and the literal this replaces started with a quote.
+ */
+function buildMaskDecodeCall(pieces: t.Expression, width: 2 | 4, m: number, c: number): t.Expression {
+  const id = (name: string): t.Identifier => t.identifier(name);
+  // Letter `n` of the current unit as its four bits: s.charCodeAt(i + n) - 97
+  const nibble = (n: number): t.Expression =>
+    t.binaryExpression(
+      "-",
+      t.callExpression(t.memberExpression(id("s"), id("charCodeAt")), [
+        n === 0 ? id("i") : t.binaryExpression("+", id("i"), t.numericLiteral(n)),
+      ]),
+      t.numericLiteral(MASK_LETTER_BASE),
+    );
+  let unit: t.Expression = nibble(width - 1);
+  for (let n = width - 2; n >= 0; n--) {
+    unit = t.binaryExpression(
+      "|",
+      t.binaryExpression("<<", nibble(n), t.numericLiteral((width - 1 - n) * 4)),
+      unit,
+    );
+  }
+  const key = t.binaryExpression(
+    "&",
+    t.binaryExpression("+", t.binaryExpression("*", id("i"), id("m")), id("c")),
+    t.numericLiteral(255),
+  );
+  const decoder = t.functionExpression(
+    null,
+    [id("s"), id("m"), id("c")],
+    t.blockStatement([
+      t.variableDeclaration("var", [
+        t.variableDeclarator(id("r"), t.stringLiteral("")),
+        t.variableDeclarator(
+          id("f"),
+          t.memberExpression(t.memberExpression(id("r"), id("constructor")), id("fromCharCode")),
+        ),
+        t.variableDeclarator(id("i"), t.numericLiteral(0)),
+      ]),
+      t.forStatement(
+        null,
+        t.binaryExpression("<", id("i"), t.memberExpression(id("s"), id("length"))),
+        t.assignmentExpression("+=", id("i"), t.numericLiteral(width)),
+        t.expressionStatement(
+          t.assignmentExpression(
+            "+=",
+            id("r"),
+            t.callExpression(id("f"), [t.binaryExpression("^", unit, key)]),
+          ),
+        ),
+      ),
+      t.returnStatement(id("r")),
+    ]),
+  );
+  MASK_DECODER_FUNCTIONS.add(decoder);
+  return t.callExpression(t.parenthesizedExpression(decoder), [
+    pieces,
+    t.numericLiteral(m),
+    t.numericLiteral(c),
+  ]);
+}
+/**
+ * Longest secret-looking value the literal pass will still split when it sits
+ * outside the ordinary 3–256 character range (a PEM block, a JWT, a
+ * service-account document). A split value costs about 20 bytes of output per
+ * character — two masked letters for the piece, two for the wrong piece beside
+ * it, and a condition every 12 characters — so this is also a bound on how
+ * much one literal can add to the file (measured: 83 KB).
+ */
+const SECRET_LITERAL_MAX_LENGTH = 4096;
+
+/** A value the plaintext lint reports as a shipped secret, short enough to split. */
+function isSplittableSecret(value: string): boolean {
+  return (
+    value.length >= 8 &&
+    value.length <= SECRET_LITERAL_MAX_LENGTH &&
+    isShippedSecretLiteral(value)
+  );
+}
+
+/**
+ * Nine pieces already keep every piece under the fine length for a short
+ * value, so only a longer one needs classifying before it is split.
+ */
+function wantsFineSplit(value: string): boolean {
+  const finePieceLength = Math.floor(FINE_MASKED_PIECE_MAX_LETTERS / maskWidthOf(value));
+  return value.length > finePieceLength * 9 && isSplittableSecret(value);
+}
+
+const HEX_DIGITS_LOWER = "0123456789abcdef";
+const HEX_DIGITS_UPPER = "0123456789ABCDEF";
+
+/**
+ * The wrong arm for one piece of a split string: the same length and the same
+ * kind of text as the real piece, so the two arms cannot be told apart by
+ * looking at them. Punctuation stays where it is; a digit becomes a digit and
+ * a letter a letter of the same case — and a piece whose letters are all hex
+ * digits becomes other hex digits, since `"7ff703d"` beside `"6kd246v"` would
+ * give the real one away. A piece with nothing to vary gets plain noise
+ * instead of a copy of itself.
+ */
+function buildDecoyChunk(real: string, prng: SeededPrng): string {
+  if (real.length === 0) return prng.hex(2);
+  const letters = real.replace(/[^A-Za-z]/g, "");
+  const hexAlphabet =
+    letters.length === 0
+      ? null
+      : /^[a-f]+$/.test(letters)
+        ? HEX_DIGITS_LOWER
+        : /^[A-F]+$/.test(letters)
+          ? HEX_DIGITS_UPPER
+          : null;
+  let decoy = "";
+  for (let i = 0; i < real.length; i++) {
+    const code = real.charCodeAt(i);
+    const digit = code >= 0x30 && code <= 0x39;
+    const upper = code >= 0x41 && code <= 0x5a;
+    const lower = code >= 0x61 && code <= 0x7a;
+    if (!digit && !upper && !lower) decoy += real[i];
+    else if (hexAlphabet !== null) decoy += hexAlphabet[prng.nextInt(0, 15)];
+    else if (digit) decoy += String.fromCharCode(0x30 + prng.nextInt(0, 9));
+    else decoy += String.fromCharCode((upper ? 0x41 : 0x61) + prng.nextInt(0, 25));
+  }
+  return decoy !== real ? decoy : prng.hex(Math.max(2, real.length));
+}
+
+/**
  * Splits a string literal into >= 9 conditional chunks `(cond ? realChunk : decoyChunk)`
  * joined with `+`.
  *
@@ -472,18 +919,36 @@ function buildCombinatorialStringAst(
   value: string,
   prng: SeededPrng,
   seedIdentifierName: SeedSource,
+  options: { readonly fine?: boolean; readonly mask?: boolean } = {},
 ): t.Expression {
   const minChunks = 9;
   const chunks: string[] = [];
+  // Pieces are written masked and decoded where the string is used: nothing
+  // of the text is readable in the file, and an evaluator that lists every
+  // combination of pieces still holds no value. Very short strings stay in
+  // clear pieces.
+  const mask = options.mask ?? wantsMask(value);
+  const width = maskWidthOf(value);
+  const keyM = mask ? prng.nextInt(0, 127) * 2 + 1 : 0;
+  const keyC = mask ? prng.nextInt(0, 255) : 0;
 
   if (value.length >= minChunks) {
-    const step = Math.max(1, Math.floor(value.length / minChunks));
-    let pos = 0;
-    for (let i = 0; i < minChunks - 1; i++) {
-      chunks.push(value.slice(pos, pos + step));
-      pos += step;
+    // Nine pieces by default. A secret is cut finer, so that no piece left in
+    // the file is long enough to be recognised (or reported) as one itself.
+    const finePieceLength = mask
+      ? Math.floor(FINE_MASKED_PIECE_MAX_LETTERS / width)
+      : FINE_CHUNK_MAX_LENGTH;
+    const count = options.fine
+      ? Math.max(minChunks, Math.ceil(value.length / finePieceLength))
+      : minChunks;
+    for (let i = 0; i < count; i++) {
+      chunks.push(
+        value.slice(
+          Math.floor((i * value.length) / count),
+          Math.floor(((i + 1) * value.length) / count),
+        ),
+      );
     }
-    chunks.push(value.slice(pos));
   } else {
     for (const ch of value) {
       chunks.push(ch);
@@ -493,9 +958,12 @@ function buildCombinatorialStringAst(
     }
   }
 
-  const terms: t.Expression[] = chunks.map((realChunk, idx) => {
-    const decoyChunk =
-      realChunk.length > 0 ? prng.hex(realChunk.length) : prng.hex(2);
+  let unitOffset = 0;
+  const terms: t.Expression[] = chunks.map((realPiece, idx) => {
+    const decoyPiece = buildDecoyChunk(realPiece, prng);
+    const realChunk = mask ? maskPiece(realPiece, unitOffset, width, keyM, keyC) : realPiece;
+    const decoyChunk = mask ? maskPiece(decoyPiece, unitOffset, width, keyM, keyC) : decoyPiece;
+    unitOffset += realPiece.length;
     const mode = idx % 3;
     let cond: t.Expression;
     let invertedCond: t.Expression;
@@ -576,11 +1044,16 @@ function buildCombinatorialStringAst(
     }
   });
 
-  let expr = terms[0]!;
-  for (let i = 1; i < terms.length; i++) {
-    expr = t.binaryExpression("+", expr, terms[i]!);
-  }
-  return expr;
+  // Joined as a balanced tree: a finely split secret has hundreds of pieces,
+  // and a left-leaning chain that deep is a recursion hazard for every later
+  // walk over the tree. (Every operand is a string, so grouping is free.)
+  const join = (from: number, to: number): t.Expression => {
+    if (to - from === 1) return terms[from]!;
+    const middle = from + Math.ceil((to - from) / 2);
+    return t.binaryExpression("+", join(from, middle), join(middle, to));
+  };
+  const pieces = join(0, terms.length);
+  return mask ? buildMaskDecodeCall(pieces, width, keyM, keyC) : pieces;
 }
 
 function buildOpaqueFalseAst(
@@ -1314,6 +1787,12 @@ export function transformJavaScriptWithBlaShield(
       : "script";
 
   const exportedSymbolsBefore = collectEsmExportedSymbols(ast.program);
+  // The export shapes Node's scanner reads from a CommonJS file's text. A UMD
+  // bundle is a "script" carrier here and CommonJS to Node; only a file that
+  // is certainly an ES module is never scanned.
+  const cjsExportSurface =
+    effectiveCarrier === "module" ? null : collectCjsExportSurface(ast, source);
+  const isCjsExportGlue = (node: t.Node): boolean => cjsExportSurface?.glue.has(node) === true;
 
   // Collect dynamic-lookup scope before renaming anything. Direct eval can
   // reference parent-scope bindings that Babel cannot see inside the string.
@@ -1376,6 +1855,11 @@ export function transformJavaScriptWithBlaShield(
   // rename follows Babel's idea of which declaration a reference reaches; where
   // the specification disagrees, the only safe move is to keep the names.
   const scopeModelPinnedBindings = new Set<t.Identifier>();
+  // `__exportStar(require("./m"), exports)` is a star re-export to Node only
+  // under that name.
+  for (const helper of cjsExportSurface?.helperBindings ?? []) {
+    scopeModelPinnedBindings.add(helper);
+  }
   /** Sloppy block-level functions that Annex B also declares as program-level `var`s. */
   const annexBProgramLevelNames = new Set<string>();
   {
@@ -1591,6 +2075,10 @@ export function transformJavaScriptWithBlaShield(
     { fn: t.Function; localSeedName: string }
   >();
   traverse(ast, {
+    enter(path) {
+      // No prologue, no guard, no frame seed inside export glue.
+      if (isCjsExportGlue(path.node)) path.skip();
+    },
     Function(path) {
       if (!t.isBlockStatement(path.node.body)) return;
       functionBodies.push(path.node.body);
@@ -1820,11 +2308,9 @@ export function transformJavaScriptWithBlaShield(
         val.endsWith(".wasm");
 
       if (looksSensitiveOrRoute) {
-        path.node.arguments[0] = buildCombinatorialStringAst(
-          val,
-          prng,
-          activeSeedName,
-        );
+        path.node.arguments[0] = buildCombinatorialStringAst(val, prng, activeSeedName, {
+          fine: wantsFineSplit(val),
+        });
         primitiveCandidateBranchesCreated += 512;
       }
     }
@@ -1833,6 +2319,10 @@ export function transformJavaScriptWithBlaShield(
   // Literals of guards this shield writes itself; the literal passes below leave
   // them readable instead of encoding them again.
   const shieldOwnedLiterals = new WeakSet<t.Node>();
+  // An export's name in `Object.defineProperty(exports, "x", …)` / `exports["x"] = …`.
+  for (const literal of cjsExportSurface?.nameLiterals ?? []) {
+    shieldOwnedLiterals.add(literal);
+  }
   /** Template literals rebuilt by the literal pass; never rewritten or entered twice. */
   const rebuiltTemplates = new WeakSet<t.Node>();
 
@@ -1946,6 +2436,9 @@ export function transformJavaScriptWithBlaShield(
   }
 
   traverse(ast, {
+    enter(path) {
+      if (isCjsExportGlue(path.node)) path.skip();
+    },
     ImportDeclaration(path) {
       if (
         path.node.source.value === "electron" &&
@@ -2027,7 +2520,10 @@ export function transformJavaScriptWithBlaShield(
         return;
       }
       const val = path.node.value;
-      if (val.length < 3 || val.length > 256) {
+      // Ordinary strings are split up to 256 characters. What reads as a
+      // secret is split wherever it sits and up to a few kilobytes: an
+      // embedded PEM block or JWT is exactly the string worth the bytes.
+      if (val.length < 3 || (val.length > 256 && !isSplittableSecret(val))) {
         return;
       }
       const parent = path.parent;
@@ -2060,15 +2556,30 @@ export function transformJavaScriptWithBlaShield(
       ) {
         return;
       }
-      if (isNonComputedMemberKey(parent, path.node)) return;
-      if (isStaticModuleStringPosition(parent, path.node)) return;
-      if (
-        t.isClassMethod(parent) ||
-        t.isObjectMethod(parent) ||
-        t.isClassProperty(parent)
-      ) {
+      if (isNonComputedMemberKey(parent, path.node)) {
+        // `{ "<secret>": role }`: a key is as readable as any other string.
+        // Written as a computed key it defines the same property, in the same
+        // order. Ordinary keys stay as they are, and so does every key of a
+        // TypeScript source: there the literal key is part of the object's type.
+        if (
+          loader !== "ts" &&
+          loader !== "tsx" &&
+          (t.isObjectProperty(parent) || t.isObjectMethod(parent)) &&
+          isSplittableSecret(val)
+        ) {
+          parent.computed = true;
+          path.replaceWith(
+            buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), { fine: true }),
+          );
+          path.skip();
+          primitiveCandidateBranchesCreated += 256;
+        }
         return;
       }
+      if (isStaticModuleStringPosition(parent, path.node)) return;
+      // (A member's own name was dealt with above. What is left under a class
+      // or object member is a computed key or a field's value — `static
+      // endpoint = "https://…"` — and those are strings like any other.)
       if (
         t.isCallExpression(parent) &&
         t.isIdentifier(parent.callee) &&
@@ -2076,7 +2587,9 @@ export function transformJavaScriptWithBlaShield(
       ) {
         return;
       }
-      const encoded = buildCombinatorialStringAst(val, prng, resolveSeedForPath(path));
+      const encoded = buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), {
+        fine: wantsFineSplit(val),
+      });
       // `<a title="…">`: an attribute holds a string or a `{…}` container,
       // never a bare expression. The parser has already decoded entities.
       path.replaceWith(t.isJSXAttribute(parent) ? t.jsxExpressionContainer(encoded) : encoded);
@@ -2145,13 +2658,21 @@ export function transformJavaScriptWithBlaShield(
           (acc, q) => acc + (q.value.cooked?.length ?? 0),
           0,
         );
-        if (totalCookedLen < 3 || totalCookedLen > 256) {
+        // A long template is left alone, except for the static pieces of it
+        // that read as a secret.
+        const withinOrdinaryRange = totalCookedLen <= 256;
+        if (
+          totalCookedLen < 3 ||
+          (!withinOrdinaryRange && !quasis.some((q) => isSplittableSecret(q.value.cooked ?? "")))
+        ) {
           return;
         }
         const activeSeedName = resolveSeedForPath(path);
         if (exprs.length === 0) {
           const val = quasis[0]?.value.cooked ?? "";
-          path.replaceWith(buildCombinatorialStringAst(val, prng, activeSeedName));
+          path.replaceWith(
+            buildCombinatorialStringAst(val, prng, activeSeedName, { fine: wantsFineSplit(val) }),
+          );
           path.skip();
           primitiveCandidateBranchesCreated += 256;
           return;
@@ -2175,9 +2696,13 @@ export function transformJavaScriptWithBlaShield(
         for (let i = 0; i < quasis.length; i++) {
           const quasi = quasis[i]!;
           const chunk = quasi.value.cooked ?? "";
-          if (chunk.length >= 3) {
+          if (withinOrdinaryRange ? chunk.length >= 3 : isSplittableSecret(chunk)) {
             flushQuasi(false);
-            nextExprs.push(buildCombinatorialStringAst(chunk, prng, activeSeedName));
+            nextExprs.push(
+              buildCombinatorialStringAst(chunk, prng, activeSeedName, {
+                fine: wantsFineSplit(chunk),
+              }),
+            );
             primitiveCandidateBranchesCreated += 256;
           } else {
             pendingRaw += quasi.value.raw;
@@ -2194,6 +2719,32 @@ export function transformJavaScriptWithBlaShield(
         path.replaceWith(rebuilt);
         path.skip();
       },
+    },
+    RegExpLiteral(path) {
+      // `/^5e88…42d8$/`: a digest or an encoded blob inside a pattern is as
+      // readable as one inside a string. Such a regex is rebuilt from a split
+      // string — `new RegExp(source, flags)` is the same expression object a
+      // literal evaluates to, created at the same moment. Ordinary patterns
+      // stay literals.
+      if (intensity !== "bankrupt" && intensity !== "maximum") {
+        return;
+      }
+      const { pattern, flags } = path.node;
+      if (pattern.length > SECRET_LITERAL_MAX_LENGTH) return;
+      if (regexPatternSecretRuns(pattern).length === 0) return;
+      // (A program that declares its own `RegExp` keeps its literals.)
+      if (path.scope.getBinding("RegExp") !== undefined) return;
+      const source = buildCombinatorialStringAst(pattern, prng, resolveSeedForPath(path), {
+        fine: true,
+      });
+      path.replaceWith(
+        t.newExpression(
+          t.identifier("RegExp"),
+          flags.length > 0 ? [source, t.stringLiteral(flags)] : [source],
+        ),
+      );
+      path.skip();
+      primitiveCandidateBranchesCreated += 256;
     },
     NumericLiteral(path) {
       // Issue #40: bankrupt/maximum must not leave schedule / magic integers
@@ -2326,6 +2877,12 @@ export function transformJavaScriptWithBlaShield(
   });
   traverse(ast, {
     Scope(path) {
+      // The parameters and locals of a string decoder: written at every use,
+      // so they stay one letter.
+      if (MASK_DECODER_FUNCTIONS.has(path.node)) return;
+      // `get: function get() { return m.x; }`: the getter's own name stays, so
+      // nothing has to be wrapped around it to restore it.
+      if (isCjsExportGlue(path.node)) return;
       for (const [name, binding] of Object.entries(path.scope.bindings)) {
         if (binding.scope !== path.scope) continue;
         if (bindingsVisibleToDirectEval.has(binding.identifier)) continue;
@@ -3250,6 +3807,31 @@ export function transformJavaScriptWithBlaShield(
     ast.comments = ast.comments.filter(
       (c) => !/sourceMappingURL=/i.test(c.value),
     );
+  }
+
+  // `module.exports = { label: "…" }`: a string or number the shield rewrote
+  // into an expression that starts with a word would turn up as a new named
+  // export. In parentheses it reads to the scanner the way the literal did.
+  for (const [member, startedWithIdentifier] of cjsExportSurface?.literalMembers ?? []) {
+    if (startedWithIdentifier) continue;
+    const value = member.value;
+    if (!t.isExpression(value) || t.isParenthesizedExpression(value)) continue;
+    // These print with a quote, a digit, a bracket or a brace first.
+    if (
+      t.isStringLiteral(value) ||
+      t.isNumericLiteral(value) ||
+      t.isTemplateLiteral(value) ||
+      t.isArrayExpression(value) ||
+      t.isObjectExpression(value) ||
+      t.isRegExpLiteral(value)
+    ) {
+      continue;
+    }
+    const printed = generate(value, { compact: true, comments: false }).code;
+    const first = printed.codePointAt(0);
+    if (first !== undefined && IDENTIFIER_START_RE.test(String.fromCodePoint(first))) {
+      member.value = t.parenthesizedExpression(value);
+    }
   }
 
   const generated = generate(

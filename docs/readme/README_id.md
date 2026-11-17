@@ -10,7 +10,7 @@
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
+[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.23.4_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#showcases)
 [![MIT license](https://img.shields.io/badge/license-MIT-38bdf8?style=flat-square)](../../LICENSE)
 
@@ -78,7 +78,7 @@ npx -y bla-agents@latest protect /absolute/path/to/app -o /absolute/path/to/app.
 # 3. Verifikasi ketahanan terhadap Counter-REA
 npx -y bla-agents@latest verify /absolute/path/to/app.shielded /absolute/path/to/app
 
-# 4. Jalankan pengujian Counter-REA terhadap 8 target
+# 4. Jalankan pengujian Counter-REA terhadap 14 target
 npx -y bla-agents@latest benchmark
 
 # 5. Hasilkan header pertahanan C/C++, Rust, atau Go saat kompilasi
