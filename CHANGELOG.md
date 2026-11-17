@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.4] — 2026-11-17
+
+Patch auto-wiring the optional WASM JS-loader hook into a known, safe Node.js ESM loader whose static imports are Node builtins only (so `wasm-sidecar-entangle` is recorded and `wasm-sidecar-host-verify-only` is cleared when that hook actually ships), plus `REA_INTERNAL_LIMITS` catalog hygiene for REA tip `05be423ac`.
+
 ### Added
 - **WASM JS-loader hook ESM auto-wire (`detectWasmJsLoaderCarrier` / `esmStaticImportsAreNodeBuiltinsOnly` / `listStaticEsmModuleSpecifiers`, `src/shields/runtime/sidecar-entangle.ts`; protect + harden post-pass):** Extends the 2026-11-16 Node CJS auto-wire so a same-directory Node.js ESM loader (`.mjs` or ESM `.js`) can also receive the already-landed `generateSidecarWasmLoaderSnippet` hook (`carrier: "module"`, `import { createRequire } from "node:module"` + `import.meta.url`). ESM is admitted only when every static `import` / `export-from` specifier is a Node builtin (`fs`, `node:path`, `node:url`, …), so hoisting cannot run user-module side effects or instantiate WASM before the hook. Known names stay `<stem>.*`, `loader.*`, `index.*`; `.cjs` still wins a same-rank tie, then `.js`, then `.mjs`. Browser `fetch`-only loaders, ESM files that statically import user modules or `.wasm`, minified / test files, and already-entangled entries remain untouched. Vector `wasm-sidecar-entangle` is recorded and `wasm-sidecar-host-verify-only` is cleared only when the hook was actually written. Default still OFF via existing `sidecarEntangle`.
 - **defenseScore honesty:** `jsModuleHasHoistedDependencyGraph` no longer treats Node builtin-only static imports as a user hoisted graph, so a dedicated ESM WASM loader does not get a spurious `esm-import-hoist-before-hooks` soft-cap. User-module `import` / `export-from` (e.g. `./lib.js`) is still flagged.
