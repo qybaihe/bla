@@ -1,7 +1,7 @@
 # Empirical REA red-team validation
 
-Generated: 2026-11-18, 15:32:59 (Asia/Shanghai)
-BLA: `bla-agents 3.4.3` (working tree at `.`)
+Generated: 2026-11-18, 15:50:24 (Asia/Shanghai)
+BLA: `bla-agents 3.5.0` (working tree at `.`)
 REA root: `$REA_ROOT`
 REA commit: `05be423acbdf3a56673bdbd3004e4b500c0f5217` (2026-11-17 14:40:38 +0000)
 Harness: **measured** — every probe that can run on this machine called REA itself (rows marked `skipped` name the tool that was missing).
@@ -452,16 +452,16 @@ _no metrics_
 
 **After metrics**
 
-- `budgetRuns`: [{"budgetMultiplier":1,"ms":1085,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":1049,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2380,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
+- `budgetRuns`: [{"budgetMultiplier":1,"ms":1004,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":950,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2238,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
 - `valuesHiddenAtDefaultBudgets`: true
 - `valuesHiddenAtRaisedBudgets`: true
 
 **Estimate comparison**
 
 - unhardened, 1x budgets (2 ms, coverage=complete, limits=[]): endpoint RECOVERED; channel RECOVERED; digest RECOVERED
-- hardened, 1x budgets (1085 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 4x budgets (1049 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 64x budgets (2380 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 1x budgets (1004 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 4x budgets (950 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 64x budgets (2238 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
 - AGREE: no known value reaches REA's result, with its budgets raised or not
 - REA's JavaScript budgets are per-call inputs (semantic_precision); a sample that only trips the defaults is read by whoever raises them, which is why this row measures both.
 
