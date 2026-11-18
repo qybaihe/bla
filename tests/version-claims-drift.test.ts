@@ -45,6 +45,33 @@ describe("version and public-claim drift", () => {
       const seal = JSON.parse(read(sealRel)) as { blaVersion?: string };
       expect(seal.blaVersion, sealRel).toBe(version);
     }
+
+    for (const rel of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+      expect((JSON.parse(read(rel)) as { version?: string }).version, rel).toBe(version);
+    }
+    const marketplace = JSON.parse(read(".claude-plugin/marketplace.json")) as {
+      plugins: Array<{ name: string; version?: string }>;
+    };
+    for (const plugin of marketplace.plugins) {
+      expect(plugin.version, `.claude-plugin/marketplace.json ${plugin.name}`).toBe(version);
+    }
+
+    // The website's structured data: 3.4.1 stayed in SoftwareSourceCode for four releases.
+    const site = read("website/index.html");
+    const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(site);
+    expect(jsonLd, "website/index.html has no JSON-LD block").not.toBeNull();
+    const graph = (JSON.parse(jsonLd![1]) as { "@graph": Array<Record<string, unknown>> })["@graph"];
+    const node = (type: string): Record<string, unknown> | undefined =>
+      graph.find((entry) => entry["@type"] === type);
+    expect(node("SoftwareApplication")?.softwareVersion, "SoftwareApplication.softwareVersion").toBe(version);
+    expect(node("SoftwareApplication")?.releaseNotes, "SoftwareApplication.releaseNotes").toBe(
+      `https://github.com/qybaihe/bla/releases/tag/bla-agents-${version}`,
+    );
+    expect(node("SoftwareSourceCode")?.version, "SoftwareSourceCode.version").toBe(version);
+
+    expect(read("examples/github-actions-defend.yml")).toMatch(
+      new RegExp(`\\bBLA_VERSION:\\s*"${escape(version)}"`),
+    );
   });
 
   it("documents the benchmark target count that the code actually implements", () => {
