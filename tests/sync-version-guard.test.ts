@@ -66,6 +66,40 @@ describe("sync-version.mjs semver guard", () => {
     expect(readFileSync(identityPath, "utf8")).toContain('version: "9.9.9"');
   });
 
+  it("keeps the website's structured data and the Actions example on the release", () => {
+    const root = makeSandbox("9.9.9");
+    mkdirSync(join(root, "website"), { recursive: true });
+    mkdirSync(join(root, "examples"), { recursive: true });
+    const site = [
+      '{ "@type": "SoftwareApplication", "softwareVersion": "3.4.3",',
+      '  "releaseNotes": "https://github.com/qybaihe/bla/releases/tag/bla-agents-3.4.3",',
+      '  "offers": { "@type": "Offer", "price": "0" } },',
+      '{ "@type": "SoftwareSourceCode", "name": "qybaihe/bla", "version": "3.4.1",',
+      '  "author": { "@id": "#organization" } },',
+      '{ "@type": "WebSite", "version": "1.2.3" }',
+    ].join("\n");
+    writeFileSync(join(root, "website", "index.html"), site, "utf8");
+    writeFileSync(
+      join(root, "examples", "github-actions-defend.yml"),
+      'env:\n  BLA_VERSION: "3.4.3"\n',
+      "utf8",
+    );
+    const run = spawnSync(process.execPath, [join(root, "scripts", "sync-version.mjs")], {
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(0);
+    const synced = readFileSync(join(root, "website", "index.html"), "utf8");
+    expect(synced).toContain('"softwareVersion": "9.9.9"');
+    expect(synced).toContain("/releases/tag/bla-agents-9.9.9");
+    expect(synced).toContain('"name": "qybaihe/bla", "version": "9.9.9"');
+    // A version on any other node is not the package's.
+    expect(synced).toContain('{ "@type": "WebSite", "version": "1.2.3" }');
+    expect(synced).not.toContain("3.4.");
+    expect(readFileSync(join(root, "examples", "github-actions-defend.yml"), "utf8")).toBe(
+      'env:\n  BLA_VERSION: "9.9.9"\n',
+    );
+  });
+
   it("accepts prerelease and build-metadata versions", () => {
     const root = makeSandbox("4.0.0-nightly.2+sha.abc");
     const run = spawnSync(process.execPath, [join(root, "scripts", "sync-version.mjs")], {

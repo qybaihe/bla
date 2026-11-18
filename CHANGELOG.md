@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The website named the wrong release (`scripts/sync-version.mjs`, `website/index.html`):** its structured data gave 3.4.1 as the source-code version since 3.4.1, beside a `softwareVersion` of the current release — the version bump never touched the website or the GitHub Actions example, so each was edited by hand and this one was missed. `sync-version` now keeps `softwareVersion`, the release-notes link, the `SoftwareSourceCode` version and the example's `BLA_VERSION` on `package.json`, and the version-drift test (`tests/version-claims-drift.test.ts`) fails when any of them, or a plugin manifest's version, is not the package version.
+
 ## [3.5.0] — 2026-11-18
 
 End-to-end pass over the agent journey — "MCP server and skill are registered, now harden my project" — so a coding agent can take a real project from build output to a shipped, working, protected build, and is told plainly what was not covered.

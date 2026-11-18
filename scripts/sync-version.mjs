@@ -126,6 +126,34 @@ for (const rel of [
   }
 }
 
+// The website's structured data and the GitHub Actions example pin a release
+// too. They were bumped by hand, and the JSON-LD source-code version stayed at
+// 3.4.1 for four releases while softwareVersion moved on.
+for (const [rel, rewrites] of [
+  [
+    "website/index.html",
+    [
+      [/("softwareVersion"\s*:\s*")[^"]+(")/g, `$1${version}$2`],
+      [/(\/releases\/tag\/bla-agents-)[^"'\s<>)]+/g, `$1${version}`],
+      // Only the SoftwareSourceCode node: no brace between its @type and its version.
+      [/("@type"\s*:\s*"SoftwareSourceCode"[^{}]*?"version"\s*:\s*")[^"]+(")/g, `$1${version}$2`],
+    ],
+  ],
+  ["examples/github-actions-defend.yml", [[/(\bBLA_VERSION:\s*")[^"]+(")/g, `$1${version}$2`]]],
+]) {
+  const docPath = resolve(root, rel);
+  try {
+    const docText = readFileSync(docPath, "utf8");
+    const next = rewrites.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), docText);
+    if (next !== docText) {
+      writeFileSync(docPath, next, "utf8");
+      console.log(`Synced ${rel} version -> ${version}`);
+    }
+  } catch (err) {
+    console.warn(`Skipped ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // Human-facing version surfaces outside the badge/docs pair. A partial bump
 // used to leave STATE.md and the shipped agent skill advertising an older
 // release; keep them in lockstep with package.json.
