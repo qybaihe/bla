@@ -33,6 +33,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import { isBuiltin } from "node:module";
 import {
   INTEGRITY_COVERAGE_SCHEMA,
   buildInterleavedCoverageMatrix,
@@ -1245,11 +1246,15 @@ function normalizeWasmCodeIdentity(hex: string): string {
  * host-opt-in: it runs only when the customer prepends or evals this snippet
  * in the loader that actually instantiates the module. `protectTarget` /
  * `hardenProject` auto-wire this hook into a same-directory Node.js
- * CommonJS loader that already uses `fs` and `WebAssembly.instantiate` /
- * `compile` / `instantiateStreaming` and mentions the `.wasm` basename;
+ * CommonJS or ESM loader that already uses `fs` and
+ * `WebAssembly.instantiate` / `compile` / `instantiateStreaming` and
+ * mentions the `.wasm` basename (ESM only when every static `import` /
+ * `export-from` specifier is a Node builtin, so hoisting cannot run
+ * user-module side effects or instantiate WASM before the hook);
  * only then is `wasm-sidecar-entangle` recorded and
- * `wasm-sidecar-host-verify-only` cleared. Browser, ESM (static import),
- * minified, and ambiguous loaders are left untouched.
+ * `wasm-sidecar-host-verify-only` cleared. Browser `fetch`-only,
+ * minified, and ambiguous loaders, and ESM files that statically import
+ * user modules or `.wasm`, are left untouched.
  *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
  */
@@ -1541,19 +1546,19 @@ export function entangleWasmLoaderWithSidecars(options: {
   };
 }
 
-/** Candidate Node.js WASM loader extensions (CommonJS only; `.mjs` is never auto-wired). */
-const NODE_WASM_JS_LOADER_EXTENSIONS = [".cjs", ".js"] as const;
+/** Candidate Node.js WASM loader extensions (CommonJS and ESM). */
+const NODE_WASM_JS_LOADER_EXTENSIONS = [".cjs", ".js", ".mjs"] as const;
 
 /** Skip tests, typings, and minified bundles — too risky to rewrite automatically. */
-const UNSAFE_WASM_LOADER_NAME = /\.(?:test|spec|d)\.(?:cjs|js)$/i;
+const UNSAFE_WASM_LOADER_NAME = /\.(?:test|spec|d)\.(?:cjs|mjs|js)$/i;
 
 const WASM_INSTANTIATE_API_RE =
   /WebAssembly\s*\.\s*(instantiate(?:Streaming)?|compile(?:Streaming)?)\b/;
 
 const NODE_FS_LOADER_RE =
-  /require\s*\(\s*["'](?:node:)?fs["']\s*\)|\bfrom\s+["'](?:node:)?fs["']|createRequire\s*\(|\bfs\.readFile(?:Sync)?\b/;
+  /require\s*\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)|\bfrom\s+["'](?:node:)?fs(?:\/promises)?["']|createRequire\s*\(|\bfs\.readFile(?:Sync)?\b/;
 
-/** Line-leading ESM `import` / `export` (or `import.meta`) — hook would run too late. */
+/** Line-leading ESM `import` / `export` (or `import.meta`). */
 const ESM_STATIC_IMPORT_RE = /^\s*(?:import(?:\s+type)?\s|export\s)/m;
 
 /** Soft cap so we do not slurp huge bundled artifacts as loader candidates. */
@@ -1577,7 +1582,9 @@ function escapeRegExpLiteral(value: string): string {
 export function isNodeWasmJsLoaderFilename(filename: string): boolean {
   const base = basename(filename);
   const lower = base.toLowerCase();
-  if (UNSAFE_WASM_LOADER_NAME.test(base) || lower.endsWith(".min.js")) return false;
+  if (UNSAFE_WASM_LOADER_NAME.test(base) || lower.endsWith(".min.js") || lower.endsWith(".min.mjs")) {
+    return false;
+  }
   return NODE_WASM_JS_LOADER_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
@@ -1594,11 +1601,130 @@ export function sourceMentionsWasmBasename(source: string, wasmBasename: string)
   return pattern.test(source);
 }
 
+function isNodeBuiltinModuleSpecifier(specifier: string): boolean {
+  if (typeof specifier !== "string" || specifier.length === 0) return false;
+  try {
+    return isBuiltin(specifier);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Conservative auto-wire predicate: a Node.js CommonJS file that already
- * loads the named `.wasm` via `WebAssembly.instantiate` / `compile` /
- * `instantiateStreaming` and already uses `fs`. ESM, browser (`fetch`-only),
- * minified, and test files return false.
+ * Collect static `import` / `export ... from` module specifiers.
+ * Returns `null` when the source looks like a module-edge we cannot
+ * confidently parse (refuse auto-wire).
+ *
+ * DEFENSIVE ONLY. Conservative — prefer a false-negative over rewriting
+ * a file whose import graph is unclear.
+ */
+export function listStaticEsmModuleSpecifiers(source: string): string[] | null {
+  const specs: string[] = [];
+  const lines = source.split(/\r?\n/);
+  let pending = false;
+  for (const rawLine of lines) {
+    const trimmed = rawLine.replace(/(^|[^:])\/\/.*$/, "$1").trim();
+    if (trimmed.length === 0) continue;
+    if (pending) {
+      const from = trimmed.match(/\bfrom\s*["']([^"']+)["']/);
+      if (from) {
+        specs.push(from[1]!);
+        pending = false;
+        continue;
+      }
+      // Still inside `import { ... }` / a multiline export list.
+      if (
+        /^[{},*\w$\s]+$/.test(trimmed) ||
+        trimmed.endsWith(",") ||
+        trimmed === "{" ||
+        trimmed === "}"
+      ) {
+        continue;
+      }
+      return null;
+    }
+    if (/^import\s*\(/.test(trimmed) || /^import\s*\./.test(trimmed)) continue;
+    const isImport = /^(?:import(?:\s+type)?)\b/.test(trimmed);
+    const isExport = /^export\b/.test(trimmed);
+    if (!isImport && !isExport) continue;
+    if (
+      isExport &&
+      !/\bfrom\s*["']/.test(trimmed) &&
+      /^export\s+(?:default\s+|(?:async\s+)?function\b|class\b|const\b|let\b|var\b|enum\b|type\b|interface\b|\{)/u.test(
+        trimmed,
+      )
+    ) {
+      // `export { x };` is a local export. `export {` without `from` on this
+      // line may still be `export { x } from "..."` split across lines.
+      if (/^export\s+(?:\*|\{)/.test(trimmed) && !/\bfrom\s*["']/.test(trimmed)) {
+        if (/^export\s+\{[^}]*\}\s*;?\s*$/.test(trimmed)) continue;
+        pending = true;
+        continue;
+      }
+      continue;
+    }
+    const from = trimmed.match(/\bfrom\s*["']([^"']+)["']/);
+    const bare = trimmed.match(/^import\s*["']([^"']+)["']/);
+    if (from) {
+      specs.push(from[1]!);
+      continue;
+    }
+    if (bare) {
+      specs.push(bare[1]!);
+      continue;
+    }
+    if (isImport || /^export\s+(?:\*|\{)/.test(trimmed)) {
+      pending = true;
+      continue;
+    }
+  }
+  if (pending) return null;
+  return specs;
+}
+
+/** True when every static import / export-from specifier is a Node builtin. */
+export function esmStaticImportsAreNodeBuiltinsOnly(source: string): boolean {
+  const specs = listStaticEsmModuleSpecifiers(source);
+  if (specs === null) return false;
+  return specs.every((s) => isNodeBuiltinModuleSpecifier(s));
+}
+
+export type WasmJsLoaderCarrier = "commonjs" | "module";
+
+/**
+ * Infer the snippet carrier for a candidate loader, or `null` when the
+ * file must not be auto-wired as either CJS or ESM (`.cjs` with ESM
+ * syntax, or ESM that statically imports a user module / `.wasm`).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function detectWasmJsLoaderCarrier(
+  filename: string,
+  source: string,
+): WasmJsLoaderCarrier | null {
+  const lower = basename(filename).toLowerCase();
+  const hasEsmSyntax =
+    ESM_STATIC_IMPORT_RE.test(source) || /\bimport\.meta\b/.test(source);
+  if (lower.endsWith(".cjs")) {
+    return hasEsmSyntax ? null : "commonjs";
+  }
+  if (lower.endsWith(".mjs")) {
+    return esmStaticImportsAreNodeBuiltinsOnly(source) ? "module" : null;
+  }
+  if (hasEsmSyntax) {
+    return esmStaticImportsAreNodeBuiltinsOnly(source) ? "module" : null;
+  }
+  return "commonjs";
+}
+
+/**
+ * Conservative auto-wire predicate: a Node.js CommonJS or ESM file that
+ * already loads the named `.wasm` via `WebAssembly.instantiate` / `compile`
+ * / `instantiateStreaming` and already uses `fs`. ESM is admitted only
+ * when every static `import` / `export-from` specifier is a Node builtin
+ * (`fs`, `node:path`, `node:url`, …), so hoisting cannot run user-module
+ * side effects or instantiate WASM before the prepended hook. Browser
+ * (`fetch`-only), minified, and test files return false.
  *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
  */
@@ -1610,9 +1736,7 @@ export function isSafeNodeWasmJsLoader(options: {
   if (!isNodeWasmJsLoaderFilename(options.filename)) return false;
   if (options.source.length > MAX_WASM_LOADER_AUTOWIRE_CHARS) return false;
   if (ALREADY_ENTANGLED_JS_RE.test(options.source)) return false;
-  if (ESM_STATIC_IMPORT_RE.test(options.source) || /\bimport\.meta\b/.test(options.source)) {
-    return false;
-  }
+  if (detectWasmJsLoaderCarrier(options.filename, options.source) === null) return false;
   if (!WASM_INSTANTIATE_API_RE.test(options.source)) return false;
   if (!NODE_FS_LOADER_RE.test(options.source)) return false;
   return sourceMentionsWasmBasename(options.source, options.wasmBasename);
@@ -1623,10 +1747,19 @@ function wasmLoaderPreference(loaderName: string, wasmBasename: string): number 
     /\.wasm$/i,
     "",
   );
-  const base = basename(loaderName).replace(/\.(?:cjs|js)$/i, "");
+  const base = basename(loaderName).replace(/\.(?:cjs|mjs|js)$/i, "");
   if (stem.length > 0 && base.toLowerCase() === stem.toLowerCase()) return 0;
   if (/^loader$/i.test(base)) return 1;
   if (/^index$/i.test(base)) return 2;
+  return 3;
+}
+
+/** `.cjs` wins a same-rank tie, then `.js`, then `.mjs`. */
+function wasmLoaderExtRank(name: string): number {
+  const lower = basename(name).toLowerCase();
+  if (lower.endsWith(".cjs")) return 0;
+  if (lower.endsWith(".js")) return 1;
+  if (lower.endsWith(".mjs")) return 2;
   return 3;
 }
 
@@ -1636,10 +1769,11 @@ export interface NodeWasmJsLoaderCandidate {
 }
 
 /**
- * Pick a single same-directory Node CJS WASM loader, or `null` when none
- * qualify or several unranked files all qualify (do not guess). Preferred
- * names: `<stem>.cjs` / `<stem>.js`, then `loader.*`, then `index.*`
- * (`.cjs` wins a same-rank tie).
+ * Pick a single same-directory Node CJS or ESM WASM loader, or `null`
+ * when none qualify or several unranked files all qualify (do not guess).
+ * Preferred names: `<stem>.cjs` / `<stem>.js` / `<stem>.mjs`, then
+ * `loader.*`, then `index.*` (`.cjs` wins a same-rank tie, then `.js`,
+ * then `.mjs`).
  *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
  */
@@ -1658,17 +1792,17 @@ export function selectNodeWasmJsLoader(
   const scored = qualifying.map((c) => ({
     c,
     score: wasmLoaderPreference(c.name, wasmBasename),
-    cjs: basename(c.name).toLowerCase().endsWith(".cjs") ? 0 : 1,
+    ext: wasmLoaderExtRank(c.name),
   }));
   scored.sort(
     (a, b) =>
-      a.score - b.score || a.cjs - b.cjs || a.c.name.localeCompare(b.c.name),
+      a.score - b.score || a.ext - b.ext || a.c.name.localeCompare(b.c.name),
   );
   const best = scored[0]!;
   // Only known names: <stem>, loader, index. Never guess at unique app files
   // such as license.cjs / main.cjs / helper.cjs.
   if (best.score >= 3) return null;
-  const ties = scored.filter((s) => s.score === best.score && s.cjs === best.cjs);
+  const ties = scored.filter((s) => s.score === best.score && s.ext === best.ext);
   if (ties.length > 1) return null;
   return best.c.name;
 }
@@ -1692,8 +1826,8 @@ function readWasmLoaderCandidateSource(absPath: string): string | null {
 }
 
 /**
- * List same-directory `.cjs` / `.js` candidates (no recursion). Unreadable
- * or oversized files are skipped.
+ * List same-directory `.cjs` / `.js` / `.mjs` candidates (no recursion).
+ * Unreadable or oversized files are skipped.
  */
 export function listSameDirNodeWasmJsLoaderCandidates(
   directory: string,
@@ -1716,9 +1850,10 @@ export function listSameDirNodeWasmJsLoaderCandidates(
 }
 
 /**
- * Discover the unique safe Node CJS loader for `wasmBasename` in the first
- * search directory that yields a selection. Later directories are not
- * consulted once one directory produces a hit (output dir wins over source).
+ * Discover the unique safe Node CJS or ESM loader for `wasmBasename` in
+ * the first search directory that yields a selection. Later directories
+ * are not consulted once one directory produces a hit (output dir wins
+ * over source).
  *
  * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
  */

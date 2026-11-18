@@ -82,6 +82,7 @@ import {
   generateSidecarWasmLoaderSnippet,
   prependWasmSidecarLoaderHook,
   selectNodeWasmJsLoader,
+  detectWasmJsLoaderCarrier,
   isNodeWasmJsLoaderFilename,
   computeWasmSidecarCodeIdentity,
   WASM_SIDECAR_LOADER_MARKER,
@@ -2790,7 +2791,7 @@ function hardenProjectCore(
   // Per-artifact protect skips inject when harden did not pass explicit
   // sidecarEntanglePaths (avoids partial/double prepend). Only one entry is
   // rewritten so sibling digests stay stable — except when a same-directory
-  // Node CJS WASM loader is auto-wired: the WASM custom section is planted
+  // Node CJS/ESM WASM loader is auto-wired: the WASM custom section is planted
   // first (excluding the JS entry, which is still rewritten later) and the
   // loader hook is prepended before the JS preamble, so both digests stay
   // consistent.
@@ -2891,6 +2892,11 @@ function hardenProjectCore(
           ? loaderCandidates.find((c) => c.name === selectedName)
           : undefined;
         if (found) {
+          const carrier = detectWasmJsLoaderCarrier(found.name, found.source);
+          if (!carrier) {
+            if (!jsEntry && !pyEntry) wasmPlantTargets.push(wasmSum);
+            continue;
+          }
           const otherPrimary =
             (jsEntryAbs !== undefined && found.absPath !== jsEntryAbs) ||
             (pyEntryAbs !== undefined && found.absPath !== pyEntryAbs);
@@ -2911,7 +2917,7 @@ function hardenProjectCore(
             ? null
             : generateSidecarWasmLoaderSnippet({
                 codeIdentityHex: identity,
-                carrier: "commonjs",
+                carrier,
               });
           const next = inject
             ? prependWasmSidecarLoaderHook(existing, inject.preamble)

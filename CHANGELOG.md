@@ -73,6 +73,18 @@ End-to-end pass over the agent journey — "MCP server and skill are registered,
   - the `.pyc` weave re-serialised every constant and corrupted non-ASCII strings; it now splices decoys in and copies your constants byte for byte.
 - **SQLite:** a database holding integers beyond 2^53 was refused with a `RangeError`; a database that stock SQLite could not use after hardening is now refused instead of written.
 
+## [3.4.4] — 2026-11-17
+
+Patch auto-wiring the optional WASM JS-loader hook into a known, safe Node.js ESM loader whose static imports are Node builtins only (so `wasm-sidecar-entangle` is recorded and `wasm-sidecar-host-verify-only` is cleared when that hook actually ships), plus `REA_INTERNAL_LIMITS` catalog hygiene for REA tip `05be423ac`.
+
+### Added
+- **WASM JS-loader hook ESM auto-wire (`detectWasmJsLoaderCarrier` / `esmStaticImportsAreNodeBuiltinsOnly` / `listStaticEsmModuleSpecifiers`, `src/shields/runtime/sidecar-entangle.ts`; protect + harden post-pass):** Extends the 2026-11-16 Node CJS auto-wire so a same-directory Node.js ESM loader (`.mjs` or ESM `.js`) can also receive the already-landed `generateSidecarWasmLoaderSnippet` hook (`carrier: "module"`, `import { createRequire } from "node:module"` + `import.meta.url`). ESM is admitted only when every static `import` / `export-from` specifier is a Node builtin (`fs`, `node:path`, `node:url`, …), so hoisting cannot run user-module side effects or instantiate WASM before the hook. Known names stay `<stem>.*`, `loader.*`, `index.*`; `.cjs` still wins a same-rank tie, then `.js`, then `.mjs`. Browser `fetch`-only loaders, ESM files that statically import user modules or `.wasm`, minified / test files, and already-entangled entries remain untouched. Vector `wasm-sidecar-entangle` is recorded and `wasm-sidecar-host-verify-only` is cleared only when the hook was actually written. Default still OFF via existing `sidecarEntangle`.
+- **defenseScore honesty:** `jsModuleHasHoistedDependencyGraph` no longer treats Node builtin-only static imports as a user hoisted graph, so a dedicated ESM WASM loader does not get a spurious `esm-import-hoist-before-hooks` soft-cap. User-module `import` / `export-from` (e.g. `./lib.js`) is still flagged.
+- **`REA_INTERNAL_LIMITS` catalog hygiene:** Inspection / walk ceilings from REA tip `05be423ac` (DWARF units, ELF debug-link, ELF DT_NEEDED, Maven/Gradle metadata, NuGet `.nupkg`, Android OTA / boot image). Honesty catalog only, not densify trip targets.
+
+### Notes
+- REA tip `05be423ac` (+41 since `26d88826c`): new offline analyzers (Android OTA / boot, Maven POM + Gradle module, NuGet, DWARF compile units, ELF debug-link, ELF dynamic dependencies, CycloneDX Go/Rust projection) plus PE certificate-table alignment padding reject (#11823), HAR body-identity (#11829), and more LimitRef typed refusals. **No new 1:1 trip-able densify constants.** Planting DT_NEEDED / OTA operations / boot ramdisks / Maven dependency rows would break the protected artifact; file-byte and pagination ceilings are admission/walk caps, not plantable budgets.
+
 ## [3.4.3] — 2026-11-17
 
 Patch shipping architecture-matched **PE32 (`0x014c`) / ARM64 (`0xaa64`) / ELF32 (`0x03`)** mapped `.enclave` code islands with executable `0x60000020` (`R-X`) flags, intra-island `CALL`/`BL` + PC-relative xref topology, in-bounds `[ImageBase, ImageBase + SizeOfImage)` manifest RVAs, and zero unmapped EOF overlay (Issue #157); structural **anti-marker-spoofing** across 11 artifact formats + SQLite `GENERATED ALWAYS AS` false-positive fix (Issue #155); and **fail-closed GGUF / CLI / MCP / SARIF / runtime hygiene** across 22 merged PRs (`#231`–`#252`).

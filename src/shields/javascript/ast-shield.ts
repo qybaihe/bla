@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isBuiltin } from "node:module";
 import { parse, type ParserPlugin } from "@babel/parser";
 import _traverse, { type Binding, type NodePath, type Scope } from "@babel/traverse";
 import _generate from "@babel/generator";
@@ -581,8 +582,10 @@ export function detectJsCarrierForSource(
  * True when an ES module has static `import` / `export-from` bindings that the
  * ESM loader will instantiate *before* any statement in the file — including a
  * prepended sidecarEntangle / self-seal IIFE. The BLA preamble's own
- * `import { createRequire } from "node:module"` is ignored (it has no user
- * side effects). CommonJS `require()` after a preamble is *not* hoisted.
+ * `import { createRequire } from "node:module"` and other Node builtin
+ * static imports (`node:fs`, `node:path`, …) are ignored (they have no
+ * user-module side effects). CommonJS `require()` after a preamble is
+ * *not* hoisted. User-module `import` / `export-from` still count.
  *
  * Honesty: entry-body fail-closed is not process-start for the hoisted graph.
  */
@@ -624,11 +627,29 @@ function isPreambleCreateRequireImport(stmt: t.Node): boolean {
   );
 }
 
+function isNodeBuiltinModuleSpecifier(specifier: string): boolean {
+  if (typeof specifier !== "string" || specifier.length === 0) return false;
+  try {
+    return isBuiltin(specifier);
+  } catch {
+    return false;
+  }
+}
+
 function isHoistedUserModuleEdge(stmt: t.Node): boolean {
   if (isPreambleCreateRequireImport(stmt)) return false;
-  if (t.isImportDeclaration(stmt)) return true;
-  if (t.isExportAllDeclaration(stmt) && stmt.source !== null) return true;
-  if (t.isExportNamedDeclaration(stmt) && stmt.source !== null) return true;
+  // Node builtin instantiation has no user-module side effects; hoisting
+  // `import fs from "node:fs"` (or the WASM loader's createRequire preamble)
+  // is not the process-start gap this detector describes.
+  if (t.isImportDeclaration(stmt) && stmt.source) {
+    return !isNodeBuiltinModuleSpecifier(stmt.source.value);
+  }
+  if (t.isExportAllDeclaration(stmt) && stmt.source) {
+    return !isNodeBuiltinModuleSpecifier(stmt.source.value);
+  }
+  if (t.isExportNamedDeclaration(stmt) && stmt.source) {
+    return !isNodeBuiltinModuleSpecifier(stmt.source.value);
+  }
   return false;
 }
 

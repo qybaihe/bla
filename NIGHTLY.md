@@ -1,5 +1,63 @@
 # BLA nightly development log
 
+## 2026-11-17 ~America/Los_Angeles / ~2026-11-18 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `26d88826c` → `05be423ac` (**+41** commits). Dirty
+  `third_party/*` deletions were left untouched.
+- No new 1:1 trip-able densify constants. New analyzers add inspection /
+  walk / pagination ceilings that are not plantable without breaking the
+  protected artifact or massively bloating it:
+  - Android OTA payload inventory (#11378) and boot-image inspection —
+    planting extra partitions, operations, or vendor ramdisks would break
+    the update / boot image.
+  - Maven POM + Gradle module metadata, NuGet `.nupkg` — planting
+    dependency rows or 65,536 ZIP members would perturb resolution or
+    balloon the package.
+  - DWARF compile units, ELF `.gnu_debuglink` / debugaltlink, ELF
+    DT_NEEDED / versions / imports — DT_NEEDED cannot be planted without
+    breaking the dynamic linker; DWARF/file-byte/page ceilings are
+    admission or incomplete-census caps, not 1:1 refuses.
+  - PE certificate-table alignment padding reject (#11823) is analyzer
+    validation (same class as #9666). CycloneDX Go/Rust projection, HAR
+    body-identity (#11829), and LimitRef typed refusals re-own existing
+    allowances.
+- Catalogued the headline maxima in `REA_INTERNAL_LIMITS` (honesty only).
+
+### Done tonight
+- Extended the WASM JS-loader hook auto-wire to a same-directory Node.js
+  ESM loader whose static `import` / `export-from` specifiers are Node
+  builtins only (`detectWasmJsLoaderCarrier` /
+  `esmStaticImportsAreNodeBuiltinsOnly` / `listStaticEsmModuleSpecifiers`;
+  `protectTarget` + `hardenProject` post-pass; `carrier: "module"`).
+  Known names stay `<stem>.*`, `loader.*`, `index.*`; `.cjs` still wins a
+  same-rank tie, then `.js`, then `.mjs`. Browser `fetch`-only loaders,
+  ESM files that statically import user modules or `.wasm`, minified /
+  test files, and already-entangled entries remain untouched. Vector
+  `wasm-sidecar-entangle` is recorded and `wasm-sidecar-host-verify-only`
+  is cleared only when that hook was actually written. Default OFF via
+  existing `sidecarEntangle`.
+- Honesty: `jsModuleHasHoistedDependencyGraph` no longer treats Node
+  builtin-only static imports as a user hoisted graph (so a dedicated
+  ESM WASM loader does not get a spurious `esm-import-hoist-before-hooks`
+  soft-cap). User-module imports such as `./lib.js` are still flagged.
+- Live BLA tree was pulled `645993f` / `3.4.2` → `f6f37c4` / `3.4.3`
+  before this increment (daytime PRs already on main: PE32/ARM64/ELF32
+  `.enclave` islands, anti-marker-spoofing, fail-closed GGUF, MCP/CLI
+  hygiene).
+- Gates: build OK, tests **988 passed / 4 skipped**, benchmark **14/14**
+  runtime-equivalent.
+
+### Next step (following night)
+1. `.pyc` import-time hook (only then record `pyc-sidecar-entangle` /
+   clear `pyc-sidecar-host-verify-only`).
+2. GGUF / DEX / Safetensors / SQLite load-time hooks (same honesty bar).
+3. Browser WASM loader auto-wire (the hook still needs Node `fs` /
+   `crypto`; a browser snippet would have to verify without those).
+4. ESM hook that runs before hoisted *user* imports; MCP one-click
+   polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-16 ~America/Los_Angeles / ~2026-11-17 02:00 Asia/Shanghai
 
 ### REA delta
