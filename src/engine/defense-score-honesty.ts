@@ -62,6 +62,12 @@ export interface DefenseScoreHonestyInput {
    */
   readonly wasmSidecarLoaderHookApplied?: boolean;
   /**
+   * True when a same-directory Python loader was auto-wired with
+   * `entanglePycLoaderWithSidecars` (or the hook is already present next to
+   * the .pyc). Clears `pyc-sidecar-host-verify-only`.
+   */
+  readonly pycSidecarLoaderHookApplied?: boolean;
+  /**
    * How a SQLite database's generated decoy columns are defined: `"eval"`
    * when they call the function no stock connection has (opt-in), otherwise
    * plain SQL. Unknown counts as plain SQL.
@@ -148,13 +154,18 @@ export function collectDefenseScoreGaps(
     });
   }
 
-  // .pyc marshal trailer is host-verify only (importlib ignores it). Enabling
-  // sidecarEntangle must not clear the process-start strip⇒fail gap.
-  if (input.detectedFormat === "python-pyc" && input.sidecarEntangleEnabled === true) {
+  // .pyc marshal trailer is host-verify only (importlib ignores it) until a
+  // same-directory Python import-time hook is actually auto-wired (or already
+  // present) beside the module.
+  if (
+    input.detectedFormat === "python-pyc" &&
+    input.sidecarEntangleEnabled === true &&
+    input.pycSidecarLoaderHookApplied !== true
+  ) {
     gaps.push({
       id: "pyc-sidecar-host-verify-only",
       summary:
-        "sidecarEntangle planted a .pyc TYPE_ASCII marshal trailer verified only by host verifyPycSidecarMarshalNote; importlib still runs after strip or sibling delete. Import-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+        "sidecarEntangle planted a .pyc TYPE_ASCII marshal trailer verified by host verifyPycSidecarMarshalNote; importlib ignores the trailer unless a same-directory Python loader (loader.py / __init__.py / __main__.py) was auto-wired with the import-time hook (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

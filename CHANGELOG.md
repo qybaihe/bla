@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`.pyc` import-time hook (`generateSidecarPycLoaderSnippet` / `prependPycSidecarLoaderHook` / `entanglePycLoaderWithSidecars`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` post-pass auto-wire a self-contained Python snippet into a same-directory (or parent-of-`__pycache__`) loader named `loader.py`, `__init__.py`, or `__main__.py` that already mentions the module or `.pyc` basename (`selectPythonPycLoader` / `discoverPythonPycLoader` / `isSafePythonPycLoader` / `isPycSidecarLoaderHookWired`). The hook reads the sibling `.pyc` at import time and, when the stripped-body identity matches, verifies the TYPE_ASCII marshal note and sidecar digest — strip or sibling delete fails closed. The `.pyc` itself is not rewritten (marshal layout, `co_filename` / `co_name`, PEP 552 hash header, and `co_consts` weaves stay untouched); the `.py` source of the target `.pyc`, test files, and already-entangled entries are never hooked. Vector `pyc-sidecar-entangle` is recorded and defenseScore gap `pyc-sidecar-host-verify-only` is cleared only when that hook was actually written. Default still OFF.
+
 ### Fixed
 - **The website named the wrong release (`scripts/sync-version.mjs`, `website/index.html`):** its structured data gave 3.4.1 as the source-code version since 3.4.1, beside a `softwareVersion` of the current release — the version bump never touched the website or the GitHub Actions example, so each was edited by hand and this one was missed. `sync-version` now keeps `softwareVersion`, the release-notes link, the `SoftwareSourceCode` version and the example's `BLA_VERSION` on `package.json`, and the version-drift test (`tests/version-claims-drift.test.ts`) fails when any of them, or a plugin manifest's version, is not the package version.
 

@@ -17,7 +17,14 @@
  * optional in-archive main JS preamble (`generateSidecarAsarMainJsPreamble`) that
  * re-measures members via Electron's fs-patched `readFileSync`; CPython `.pyc`
  * appends a TYPE_ASCII marshal trailer note (`__blaPycSidecarDigest=…`) verified
- * by `verifyPycSidecarMarshalNote` (importlib ignores post-root trailers — see
+ * by `verifyPycSidecarMarshalNote` (importlib ignores post-root trailers) and an
+ * optional same-directory Python import-time hook
+ * (`generateSidecarPycLoaderSnippet` / `prependPycSidecarLoaderHook` /
+ * `entanglePycLoaderWithSidecars`) auto-wired into a known safe loader
+ * (`loader.py`, `__init__.py`, `__main__.py` — never the `.py` source of the
+ * `.pyc` itself) so strip / sibling delete fail closed when that loader runs;
+ * only then is `pyc-sidecar-entangle` recorded and
+ * `pyc-sidecar-host-verify-only` cleared (see
  * `docs/design/sidecar-entry-entanglement.md`); GGUF plants a STRING metadata
  * KV note (`bla.sidecar.v1`) verified by `verifyGgufSidecarMetadataNote`, with
  * alignment-safe rewrite so tensor bytes stay bit-exact;
@@ -32,7 +39,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { isBuiltin } from "node:module";
 import {
   INTEGRITY_COVERAGE_SCHEMA,
@@ -2940,8 +2947,10 @@ export function entanglePycEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  /** When true, plant a trailer even if there are no sibling artifacts (hook can still fail-closed on strip). */
+  readonly allowEmptySidecars?: boolean;
 }): SidecarPycBindResult | null {
-  if (options.sidecars.length === 0) return null;
+  if (options.sidecars.length === 0 && options.allowEmptySidecars !== true) return null;
   return bindPycSidecarEntanglement({
     entryPath: options.entryPath,
     sidecarPaths: options.sidecars.map((s) => s.pathLabel),
@@ -3121,6 +3130,526 @@ export function verifyPycSidecarMarshalNote(
   };
 }
 
+
+
+/**
+ * SHA-256 hex of a `.pyc` with any `__blaPycSidecarDigest=` TYPE_ASCII trailer
+ * removed. Used by the optional Python import-time hook to recognize the
+ * protected module after an adversary strips the note (the root marshal object
+ * stays identical, so the hook can still fail closed).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function computePycSidecarCodeIdentity(bytes: Uint8Array): string {
+  const stripped = stripPycSidecarMarshalNote(bytes);
+  return createHash("sha256").update(stripped).digest("hex");
+}
+
+/** Idempotence marker inserted with the optional `.pyc` import-time hook. */
+export const PYC_SIDECAR_LOADER_MARKER = "_installPycSidecarLoaderHook" as const;
+
+export interface SidecarPycLoaderInjectOptions {
+  /**
+   * SHA-256 hex (or list) of the protected `.pyc` with the sidecar marshal
+   * note stripped. Files whose identity matches MUST present a valid
+   * TYPE_ASCII trailer; other `.pyc` files pass through unchanged.
+   */
+  readonly codeIdentityHex: string | readonly string[];
+  /**
+   * Paths to the protected `.pyc`, relative to the loader file's directory
+   * (`Path(__file__).resolve().parent`). Sidecar paths inside the note are
+   * resolved against the `.pyc` file's own directory.
+   */
+  readonly pycRelPaths: readonly string[];
+  readonly bindingName?: string;
+}
+
+export interface SidecarPycLoaderInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly codeIdentityHexes: readonly string[];
+  readonly pycRelPaths: readonly string[];
+}
+
+function normalizePycCodeIdentity(hex: string): string {
+  const value = hex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("codeIdentityHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  return value;
+}
+
+/**
+ * Emit a self-contained host Python snippet that, at import time of the
+ * loader it is inserted into, reads the sibling `.pyc`, and when the
+ * stripped-body identity matches, verifies the TYPE_ASCII marshal note and
+ * sibling sidecar digest. Strip or sibling delete fails closed. Unrelated
+ * `.pyc` files (identity mismatch) and a missing file pass through so a
+ * later import can fail naturally or recompile from source.
+ *
+ * The hook does not rewrite the `.pyc` (marshal layout, `co_filename` /
+ * `co_name`, PEP 552 hash header, and `co_consts` weaves stay untouched).
+ * It is host-opt-in: `protectTarget` / `hardenProject` auto-wire it only
+ * into a known same-directory (or parent-of-`__pycache__`) Python loader
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * module or `.pyc` basename — never the `.py` source of the target `.pyc`,
+ * and never a test / already-entangled / self-seal file. Only then is
+ * `pyc-sidecar-entangle` recorded and `pyc-sidecar-host-verify-only` cleared.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarPycLoaderSnippet(
+  options: SidecarPycLoaderInjectOptions,
+): SidecarPycLoaderInjectResult {
+  const raw = options.codeIdentityHex;
+  const list = (Array.isArray(raw) ? raw : [raw]).map((hex) =>
+    normalizePycCodeIdentity(hex),
+  );
+  if (list.length === 0) {
+    throw new Error("codeIdentityHex must contain at least one digest");
+  }
+  const relPaths = (options.pycRelPaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (relPaths.length === 0) {
+    throw new Error("pycRelPaths must contain at least one path");
+  }
+  const tag = list[0]!.slice(0, 8);
+  const bindingName = options.bindingName ?? `${PYC_SIDECAR_LOADER_MARKER}_${tag}`;
+  const idsLiteral = JSON.stringify(list);
+  const pathsLiteral = JSON.stringify(relPaths);
+  const markerLiteral = JSON.stringify(PYC_SIDECAR_MARSHAL_MARKER);
+  const schemaLiteral = JSON.stringify(SIDECAR_ENTANGLE_SCHEMA);
+  const kindLiteral = JSON.stringify(PYC_SIDECAR_MARSHAL_KIND);
+
+  const lines: string[] = [];
+  lines.push(`# ${PYC_SIDECAR_LOADER_MARKER}`);
+  lines.push(`def ${bindingName}():`);
+  lines.push(`    import hashlib as _sc_hashlib_${tag}`);
+  lines.push(`    import json as _sc_json_${tag}`);
+  lines.push(`    import pathlib as _sc_pathlib_${tag}`);
+  lines.push(`    _sc_ids_${tag} = ${idsLiteral}`);
+  lines.push(`    _sc_idset_${tag} = set(_sc_ids_${tag})`);
+  lines.push(`    _sc_paths_${tag} = ${pathsLiteral}`);
+  lines.push(`    _sc_marker_${tag} = ${markerLiteral}`);
+  lines.push(`    _sc_schema_${tag} = ${schemaLiteral}`);
+  lines.push(`    _sc_kind_${tag} = ${kindLiteral}`);
+  lines.push(`    _sc_marker_b_${tag} = _sc_marker_${tag}.encode("utf-8")`);
+  lines.push(`    _sc_base_${tag} = _sc_pathlib_${tag}.Path(__file__).resolve().parent`);
+  lines.push(`    def _sc_strip_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_at_${tag} = _sc_buf_${tag}.rfind(_sc_marker_b_${tag})`);
+  lines.push(`        if _sc_at_${tag} < 0:`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        if _sc_at_${tag} >= 5 and _sc_buf_${tag}[_sc_at_${tag} - 5] == 0x61:`);
+  lines.push(
+    `            _sc_decl_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_at_${tag} - 4:_sc_at_${tag}], "little")`,
+  );
+  lines.push(`            _sc_start_${tag} = _sc_at_${tag} - 5`);
+  lines.push(`            _sc_end_${tag} = _sc_at_${tag} + _sc_decl_${tag}`);
+  lines.push(`            if _sc_end_${tag} <= len(_sc_buf_${tag}):`);
+  lines.push(
+    `                return _sc_buf_${tag}[:_sc_start_${tag}] + _sc_buf_${tag}[_sc_end_${tag}:]`,
+  );
+  lines.push(`        return _sc_buf_${tag}[: max(0, _sc_at_${tag} - 5)]`);
+  lines.push(`    def _sc_extract_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_at_${tag} = _sc_buf_${tag}.rfind(_sc_marker_b_${tag})`);
+  lines.push(`        if _sc_at_${tag} < 0:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_text_${tag} = None`);
+  lines.push(`        if _sc_at_${tag} >= 5 and _sc_buf_${tag}[_sc_at_${tag} - 5] == 0x61:`);
+  lines.push(
+    `            _sc_decl_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_at_${tag} - 4:_sc_at_${tag}], "little")`,
+  );
+  lines.push(`            _sc_pay_end_${tag} = _sc_at_${tag} + _sc_decl_${tag}`);
+  lines.push(`            if _sc_pay_end_${tag} <= len(_sc_buf_${tag}):`);
+  lines.push(
+    `                _sc_pay_${tag} = _sc_buf_${tag}[_sc_at_${tag}:_sc_pay_end_${tag}]`,
+  );
+  lines.push(`                if _sc_pay_${tag}.startswith(_sc_marker_b_${tag}):`);
+  lines.push(
+    `                    _sc_text_${tag} = _sc_pay_${tag}[len(_sc_marker_b_${tag}):].decode("utf-8")`,
+  );
+  lines.push(`        if _sc_text_${tag} is None:`);
+  lines.push(
+    `            _sc_rest_${tag} = _sc_buf_${tag}[_sc_at_${tag} + len(_sc_marker_b_${tag}):]`,
+  );
+  lines.push(`            _sc_nul_${tag} = _sc_rest_${tag}.find(b"\\x00")`);
+  lines.push(
+    `            _sc_slice_${tag} = _sc_rest_${tag} if _sc_nul_${tag} < 0 else _sc_rest_${tag}[:_sc_nul_${tag}]`,
+  );
+  lines.push(`            _sc_text_${tag} = _sc_slice_${tag}.decode("utf-8", "replace")`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_obj_${tag} = _sc_json_${tag}.loads(_sc_text_${tag})`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return None`);
+  lines.push(
+    `        if _sc_obj_${tag}.get("schema") != _sc_schema_${tag} or _sc_obj_${tag}.get("kind") != _sc_kind_${tag}:`,
+  );
+  lines.push(`            return None`);
+  lines.push(`        _sc_dig_${tag} = _sc_obj_${tag}.get("digest")`);
+  lines.push(
+    `        if not isinstance(_sc_dig_${tag}, str) or len(_sc_dig_${tag}) != 64:`,
+  );
+  lines.push(`            return None`);
+  lines.push(`        return _sc_obj_${tag}`);
+  lines.push(`    def _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}):`);
+  lines.push(`        _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`        _sc_h_${tag}.update(_sc_entry_${tag}.encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        for _sc_sp_${tag}, _sc_data_${tag} in _sc_parts_${tag}:`);
+  lines.push(`            _sc_h_${tag}.update(_sc_sp_${tag}.encode("utf-8"))`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`            _sc_h_${tag}.update(_sc_data_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
+  lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
+  lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
+  lines.push(`        if not _sc_path_${tag}.is_absolute():`);
+  lines.push(`            _sc_path_${tag} = _sc_base_${tag} / _sc_rel_${tag}`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
+  lines.push(`        except Exception:`);
+  lines.push(`            continue`);
+  lines.push(
+    `        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`,
+  );
+  lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_note_${tag} = _sc_extract_${tag}(_sc_raw_${tag})`);
+  lines.push(`        if _sc_note_${tag} is None:`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        _sc_parts_${tag} = []`);
+  lines.push(`        _sc_dir_${tag} = _sc_path_${tag}.parent`);
+  lines.push(`        _sc_sp_list_${tag} = _sc_note_${tag}.get("sidecarPaths") or []`);
+  lines.push(`        if not isinstance(_sc_sp_list_${tag}, list):`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        for _sc_sp_${tag} in _sc_sp_list_${tag}:`);
+  lines.push(`            if not isinstance(_sc_sp_${tag}, str) or len(_sc_sp_${tag}) == 0:`);
+  lines.push(`                continue`);
+  lines.push(`            _sc_sib_${tag} = _sc_pathlib_${tag}.Path(_sc_sp_${tag})`);
+  lines.push(`            if not _sc_sib_${tag}.is_absolute():`);
+  lines.push(`                _sc_sib_${tag} = _sc_dir_${tag} / _sc_sp_${tag}`);
+  lines.push(`            try:`);
+  lines.push(`                _sc_parts_${tag}.append((_sc_sp_${tag}, _sc_sib_${tag}.read_bytes()))`);
+  lines.push(`            except Exception:`);
+  lines.push(`                raise RuntimeError("integrity binding mismatch") from None`);
+  lines.push(`        _sc_seed_${tag} = _sc_note_${tag}.get("seedTag")`);
+  lines.push(
+    `        if not isinstance(_sc_seed_${tag}, str) or len(_sc_seed_${tag}) == 0:`,
+  );
+  lines.push(`            _sc_seed_${tag} = "bla-sidecar-v1"`);
+  lines.push(`        _sc_entry_${tag} = _sc_note_${tag}.get("entryPath")`);
+  lines.push(`        if not isinstance(_sc_entry_${tag}, str):`);
+  lines.push(`            _sc_entry_${tag} = ""`);
+  lines.push(
+    `        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`,
+  );
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        return`);
+  lines.push(`try:`);
+  lines.push(`    ${bindingName}()`);
+  lines.push(`finally:`);
+  lines.push(`    del ${bindingName}`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    codeIdentityHexes: list,
+    pycRelPaths: relPaths,
+  };
+}
+
+/**
+ * Insert a `.pyc` import-time hook after shebang / encoding / docstring /
+ * `from __future__`, idempotent when {@link PYC_SIDECAR_LOADER_MARKER} is
+ * already present. Preserves surrounding newlines the same way
+ * `bindPythonSidecarEntanglement` does.
+ */
+export function prependPycSidecarLoaderHook(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(PYC_SIDECAR_LOADER_MARKER)) return entrySource;
+  const eol = entrySource.includes("\r\n") ? "\r\n" : "\n";
+  const analysis = findPythonPrologueInsertionOffset(entrySource);
+  const headRaw = entrySource.slice(0, analysis.insertOffset);
+  const tailRaw = entrySource.slice(analysis.insertOffset);
+  const head = headRaw.replace(/(?:\r?\n)+$/, "");
+  const tail = tailRaw.replace(/^(?:\r?\n)+/, "");
+  const body = preamble.replace(/\r?\n/g, eol).replace(/(?:\r?\n)+$/, "");
+  const parts: string[] = [];
+  if (head.length > 0) parts.push(head);
+  parts.push(body);
+  if (tail.length > 0) parts.push(tail);
+  return (
+    parts.join(eol) +
+    (entrySource.endsWith("\n") || entrySource.endsWith("\r\n") ? eol : "")
+  );
+}
+
+/**
+ * Convenience: prepend a loader hook bound to this `.pyc` file's stripped
+ * identity. Idempotent when the marker is already present.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function entanglePycLoaderWithSidecars(options: {
+  readonly loaderSource: string;
+  readonly pycBytes: Uint8Array;
+  readonly pycRelPath: string | readonly string[];
+}): { readonly code: string; readonly identity: string } {
+  const identity = computePycSidecarCodeIdentity(options.pycBytes);
+  const paths = (
+    Array.isArray(options.pycRelPath) ? options.pycRelPath : [options.pycRelPath]
+  ).filter((p) => p.length > 0);
+  const inject = generateSidecarPycLoaderSnippet({
+    codeIdentityHex: identity,
+    pycRelPaths: paths,
+  });
+  return {
+    code: prependPycSidecarLoaderHook(options.loaderSource, inject.preamble),
+    identity,
+  };
+}
+
+const MAX_PYC_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
+const MAX_PYC_LOADER_AUTOWIRE_CHARS = 64 * 1024;
+const PYC_LOADER_EXTENSIONS = [".py"] as const;
+const ALREADY_ENTANGLED_PY_RE =
+  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook/;
+
+/** Module stem of a CPython cache filename (`sample.cpython-312.opt-1.pyc` → `sample`). */
+export function pycModuleStemFromBasename(filename: string): string {
+  const base = basename(filename);
+  return base
+    .replace(/\.opt-\d+(?=\.pyc$)/i, "")
+    .replace(/\.cpython-\d+(?=\.pyc$)/i, "")
+    .replace(/\.py[co]$/i, "");
+}
+
+function isUnsafePythonPycLoaderName(filename: string): boolean {
+  const lower = basename(filename).toLowerCase();
+  if (lower === "conftest.py" || lower === "test.py" || lower === "tests.py") {
+    return true;
+  }
+  if (lower.startsWith("test_")) return true;
+  if (lower.endsWith("_test.py") || lower.endsWith("_tests.py")) return true;
+  return false;
+}
+
+/**
+ * True when `filename` is a `.py` file that may be considered as a `.pyc`
+ * import-time loader (not a test module).
+ */
+export function isPythonPycLoaderFilename(filename: string): boolean {
+  const base = basename(filename);
+  const lower = base.toLowerCase();
+  if (isUnsafePythonPycLoaderName(base)) return false;
+  return PYC_LOADER_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/**
+ * True when `source` mentions `pycBasename` in a quoted string / template,
+ * or statically imports the corresponding module stem (`import sample`,
+ * `from .sample import …`, `from . import sample`, `importlib.import_module`).
+ */
+export function sourceMentionsPycModule(source: string, pycBasename: string): boolean {
+  const name = (pycBasename.replaceAll("\\", "/").split("/").pop() ?? "");
+  if (!name || !name.toLowerCase().endsWith(".pyc")) return false;
+  const stem = pycModuleStemFromBasename(name);
+  if (!stem) return false;
+  const quoted = new RegExp(
+    `['"\`](?:[^'"\`\\\\]|\\\\.)*${escapeRegExpLiteral(name)}['"\`]`,
+  );
+  if (quoted.test(source)) return true;
+  const id = escapeRegExpLiteral(stem);
+  const importRe = new RegExp(
+    String.raw`(?:^|[\n;])\s*(?:import\s+${id}\b|from\s+\.*${id}\b|from\s+\.+\s+import\s+\(?\s*(?:[\w$.]+\s+as\s+)?(?:[\w$]+\s*,\s*)*${id}\b)`,
+  );
+  if (importRe.test(source)) return true;
+  const importlibRe = new RegExp(
+    String.raw`import_module\(\s*['"](?:\.*)?${id}['"]`,
+  );
+  return importlibRe.test(source);
+}
+
+/**
+ * Conservative auto-wire predicate: a Python file with a known loader name
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * target `.pyc` / module stem. The `.py` source counterpart of the `.pyc`
+ * (`<stem>.py`) is never admitted — rewriting it would invalidate PEP 552
+ * / timestamp headers and change that module's own import semantics.
+ * Test, already-entangled, and oversized files return false.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function isSafePythonPycLoader(options: {
+  readonly source: string;
+  readonly filename: string;
+  readonly pycBasename: string;
+}): boolean {
+  if (!isPythonPycLoaderFilename(options.filename)) return false;
+  if (options.source.length > MAX_PYC_LOADER_AUTOWIRE_CHARS) return false;
+  if (ALREADY_ENTANGLED_PY_RE.test(options.source)) return false;
+  const stem = pycModuleStemFromBasename(options.pycBasename);
+  const base = basename(options.filename).replace(/\.py$/i, "");
+  if (stem.length > 0 && base.toLowerCase() === stem.toLowerCase()) return false;
+  return sourceMentionsPycModule(options.source, options.pycBasename);
+}
+
+function pycLoaderPreference(loaderName: string): number {
+  const base = basename(loaderName);
+  if (/^loader\.py$/i.test(base)) return 0;
+  if (/^__init__\.py$/i.test(base)) return 1;
+  if (/^__main__\.py$/i.test(base)) return 2;
+  return 3;
+}
+
+export interface PythonPycLoaderCandidate {
+  readonly name: string;
+  readonly source: string;
+}
+
+/**
+ * Pick a single same-directory (or parent-of-`__pycache__`) Python loader,
+ * or `null` when none qualify or several unranked files all qualify (do
+ * not guess). Preferred names: `loader.py`, then `__init__.py`, then
+ * `__main__.py`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function selectPythonPycLoader(
+  pycBasename: string,
+  candidates: readonly PythonPycLoaderCandidate[],
+): string | null {
+  const qualifying = candidates.filter((c) =>
+    isSafePythonPycLoader({
+      source: c.source,
+      filename: c.name,
+      pycBasename,
+    }),
+  );
+  if (qualifying.length === 0) return null;
+  const scored = qualifying.map((c) => ({
+    c,
+    score: pycLoaderPreference(c.name),
+  }));
+  scored.sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name));
+  const best = scored[0]!;
+  // Only known names: loader, __init__, __main__. Never guess at unique
+  // app files such as helper.py / main.py / app.py.
+  if (best.score >= 3) return null;
+  const ties = scored.filter((s) => s.score === best.score);
+  if (ties.length > 1) return null;
+  return best.c.name;
+}
+
+export interface DiscoveredPythonPycLoader {
+  readonly absPath: string;
+  readonly name: string;
+  readonly source: string;
+}
+
+function readPycLoaderCandidateSource(absPath: string): string | null {
+  try {
+    const st = statSync(absPath);
+    if (!st.isFile() || st.size <= 0 || st.size > MAX_PYC_LOADER_CANDIDATE_BYTES) {
+      return null;
+    }
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Directories to search for a Python loader next to a `.pyc`. */
+export function listPycLoaderSearchDirectories(pycPath: string): string[] {
+  const dir = dirname(pycPath);
+  const out = [dir];
+  if (basename(dir).toLowerCase() === "__pycache__") {
+    out.push(dirname(dir));
+  }
+  return out;
+}
+
+/**
+ * List same-directory `.py` candidates (no recursion). Unreadable or
+ * oversized files are skipped.
+ */
+export function listSameDirPythonPycLoaderCandidates(
+  directory: string,
+): DiscoveredPythonPycLoader[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const out: DiscoveredPythonPycLoader[] = [];
+  for (const name of names) {
+    if (!isPythonPycLoaderFilename(name)) continue;
+    const absPath = join(directory, name);
+    const source = readPycLoaderCandidateSource(absPath);
+    if (source === null) continue;
+    out.push({ absPath, name, source });
+  }
+  return out;
+}
+
+/**
+ * Discover the unique safe Python loader for `pycBasename` in the first
+ * search directory that yields a selection. Later directories are not
+ * consulted once one directory produces a hit (output dir wins over source).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function discoverPythonPycLoader(options: {
+  readonly pycBasename: string;
+  readonly searchDirectories: readonly string[];
+}): DiscoveredPythonPycLoader | null {
+  const seen = new Set<string>();
+  for (const directory of options.searchDirectories) {
+    if (typeof directory !== "string" || directory.length === 0) continue;
+    if (seen.has(directory)) continue;
+    seen.add(directory);
+    const candidates = listSameDirPythonPycLoaderCandidates(directory);
+    const selected = selectPythonPycLoader(options.pycBasename, candidates);
+    if (!selected) continue;
+    const hit = candidates.find((c) => c.name === selected || c.absPath === selected);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * True when a same-directory (or parent-of-`__pycache__`) Python file already
+ * carries the `.pyc` import-time hook bound to this module's code identity
+ * (used by defenseScore honesty).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function isPycSidecarLoaderHookWired(options: {
+  readonly pycBytes: Uint8Array;
+  readonly pycPath: string;
+}): boolean {
+  const identity = computePycSidecarCodeIdentity(options.pycBytes);
+  const directories = listPycLoaderSearchDirectories(options.pycPath);
+  return directories.some((directory) =>
+    listSameDirPythonPycLoaderCandidates(directory).some(
+      (c) =>
+        c.source.includes(PYC_SIDECAR_LOADER_MARKER) && c.source.includes(identity),
+    ),
+  );
+}
+
+/** Relative path from a loader file's directory to the protected `.pyc`. */
+export function relativePycPathFromLoader(loaderPath: string, pycPath: string): string {
+  const rel = relative(dirname(loaderPath), pycPath).split("\\").join("/");
+  return rel.length === 0 ? basename(pycPath) : rel;
+}
 
 
 // ---------------------------------------------------------------------------

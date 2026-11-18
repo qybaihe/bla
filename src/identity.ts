@@ -336,4 +336,22 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   ANDROID_OTA_MAX_OPERATIONS: 65_536,
   ANDROID_BOOT_MAX_VENDOR_RAMDISKS: 4_096,
   ANDROID_BOOT_MAX_HEADER_SIZE: 1_048_576,
+  /**
+   * New REA ceilings on tip 31aaec6b4 (198 commits after 05be423ac; almost
+   * entirely test / fix / refactor — no new feat analyzers). Honesty catalog
+   * only — not densify trip targets:
+   *
+   * - `ANDROID_PACKED_TABLE_BYTES` (16 MiB) caps decode of Android APS2 / RELR
+   *   packed relocation tables (`elfPointerRelocations.ts`, #12047). Planting
+   *   a 16 MiB reloc table would bloat or break the protected ELF.
+   * - `MAX_PE_OPTIONAL_HEADER_BYTES` (4096) is PE header validation before
+   *   classification (`binaryTarget.ts` / inventory, #11691). A larger
+   *   optional header is an invalid PE, not a plantable 1:1 refuse.
+   * - `DEFAULT_INSPECT_ELF_NOTE_ENTRIES` was raised to 128 so distribution
+   *   glibc notes fit (#11847); the hard ceiling
+   *   `MAX_INSPECT_ELF_NOTE_ENTRIES` (256) and file-byte cap were already
+   *   present on the previous tip (admission / incomplete-census, not new).
+   */
+  ANDROID_PACKED_TABLE_BYTES: 16_777_216,
+  MAX_PE_OPTIONAL_HEADER_BYTES: 4_096,
 });

@@ -79,6 +79,15 @@ describe("Issue #40.6: defenseScore honesty", () => {
     expect(hostOnly.gaps.map((g) => g.id)).toContain("pyc-sidecar-host-verify-only");
     expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
     expect(hostOnly.cappedScore).toBe(93);
+
+    const hooked = applyDefenseScoreHonesty(99, {
+      detectedFormat: "python-pyc",
+      sidecarEntangleEnabled: true,
+      pycSidecarLoaderHookApplied: true,
+    });
+    expect(hooked.gaps.map((g) => g.id)).not.toContain("pyc-sidecar-host-verify-only");
+    expect(hooked.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
+    expect(hooked.cappedScore).toBe(99);
   });
 
   it("keeps a GGUF host-only STRING metadata note from closing the strip⇒fail gap", () => {

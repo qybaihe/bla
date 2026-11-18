@@ -111,6 +111,11 @@ import {
   discoverNodeWasmJsLoader,
   detectWasmJsLoaderCarrier,
   WASM_SIDECAR_LOADER_MARKER,
+  entanglePycLoaderWithSidecars,
+  discoverPythonPycLoader,
+  listPycLoaderSearchDirectories,
+  relativePycPathFromLoader,
+  PYC_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -357,6 +362,62 @@ function applySidecarEntangleToPyc(
   });
   if (!bound) return { buffer: pycBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
+}
+
+
+function applySidecarPycLoaderAutoWire(options: {
+  readonly pycBytes: Uint8Array;
+  readonly pycBasenames: readonly string[];
+  readonly outputDir: string;
+  readonly sourceDir: string;
+  readonly outputPycPath: string;
+}): { applied: boolean; destPath?: string } {
+  const search: string[] = [];
+  const seen = new Set<string>();
+  const addDir = (dir: string): void => {
+    if (!dir || seen.has(dir)) return;
+    seen.add(dir);
+    search.push(dir);
+    if (basename(dir).toLowerCase() === "__pycache__") addDir(dirname(dir));
+  };
+  addDir(options.outputDir);
+  if (options.sourceDir !== options.outputDir) addDir(options.sourceDir);
+  for (const extra of listPycLoaderSearchDirectories(options.outputPycPath)) {
+    addDir(extra);
+  }
+
+  const names = [...new Set(options.pycBasenames.filter((n) => /\.pyc$/i.test(n)))];
+  let found: ReturnType<typeof discoverPythonPycLoader> = null;
+  for (const pycBasename of names) {
+    found = discoverPythonPycLoader({
+      pycBasename,
+      searchDirectories: search,
+    });
+    if (found) break;
+  }
+  if (!found) return { applied: false };
+  let destPath = found.absPath;
+  const foundDir = dirname(found.absPath);
+  if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
+    destPath = join(options.outputDir, found.name);
+    if (existsSync(destPath) && destPath !== found.absPath) {
+      // Do not clobber an existing output sibling that was not the selected loader.
+      return { applied: false };
+    }
+  }
+  const pycRel = relativePycPathFromLoader(destPath, options.outputPycPath);
+  const entangled = entanglePycLoaderWithSidecars({
+    loaderSource: found.source,
+    pycBytes: options.pycBytes,
+    pycRelPath: pycRel,
+  });
+  if (entangled.code === found.source && destPath === found.absPath) {
+    return found.source.includes(PYC_SIDECAR_LOADER_MARKER)
+      ? { applied: true, destPath }
+      : { applied: false };
+  }
+  writeFileAtomicSync(destPath, entangled.code, "utf8");
+  return { applied: true, destPath };
 }
 
 function applySidecarEntangleToGguf(
@@ -737,6 +798,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let inlineScriptsFailed = 0;
   let sidecarEntangleApplied = false;
   let wasmSidecarLoaderHookApplied = false;
+  let pycSidecarLoaderHookApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -1209,15 +1271,41 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     });
     let finalPyc = res.buffer;
     {
+      const willPlantNote =
+        options.sidecarEntangle === true &&
+        (options.sidecarEntanglePaths ?? []).some((rel) => {
+          if (typeof rel !== "string" || rel.length === 0) return false;
+          const abs = isAbsolute(rel) ? rel : join(dirname(absOutput), rel);
+          try {
+            return existsSync(abs);
+          } catch {
+            return false;
+          }
+        });
+      if (willPlantNote) {
+        const hook = applySidecarPycLoaderAutoWire({
+          pycBytes: finalPyc,
+          pycBasenames: [basename(absInput), basename(absOutput)],
+          outputDir: dirname(absOutput),
+          sourceDir: dirname(absInput),
+          outputPycPath: absOutput,
+        });
+        if (hook.applied) pycSidecarLoaderHookApplied = true;
+      }
       const entangled = applySidecarEntangleToPyc(finalPyc, options, absOutput, seed);
       finalPyc = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
-        // Host-verify trailer only: importlib ignores post-root TYPE_ASCII
-        // notes, so strip / sibling delete still execute. Do not record
-        // pyc-sidecar-entangle until an import-time hook lands (paper
-        // coverage otherwise; same honesty bar as ASAR's process-start
-        // preamble before asar-sidecar-entangle is claimed).
+        // Record the process-start vector only when the marshal note was
+        // planted AND a same-directory Python loader was actually auto-wired
+        // (honesty: importlib still ignores the trailer if the hook never shipped).
+        if (pycSidecarLoaderHookApplied) {
+          counteredVectors.add("pyc-sidecar-entangle");
+        } else {
+          pycSidecarLoaderHookApplied = false;
+        }
+      } else {
+        pycSidecarLoaderHookApplied = false;
       }
     }
     writeProtectedOutput(absOutput, finalPyc);
@@ -1631,6 +1719,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
+    ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportRenames.length > 0 ? { wasmExportRenames } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),

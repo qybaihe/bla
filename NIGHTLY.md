@@ -1,5 +1,58 @@
 # BLA nightly development log
 
+## 2026-11-18 ~America/Los_Angeles / ~2026-11-19 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `05be423ac` → `31aaec6b4` (**+198** commits). Dirty
+  `third_party/*` deletions were left untouched.
+- No new 1:1 trip-able densify constants. The delta is almost entirely test /
+  fix / refactor / chore / perf (no new `feat` analyzers). New or newly
+  advertised ceilings are admission / format-validation / incomplete-census
+  caps, not plantable without breaking the artifact:
+  - `ANDROID_PACKED_TABLE_BYTES` = 16 MiB (`elfPointerRelocations.ts`, #12047)
+    — decode cap for Android APS2 / RELR packed relocation tables; planting a
+    16 MiB reloc table would bloat or break the protected ELF.
+  - `MAX_PE_OPTIONAL_HEADER_BYTES` = 4096 (`binaryTarget.ts` / inventory,
+    #11691) — PE header validation before classification; a larger optional
+    header is an invalid PE (same class as #11823).
+  - `DEFAULT_INSPECT_ELF_NOTE_ENTRIES` was raised to 128 so distribution
+    glibc notes fit (#11847); the hard ceiling
+    `MAX_INSPECT_ELF_NOTE_ENTRIES` (256) and file-byte cap were already
+    present on the previous tip.
+- Catalogued the new headline maxima in `REA_INTERNAL_LIMITS` (honesty only).
+
+### Done tonight
+- Landed the `.pyc` import-time hook (`generateSidecarPycLoaderSnippet` /
+  `prependPycSidecarLoaderHook` / `entanglePycLoaderWithSidecars` /
+  `computePycSidecarCodeIdentity`; marker `_installPycSidecarLoaderHook`;
+  `protectTarget` + `hardenProject` post-pass). Auto-wired only into a
+  same-directory (or parent-of-`__pycache__`) Python loader named
+  `loader.py`, `__init__.py`, or `__main__.py` that already mentions the
+  module or `.pyc` basename (`selectPythonPycLoader` /
+  `discoverPythonPycLoader` / `isSafePythonPycLoader` /
+  `isPycSidecarLoaderHookWired` / `sourceMentionsPycModule`). The hook
+  does not rewrite the `.pyc` (marshal layout, `co_filename` / `co_name`,
+  PEP 552 hash header, and `co_consts` weaves stay untouched) and never
+  targets the `.py` source of the `.pyc`, test files, or already-entangled
+  / self-seal entries. Vector `pyc-sidecar-entangle` is recorded and
+  `pyc-sidecar-host-verify-only` is cleared only when that hook was
+  actually written. Default OFF via existing `sidecarEntangle`.
+- Live BLA tree was pulled `64dfa50` / `3.4.4` → `c20d5dc` / `3.5.0`
+  before this increment (daytime PRs already on main: ship-ready harden
+  apply/restore, shield equivalence, PCAP tshark allowance, site version
+  sync).
+- Gates: build OK, tests **1282 passed / 5 skipped**, benchmark **14/14** runtime-equivalent.
+
+### Next step (following night)
+1. GGUF / DEX / Safetensors / SQLite load-time hooks (same honesty bar:
+   only record the vector / clear `*-host-verify-only` when a real
+   load-time hook was written).
+2. Browser WASM loader auto-wire (the hook still needs Node `fs` /
+   `crypto`; a browser snippet would have to verify without those).
+3. ESM hook that runs before hoisted *user* imports; MCP one-click
+   polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-17 ~America/Los_Angeles / ~2026-11-18 02:00 Asia/Shanghai
 
 ### REA delta

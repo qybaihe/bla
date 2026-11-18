@@ -87,6 +87,14 @@ import {
   computeWasmSidecarCodeIdentity,
   WASM_SIDECAR_LOADER_MARKER,
   WASM_SIDECAR_SECTION_NAME,
+  generateSidecarPycLoaderSnippet,
+  prependPycSidecarLoaderHook,
+  selectPythonPycLoader,
+  isPythonPycLoaderFilename,
+  computePycSidecarCodeIdentity,
+  extractPycSidecarMarshalNote,
+  relativePycPathFromLoader,
+  PYC_SIDECAR_LOADER_MARKER,
   verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
@@ -2983,6 +2991,117 @@ function hardenProjectCore(
         }
       }
 
+
+      const pycPlantedAbs = new Set<string>();
+      const pycLikeEarly = bindableSummaries.filter(
+        (s) =>
+          s.success && /\.pyc$/i.test(s.relativePath.replaceAll("\\", "/")),
+      );
+      for (const pycSum of pycLikeEarly) {
+        const pycAbs = join(outputRoot, pycSum.relativePath);
+        if (!existsSync(pycAbs)) continue;
+        const pycDir = dirname(pycAbs);
+        const searchDirs = [pycDir];
+        if (basename(pycDir).toLowerCase() === "__pycache__") {
+          searchDirs.push(dirname(pycDir));
+        }
+        const loaderCandidates: {
+          name: string;
+          source: string;
+          absPath: string;
+        }[] = [];
+        for (const s of pyLike) {
+          const outAbs = join(outputRoot, s.relativePath);
+          if (!searchDirs.includes(dirname(outAbs))) continue;
+          if (!isPythonPycLoaderFilename(s.relativePath)) continue;
+          let predicateSource: string | null = null;
+          try {
+            if (s.inputPath && existsSync(s.inputPath)) {
+              predicateSource = readFileSync(s.inputPath, "utf8");
+            }
+          } catch {
+            predicateSource = null;
+          }
+          if (predicateSource === null && existsSync(outAbs)) {
+            try {
+              predicateSource = readFileSync(outAbs, "utf8");
+            } catch {
+              predicateSource = null;
+            }
+          }
+          if (predicateSource === null) continue;
+          loaderCandidates.push({
+            name: basename(outAbs),
+            source: predicateSource,
+            absPath: outAbs,
+          });
+        }
+        const selectedName = selectPythonPycLoader(
+          basename(pycAbs),
+          loaderCandidates,
+        );
+        const found = selectedName
+          ? loaderCandidates.find((c) => c.name === selectedName)
+          : undefined;
+        if (!found) continue;
+        const alreadyNoted =
+          extractPycSidecarMarshalNote(readFileSync(pycAbs)) !== null;
+        const otherPrimary =
+          (jsEntryAbs !== undefined && found.absPath !== jsEntryAbs) ||
+          (pyEntryAbs !== undefined && found.absPath !== pyEntryAbs);
+        // A foreign JS/Python entry may already bake a digest of this
+        // module. Hooking without a note would fail-closed at import;
+        // planting a new trailer would break that digest.
+        if (otherPrimary && !alreadyNoted) continue;
+
+        if (!otherPrimary) {
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of bindableSummaries) {
+            if (!s.success || s.relativePath === pycSum.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            if (jsEntryAbs && abs === jsEntryAbs) continue;
+            if (pyEntryAbs && abs === pyEntryAbs) continue;
+            const rel = relative(pycDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          const bound = entanglePycEntryWithSidecars({
+            entryPath: basename(pycAbs),
+            entryBytes: readFileSync(pycAbs),
+            sidecars,
+            seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
+            allowEmptySidecars: true,
+          });
+          if (bound) {
+            writeFileAtomicSync(pycAbs, bound.bytes, undefined, {
+              allowLinkWriteThrough: false,
+            });
+            pycPlantedAbs.add(pycAbs);
+          }
+        }
+
+        const identity = computePycSidecarCodeIdentity(readFileSync(pycAbs));
+        const existing = readFileSync(found.absPath, "utf8");
+        const already = existing.includes(PYC_SIDECAR_LOADER_MARKER);
+        const pycRel = relativePycPathFromLoader(found.absPath, pycAbs);
+        const inject = already
+          ? null
+          : generateSidecarPycLoaderSnippet({
+              codeIdentityHex: identity,
+              pycRelPaths: [pycRel],
+            });
+        const next = inject
+          ? prependPycSidecarLoaderHook(existing, inject.preamble)
+          : existing;
+        if (next !== existing) {
+          writeFileAtomicSync(found.absPath, next, "utf8", {
+            allowLinkWriteThrough: false,
+          });
+        }
+        // Hook presence is observed later by isPycSidecarLoaderHookWired /
+        // protectTarget honesty; the loader rewrite above is the act.
+      }
+
       if (jsEntry) {
         const entryAbs = join(outputRoot, jsEntry.relativePath);
         if (existsSync(entryAbs)) {
@@ -3128,7 +3247,7 @@ function hardenProjectCore(
           : undefined;
       if (pycEntry) {
         const entryAbs = join(outputRoot, pycEntry.relativePath);
-        if (existsSync(entryAbs)) {
+        if (existsSync(entryAbs) && !pycPlantedAbs.has(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
           for (const s of bindableSummaries) {
