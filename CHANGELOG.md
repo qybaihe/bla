@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] — 2026-11-18
+
+Optional `.pyc` import-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the module, stripping the marshal note or a sibling sidecar fails closed at import. Default remains OFF.
+
 ### Added
 - **`.pyc` import-time hook (`generateSidecarPycLoaderSnippet` / `prependPycSidecarLoaderHook` / `entanglePycLoaderWithSidecars`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` post-pass auto-wire a self-contained Python snippet into a same-directory (or parent-of-`__pycache__`) loader named `loader.py`, `__init__.py`, or `__main__.py` that already mentions the module or `.pyc` basename (`selectPythonPycLoader` / `discoverPythonPycLoader` / `isSafePythonPycLoader` / `isPycSidecarLoaderHookWired`). The hook reads the sibling `.pyc` at import time and, when the stripped-body identity matches, verifies the TYPE_ASCII marshal note and sidecar digest — strip or sibling delete fails closed. The `.pyc` itself is not rewritten (marshal layout, `co_filename` / `co_name`, PEP 552 hash header, and `co_consts` weaves stay untouched); the `.py` source of the target `.pyc`, test files, and already-entangled entries are never hooked. Vector `pyc-sidecar-entangle` is recorded and defenseScore gap `pyc-sidecar-host-verify-only` is cleared only when that hook was actually written. Default still OFF.
 

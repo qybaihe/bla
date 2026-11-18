@@ -42,6 +42,7 @@
   apply/restore, shield equivalence, PCAP tshark allowance, site version
   sync).
 - Gates: build OK, tests **1282 passed / 5 skipped**, benchmark **14/14** runtime-equivalent.
+- Cut `bla-agents@3.5.1` (tag `bla-agents-3.5.1`).
 
 ### Next step (following night)
 1. GGUF / DEX / Safetensors / SQLite load-time hooks (same honesty bar:
