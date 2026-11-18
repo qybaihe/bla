@@ -1,4 +1,4 @@
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,6 +120,55 @@ function failOutcome(base, err, budgetName = null) {
  * budgetHit is always false — the harness failing is not evidence of a REA
  * limit being hit.
  */
+/** Placeholder for the capture path in REA's tshark arguments. */
+const PCAP_PATH = Symbol("capture path");
+
+/**
+ * REA's tshark passes, read from its compiled provider: the field pass
+ * (`-T json -e <field>…`, whose output over TSHARK_JSON_MAX_BYTES fails the
+ * analysis) and the DNS pass (`-Y "dns || mdns || llmnr" -x -J …`, whose
+ * failure only marks the result partial). Throws when the source no longer
+ * has the shape this reads, instead of measuring something REA does not run.
+ */
+function readReaTsharkPasses(source, httpUriFields) {
+  const block = /const FIELDS = \[([\s\S]*?)\];/.exec(source);
+  if (!block) throw new Error("no `const FIELDS = [...]` list");
+  const fields = [];
+  for (const item of block[1].matchAll(
+    /"([^"]+)"|\.\.\.Object\.keys\(PCAP_HTTP_URI_FIELDS\)/g,
+  )) {
+    if (item[1] !== undefined) fields.push(item[1]);
+    else fields.push(...Object.keys(httpUriFields));
+  }
+  if (fields.length < 10 || !fields.includes("frame.number")) {
+    throw new Error(`unexpected field list (${fields.length} fields)`);
+  }
+  for (const literal of [
+    '"--no-duplicate-keys"',
+    '"dns || mdns || llmnr"',
+    '"frame dns mdns llmnr"',
+    '"-x"',
+    '"-J"',
+  ]) {
+    if (!source.includes(literal)) {
+      throw new Error(`the DNS pass no longer passes ${literal}`);
+    }
+  }
+  const common = ["-n", "-r", PCAP_PATH, "-T", "json", "--no-duplicate-keys"];
+  return {
+    fieldCount: fields.length,
+    fieldPass: [...common, ...fields.flatMap((field) => ["-e", field])],
+    dnsPass: [
+      ...common,
+      "-Y",
+      "dns || mdns || llmnr",
+      "-x",
+      "-J",
+      "frame dns mdns llmnr",
+    ],
+  };
+}
+
 function harnessErrorOutcome(base, err) {
   base.status = "harness_error";
   base.errorName = err?.constructor?.name ?? "Error";
@@ -180,6 +229,24 @@ export async function loadReaProbes() {
   const { TSHARK_JSON_MAX_BYTES, parseTsharkJsonOutput } = await import(
     resolveReaDist("pcap/PcapOutput.js")
   );
+  // REA analyses captures only where it can bound tshark's memory (Linux,
+  // Windows), so the harness runs REA's two tshark passes itself — with the
+  // arguments read from REA's own provider, so a change there is noticed.
+  let PCAP_TSHARK_PASSES = null;
+  try {
+    const { PCAP_HTTP_URI_FIELDS } = await import(
+      resolveReaDist("pcap/PcapHttpUri.js")
+    );
+    PCAP_TSHARK_PASSES = readReaTsharkPasses(
+      readFileSync(resolveReaDist("pcap/PcapProvider.js"), "utf8"),
+      PCAP_HTTP_URI_FIELDS,
+    );
+  } catch (err) {
+    recordHarnessError(
+      "pcap_capture",
+      `REA's tshark arguments could not be read from pcap/PcapProvider.js: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // Model: ModelFormatFailure removed; errors now use ParseFailureError with
   // failure.limit.name === "json-nesting" / "metadata-nesting".
@@ -327,6 +394,7 @@ export async function loadReaProbes() {
     inspectSolidityMetadata,
     TSHARK_JSON_MAX_BYTES,
     parseTsharkJsonOutput,
+    PCAP_TSHARK_PASSES,
     MODEL_JSON_NESTING,
     MODEL_METADATA_NESTING,
     readSafetensorsHeader,
@@ -490,48 +558,124 @@ export async function probePcap(rea, bytes, phase) {
       "not empirically verified on this box (requires tshark)";
     return base;
   }
+  if (!rea.PCAP_TSHARK_PASSES) {
+    return harnessErrorOutcome(
+      base,
+      new Error("REA's tshark arguments could not be read"),
+    );
+  }
   const dir = mkdtempSync(join(tmpdir(), "bla-rt-pcap-"));
   const path = join(dir, `${phase}.pcap`);
   writeFileSync(path, bytes);
-  const proc = spawnSync(
-    tshark.bin,
-    ["-r", path, "-T", "json"],
-    {
-      encoding: "buffer",
-      maxBuffer: 64 * 1024 * 1024,
-      env: tshark.env,
-      timeout: 120_000,
-    },
-  );
-  const jsonBytes = proc.stdout ? proc.stdout.length : 0;
+  const runTshark = (args) =>
+    spawnSync(
+      tshark.bin,
+      [
+        ...args.map((arg) => (arg === PCAP_PATH ? path : arg)),
+        `--temp-dir=${dir}`,
+      ],
+      {
+        encoding: "buffer",
+        maxBuffer: 256 * 1024 * 1024,
+        env: tshark.env,
+        timeout: 300_000,
+      },
+    );
+  const fieldPass = runTshark(rea.PCAP_TSHARK_PASSES.fieldPass);
+  const dnsPass = runTshark(rea.PCAP_TSHARK_PASSES.dnsPass);
+  // Context only: the full dissection is not what REA asks tshark for.
+  const full = runTshark([
+    "-n",
+    "-r",
+    PCAP_PATH,
+    "-T",
+    "json",
+    "--no-duplicate-keys",
+  ]);
+  const cap = rea.TSHARK_JSON_MAX_BYTES;
+  const fieldBytes = fieldPass.stdout ? fieldPass.stdout.length : 0;
+  const dnsBytes = dnsPass.stdout ? dnsPass.stdout.length : 0;
   base.metrics = {
-    tsharkStatus: proc.status,
-    tsharkJsonBytes: jsonBytes,
-    tsharkJsonLimit: rea.TSHARK_JSON_MAX_BYTES,
-    exceedsTsharkJsonBudget: jsonBytes > rea.TSHARK_JSON_MAX_BYTES,
-    stderrHead: proc.stderr
-      ? Buffer.from(proc.stderr).toString("utf8").slice(0, 160)
-      : "",
+    tsharkSource: tshark.source,
+    reaRunsPcapOnThisHost:
+      process.platform === "linux" || process.platform === "win32",
+    reaTsharkFieldCount: rea.PCAP_TSHARK_PASSES.fieldCount,
+    tsharkStatus: fieldPass.status,
+    tsharkJsonBytes: fieldBytes,
+    tsharkDnsPassJsonBytes: dnsBytes,
+    tsharkFullDissectionJsonBytes: full.stdout ? full.stdout.length : 0,
+    tsharkJsonLimit: cap,
+    exceedsTsharkJsonBudget: fieldBytes > cap,
+    dnsPassExceedsTsharkJsonBudget: dnsBytes > cap,
   };
-  if (proc.error) {
-    failOutcome(base, proc.error, "tshark");
+  const stderrHead = fieldPass.stderr
+    ? Buffer.from(fieldPass.stderr).toString("utf8").slice(0, 160).trim()
+    : "";
+  if (stderrHead) base.metrics.stderrHead = stderrHead;
+  if (fieldPass.error || dnsPass.error) {
+    return harnessErrorOutcome(base, fieldPass.error ?? dnsPass.error);
+  }
+  if (fieldPass.status !== 0) {
+    // REA reports a failed tool run as such; it is not a budget.
+    failOutcome(
+      base,
+      new Error(`tshark exited ${fieldPass.status}: ${stderrHead}`),
+    );
     return base;
   }
-  if (jsonBytes > rea.TSHARK_JSON_MAX_BYTES) {
+  if (fieldBytes > cap) {
+    // REA captures at most `cap` bytes of the field pass, then fails the
+    // analysis: "The packet-tool output capture allowance" (fixed).
     base.budgetHit = true;
     base.budgetName = "TSHARK_JSON_MAX_BYTES";
+    base.status = "budget_rejected";
     base.redactionOrAmbiguity =
-      "REA parseTsharkJsonOutput would throw AnalysisResourceConstraintError";
-    // Confirm REA's parser rejects oversized JSON
+      "REA's tshark field pass exceeds its fixed output allowance; inspect_pcap_capture fails";
+    return base;
+  }
+  // As REA does: parse the field pass (a failure here fails the analysis),
+  // then parse it again with the DNS pass; when the DNS pass is over the
+  // allowance or cannot be parsed, REA keeps the first result, marked partial.
+  const fieldStdout = fieldPass.stdout.toString("utf8");
+  let parsed;
+  try {
+    parsed = await rea.parseTsharkJsonOutput(fieldStdout);
+  } catch (err) {
+    failOutcome(
+      base,
+      err,
+      err?.constructor?.name === "AnalysisResourceConstraintError"
+        ? "TSHARK_JSON_DECODE"
+        : null,
+    );
+    if (base.budgetHit) base.status = "budget_rejected";
+    return base;
+  }
+  let dnsLimitation = null;
+  if (dnsPass.status !== 0) {
+    dnsLimitation = `the DNS pass exited ${dnsPass.status}`;
+  } else if (dnsBytes > cap) {
+    dnsLimitation = "the DNS pass exceeds the output allowance";
+  } else {
     try {
-      await rea.parseTsharkJsonOutput(proc.stdout.toString("utf8"));
-      base.metrics.reaParseAcceptedOversized = true;
+      parsed = await rea.parseTsharkJsonOutput(
+        fieldStdout,
+        undefined,
+        dnsPass.stdout.toString("utf8"),
+      );
     } catch (err) {
-      base.metrics.reaParseErrorName = err?.constructor?.name;
-      base.metrics.reaParseError = String(err.message).slice(0, 160);
-      base.status = "budget_rejected";
+      dnsLimitation = `the DNS pass was refused: ${String(err?.message ?? err).slice(0, 120)}`;
     }
   }
+  base.metrics.reaPacketCount = parsed.packetCount;
+  base.metrics.reaPartial = parsed.partial || dnsLimitation !== null;
+  base.metrics.reaProtocolCount = parsed.protocolCount;
+  base.metrics.reaHttpRequestUriCount = parsed.httpRequestUriCount;
+  base.metrics.reaDnsQueryCount = parsed.dnsQueryCount;
+  base.metrics.reaDnsLimitations = [
+    ...(dnsLimitation ? [dnsLimitation] : []),
+    ...parsed.dnsLimitations,
+  ].slice(0, 2);
   return base;
 }
 

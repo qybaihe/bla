@@ -52,6 +52,59 @@ function tsharkVersion(env) {
   return line.trim() || "tshark (version unknown)";
 }
 
+/**
+ * Whether REA read a hardened sample this format's plant is meant to stop it
+ * on. go_buildinfo: a format error (truncated) is not a regression while REA
+ * still cannot read it — only a clean read with no budget hit counts.
+ */
+function wasNotStopped(p) {
+  // harness_error probes are unverified, not divergent
+  if (p.after.status === "harness_error") return false;
+  // soft check: after should hit for flutter/beam/pcap/gguf + asar/wasm/fuses
+  // sqlite must-trip only when DatabaseSync.limits made the probe runnable
+  const must = new Set([
+    "flutter_pool",
+    "erlang_beam",
+    "pcap_capture",
+    "gguf",
+    "safetensors",
+    "electron_asar",
+    "wasm_module",
+    "electron_fuses",
+  ]);
+  // javascript_strings: a known value in REA's result — at its default
+  // budgets or at raised ones — means the string encoding was read through.
+  if (p.format === "javascript_strings") {
+    return !(
+      p.after.metrics?.valuesHiddenAtDefaultBudgets === true &&
+      p.after.metrics?.valuesHiddenAtRaisedBudgets === true
+    );
+  }
+  // go_buildinfo: REA at 05be423 checks "string range is truncated" before
+  // max_build_info_bytes, so the planted length is rejected as malformed
+  // rather than as over budget. Either way REA reads no build info; only a
+  // clean read with no budget hit means the plant stopped working.
+  if (p.format === "go_buildinfo") {
+    return p.after.status === "ok" && !p.after.budgetHit;
+  }
+  // evm_bytecode: the sample is padded to just under REA's input budget on
+  // purpose. Over it, or within 8 KiB of it, is what the shield aims for.
+  if (p.format === "evm_bytecode") {
+    return !(p.after.budgetHit || p.after.metrics?.approachesLimit === true);
+  }
+  if (p.format === "sqlite_db") {
+    if (
+      p.after.status === "capability_gated" ||
+      p.after.status === "skipped"
+    )
+      return false;
+    return !p.after.budgetHit;
+  }
+  if (!must.has(p.format)) return false;
+  if (p.format === "pcap_capture" && p.after.status === "skipped") return false;
+  return !p.after.budgetHit;
+}
+
 /** Resolve REA commit hash and date, soft-fail to null. */
 function resolveReaProvenance() {
   try {
@@ -299,6 +352,10 @@ async function main() {
   const hasHarnessErrors = harnessFailures.length > 0;
   const overallStatus = hasHarnessErrors ? "unverified" : "measured";
 
+  // Formats whose plant is meant to stop REA, where REA read the hardened
+  // sample: the report records them, and the run exits 1.
+  const notStopped = pairs.filter(wasNotStopped).map((p) => p.format);
+
   const run = {
     schema: "bla-redteam-rea/v1",
     status: overallStatus,
@@ -319,8 +376,10 @@ async function main() {
     tshark: {
       available: tshark.available,
       version: tsharkVersion(tshark),
+      source: tshark.source,
     },
     pairs,
+    notStopped,
     unverified: unverifiedAnalyzers(),
     harnessErrors: harnessFailures,
   };
@@ -343,58 +402,9 @@ async function main() {
     );
   }
 
-  // go_buildinfo: a format error (truncated) is not a budget regression if REA still can't read it.
-  // Only flag as diverging when REA reads the sample fine AND no budget was hit.
-  const diverges = pairs.filter((p) => {
-    // harness_error probes are unverified, not divergent
-    if (p.after.status === "harness_error") return false;
-    // soft check: after should hit for flutter/beam/pcap/gguf + asar/wasm/fuses
-    // sqlite must-trip only when DatabaseSync.limits made the probe runnable
-    const must = new Set([
-      "flutter_pool",
-      "erlang_beam",
-      "pcap_capture",
-      "gguf",
-      "safetensors",
-      "electron_asar",
-      "wasm_module",
-      "electron_fuses",
-    ]);
-    // javascript_strings: a known value in REA's result — at its default
-    // budgets or at raised ones — means the string encoding was read through.
-    if (p.format === "javascript_strings") {
-      return !(
-        p.after.metrics?.valuesHiddenAtDefaultBudgets === true &&
-        p.after.metrics?.valuesHiddenAtRaisedBudgets === true
-      );
-    }
-    // go_buildinfo: REA at 05be423 checks "string range is truncated" before
-    // max_build_info_bytes, so the planted length is rejected as malformed
-    // rather than as over budget. Either way REA reads no build info; only a
-    // clean read with no budget hit means the plant stopped working.
-    if (p.format === "go_buildinfo") {
-      return p.after.status === "ok" && !p.after.budgetHit;
-    }
-    // evm_bytecode: the sample is padded to just under REA's input budget on
-    // purpose. Over it, or within 8 KiB of it, is what the shield aims for.
-    if (p.format === "evm_bytecode") {
-      return !(p.after.budgetHit || p.after.metrics?.approachesLimit === true);
-    }
-    if (p.format === "sqlite_db") {
-      if (
-        p.after.status === "capability_gated" ||
-        p.after.status === "skipped"
-      )
-        return false;
-      return !p.after.budgetHit;
-    }
-    if (!must.has(p.format)) return false;
-    if (p.format === "pcap_capture" && p.after.status === "skipped") return false;
-    return !p.after.budgetHit;
-  });
-  if (diverges.length) {
+  if (notStopped.length) {
     console.error(
-      `WARNING: ${diverges.length} format(s) did not trip REA budgets: ${diverges.map((d) => d.format).join(", ")}`,
+      `WARNING: ${notStopped.length} format(s) did not trip REA budgets: ${notStopped.join(", ")}`,
     );
     process.exitCode = EXIT_DIVERGED;
   }

@@ -6,8 +6,17 @@ import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.j
 /** Classic libpcap global-header magic (microsecond, little-endian host). */
 const PCAP_MAGIC_LE = 0xa1b2c3d4;
 
-/** Heuristic: tshark `-T json` typically expands each dissected byte ~4–8×. */
-const TSHARK_JSON_EXPANSION = 8;
+/**
+ * Upper bound of what REA's tshark field pass prints for one injected packet.
+ * REA does not dissect a capture in full: it asks tshark for a fixed list of
+ * fields (`-T json -e frame.number -e ip.src … -e dns.qry.name …`), and only
+ * that output is held to TSHARK_JSON_MAX_BYTES; a failed second pass over the
+ * DNS packets only marks REA's result partial. Measured against REA `05be423`
+ * with tshark 4.4: about 550 bytes per injected HTTP-like packet and 1,030 per
+ * DNS packet (it carries the query name). HTTP headers are not among the
+ * fields, so the header count does not change it.
+ */
+const REA_FIELD_PASS_BYTES_PER_PACKET = 1_536;
 
 export interface PcapInspection {
   readonly validMagic: boolean;
@@ -180,10 +189,15 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
 }
 
 /**
- * Protects a classic libpcap capture by appending nested-protocol packets
- * (HTTP-like TCP + deep DNS UDP) whose dissected tshark JSON is estimated to
- * exceed `TSHARK_JSON_MAX_BYTES` (8 MiB) under bankrupt intensity, while
- * preserving the original global header and existing packets byte-for-byte.
+ * Protects a classic libpcap capture by appending decoy packets (HTTP-like TCP
+ * + deep DNS UDP) that carry canary values and diagnostic bait, preserving the
+ * original global header and existing packets byte-for-byte.
+ *
+ * `estimatedTsharkJsonBytes` is an upper bound of REA's tshark field pass over
+ * the injected packets. It stays far below `TSHARK_JSON_MAX_BYTES` (8 MiB) at
+ * every intensity — measured against REA `05be423`: 116 KiB for the 160
+ * bankrupt packets, whose full dissection would be 12 MiB — so REA reads the
+ * decoys rather than refusing the capture, and `exceedsTsharkJsonBudget` says so.
  */
 export function protectPcapCaptureBuffer(
   input: Buffer,
@@ -224,11 +238,9 @@ export function protectPcapCaptureBuffer(
   const dnsDepth = intensity === "bankrupt" ? 32 : intensity === "maximum" ? 16 : 6;
 
   const injected: Buffer[] = [];
-  let payloadBytes = 0;
 
   for (let i = 0; i < httpPackets; i++) {
     const payload = buildHttpLikePayload(prng, headerCount);
-    payloadBytes += payload.length;
     injected.push(
       buildTcpHttpPacket(payload, 1_700_000_000 + i, i * 1000, 1000 + i * 4096),
     );
@@ -241,15 +253,12 @@ export function protectPcapCaptureBuffer(
       "utf8",
     );
     const full = Buffer.concat([payload, bait]);
-    payloadBytes += full.length;
     injected.push(buildUdpPacket(full, 1_700_100_000 + i, i * 2000));
   }
 
-  // Conservative lower-bound estimate of tshark `-T json` size for these frames.
-  // Nested HTTP header trees and deep DNS labels expand far beyond raw bytes
-  // under tshark `-T json` (each header becomes multiple JSON nodes).
+  // REA's field pass grows with the packet count, not the payload size.
   const estimatedTsharkJsonBytes =
-    injected.length * 4096 + payloadBytes * TSHARK_JSON_EXPANSION;
+    injected.length * REA_FIELD_PASS_BYTES_PER_PACKET;
 
   return {
     buffer: Buffer.concat([base, ...injected]),

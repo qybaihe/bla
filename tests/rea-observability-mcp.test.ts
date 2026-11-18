@@ -162,6 +162,30 @@ describe("REA observability engine (C2)", () => {
     expect(result.status).toBe("available");
     expect(result.reason).toBeUndefined();
   });
+
+  it("a report on disk names the formats whose plant REA read through", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-not-stopped-"));
+    tempDirs.push(dir);
+    const reportPath = join(dir, "empirical.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({
+        schema: "bla-redteam-rea/v1",
+        status: "measured",
+        pairs: [],
+        notStopped: ["pcap_capture"],
+        harnessErrors: [],
+      }),
+      "utf8",
+    );
+
+    const result = getRedteamReport({ reaRoot: join(dir, "rea-absent"), reportPath });
+
+    // Still an on-disk read, not a fresh verdict — but it says what it found.
+    expect(result.status).toBe("available");
+    expect(result.reason).toContain("pcap_capture");
+    expect(result.reason).toContain("REA read the hardened sample");
+  });
 });
 
 describe("REA observability MCP tools (C2)", () => {

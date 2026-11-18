@@ -217,7 +217,8 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
   moved or renamed something; the harness needs updating). Treat it as **not proven**:
   never a pass, and never a failed defense either — `fail` is the status for REA reading
   a hardened sample. An on-disk `bla_redteam_report` without `execute:true` is
-  `status: available` — readable evidence, not a fresh REA verdict.
+  `status: available` — readable evidence, not a fresh REA verdict; its `reason`
+  names any format whose plant REA read through in that run (`notStopped`).
 - `bla_harden` `{ "dry_run": true }` always has `overallSuccess: false`; only real
   writes return `writeReceipt`.
 

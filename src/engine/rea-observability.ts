@@ -163,6 +163,19 @@ function describeUnmeasuredReport(report: unknown): string | null {
   return `This report was written by a run in which the harness could not call REA for ${errors.length > 0 ? String(errors.length) : "at least one"} probe${errors.length > 1 ? "s" : ""}${which}. Those formats were not measured — their rows are not evidence about the shield.`;
 }
 
+/**
+ * The formats whose plant is meant to stop REA, where REA read the hardened
+ * sample in the run that wrote the report (`notStopped`; that run exited 1).
+ */
+function describeNotStopped(report: unknown): string | null {
+  if (typeof report !== "object" || report === null) return null;
+  const formats = (report as { notStopped?: unknown }).notStopped;
+  if (!Array.isArray(formats)) return null;
+  const named = formats.filter((format): format is string => typeof format === "string");
+  if (named.length === 0) return null;
+  return `In the run that wrote this report, REA read the hardened sample of ${named.slice(0, 8).join(", ")}, which BLA's plant is meant to stop it on (that run exited 1). Read those rows before relying on that shield.`;
+}
+
 export interface RedteamReportResult {
   readonly schema: "bla-redteam-report/v1";
   readonly status: ReaObservabilityStatus;
@@ -304,12 +317,14 @@ export function getRedteamReport(options: {
         stderr: "",
       };
     }
+    const notStopped = describeNotStopped(report);
     return {
       ...base,
       // Live execute → pass; plain on-disk read → available (not a fresh REA verdict).
       status: executed ? "pass" : "available",
       executed,
       exitCode: executed ? 0 : null,
+      ...(notStopped !== null ? { reason: notStopped } : {}),
       report,
       stdout: "",
       stderr: "",

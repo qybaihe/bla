@@ -87,8 +87,18 @@ function compareToEstimates(pair) {
     const est = sampleMeta?.estimatedTsharkJsonBytes;
     const real = after.metrics?.tsharkJsonBytes;
     notes.push(
-      `BLA estimate=${fmtBytes(est)}; empirical tshark JSON=${fmtBytes(real)}`,
+      `BLA estimate=${fmtBytes(est)}; REA's tshark field pass=${fmtBytes(real)} (DNS pass ${fmtBytes(after.metrics?.tsharkDnsPassJsonBytes)}; a full dissection, which REA does not ask for, ${fmtBytes(after.metrics?.tsharkFullDissectionJsonBytes)})`,
     );
+    if (after.metrics?.reaPacketCount != null) {
+      notes.push(
+        `REA's parser read ${after.metrics.reaPacketCount} packets${after.metrics.reaPartial ? " (result marked partial)" : ""}`,
+      );
+    }
+    if (after.metrics?.reaRunsPcapOnThisHost === false) {
+      notes.push(
+        "REA analyses captures only on Linux / Windows; on this host the harness ran REA's tshark passes and REA's parser itself",
+      );
+    }
     if (after.status === "skipped") {
       notes.push("SKIPPED: tshark unavailable — estimate not empirically confirmed");
     } else if (hit === expect) {
@@ -222,7 +232,9 @@ export function buildReportDocument(run) {
   );
   lines.push(`Intensity: \`${run.intensity}\` · seed: \`${run.seed}\``);
   lines.push(`Node: \`${run.nodeVersion}\``);
-  lines.push(`tshark: ${run.tshark.available ? `\`${run.tshark.version}\`` : "not available"}`);
+  lines.push(
+    `tshark: ${run.tshark.available ? `\`${run.tshark.version}\`${run.tshark.source ? ` (${run.tshark.source})` : ""}` : "not available"}`,
+  );
   lines.push("");
   lines.push("## Summary");
   lines.push("");
@@ -244,6 +256,12 @@ export function buildReportDocument(run) {
     );
   }
   lines.push("");
+  if (Array.isArray(run.notStopped) && run.notStopped.length > 0) {
+    lines.push(
+      `**Not stopped:** REA read the hardened sample of ${run.notStopped.map((f) => `\`${f}\``).join(", ")}, which BLA's plant is meant to stop it on. This run exited 1.`,
+    );
+    lines.push("");
+  }
   lines.push("## Per-format empirical outcomes");
   lines.push("");
   for (const pair of run.pairs) {
@@ -278,7 +296,7 @@ export function buildReportDocument(run) {
   lines.push("## Method");
   lines.push("");
   lines.push(
-    "Harness lives under `scripts/redteam/`. For each in-process REA analyzer, it builds a representative sample, runs the real REA parser on the unhardened bytes, hardens via BLA (`protect*` APIs / mapped plants), re-runs REA, and records budget/redaction/error outcomes. Flutter pool projection uses a faithful replica of REA's private `projectStringPool` (same caps, slack, identifier rules). PCAP uses a real user-local tshark when present.",
+    "Harness lives under `scripts/redteam/`. For each in-process REA analyzer, it builds a representative sample, runs the real REA parser on the unhardened bytes, hardens via BLA (`protect*` APIs / mapped plants), re-runs REA, and records budget/redaction/error outcomes. Flutter pool projection uses a faithful replica of REA's private `projectStringPool` (same caps, slack, identifier rules). PCAP runs REA's two tshark passes — the arguments read from REA's own provider, tshark taken from `REA_TSHARK_COMMAND`, PATH or the Wireshark installer — and REA's parser on their output; REA itself analyses captures only on Linux / Windows.",
   );
   lines.push("");
   return lines.join("\n");

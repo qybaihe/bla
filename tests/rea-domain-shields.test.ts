@@ -464,16 +464,20 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
     expect(after.blaProtected).toBe(true);
   });
 
-  it("bankrupt PCAP decoys estimate past TSHARK_JSON_MAX_BYTES while staying valid libpcap", () => {
+  it("bankrupt PCAP decoys stay valid libpcap and do not claim to exceed REA's tshark field pass", () => {
     const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
       intensity: "bankrupt",
       seed: "pcap-bankrupt",
     });
     expect(res.packetsInjected).toBeGreaterThanOrEqual(48);
-    expect(res.estimatedTsharkJsonBytes).toBeGreaterThan(
+    // REA asks tshark for selected fields only: 116 KiB for these packets
+    // against REA 05be423 (npm run redteam:rea), not the 12 MiB of a full
+    // dissection.
+    expect(res.estimatedTsharkJsonBytes).toBeLessThan(
       REA_INTERNAL_LIMITS.PCAP_TSHARK_JSON_MAX_BYTES,
     );
-    expect(res.exceedsTsharkJsonBudget).toBe(true);
+    expect(res.estimatedTsharkJsonBytes).toBeGreaterThanOrEqual(118_455);
+    expect(res.exceedsTsharkJsonBudget).toBe(false);
     const after = inspectPcapCapture(res.buffer);
     expect(after.validMagic).toBe(true);
     expect(after.packetCount).toBe(res.packetsInjected);

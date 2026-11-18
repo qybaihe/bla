@@ -1,7 +1,7 @@
 {
   "schema": "bla-redteam-rea/v1",
   "status": "measured",
-  "generatedAt": "2026-11-18, 01:56:47",
+  "generatedAt": "2026-11-18, 12:27:53",
   "blaRoot": ".",
   "reaRoot": "$REA_ROOT",
   "blaVersion": "3.4.3",
@@ -13,8 +13,9 @@
   "seed": "bla-redteam-empirical-v1",
   "nodeVersion": "v26.12.1",
   "tshark": {
-    "available": false,
-    "version": null
+    "available": true,
+    "version": "TShark (Wireshark) 4.4.1 (v4.4.1-0-g575b2bf4746e).",
+    "source": "Wireshark installer"
   },
   "pairs": [
     {
@@ -800,29 +801,65 @@
         "format": "pcap_capture",
         "phase": "before",
         "inputBytes": 24,
-        "status": "skipped",
+        "status": "ok",
         "errorName": null,
         "errorMessage": null,
         "budgetHit": false,
         "budgetName": null,
-        "redactionOrAmbiguity": "not empirically verified on this box (requires tshark)",
-        "metrics": {}
+        "redactionOrAmbiguity": null,
+        "metrics": {
+          "tsharkSource": "Wireshark installer",
+          "reaRunsPcapOnThisHost": false,
+          "reaTsharkFieldCount": 25,
+          "tsharkStatus": 0,
+          "tsharkJsonBytes": 3,
+          "tsharkDnsPassJsonBytes": 3,
+          "tsharkFullDissectionJsonBytes": 3,
+          "tsharkJsonLimit": 8388608,
+          "exceedsTsharkJsonBudget": false,
+          "dnsPassExceedsTsharkJsonBudget": false,
+          "reaPacketCount": 0,
+          "reaPartial": false,
+          "reaProtocolCount": 0,
+          "reaHttpRequestUriCount": 0,
+          "reaDnsQueryCount": 0,
+          "reaDnsLimitations": []
+        }
       },
       "after": {
         "format": "pcap_capture",
         "phase": "after",
         "inputBytes": 1346264,
-        "status": "skipped",
+        "status": "ok",
         "errorName": null,
         "errorMessage": null,
         "budgetHit": false,
         "budgetName": null,
-        "redactionOrAmbiguity": "not empirically verified on this box (requires tshark)",
-        "metrics": {}
+        "redactionOrAmbiguity": null,
+        "metrics": {
+          "tsharkSource": "Wireshark installer",
+          "reaRunsPcapOnThisHost": false,
+          "reaTsharkFieldCount": 25,
+          "tsharkStatus": 0,
+          "tsharkJsonBytes": 118455,
+          "tsharkDnsPassJsonBytes": 630550,
+          "tsharkFullDissectionJsonBytes": 12781534,
+          "tsharkJsonLimit": 8388608,
+          "exceedsTsharkJsonBudget": false,
+          "dnsPassExceedsTsharkJsonBudget": false,
+          "reaPacketCount": 160,
+          "reaPartial": true,
+          "reaProtocolCount": 2,
+          "reaHttpRequestUriCount": 1,
+          "reaDnsQueryCount": 64,
+          "reaDnsLimitations": [
+            "DNS message contains unexamined trailing bytes"
+          ]
+        }
       },
       "sampleMeta": {
-        "estimatedTsharkJsonBytes": 11341824,
-        "exceedsTsharkJsonBudget": true,
+        "estimatedTsharkJsonBytes": 245760,
+        "exceedsTsharkJsonBudget": false,
         "packetsInjected": 160
       },
       "blaLimits": {
@@ -2557,7 +2594,7 @@
           "budgetRuns": [
             {
               "budgetMultiplier": 1,
-              "ms": 925,
+              "ms": 891,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2573,7 +2610,7 @@
             },
             {
               "budgetMultiplier": 4,
-              "ms": 943,
+              "ms": 944,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2589,7 +2626,7 @@
             },
             {
               "budgetMultiplier": 64,
-              "ms": 2268,
+              "ms": 2212,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2725,6 +2762,9 @@
         "SQLITE_WORKER_HEAP_BYTES": 268435456
       }
     }
+  ],
+  "notStopped": [
+    "pcap_capture"
   ],
   "unverified": [
     {

@@ -1,13 +1,13 @@
 # Empirical REA red-team validation
 
-Generated: 2026-11-18, 01:56:47 (Asia/Shanghai)
+Generated: 2026-11-18, 12:27:53 (Asia/Shanghai)
 BLA: `bla-agents 3.4.3` (working tree at `.`)
 REA root: `$REA_ROOT`
 REA commit: `05be423acbdf3a56673bdbd3004e4b500c0f5217` (2026-11-17 14:40:38 +0000)
 Harness: **measured** — every probe that can run on this machine called REA itself (rows marked `skipped` name the tool that was missing).
 Intensity: `bankrupt` · seed: `bla-redteam-empirical-v1`
 Node: `v26.12.1`
-tshark: not available
+tshark: `TShark (Wireshark) 4.4.1 (v4.4.1-0-g575b2bf4746e).` (Wireshark installer)
 
 ## Summary
 
@@ -17,7 +17,7 @@ tshark: not available
 | flutter_pool | ok | ok | MAX_POOL_URIS|MAX_POOL_TOKENS | agree |
 | erlang_beam | ok | error | max_chunks | agree |
 | evm_bytecode | ok | ok | no | agree |
-| pcap_capture | skipped | skipped | no | noted |
+| pcap_capture | ok | ok | no | agree |
 | safetensors | ok | error | MODEL_JSON_NESTING | — |
 | gguf | ok | error | MODEL_METADATA_NESTING | agree |
 | gpu_ptx | ok | ok | no | noted |
@@ -27,6 +27,8 @@ tshark: not available
 | electron_fuses | ok | budget_rejected | ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice | agree |
 | javascript | ok | budget_rejected | alias-selections+primitive-bytes+primitive-candidates+getter-expansion | — |
 | javascript_strings | ok | budget_rejected | alias-selections+getter-expansion+primitive-bytes+primitive-candidates | agree |
+
+**Not stopped:** REA read the hardened sample of `pcap_capture`, which BLA's plant is meant to stop it on. This run exited 1.
 
 ## Per-format empirical outcomes
 
@@ -141,21 +143,53 @@ _no metrics_
 
 - Input before: 24
 - Input after: 1346264 (1.28 MiB)
-- Before: status=skipped; budgetHit=false; note=not empirically verified on this box (requires tshark)
-- After: status=skipped; budgetHit=false; note=not empirically verified on this box (requires tshark)
+- Before: status=ok; budgetHit=false
+- After: status=ok; budgetHit=false
 
 **Before metrics**
 
-_no metrics_
+- `tsharkSource`: Wireshark installer
+- `reaRunsPcapOnThisHost`: false
+- `reaTsharkFieldCount`: 25
+- `tsharkStatus`: 0
+- `tsharkJsonBytes`: 3
+- `tsharkDnsPassJsonBytes`: 3
+- `tsharkFullDissectionJsonBytes`: 3
+- `tsharkJsonLimit`: 8388608
+- `exceedsTsharkJsonBudget`: false
+- `dnsPassExceedsTsharkJsonBudget`: false
+- `reaPacketCount`: 0
+- `reaPartial`: false
+- `reaProtocolCount`: 0
+- `reaHttpRequestUriCount`: 0
+- `reaDnsQueryCount`: 0
+- `reaDnsLimitations`: []
 
 **After metrics**
 
-_no metrics_
+- `tsharkSource`: Wireshark installer
+- `reaRunsPcapOnThisHost`: false
+- `reaTsharkFieldCount`: 25
+- `tsharkStatus`: 0
+- `tsharkJsonBytes`: 118455
+- `tsharkDnsPassJsonBytes`: 630550
+- `tsharkFullDissectionJsonBytes`: 12781534
+- `tsharkJsonLimit`: 8388608
+- `exceedsTsharkJsonBudget`: false
+- `dnsPassExceedsTsharkJsonBudget`: false
+- `reaPacketCount`: 160
+- `reaPartial`: true
+- `reaProtocolCount`: 2
+- `reaHttpRequestUriCount`: 1
+- `reaDnsQueryCount`: 64
+- `reaDnsLimitations`: ["DNS message contains unexamined trailing bytes"]
 
 **Estimate comparison**
 
-- BLA estimate=11341824 (10.82 MiB); empirical tshark JSON=—
-- SKIPPED: tshark unavailable — estimate not empirically confirmed
+- BLA estimate=245760 (240.0 KiB); REA's tshark field pass=118455 (115.7 KiB) (DNS pass 630550 (615.8 KiB); a full dissection, which REA does not ask for, 12781534 (12.19 MiB))
+- REA's parser read 160 packets (result marked partial)
+- REA analyses captures only on Linux / Windows; on this host the harness ran REA's tshark passes and REA's parser itself
+- AGREE with BLA exceedsTsharkJsonBudget=false
 
 ### safetensors
 
@@ -427,16 +461,16 @@ _no metrics_
 
 **After metrics**
 
-- `budgetRuns`: [{"budgetMultiplier":1,"ms":925,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":943,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2268,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
+- `budgetRuns`: [{"budgetMultiplier":1,"ms":891,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":944,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2212,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
 - `valuesHiddenAtDefaultBudgets`: true
 - `valuesHiddenAtRaisedBudgets`: true
 
 **Estimate comparison**
 
 - unhardened, 1x budgets (2 ms, coverage=complete, limits=[]): endpoint RECOVERED; channel RECOVERED; digest RECOVERED
-- hardened, 1x budgets (925 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 4x budgets (943 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 64x budgets (2268 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 1x budgets (891 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 4x budgets (944 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 64x budgets (2212 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
 - AGREE: no known value reaches REA's result, with its budgets raised or not
 - REA's JavaScript budgets are per-call inputs (semantic_precision); a sample that only trips the defaults is read by whoever raises them, which is why this row measures both.
 
@@ -455,4 +489,4 @@ _no metrics_
 
 ## Method
 
-Harness lives under `scripts/redteam/`. For each in-process REA analyzer, it builds a representative sample, runs the real REA parser on the unhardened bytes, hardens via BLA (`protect*` APIs / mapped plants), re-runs REA, and records budget/redaction/error outcomes. Flutter pool projection uses a faithful replica of REA's private `projectStringPool` (same caps, slack, identifier rules). PCAP uses a real user-local tshark when present.
+Harness lives under `scripts/redteam/`. For each in-process REA analyzer, it builds a representative sample, runs the real REA parser on the unhardened bytes, hardens via BLA (`protect*` APIs / mapped plants), re-runs REA, and records budget/redaction/error outcomes. Flutter pool projection uses a faithful replica of REA's private `projectStringPool` (same caps, slack, identifier rules). PCAP runs REA's two tshark passes — the arguments read from REA's own provider, tshark taken from `REA_TSHARK_COMMAND`, PATH or the Wireshark installer — and REA's parser on their output; REA itself analyses captures only on Linux / Windows.
