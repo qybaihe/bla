@@ -365,6 +365,7 @@ module.exports = { API, CHANNEL, check, activate };
           estimatedTsharkJsonBytes: pcapHard.estimatedTsharkJsonBytes,
           exceedsTsharkJsonBudget: pcapHard.exceedsTsharkJsonBudget,
           packetsInjected: pcapHard.packetsInjected,
+          answerFloodPackets: pcapHard.answerFloodPackets ?? 0,
         },
       },
       gpu_ptx: {

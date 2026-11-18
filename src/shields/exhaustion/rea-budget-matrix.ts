@@ -241,7 +241,7 @@ export const REA_BUDGET_BREAKER_MATRIX: readonly ReaSubsystemBudgetSpec[] = [
     unit: "bytes",
     failureClassOrStatus: "tshark JSON output exceeds 8 MiB",
     counterStrategy:
-      "Inject high-volume decoy packets whose decoded JSON projection exceeds TSHARK_JSON_MAX_BYTES.",
+      "Append DNS responses whose answers name a 251-character owner through 2-byte compression pointers: REA's tshark field pass prints every name in full and passes TSHARK_JSON_MAX_BYTES, which no REA setting raises (bankrupt).",
   },
   {
     id: "gpu-report-bytes",

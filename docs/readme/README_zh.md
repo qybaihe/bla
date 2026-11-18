@@ -138,7 +138,7 @@ flowchart LR
 | 四大防御支柱 | 核心技术机制 | 对 AI 逆向代理的实际打击效果 |
 | :--- | :--- | :--- |
 | **1. Poison（认知投毒）** | 植入符合格式规范的蜜罐凭据、SGX/TPM2/Secure Enclave 硬件飞地清单、VLQ v3 诱饵 SourceMap 与高拟真影子状态机。 | 迫使大模型在相互冲突的证据假说间分裂注意力，沿合成诊断线索陷入死胡同。 |
-| **2. Exhaust（预算爆破）** | 精确触发分析器的默认配额上限（`primitive-candidates`、ASAR 16 MiB 头部、WASM Wabt 表达上限、SQLite 虚拟生成列求值、AI 模型 32 层嵌套、Electron 32 个 Fuse 哨兵）。 | 将 REA 的默认分析状态从 `COMPLETE` 降级为 `LIMITED` 或直接抛出容量异常。凡是 REA 允许调用方调高的配额，这只让攻击者多重试一次，而不是挡住分析——见实测表最后一列。 |
+| **2. Exhaust（预算爆破）** | 精确触发分析器的默认配额上限（`primitive-candidates`、ASAR 16 MiB 头部、WASM Wabt 表达上限、SQLite 虚拟生成列求值、AI 模型 32 层嵌套、PCAP tshark 字段输出（固定 8 MiB）、Electron 32 个 Fuse 哨兵）。 | 将 REA 的默认分析状态从 `COMPLETE` 降级为 `LIMITED` 或直接抛出容量异常。凡是 REA 允许调用方调高的配额，这只让攻击者多重试一次，而不是挡住分析——见实测表最后一列。 |
 | **3. Entangle（反剥离缠绕）** | 通过运行时 SHA-256 摘要（`--self-seal`、`--sidecar-entangle`）与多点调用域折叠（`bla_bind_scope`）将 JS ↔ WASM ↔ 原生二进制深度绑定。 | 阻止红队直接裁剪诱饵分支、NOP 单点校验或将导出函数当作离线解密 Oracle 调用。 |
 | **4. Runtime（楚门世界）** | 原地加固 Electron V1 Fuse 位（`RunAsNode=0`、`Inspect=0`），并检测 CDP、Inspector、Frida 与 WebDriver 挂载（`runtime-shield.ts`）。 | 在动态调试会话中返回可信的合成遥测数据，同时保证正常用户运行零感知。 |
 
@@ -157,7 +157,7 @@ flowchart LR
 | **Go buildinfo** | 50 KiB → 1.17 MiB | ⚠️ 判为格式损坏而拒绝 | `BinaryFormatFailure` — *Go build-info string range is truncated*。REA 读不到加固产物的构建信息，但它现在先检查字符串范围，再检查 `max_build_info_bytes`（1 MiB）——后者才是该诱饵瞄准的预算 | 未实测 |
 | **Erlang BEAM** | 84 B → 241 KiB | ❌ 容量溢出拒绝 | `max_chunks` — *BEAM form exceeds the 64-chunk budget* | 能 — `max_chunks` |
 | **EVM 字节码** | 16 B → **4.00 MiB** | ⚠️ 被接受，仅略低于上限 | 占用 `EVM_PRODUCER_LIMIT_DEFAULTS.input_bytes` 4,194,304 字节中的 4,190,208 字节；脚手架不运行 EVMole worker 本身 | 能 — `producer_limits.input_bytes` |
-| **PCAP 抓包** | 24 B → 1.28 MiB | ⚠️ **未能拦住** — REA 读出全部 160 个包，诱饵包也在其中 | REA 只向 tshark 请求 25 个选定字段，而不是完整解析：输出 116 KiB，远低于 8 MiB 的 `TSHARK_JSON_MAX_BYTES`。该抓包完整解析为 12.2 MiB——诱饵正是按这个大小设计的，也是脚手架此前测量的数值。每个 DNS 问题后的诱饵字节只会让 REA 把结果标为 partial；`npm run redteam:rea` 因本行以退出码 1 结束 | 不能 — 固定 8 MiB，但诱饵远未达到 |
+| **PCAP 抓包** | 24 B → 1.91 MiB | ❌ 预算超限拒绝 | REA 向 tshark 请求 25 个选定字段，并把这部分输出限制在 8 MiB 的 `TSHARK_JSON_MAX_BYTES` 内：加固后的抓包输出 12.7 MiB，`inspect_pcap_capture` 以不可重试的资源错误失败。起作用的是 10 个 DNS 应答包——每个 4,076 条应答，都用 2 字节压缩指针指向一个 251 字符的名字，tshark 会把它完整打印出来。没有它们时，REA 读出了其余 160 个诱饵包（116 KiB） | 不能 — 固定上限，REA 没有对应设置 |
 | **Electron ASAR** | 607 B → **16.9 MiB** | ❌ 容量溢出拒绝 | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) | 能 — `asar.max_header_bytes`，最高 256 MiB |
 | **WASM + Wabt** | 54 B → **6.56 MiB** · 251 导出 | ⚠️ `ifaceState=partial` | `max_interface_bytes` (32 MiB) — *Typed WASM interface representation exceeds max_interface_bytes* | 能 — 最高 512 MiB |
 | **SQLite** (Node 24，需 `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ 蜜罐表求值陷阱阻断 | `SqliteColumnEvaluationFailure` — 蜜罐虚拟生成列触发未知 `enclave_unseal_payload()`。该陷阱需显式开启（3.4.3 及之前为默认行为）：它同样会让宿主程序自己的 `PRAGMA integrity_check` / `VACUUM` 失败。默认加固只加入 REA 可读的蜜罐表；业务表从不被隐藏。 | 不是预算——是求值失败 |
@@ -188,7 +188,7 @@ flowchart LR
 | **Flutter / Dart Pool** | ✓ | ✓ URI/Token 阈值填充 | **已验证** | 快照魔数与工具链标识填充 |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ Chunk / Atom 填充 | **已验证** | 突破 64-chunk 预算上限 |
 | **EVM + Solidity 元数据** | ✓ | ✓ 逼近 4 MiB 上限 | **已验证** | CBOR 元数据与字节码致密化 |
-| **PCAP (`.pcap`)** | ✓ | ✗ REA 的 tshark 字段遍：116 KiB / 8 MiB | **已验证：未能拦住**（tshark 4.4.1） | 合成流量包与金丝雀凭据注入；REA 会把诱饵当作真实流量读出 |
+| **PCAP (`.pcap`)** | ✓ | ✓ REA 的 tshark 字段输出 >8 MiB（固定上限） | **已验证**（tshark 4.4.1） | 合成流量包与金丝雀凭据注入；bankrupt 下追加 DNS 应答洪泛 |
 | **Python (`.py` / `.pyc`)** | ✓ | ✓ | 设计支持 | 支持 CPython 3.7–3.14 字节码与源码保护 |
 | **NVIDIA PTX (`.ptx`)** | ✓ | 入口洪泛 | 基准测试验证 | GPU PTX 文本核函数洪泛 |
 | **DEX / IL2CPP / bplist / .NET / JVM / ZIP** | ✓ | 格式专属护盾 | 设计支持 | 自动重算 DEX SHA-1 与 Adler32 校验和 |
@@ -219,8 +219,6 @@ flowchart LR
 | **12. Apple 二进制属性表 (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 8/100 · 1.79M tok · $29.54 · `LIMITED` | **277.6×** | ✅ 100% |
 | **13. SQLite 授权数据库 (`.sqlite`)** | 81/100 · 10,568 tok · $0.29 | 7/100 · 1.71M tok · $28.39 · `LIMITED` | **162.1×** | ✅ 100% |
 | **14. Native ELF64 二进制 (Rust/Go/Fuse/Dart)** | 81/100 · 35,222 tok · $0.73 | 2/100 · 3.72M tok · $60.03 · `LIMITED` | **105.6×** | ✅ 100% |
-
-PCAP 一行按 tshark JSON 配额被触发来建模。对 REA `05be423` 实测，该诱饵达不到这个配额——见上方实测结果表。
 
 ---
 

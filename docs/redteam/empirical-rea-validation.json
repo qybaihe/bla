@@ -1,7 +1,7 @@
 {
   "schema": "bla-redteam-rea/v1",
   "status": "measured",
-  "generatedAt": "2026-11-18, 12:27:53",
+  "generatedAt": "2026-11-18, 15:32:59",
   "blaRoot": ".",
   "reaRoot": "$REA_ROOT",
   "blaVersion": "3.4.3",
@@ -829,38 +829,31 @@
       "after": {
         "format": "pcap_capture",
         "phase": "after",
-        "inputBytes": 1346264,
-        "status": "ok",
+        "inputBytes": 2001694,
+        "status": "budget_rejected",
         "errorName": null,
         "errorMessage": null,
-        "budgetHit": false,
-        "budgetName": null,
-        "redactionOrAmbiguity": null,
+        "budgetHit": true,
+        "budgetName": "TSHARK_JSON_MAX_BYTES",
+        "redactionOrAmbiguity": "REA's tshark field pass exceeds its fixed output allowance; inspect_pcap_capture fails",
         "metrics": {
           "tsharkSource": "Wireshark installer",
           "reaRunsPcapOnThisHost": false,
           "reaTsharkFieldCount": 25,
           "tsharkStatus": 0,
-          "tsharkJsonBytes": 118455,
-          "tsharkDnsPassJsonBytes": 630550,
-          "tsharkFullDissectionJsonBytes": 12781534,
+          "tsharkJsonBytes": 13334285,
+          "tsharkDnsPassJsonBytes": 66220928,
+          "tsharkFullDissectionJsonBytes": 35869856,
           "tsharkJsonLimit": 8388608,
-          "exceedsTsharkJsonBudget": false,
-          "dnsPassExceedsTsharkJsonBudget": false,
-          "reaPacketCount": 160,
-          "reaPartial": true,
-          "reaProtocolCount": 2,
-          "reaHttpRequestUriCount": 1,
-          "reaDnsQueryCount": 64,
-          "reaDnsLimitations": [
-            "DNS message contains unexamined trailing bytes"
-          ]
+          "exceedsTsharkJsonBudget": true,
+          "dnsPassExceedsTsharkJsonBudget": true
         }
       },
       "sampleMeta": {
-        "estimatedTsharkJsonBytes": 245760,
-        "exceedsTsharkJsonBudget": false,
-        "packetsInjected": 160
+        "estimatedTsharkJsonBytes": 11127480,
+        "exceedsTsharkJsonBudget": true,
+        "packetsInjected": 170,
+        "answerFloodPackets": 10
       },
       "blaLimits": {
         "SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT": 256,
@@ -2594,7 +2587,7 @@
           "budgetRuns": [
             {
               "budgetMultiplier": 1,
-              "ms": 891,
+              "ms": 1085,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2610,7 +2603,7 @@
             },
             {
               "budgetMultiplier": 4,
-              "ms": 944,
+              "ms": 1049,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2626,7 +2619,7 @@
             },
             {
               "budgetMultiplier": 64,
-              "ms": 2212,
+              "ms": 2380,
               "coverage": "partial",
               "limits": [
                 "alias-selections",
@@ -2763,9 +2756,7 @@
       }
     }
   ],
-  "notStopped": [
-    "pcap_capture"
-  ],
+  "notStopped": [],
   "unverified": [
     {
       "analyzer": "Ghidra / Hopper native decompile",

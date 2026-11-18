@@ -1,6 +1,6 @@
 # Empirical REA red-team validation
 
-Generated: 2026-11-18, 12:27:53 (Asia/Shanghai)
+Generated: 2026-11-18, 15:32:59 (Asia/Shanghai)
 BLA: `bla-agents 3.4.3` (working tree at `.`)
 REA root: `$REA_ROOT`
 REA commit: `05be423acbdf3a56673bdbd3004e4b500c0f5217` (2026-11-17 14:40:38 +0000)
@@ -17,7 +17,7 @@ tshark: `TShark (Wireshark) 4.4.1 (v4.4.1-0-g575b2bf4746e).` (Wireshark installe
 | flutter_pool | ok | ok | MAX_POOL_URIS|MAX_POOL_TOKENS | agree |
 | erlang_beam | ok | error | max_chunks | agree |
 | evm_bytecode | ok | ok | no | agree |
-| pcap_capture | ok | ok | no | agree |
+| pcap_capture | ok | budget_rejected | TSHARK_JSON_MAX_BYTES | agree |
 | safetensors | ok | error | MODEL_JSON_NESTING | — |
 | gguf | ok | error | MODEL_METADATA_NESTING | agree |
 | gpu_ptx | ok | ok | no | noted |
@@ -27,8 +27,6 @@ tshark: `TShark (Wireshark) 4.4.1 (v4.4.1-0-g575b2bf4746e).` (Wireshark installe
 | electron_fuses | ok | budget_rejected | ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice | agree |
 | javascript | ok | budget_rejected | alias-selections+primitive-bytes+primitive-candidates+getter-expansion | — |
 | javascript_strings | ok | budget_rejected | alias-selections+getter-expansion+primitive-bytes+primitive-candidates | agree |
-
-**Not stopped:** REA read the hardened sample of `pcap_capture`, which BLA's plant is meant to stop it on. This run exited 1.
 
 ## Per-format empirical outcomes
 
@@ -142,9 +140,9 @@ _no metrics_
 ### pcap_capture
 
 - Input before: 24
-- Input after: 1346264 (1.28 MiB)
+- Input after: 2001694 (1.91 MiB)
 - Before: status=ok; budgetHit=false
-- After: status=ok; budgetHit=false
+- After: status=budget_rejected; budgetHit=TSHARK_JSON_MAX_BYTES; note=REA's tshark field pass exceeds its fixed output allowance; inspect_pcap_capture fails
 
 **Before metrics**
 
@@ -171,25 +169,18 @@ _no metrics_
 - `reaRunsPcapOnThisHost`: false
 - `reaTsharkFieldCount`: 25
 - `tsharkStatus`: 0
-- `tsharkJsonBytes`: 118455
-- `tsharkDnsPassJsonBytes`: 630550
-- `tsharkFullDissectionJsonBytes`: 12781534
+- `tsharkJsonBytes`: 13334285
+- `tsharkDnsPassJsonBytes`: 66220928
+- `tsharkFullDissectionJsonBytes`: 35869856
 - `tsharkJsonLimit`: 8388608
-- `exceedsTsharkJsonBudget`: false
-- `dnsPassExceedsTsharkJsonBudget`: false
-- `reaPacketCount`: 160
-- `reaPartial`: true
-- `reaProtocolCount`: 2
-- `reaHttpRequestUriCount`: 1
-- `reaDnsQueryCount`: 64
-- `reaDnsLimitations`: ["DNS message contains unexamined trailing bytes"]
+- `exceedsTsharkJsonBudget`: true
+- `dnsPassExceedsTsharkJsonBudget`: true
 
 **Estimate comparison**
 
-- BLA estimate=245760 (240.0 KiB); REA's tshark field pass=118455 (115.7 KiB) (DNS pass 630550 (615.8 KiB); a full dissection, which REA does not ask for, 12781534 (12.19 MiB))
-- REA's parser read 160 packets (result marked partial)
+- BLA estimate=11127480 (10.61 MiB); REA's tshark field pass=13334285 (12.72 MiB) (DNS pass 66220928 (63.15 MiB); a full dissection, which REA does not ask for, 35869856 (34.21 MiB))
 - REA analyses captures only on Linux / Windows; on this host the harness ran REA's tshark passes and REA's parser itself
-- AGREE with BLA exceedsTsharkJsonBudget=false
+- AGREE with BLA exceedsTsharkJsonBudget=true
 
 ### safetensors
 
@@ -461,16 +452,16 @@ _no metrics_
 
 **After metrics**
 
-- `budgetRuns`: [{"budgetMultiplier":1,"ms":891,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":944,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2212,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
+- `budgetRuns`: [{"budgetMultiplier":1,"ms":1085,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":4,"ms":1049,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}},{"budgetMultiplier":64,"ms":2380,"coverage":"partial","limits":["alias-selections","getter-expansion","primitive-bytes","primitive-candidates"],"recovered":{"endpoint":0,"channel":0,"digest":0}}]
 - `valuesHiddenAtDefaultBudgets`: true
 - `valuesHiddenAtRaisedBudgets`: true
 
 **Estimate comparison**
 
 - unhardened, 1x budgets (2 ms, coverage=complete, limits=[]): endpoint RECOVERED; channel RECOVERED; digest RECOVERED
-- hardened, 1x budgets (891 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 4x budgets (944 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
-- hardened, 64x budgets (2212 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 1x budgets (1085 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 4x budgets (1049 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
+- hardened, 64x budgets (2380 ms, coverage=partial, limits=[alias-selections, getter-expansion, primitive-bytes, primitive-candidates]): endpoint not in REA's result; channel not in REA's result; digest not in REA's result
 - AGREE: no known value reaches REA's result, with its budgets raised or not
 - REA's JavaScript budgets are per-call inputs (semantic_precision); a sample that only trips the defaults is read by whoever raises them, which is why this row measures both.
 

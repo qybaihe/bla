@@ -1442,6 +1442,11 @@ export function auditTarget(targetPath: string): AuditReport {
         pcapInfo.exactFraming &&
         pcapInfo.blaProtected &&
         pcapInfo.decoyPacketCount >= 8;
+      // Only the answer flood (bankrupt) takes REA's tshark field pass past
+      // its fixed allowance; REA reads the other decoys as packets (npm run
+      // redteam:rea). The simulation below keeps this module's convention for
+      // a protected artifact; the reason says which one this is.
+      const tripsTsharkAllowance = isProtected && pcapInfo.answerFloodPackets > 0;
       exposedItems.push({
         id: `pcap_${basename(absPath)}`,
         name: basename(absPath),
@@ -1451,9 +1456,11 @@ export function auditTarget(targetPath: string): AuditReport {
         reaToolUsed: "inspect_pcap_capture (tshark JSON)",
         estimatedTokensToReconstruct: isProtected ? 55_000 : 1_400,
         estimatedCostUsd: isProtected ? 4.1 : 0.06,
-        reason: isProtected
-          ? "Protected by BLA PCAP decoy-packet flood targeting TSHARK_JSON_MAX_BYTES"
-          : "PCAP frames fully dissectable by REA tshark provider",
+        reason: !isProtected
+          ? "PCAP frames fully dissectable by REA tshark provider"
+          : tripsTsharkAllowance
+            ? "Protected by BLA PCAP decoys and a DNS answer flood past REA's fixed TSHARK_JSON_MAX_BYTES"
+            : "Protected by BLA PCAP decoy packets; REA's tshark field pass reads them (the answer flood is planted at bankrupt)",
       });
       sim = {
         ...sim,

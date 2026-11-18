@@ -138,7 +138,7 @@ flowchart LR
 | Defense Pillar | Mechanism | Effect on AI Reverse-Engineering Agents |
 | :--- | :--- | :--- |
 | **1. Poison (Deception)** | Plants format-valid canaries, SGX/TPM2/Secure Enclave delegation manifests, VLQ v3 honey SourceMaps, and plausible shadow state machines. | Forces LLM agents to split context across conflicting hypotheses and chase synthetic rabbit holes. |
-| **2. Exhaust (Budget Breakers)** | Trips the analyzer's default limits (`primitive-candidates`, `alias-selections`, ASAR 16 MiB header, WASM Wabt representation, SQLite virtual column eval, Model 32-level nesting, Electron 32 fuse sentinels). | Downgrades REA's default examination from `COMPLETE` to `LIMITED` / `CapacityError`. Where REA lets the caller raise a limit this costs the attacker a retry, not the analysis — see the last column of the [results table](#empirically-verified-on-commodity-hardware). |
+| **2. Exhaust (Budget Breakers)** | Trips the analyzer's default limits (`primitive-candidates`, `alias-selections`, ASAR 16 MiB header, WASM Wabt representation, SQLite virtual column eval, Model 32-level nesting, PCAP tshark field pass (fixed 8 MiB), Electron 32 fuse sentinels). | Downgrades REA's default examination from `COMPLETE` to `LIMITED` / `CapacityError`. Where REA lets the caller raise a limit this costs the attacker a retry, not the analysis — see the last column of the [results table](#empirically-verified-on-commodity-hardware). |
 | **3. Entangle (Anti-Strip & Self-Seal)** | Binds sibling artifacts (JS ↔ WASM ↔ Native sidecars) via runtime SHA-256 digests (`--self-seal`, `--sidecar-entangle`) and multi-site caller scope folding (`bla_bind_scope`). | Prevents red-team agents from stripping decoys, nop-patching single-point checks, or calling exported functions as offline oracles. |
 | **4. Runtime Truman Show** | Hardens Electron V1 Fuses (`RunAsNode=0`, `Inspect=0`) and detects CDP / Node Inspector / Frida / WebDriver attachment (`runtime-shield.ts`). | Serves believable synthetic telemetry during live debugging while keeping normal user execution untouched. |
 
@@ -161,7 +161,7 @@ Last recorded **2026-11-18** against REA `05be423` under **Node v26.12.1** (macO
 | **Go buildinfo** | 50 KiB → 1.17 MiB | ⚠️ Rejected as malformed | `BinaryFormatFailure` — *Go build-info string range is truncated*. REA reads no build info from the hardened file, but it now checks the string range before `max_build_info_bytes` (1 MiB), the budget this plant was sized for | Not measured |
 | **Erlang BEAM** | 84 B → 241 KiB | ❌ Capacity error | `max_chunks` — *BEAM form exceeds the 64-chunk budget* | Yes — `max_chunks` |
 | **EVM bytecode** | 16 B → **4.00 MiB** | ⚠️ Admitted, just under the cap | 4,190,208 of 4,194,304 bytes of `EVM_PRODUCER_LIMIT_DEFAULTS.input_bytes`; the EVMole worker itself is not run by the harness | Yes — `producer_limits.input_bytes` |
-| **PCAP** | 24 B → 1.28 MiB | ⚠️ **Not stopped** — REA reads all 160 packets, decoys included | REA asks tshark for 25 selected fields, not a full dissection: 116 KiB of the 8 MiB `TSHARK_JSON_MAX_BYTES` allowance. A full dissection of this capture is 12.2 MiB — the size the plant was built for, and what the harness measured until now. The bait after each DNS question marks REA's result partial; `npm run redteam:rea` exits 1 on this row | No — fixed at 8 MiB, but the plant stays far below it |
+| **PCAP** | 24 B → 1.91 MiB | ❌ Budget rejected | REA asks tshark for 25 selected fields and holds that output to the 8 MiB `TSHARK_JSON_MAX_BYTES`: the hardened capture prints 12.7 MiB, so `inspect_pcap_capture` fails with a non-retryable resource error. Ten DNS responses do it — 4,076 answers each, every one naming a 251-character owner through a 2-byte compression pointer, which tshark prints in full. Without them REA read the 160 other decoys (116 KiB) | No — fixed; REA has no setting for it |
 | **Electron ASAR** | 607 B → **16.9 MiB** | ❌ Capacity error | `DEFAULT_ASAR_MAX_HEADER_BYTES` (16 MiB) | Yes — `asar.max_header_bytes`, up to 256 MiB |
 | **WASM + Wabt** | 54 B → **6.56 MiB** · 251 exports | ⚠️ `ifaceState=partial` | `max_interface_bytes` (32 MiB) — *Typed WASM interface representation exceeds max_interface_bytes* | Yes — up to 512 MiB |
 | **SQLite** (Node 24, `--sqlite-eval-trap`) | 12 KiB → 56 KiB | ❌ Eval trap on the honey tables | `SqliteColumnEvaluationFailure` — unknown `enclave_unseal_payload()` on virtual trap columns. Opt-in (the default through 3.4.3): it also stops the application's own `PRAGMA integrity_check` / `VACUUM`. Default hardening adds honey tables REA can read; application tables are never hidden. | Not a budget — an evaluation failure |
@@ -221,7 +221,7 @@ All 26 format shields are built directly into `bla-agents` with zero external pa
 | **Flutter / Dart pool** | ✓ | ✓ URI/token caps | **verified** (projected) | Snapshot magic & toolchain flood |
 | **Erlang BEAM (`.beam`)** | ✓ | ✓ chunks / atoms | **verified** | Exceeds 64-chunk budget |
 | **EVM + Solidity meta** | ✓ | ✓ → 4 MiB input | **verified** (approach) | CBOR metadata + bytecode densification |
-| **PCAP (`.pcap`)** | ✓ | ✗ REA's tshark field pass: 116 KiB of 8 MiB | **verified: not stopped** (tshark 4.4.1) | Synthetic packet + canary injection; REA reads the decoys as packets |
+| **PCAP (`.pcap`)** | ✓ | ✓ REA's tshark field pass > 8 MiB (fixed) | **verified** (tshark 4.4.1) | Synthetic packet + canary injection; a DNS answer flood at bankrupt |
 | **Python (`.py` / `.pyc`)** | ✓ | ✓ | designed-for | CPython 3.7–3.14 marshal & AST support |
 | **NVIDIA PTX (`.ptx`)** | ✓ | entry flood | benchmark only | Kernel entry & canary flood |
 | **DEX / IL2CPP / bplist / .NET / JVM / ZIP** | ✓ | format-specific | designed-for | Recomputes DEX SHA-1 & Adler32 checksums |
@@ -256,8 +256,6 @@ npx bla-agents benchmark
 | **Apple binary plist (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 8/100 · 1.79M tok · $29.54 · `LIMITED` | **277.6×** | ✅ 100% |
 | **SQLite entitlement DB (`.sqlite`)** | 81/100 · 10,568 tok · $0.29 | 7/100 · 1.71M tok · $28.39 · `LIMITED` | **162.1×** | ✅ 100% |
 | **Native ELF64 (Rust/Go/Fuse/Dart)** | 81/100 · 35,222 tok · $0.73 | 2/100 · 3.72M tok · $60.03 · `LIMITED` | **105.6×** | ✅ 100% |
-
-The PCAP row models the tshark JSON allowance as tripped. Measured against REA `05be423` the plant does not reach it — see the [results table](#empirically-verified-on-commodity-hardware).
 
 ---
 

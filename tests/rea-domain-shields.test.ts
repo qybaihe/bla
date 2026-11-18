@@ -48,6 +48,9 @@ import {
   UF2_SHIELD_MARKER,
 } from "../src/shields/formats/firmware-uf2.js";
 import { detectArtifactFormat } from "../src/core/detector.js";
+import { auditTarget } from "../src/engine/auditor.js";
+import { protectTarget } from "../src/engine/protector.js";
+import { verifyTarget } from "../src/engine/verifier.js";
 import { SeededPrng } from "../src/core/prng.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -464,26 +467,123 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
     expect(after.blaProtected).toBe(true);
   });
 
-  it("bankrupt PCAP decoys stay valid libpcap and do not claim to exceed REA's tshark field pass", () => {
-    const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
+  it("bankrupt PCAP plants the answer flood past REA's fixed tshark allowance, staying valid libpcap", () => {
+    const input = pcapGlobalHeader();
+    const res = protectPcapCaptureBuffer(input, {
       intensity: "bankrupt",
       seed: "pcap-bankrupt",
     });
-    expect(res.packetsInjected).toBeGreaterThanOrEqual(48);
-    // REA asks tshark for selected fields only: 116 KiB for these packets
-    // against REA 05be423 (npm run redteam:rea), not the 12 MiB of a full
-    // dissection.
-    expect(res.estimatedTsharkJsonBytes).toBeLessThan(
+    expect(res.answerFloodPackets).toBe(10);
+    expect(res.packetsInjected).toBe(170);
+    // A lower bound of REA's field pass; measured with tshark 4.4.1 against
+    // REA 05be423 it is 13.3 MB (npm run redteam:rea).
+    expect(res.estimatedTsharkJsonBytes).toBeGreaterThan(
       REA_INTERNAL_LIMITS.PCAP_TSHARK_JSON_MAX_BYTES,
     );
-    expect(res.estimatedTsharkJsonBytes).toBeGreaterThanOrEqual(118_455);
-    expect(res.exceedsTsharkJsonBudget).toBe(false);
+    expect(res.exceedsTsharkJsonBudget).toBe(true);
+    expect(res.buffer.subarray(0, input.length).equals(input)).toBe(true);
     const after = inspectPcapCapture(res.buffer);
     expect(after.validMagic).toBe(true);
+    expect(after.exactFraming).toBe(true);
     expect(after.packetCount).toBe(res.packetsInjected);
     expect(after.blaProtected).toBe(true);
     // Nested HTTP headers present
     expect(res.buffer.includes(Buffer.from("X-BLA-Nested-0:", "utf8"))).toBe(true);
+  });
+
+  it("each flood packet is one DNS response whose answers all point at its question", () => {
+    const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
+      intensity: "bankrupt",
+      seed: "pcap-flood-shape",
+    });
+    const records: Buffer[] = [];
+    for (let at = 24; at + 16 <= res.buffer.length; ) {
+      const length = res.buffer.readUInt32LE(at + 8);
+      records.push(res.buffer.subarray(at + 16, at + 16 + length));
+      at += 16 + length;
+    }
+    const flood = records.slice(-res.answerFloodPackets);
+    expect(flood).toHaveLength(10);
+    for (const frame of flood) {
+      expect(frame.length).toBeLessThanOrEqual(65_535); // fits a 65,535-byte snaplen
+      expect(frame.readUInt16BE(34)).toBe(53); // UDP source port: a resolver's answer
+      const dns = frame.subarray(42);
+      expect(dns.readUInt16BE(2)).toBe(0x8180); // standard response, no error
+      expect(dns.readUInt16BE(4)).toBe(1);
+      const answers = dns.readUInt16BE(6);
+      expect(answers).toBeGreaterThan(4_000);
+      // header 12 + name 253 + type/class 4, then 16 bytes per answer, nothing after
+      expect(dns.length).toBe(12 + 253 + 4 + answers * 16);
+      for (const i of [0, answers - 1]) {
+        const record = 12 + 253 + 4 + i * 16;
+        expect(dns.readUInt16BE(record)).toBe(0xc00c); // owner: pointer to the question
+        expect(dns.readUInt16BE(record + 2)).toBe(1); // A
+        expect(dns.readUInt16BE(record + 10)).toBe(4);
+      }
+    }
+  });
+
+  it("maximum PCAP decoys get no flood and do not claim REA's tshark allowance", () => {
+    const res = protectPcapCaptureBuffer(pcapGlobalHeader(), {
+      intensity: "maximum",
+      seed: "pcap-maximum",
+    });
+    expect(res.answerFloodPackets).toBe(0);
+    // REA's field pass printed 27 KiB for these packets (an upper bound here).
+    expect(res.estimatedTsharkJsonBytes).toBeLessThan(
+      REA_INTERNAL_LIMITS.PCAP_TSHARK_JSON_MAX_BYTES,
+    );
+    expect(res.exceedsTsharkJsonBudget).toBe(false);
+  });
+
+  it("appends records in the capture's own byte order", () => {
+    const header = Buffer.alloc(24);
+    header.writeUInt32BE(0xa1b2c3d4, 0);
+    header.writeUInt16BE(2, 4);
+    header.writeUInt16BE(4, 6);
+    header.writeUInt32BE(65535, 16);
+    header.writeUInt32BE(1, 20);
+    const res = protectPcapCaptureBuffer(header, { intensity: "bankrupt", seed: "pcap-be" });
+    // Through 3.4.3 the records were written little-endian here and tshark
+    // called the file corrupt.
+    const after = inspectPcapCapture(res.buffer);
+    expect(after.exactFraming).toBe(true);
+    expect(after.packetCount).toBe(res.packetsInjected);
+    expect(res.answerFloodPackets).toBe(10);
+  });
+
+  it("inspection finds the flood; the audit says which capture has it and still verifies both", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bla-pcap-audit-"));
+    try {
+      const input = path.join(dir, "in.pcap");
+      fs.writeFileSync(input, pcapGlobalHeader());
+      const reasons: Record<string, string | undefined> = {};
+      for (const intensity of ["maximum", "bankrupt"] as const) {
+        const output = path.join(dir, `${intensity}.pcap`);
+        const res = protectTarget({ inputPath: input, outputPath: output, intensity, seed: "pcap-audit" });
+        expect(res.detectedFormat).toBe("pcap-capture");
+        const bytes = fs.readFileSync(output);
+        expect(inspectPcapCapture(bytes).answerFloodPackets).toBe(intensity === "bankrupt" ? 10 : 0);
+        const report = auditTarget(output);
+        expect(report.protectionStatus).toBe("BLA_PROTECTED");
+        // A capture hardened below bankrupt keeps verifying as protected.
+        expect(verifyTarget(output, input).overallPassed).toBe(true);
+        reasons[intensity] = report.exposedItems[0]?.reason;
+      }
+      expect(reasons.bankrupt).toContain("answer flood past REA's fixed TSHARK_JSON_MAX_BYTES");
+      expect(reasons.maximum).toContain("REA's tshark field pass reads them");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("claims nothing for a capture whose link type is not Ethernet", () => {
+    const header = pcapGlobalHeader();
+    header.writeUInt32LE(101, 20); // LINKTYPE_RAW: the decoys' Ethernet frames would not be read as DNS
+    const res = protectPcapCaptureBuffer(header, { intensity: "bankrupt", seed: "pcap-raw" });
+    expect(res.answerFloodPackets).toBe(0);
+    expect(res.exceedsTsharkJsonBudget).toBe(false);
+    expect(inspectPcapCapture(res.buffer).exactFraming).toBe(true);
   });
 
   it("documents SPIR-V / CUDA fatbinary / AMD GPU object skip alongside firmware", () => {
