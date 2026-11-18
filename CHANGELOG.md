@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-11-18
+
 End-to-end pass over the agent journey — "MCP server and skill are registered, now harden my project" — so a coding agent can take a real project from build output to a shipped, working, protected build, and is told plainly what was not covered.
 
 ### Added
