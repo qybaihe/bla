@@ -3,14 +3,36 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  rmSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { detectArtifactFormat } from "../core/detector.js";
+import { detectArtifactFormat, isTypeScriptDeclarationPath } from "../core/detector.js";
 import { generateProjectSeed, loadBlaConfig, type BlaProjectConfig } from "../core/config.js";
 import { physicalPath } from "../core/output-path.js";
+import { classifyBrowserBundles } from "./browser-bundle.js";
+import { isKnownBlaOutput, registerBlaOutput } from "../core/output-registry.js";
+import { lintPlaintextSecretsFile } from "./plaintext-secret-lint.js";
+import {
+  BLA_BUILD_OUTPUT_DIR_NAMES,
+  applyHardenedOutputs,
+  collectApplyCandidates,
+  isInsideBuildOutput,
+  listAppliedFiles,
+  resolveApplyStateDirectory,
+  restoreAppliedOriginals,
+  suspendAppliedOutputs,
+  type HardenApplyReport,
+} from "./harden-apply.js";
 import { sanitizeTerminalText } from "../core/terminal-text.js";
 import { walkBounded } from "../core/walk.js";
+import {
+  isDevToolingFile,
+  readPackageRuntimeEntries,
+  readPythonDeclaredEntryModules,
+  readPackageToolingScripts,
+} from "../core/dev-tooling.js";
 import type { ArtifactFormat, ProtectionIntensity } from "../core/types.js";
 import { BLA_IDENTITY } from "../identity.js";
 import {
@@ -65,45 +87,41 @@ import {
   computeWasmSidecarCodeIdentity,
   WASM_SIDECAR_LOADER_MARKER,
   WASM_SIDECAR_SECTION_NAME,
-  planSidecarEntanglement,
   verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
-import { inspectWasmBinary } from "../shields/formats/wasm.js";
+import { inspectWasmBinary, isAbiMandatedWasmExport } from "../shields/formats/wasm.js";
 import { detectJsCarrierForSource } from "../shields/javascript/ast-shield.js";
 import { refineJsCarrierForRuntimePaths } from "../shields/javascript/node-runtime-carrier.js";
 import {
   finalizeSelfSealSelfDigest,
   verifySelfSealSelfDigest,
 } from "../shields/runtime/self-seal.js";
-import { withoutHostSelfCoverage } from "./integrity-coverage.js";
+import {
+  buildInterleavedCoverageMatrix,
+  sha256Hex,
+  withoutHostSelfCoverage,
+} from "./integrity-coverage.js";
 import { writeFileAtomicSync } from "./protector.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
   HARDEN_SUMMARY_SCHEMA,
+  sha256File,
 } from "./run-evidence.js";
+import {
+  readManifestSigningKeyOrThrow,
+  signManifestPayload,
+} from "../core/manifest-signing.js";
 import {
   buildWeavePlan,
   verifyWeaveTarget,
   type WeaveAgentAction,
   type WeaveSurgicalWorkorder,
+  type WeaveVerifyScope,
 } from "../shields/weave/weave-decoy.js";
 
-/** Preferred build-output directory names, searched first under a project root. */
-export const BLA_BUILD_OUTPUT_DIR_NAMES = Object.freeze([
-  "dist",
-  "build",
-  "out",
-  "release",
-  "Release",
-  "Debug",
-  "x64",
-  "Win32",
-  "bin",
-  ".next",
-  "target",
-] as const);
+export { BLA_BUILD_OUTPUT_DIR_NAMES };
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -139,8 +157,67 @@ const SUPPLEMENTAL_SKIP_DIR_NAMES = new Set([
   "benchmarks",
 ]);
 
+/**
+ * Whole-project walks (no build-output directory) still descend into `src/`,
+ * `lib/`, `scripts/` … because the sources ARE the artifact there, but a test
+ * suite, the documentation, and sample programs are never shipped product
+ * logic. (`scripts/` stays in: in a source-only project it is as often the
+ * product as it is tooling.)
+ */
+const FULL_TREE_SKIP_DIR_NAMES = new Set([
+  ...SKIP_DIR_NAMES,
+  "test",
+  "tests",
+  "__tests__",
+  "__mocks__",
+  "__fixtures__",
+  "fixtures",
+  // Documentation and sample programs are not the product either
+  // (`docs/conf.py` is Sphinx configuration).
+  "docs",
+  "doc",
+  "examples",
+  "example",
+  "benchmarks",
+]);
+
 const MAX_DISCOVERED_ARTIFACTS = 64;
 const MAX_WALK_DEPTH = 8;
+/** Cap on how many skipped toolchain paths a discovery result lists verbatim. */
+const MAX_REPORTED_SKIPPED_TOOLING = 24;
+
+/**
+ * Which kind of root a discovery walk is covering:
+ * - `build`: a recognised build-output directory — everything in it ships.
+ * - `full`: the whole project when no build-output directory exists.
+ * - `supplemental`: the project root *beside* build-output directories, where
+ *   JS/TS/HTML files are the inputs of that build, not release artifacts.
+ */
+type DiscoveryWalkMode = "build" | "full" | "supplemental";
+
+/** Text formats that are build inputs whenever a build-output directory exists. */
+const SOURCE_TEXT_FORMATS: ReadonlySet<ArtifactFormat> = new Set<ArtifactFormat>([
+  "javascript",
+  "typescript",
+  "html-bundle",
+  "sourcemap",
+]);
+
+/** Formats a toolchain file can have (configs, task runners, test suites). */
+const TOOLING_CAPABLE_FORMATS: ReadonlySet<ArtifactFormat> = new Set<ArtifactFormat>([
+  "javascript",
+  "typescript",
+  "python-source",
+]);
+
+interface DiscoverySkipLedger {
+  readonly devTooling: string[];
+  sourceFiles: number;
+  /** Files that still hold the bytes an earlier BLA run wrote. */
+  readonly hardenedOutputs: string[];
+  /** Protectable files the caller's `exclude` list left out. */
+  readonly excluded: string[];
+}
 
 export interface DiscoveredArtifact {
   readonly path: string;
@@ -159,7 +236,49 @@ export interface HardenArtifactSummary {
   readonly costAmplificationFactor: number;
   /** True when a file already existed at outputPath before this run (or would, in dry-run). */
   readonly outputExisted: boolean;
+  /** Size of the input file, in bytes. */
+  readonly inputBytes?: number;
+  /** Size of the hardened file as it will ship, in bytes (absent on dry-run / failure). */
+  readonly outputBytes?: number;
   readonly error?: string;
+  /**
+   * WASM only: exports this run renamed (`from` → `to`). Anything that calls
+   * one by its old name is now broken until it is updated from this map.
+   */
+  readonly wasmExportRenames?: readonly {
+    readonly from: string;
+    readonly to: string;
+    readonly kind: string;
+  }[];
+  /**
+   * WASM only: exports kept under their original name because another file in
+   * the project refers to them (`referencedBy`, project-relative). They remain
+   * a stable hook surface; rename them in your own source and its callers if
+   * they guard entitlement logic.
+   */
+  readonly wasmExportsAutoPreserved?: readonly {
+    readonly name: string;
+    readonly referencedBy: string;
+  }[];
+  /**
+   * JS/TS/HTML only: sensitive-looking literals of the input (digests, keys,
+   * tokens — what `bla_lint` reports as `plaintext-secret`) that can still be
+   * read verbatim in the hardened output. `maximum`/`bankrupt` split string
+   * and template text, and a secret-looking value wherever it is written
+   * (object key, regular expression, a string of up to 4,096 characters), so
+   * what is left there is what the shield cannot reach — HTML attributes,
+   * tagged templates, class member names, the keys and `as const` values of a
+   * TypeScript source, anything longer. `stealth` and `balanced` do not
+   * encode strings at all. Previews are clipped.
+   */
+  readonly plaintextSurvivors?: {
+    readonly count: number;
+    readonly samples: readonly {
+      readonly id: string;
+      readonly preview: string;
+      readonly line?: number;
+    }[];
+  };
 }
 
 export interface HardenProjectOptions {
@@ -205,8 +324,33 @@ export interface HardenProjectOptions {
    * Host Agent performs source surgery first.
    */
   readonly requireAgentWeave?: boolean;
+  /**
+   * SQLite only, opt-in: evaluation-trap columns on the honey tables (see
+   * `ProtectionOptions.sqliteEvalTrap`). The report names the databases it
+   * was applied to and what stops working on them.
+   */
+  readonly sqliteEvalTrap?: boolean;
   /** Optional output root; defaults to `<dir>/.bla-hardened`. */
   readonly outputDirectory?: string;
+  /**
+   * Project-relative paths or globs to leave out (merged with the project
+   * config's `exclude`). For the artifact that breaks or slows the program
+   * when hardened: everything else is still protected, and the report lists
+   * what was left out (`excluded`). See `compileExcludeMatcher` for the syntax.
+   */
+  readonly exclude?: readonly string[];
+  /**
+   * Promote the hardened files over the build output they came from, so the
+   * tree that ships is the protected one. Only files inside a build-output
+   * directory are ever overwritten (never source); the originals are backed up
+   * outside the project and `restoreHardenedProject` puts them back. Re-running
+   * re-hardens from those originals instead of hardening twice. Without an
+   * explicit `outputDirectory` nothing but the promoted files is written into
+   * the project.
+   */
+  readonly apply?: boolean;
+  /** Override the per-user directory that holds apply backups (tests / CI caches). */
+  readonly applyStateRoot?: string;
   readonly maxArtifacts?: number;
   /**
    * Preview only: discover targets and plan output paths, but write zero bytes
@@ -225,8 +369,22 @@ export interface HardenProjectOptions {
 export interface AgentWeaveAssessment {
   readonly weaveVerified: boolean;
   readonly weaveScore: number;
+  /**
+   * Which files decided `weaveVerified` (`crown-jewels`: the files holding
+   * gate / entitlement logic; `agent-selected`: none is recognizable by name,
+   * so at least one file must pass; `all`: every source file).
+   */
+  readonly weaveScope?: WeaveVerifyScope;
+  /** Required source files that have not passed weave verification yet. */
   readonly unwovenSourceFiles: readonly string[];
+  /** Verified source files that never block the verdict (no gate logic). */
+  readonly advisorySourceFiles?: readonly string[];
   readonly agentActions: readonly WeaveAgentAction[];
+  /**
+   * Surgical workorders for `unwovenSourceFiles`. Populated only when
+   * `requireAgentWeave` refused the run (the agent needs them for Stage 2);
+   * otherwise empty — call `bla_weave_plan` for the full plan.
+   */
   readonly surgicalWorkorders: Readonly<Record<string, WeaveSurgicalWorkorder>>;
   readonly agentPlaybookDirective: string;
 }
@@ -299,6 +457,70 @@ export interface HardenProjectReport {
    */
   readonly discoveryReadErrors?: readonly string[];
   /**
+   * Artifacts hardened WITHOUT the requested self-seal / sidecar-entanglement
+   * binding, each with the reason: a browser bundle (the bindings need
+   * `node:fs` / `node:crypto` and would stop the page from loading), mutable
+   * data such as a SQLite database the app writes to, or a file the entry
+   * module does not check. Tampering with these is NOT detected at load time.
+   * Present only when a binding was requested.
+   */
+  readonly integrityBindingSkipped?: readonly {
+    readonly relativePath: string;
+    readonly reason: string;
+  }[];
+  /**
+   * Python module that now checks its hardened sibling files when it is
+   * imported (sidecar entanglement). The check needs those files as shipped:
+   * loose on disk or inside a zipapp. A bytecode-only tree or a frozen bundle
+   * ships no sibling sources; the module starts there without verifying them.
+   */
+  readonly pythonSidecarEntry?: string;
+  /**
+   * JS module that carries the cross-file check (project-relative): it pins
+   * its hardened siblings and refuses to load when one was changed, replaced
+   * or removed. The check runs when this module is loaded, and only then.
+   */
+  readonly integrityBindingEntry?: string;
+  /**
+   * Entry points `package.json` declares (`main` / `bin` / `exports`) that do
+   * not load `integrityBindingEntry`: started there, a replaced sibling goes
+   * unnoticed (under self-seal each file still checks its own bytes). Present
+   * only when non-empty.
+   */
+  readonly integrityBindingUncoveredEntries?: readonly string[];
+  /**
+   * Console-script modules the Python project declares (`pyproject.toml`,
+   * `setup.cfg`, `setup.py`) that never import `pythonSidecarEntry`: started
+   * through one of them, nothing is verified. Present only when non-empty.
+   */
+  readonly pythonSidecarUncoveredEntries?: readonly string[];
+  /** Toolchain files discovery left out on purpose (see `HardenDiscoveryResult`). */
+  readonly skippedDevTooling?: readonly string[];
+  /** Count of JS/TS/HTML sources beside a build-output directory left out on purpose. */
+  readonly skippedSourceFiles?: number;
+  /** Files discovery left out because they are already BLA output (see `HardenDiscoveryResult`). */
+  readonly skippedHardenedOutputs?: readonly string[];
+  /** Protectable files left out by the `exclude` list: they ship unprotected. */
+  readonly excluded?: readonly string[];
+  /**
+   * What hardening costs to ship: total bytes of the hardened artifacts before
+   * and after, and the artifact that grew the most. Decoys are the mechanism,
+   * so growth is expected — a fixed amount per file, and megabytes per WASM
+   * module at `bankrupt`. Present when at least one artifact was written.
+   */
+  readonly outputSize?: {
+    readonly inputBytes: number;
+    readonly outputBytes: number;
+    readonly largestGrowth?: { readonly relativePath: string; readonly growthBytes: number };
+  };
+  /**
+   * SQLite databases hardened with the opt-in evaluation trap
+   * (`sqliteEvalTrap`). On these, a connection that does not register
+   * `enclave_unseal_payload()` cannot read the honey tables — and cannot run
+   * `PRAGMA integrity_check`, `VACUUM` or a dump/restore either.
+   */
+  readonly sqliteEvalTrapArtifacts?: readonly string[];
+  /**
    * Content-addressed id for this harden run (unsigned). Stable across identical
    * inputs/planned outputs; present even on dry-run so agents can correlate later.
    */
@@ -320,6 +542,15 @@ export interface HardenProjectReport {
   readonly cancelled?: boolean;
   /** Absolute output paths written before cancel or at completion. */
   readonly written?: readonly string[];
+  /** Outcome of the `apply` promotion (present whenever `apply` was requested). */
+  readonly apply?: HardenApplyReport;
+  /**
+   * Protectable artifacts outside every build-output directory that an `apply`
+   * run left alone (project-relative). Harden them without `apply` if they ship.
+   */
+  readonly notPromoted?: readonly string[];
+  /** What the caller should do next, most important first. */
+  readonly nextSteps?: readonly string[];
 }
 
 export interface HardenDiscoveryResult {
@@ -341,6 +572,92 @@ export interface HardenDiscoveryResult {
    * this page exhausted the inventory.
    */
   readonly nextOffset?: number;
+  /**
+   * Toolchain files deliberately left out (tool configs, test files, scripts
+   * that `package.json` runs for build/test/release), project-relative and
+   * capped. Present only when non-empty. Name one explicitly (`bla defend
+   * <file>` / `bla_defend`) if it really is shipped product code.
+   */
+  readonly skippedDevTooling?: readonly string[];
+  /**
+   * Count of JS/TS/HTML source files beside a build-output directory that were
+   * left out because the build output is the release artifact. Present only
+   * when non-zero.
+   */
+  readonly skippedSourceFiles?: number;
+  /**
+   * Files left out because they still hold exactly the bytes an earlier BLA
+   * run on this machine wrote (project-relative, capped): hardened output is
+   * never hardened twice. Rebuild to get fresh, unprotected output.
+   */
+  readonly skippedHardenedOutputs?: readonly string[];
+  /**
+   * Protectable files left out because they match the caller's `exclude` list
+   * (project-relative, capped). They ship unprotected.
+   */
+  readonly excluded?: readonly string[];
+}
+
+/**
+ * Compile an `exclude` list into a matcher over project-relative POSIX paths.
+ *
+ * gitignore-like, deliberately small. A pattern containing a slash is anchored
+ * at the project root and also excludes everything beneath a matching
+ * directory (`dist/vendor`, `dist/chunks/heavy-*.js`); a pattern without one
+ * matches any path segment (`vendor`, `*.min.js`). A single star stays inside
+ * one segment, a double star crosses segments, `?` is one character. There is
+ * no negation.
+ */
+export function compileExcludeMatcher(
+  patterns: readonly string[] | undefined,
+): ((relativePath: string) => boolean) | undefined {
+  const compiled: { readonly anchored: boolean; readonly re: RegExp }[] = [];
+  for (const raw of patterns ?? []) {
+    const pattern = raw
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^(?:\.\/)+/, "")
+      .replace(/\/+$/, "");
+    if (pattern.length === 0) continue;
+    let source = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i]!;
+      if (ch === "*") {
+        if (pattern[i + 1] === "*") {
+          i++;
+          if (pattern[i + 1] === "/") {
+            i++;
+            source += "(?:.*/)?";
+          } else {
+            source += ".*";
+          }
+        } else {
+          source += "[^/]*";
+        }
+      } else if (ch === "?") {
+        source += "[^/]";
+      } else {
+        source += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+      }
+    }
+    compiled.push({ anchored: pattern.includes("/"), re: new RegExp(`^${source}$`) });
+  }
+  if (compiled.length === 0) return undefined;
+  return (relativePath: string): boolean => {
+    const rel = relativePath.replaceAll("\\", "/");
+    const segments = rel.split("/");
+    for (const { anchored, re } of compiled) {
+      if (anchored) {
+        // The path itself, or any directory above it.
+        for (let end = segments.length; end >= 1; end--) {
+          if (re.test(segments.slice(0, end).join("/"))) return true;
+        }
+      } else if (segments.some((segment) => re.test(segment))) {
+        return true;
+      }
+    }
+    return false;
+  };
 }
 
 function isProtectableFormat(format: ArtifactFormat): boolean {
@@ -356,23 +673,30 @@ function resolveSearchRoots(absRoot: string): {
   readonly includeProjectRootSupplemental: boolean;
 } {
   const preferred: string[] = [];
-  for (const name of BLA_BUILD_OUTPUT_DIR_NAMES) {
-    const candidate = join(absRoot, name);
+  // `release` and `Release` are one directory on a case-insensitive file
+  // system (macOS, Windows): walk it once, under the name it has on disk.
+  const seenPhysical = new Set<string>();
+  const addRoot = (candidate: string): void => {
     try {
-      if (statSync(candidate).isDirectory()) preferred.push(candidate);
+      if (!statSync(candidate).isDirectory()) return;
+      // The output of an earlier `bla harden -o ./release` is not build output.
+      if (existsSync(join(candidate, HARDEN_SUMMARY_FILE_NAME))) return;
+      const physical = realpathSync.native(candidate);
+      if (seenPhysical.has(physical)) return;
+      seenPhysical.add(physical);
+      const onDiskName = basename(physical);
+      preferred.push(
+        onDiskName.toLowerCase() === basename(candidate).toLowerCase()
+          ? join(dirname(candidate), onDiskName)
+          : candidate,
+      );
     } catch {
       /* absent */
     }
-  }
+  };
+  for (const name of BLA_BUILD_OUTPUT_DIR_NAMES) addRoot(join(absRoot, name));
   // Rust/cargo nested release
-  const cargoRelease = join(absRoot, "target", "release");
-  try {
-    if (statSync(cargoRelease).isDirectory() && !preferred.includes(cargoRelease)) {
-      preferred.push(cargoRelease);
-    }
-  } catch {
-    /* absent */
-  }
+  addRoot(join(absRoot, "target", "release"));
   if (preferred.length === 0) {
     return { preferred: [absRoot], includeProjectRootSupplemental: false };
   }
@@ -388,12 +712,25 @@ function collectRootArtifacts(
   skipDirs: ReadonlySet<string>,
   excludeDir: string | undefined,
   readErrors: string[],
+  mode: DiscoveryWalkMode,
+  manifest: {
+    readonly toolingScripts: ReadonlySet<string>;
+    readonly runtimeEntries: ReadonlySet<string>;
+  },
+  skipped: DiscoverySkipLedger,
+  stateRoot: string | undefined,
+  isExcluded: ((relativePath: string) => boolean) | undefined,
 ): DiscoveredArtifact[] {
   const formats = new Map<string, ArtifactFormat>();
+  const relOf = (full: string): string =>
+    (relative(projectRoot, full) || basename(full)).split(sep).join("/");
   const files = walkBounded(root, {
     maxDepth: MAX_WALK_DEPTH,
     maxFiles: maxArtifacts,
     skipDirs,
+    // A directory holding a harden summary is the output of an earlier run
+    // (`bla harden . -o ./release-hardened`): never feed it back in as input.
+    skipDir: (full) => existsSync(join(full, HARDEN_SUMMARY_FILE_NAME)),
     skipHiddenDirs: true,
     // Locale-independent name sort so offset paging is stable across platforms.
     sortEntries: true,
@@ -405,6 +742,9 @@ function collectRootArtifacts(
       if (excludeDir && (full === excludeDir || full.startsWith(excludeDir + sep))) {
         return false;
       }
+      // Ambient declarations carry no runtime logic; "protecting" one breaks
+      // every TypeScript consumer of the package.
+      if (isTypeScriptDeclarationPath(name)) return false;
       const format = detectArtifactFormat(full);
       if (!isProtectableFormat(format)) return false;
       // Skip already-shielded outputs to avoid re-hardening loops.
@@ -412,6 +752,40 @@ function collectRootArtifacts(
       if (name.endsWith(".bla-manifest.json")) return false;
       if (name.endsWith(".bunfs-snapshot")) return false;
       if (name.endsWith(".bla-sidecar.v1.json")) return false;
+      // The caller's explicit keep-out list: reported, never silently dropped.
+      if (isExcluded?.(relOf(full)) === true) {
+        if (skipped.excluded.length < MAX_REPORTED_SKIPPED_TOOLING) {
+          skipped.excluded.push(relOf(full));
+        }
+        return false;
+      }
+      // Output of an earlier run written anywhere else (`bla_defend` with an
+      // explicit output path, build output promoted by `apply`): hardening it
+      // again hardens the decoys, and the packaging gates then refuse them.
+      if (isKnownBlaOutput(full, stateRoot)) {
+        if (skipped.hardenedOutputs.length < MAX_REPORTED_SKIPPED_TOOLING) {
+          skipped.hardenedOutputs.push(relOf(full));
+        }
+        return false;
+      }
+      // A declared runtime entry (package.json main/bin/exports) is product
+      // code by definition, whatever its name or location looks like.
+      const declaredEntry = manifest.runtimeEntries.has(full);
+      if (
+        !declaredEntry &&
+        mode !== "build" &&
+        TOOLING_CAPABLE_FORMATS.has(format) &&
+        (isDevToolingFile(full, name) || manifest.toolingScripts.has(full))
+      ) {
+        if (skipped.devTooling.length < MAX_REPORTED_SKIPPED_TOOLING) {
+          skipped.devTooling.push(relOf(full));
+        }
+        return false;
+      }
+      if (mode === "supplemental" && SOURCE_TEXT_FORMATS.has(format) && !declaredEntry) {
+        skipped.sourceFiles += 1;
+        return false;
+      }
       formats.set(full, format);
       return true;
     },
@@ -421,7 +795,7 @@ function collectRootArtifacts(
     format: formats.get(full) ?? detectArtifactFormat(full),
     // Normalize to POSIX separators so reports, manifests, and MCP
     // structuredContent stay platform-independent (`dist/app.js`).
-    relativePath: (relative(projectRoot, full) || basename(full)).split(sep).join("/"),
+    relativePath: relOf(full),
   }));
 }
 
@@ -447,17 +821,30 @@ export function discoverHardenableArtifacts(
  */
 export function discoverHardenTargets(
   directory: string = process.cwd(),
-  options: { readonly maxArtifacts?: number; readonly offset?: number; readonly outputDirectory?: string } = {},
+  options: {
+    readonly maxArtifacts?: number;
+    readonly offset?: number;
+    readonly outputDirectory?: string;
+    /** Only walk build-output directories (no project-root supplement). */
+    readonly buildOutputOnly?: boolean;
+    /** Per-user state root override (tests, sandboxes); see `resolveBlaStateRoot`. */
+    readonly stateRoot?: string;
+    /** Paths / globs to leave out (see `compileExcludeMatcher`). */
+    readonly exclude?: readonly string[];
+  } = {},
 ): HardenDiscoveryResult {
   const abs = resolve(directory);
   const maxArtifacts = Math.max(1, Math.floor(options.maxArtifacts ?? MAX_DISCOVERED_ARTIFACTS));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const excludeDir = options.outputDirectory ? resolve(options.outputDirectory) : undefined;
   // Collect one past the page end so truncated/nextOffset stay honest.
-  const { artifacts: all, readErrors } = collectHardenableArtifacts(
+  const { artifacts: all, readErrors, skipped } = collectHardenableArtifacts(
     abs,
     offset + maxArtifacts + 1,
     excludeDir,
+    options.buildOutputOnly === true,
+    options.stateRoot,
+    compileExcludeMatcher(options.exclude),
   );
   const page = all.slice(offset, offset + maxArtifacts);
   const truncated = all.length > offset + maxArtifacts;
@@ -469,6 +856,12 @@ export function discoverHardenTargets(
     offset,
     readErrors,
     ...(truncated ? { nextOffset: offset + page.length } : {}),
+    ...(skipped.devTooling.length > 0 ? { skippedDevTooling: skipped.devTooling.slice() } : {}),
+    ...(skipped.sourceFiles > 0 ? { skippedSourceFiles: skipped.sourceFiles } : {}),
+    ...(skipped.hardenedOutputs.length > 0
+      ? { skippedHardenedOutputs: skipped.hardenedOutputs.slice() }
+      : {}),
+    ...(skipped.excluded.length > 0 ? { excluded: skipped.excluded.slice() } : {}),
   };
 }
 
@@ -476,10 +869,23 @@ function collectHardenableArtifacts(
   abs: string,
   maxArtifacts: number,
   excludeDir?: string,
-): { readonly artifacts: readonly DiscoveredArtifact[]; readonly readErrors: readonly string[] } {
+  buildOutputOnly = false,
+  stateRoot?: string,
+  isExcluded?: (relativePath: string) => boolean,
+): {
+  readonly artifacts: readonly DiscoveredArtifact[];
+  readonly readErrors: readonly string[];
+  readonly skipped: DiscoverySkipLedger;
+} {
   if (!existsSync(abs)) {
     throw new Error(`Path not found: ${abs}`);
   }
+  const skipped: DiscoverySkipLedger = {
+    devTooling: [],
+    sourceFiles: 0,
+    hardenedOutputs: [],
+    excluded: [],
+  };
   const stats = statSync(abs);
   if (stats.isFile()) {
     const format = detectArtifactFormat(abs);
@@ -489,6 +895,7 @@ function collectHardenableArtifacts(
     return {
       artifacts: [{ path: abs, format, relativePath: basename(abs) }],
       readErrors: [],
+      skipped,
     };
   }
   if (!stats.isDirectory()) {
@@ -498,14 +905,48 @@ function collectHardenableArtifacts(
   const readErrors: string[] = [];
   const found: DiscoveredArtifact[] = [];
   const { preferred, includeProjectRootSupplemental } = resolveSearchRoots(abs);
+  const manifest = {
+    toolingScripts: readPackageToolingScripts(abs, BLA_BUILD_OUTPUT_DIR_NAMES),
+    runtimeEntries: readPackageRuntimeEntries(abs),
+  };
   for (const root of preferred) {
     const remaining = maxArtifacts - found.length;
     if (remaining <= 0) break;
-    found.push(...collectRootArtifacts(root, abs, remaining, SKIP_DIR_NAMES, excludeDir, readErrors));
-  }
-  if (includeProjectRootSupplemental && found.length < maxArtifacts) {
+    // Pointing straight at `dist/` is a build walk, not a project walk.
+    const fullTree =
+      !includeProjectRootSupplemental &&
+      !(BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(abs));
     found.push(
-      ...collectRootArtifacts(abs, abs, maxArtifacts - found.length, SUPPLEMENTAL_SKIP_DIR_NAMES, excludeDir, readErrors),
+      ...collectRootArtifacts(
+        root,
+        abs,
+        remaining,
+        fullTree ? FULL_TREE_SKIP_DIR_NAMES : SKIP_DIR_NAMES,
+        excludeDir,
+        readErrors,
+        fullTree ? "full" : "build",
+        manifest,
+        skipped,
+        stateRoot,
+        isExcluded,
+      ),
+    );
+  }
+  if (includeProjectRootSupplemental && !buildOutputOnly && found.length < maxArtifacts) {
+    found.push(
+      ...collectRootArtifacts(
+        abs,
+        abs,
+        maxArtifacts - found.length,
+        SUPPLEMENTAL_SKIP_DIR_NAMES,
+        excludeDir,
+        readErrors,
+        "supplemental",
+        manifest,
+        skipped,
+        stateRoot,
+        isExcluded,
+      ),
     );
   }
   // De-dupe by absolute path (cargo release may overlap target/)
@@ -516,13 +957,451 @@ function collectHardenableArtifacts(
     seen.add(item.path);
     unique.push(item);
   }
-  return { artifacts: unique, readErrors };
+  return { artifacts: unique, readErrors, skipped };
 }
 
 /** Mirror-tree destination under the output root (pure; no filesystem writes). */
 function planArtifactOutputPath(artifact: DiscoveredArtifact, outputRoot: string): string {
   // Keep original basename; place under .bla-hardened mirror tree.
   return join(outputRoot, artifact.relativePath);
+}
+
+const PLAINTEXT_SURVIVOR_FORMATS: ReadonlySet<ArtifactFormat> = new Set<ArtifactFormat>([
+  "javascript",
+  "typescript",
+  "html-bundle",
+]);
+const MAX_SURVIVOR_INPUT_BYTES = 4 * 1024 * 1024;
+const MAX_SURVIVOR_OUTPUT_BYTES = 64 * 1024 * 1024;
+const MAX_SURVIVOR_SAMPLES = 6;
+
+/**
+ * Which sensitive-looking literals of `inputPath` are still readable in the
+ * hardened `outputPath`? Best effort and conservative: only verbatim matches
+ * count, so a literal the output spells with escapes is not reported.
+ */
+function findPlaintextSurvivors(
+  artifact: DiscoveredArtifact,
+  outputPath: string,
+): HardenArtifactSummary["plaintextSurvivors"] {
+  if (!PLAINTEXT_SURVIVOR_FORMATS.has(artifact.format)) return undefined;
+  try {
+    if (statSync(artifact.path).size > MAX_SURVIVOR_INPUT_BYTES) return undefined;
+    if (statSync(outputPath).size > MAX_SURVIVOR_OUTPUT_BYTES) return undefined;
+    const flagged = lintPlaintextSecretsFile(artifact.path, {
+      allowPlaintextString: true,
+    }).findings.filter((f) => f.severity === "error");
+    if (flagged.length === 0) return undefined;
+    const hardened = readFileSync(outputPath, "utf8");
+    const seen = new Set<string>();
+    const samples: { id: string; preview: string; line?: number }[] = [];
+    let count = 0;
+    for (const finding of flagged) {
+      // Findings clip long literals to 200 chars + "…".
+      const needle =
+        finding.literal.length === 201 && finding.literal.endsWith("…")
+          ? finding.literal.slice(0, 200)
+          : finding.literal;
+      if (needle.length < 8 || seen.has(needle)) continue;
+      seen.add(needle);
+      if (!hardened.includes(needle)) continue;
+      count += 1;
+      if (samples.length < MAX_SURVIVOR_SAMPLES) {
+        samples.push({
+          id: finding.id,
+          preview: needle.length > 20 ? `${needle.slice(0, 20)}…` : needle,
+          ...(finding.line !== undefined ? { line: finding.line } : {}),
+        });
+      }
+    }
+    return count > 0 ? { count, samples } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Artifacts the running application itself rewrites. Pinning their SHA-256
+ * into an integrity binding turns the app's first legitimate write into a
+ * permanent "integrity check failed" on every later start.
+ */
+const MUTABLE_DATA_FORMATS: ReadonlySet<ArtifactFormat> = new Set<ArtifactFormat>(["sqlite"]);
+
+/** Text files that can hold a call site of a WASM export. */
+const WASM_CONSUMER_EXT_RE =
+  /\.(?:[cm]?[jt]sx?|html?|vue|svelte|astro|py|pyw|go|rs|c|cc|cpp|h|hpp|cs|java|kt|swift|rb|php|dart|zig)$/i;
+const MAX_WASM_CONSUMER_FILES = 600;
+const MAX_WASM_CONSUMER_FILE_BYTES = 4 * 1024 * 1024;
+
+interface WasmConsumerIndex {
+  /** Project-relative path of the first file that mentions `exportName`, if any. */
+  findReference(exportName: string): string | undefined;
+}
+
+/**
+ * Index the identifiers used by the project's own code so a WASM export that
+ * something still calls by name is not renamed out from under it. A plain
+ * token match — it over-preserves (a comment mentioning `add` keeps `add`),
+ * which is the safe direction: an unnecessary keep costs a little obscurity, a
+ * wrong rename breaks the program.
+ */
+function buildWasmConsumerIndex(absDir: string, outputRoot: string): WasmConsumerIndex {
+  let scanRoot = absDir;
+  try {
+    if (!statSync(absDir).isDirectory()) scanRoot = dirname(absDir);
+  } catch {
+    /* keep absDir */
+  }
+  // `bla harden dist`: the callers usually live beside it, in the project.
+  if (
+    (BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(scanRoot)) &&
+    (existsSync(join(dirname(scanRoot), "package.json")) ||
+      existsSync(join(dirname(scanRoot), "pyproject.toml")) ||
+      existsSync(join(dirname(scanRoot), "Cargo.toml")))
+  ) {
+    scanRoot = dirname(scanRoot);
+  }
+  const files: { readonly rel: string; readonly tokens: Set<string>; readonly text: string }[] = [];
+  const stack = [scanRoot];
+  let visitedDirs = 0;
+  while (stack.length > 0 && files.length < MAX_WASM_CONSUMER_FILES && visitedDirs < 4000) {
+    const dir = stack.pop()!;
+    visitedDirs += 1;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (files.length >= MAX_WASM_CONSUMER_FILES) break;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIR_NAMES.has(entry.name) || full === outputRoot) continue;
+        stack.push(full);
+        continue;
+      }
+      if (!entry.isFile() || !WASM_CONSUMER_EXT_RE.test(entry.name)) continue;
+      try {
+        if (statSync(full).size > MAX_WASM_CONSUMER_FILE_BYTES) continue;
+        const text = readFileSync(full, "utf8");
+        files.push({
+          rel: (relative(scanRoot, full) || entry.name).split(sep).join("/"),
+          tokens: new Set(text.match(/[A-Za-z_$][\w$]*/g) ?? []),
+          text,
+        });
+      } catch {
+        /* unreadable: cannot be evidence either way */
+      }
+    }
+  }
+  // Name the file that really loads the module when there is one: a loader
+  // (it mentions WebAssembly or a .wasm file) is better evidence than a file
+  // that merely has a method called `add`.
+  const looksLikeWasmHost = (text: string): boolean => /\bWebAssembly\b|\.wasm\b/.test(text);
+  files.sort((a, b) => Number(looksLikeWasmHost(b.text)) - Number(looksLikeWasmHost(a.text)));
+  return {
+    findReference(exportName: string): string | undefined {
+      const isIdentifier = /^[A-Za-z_$][\w$]*$/.test(exportName);
+      for (const file of files) {
+        if (isIdentifier ? file.tokens.has(exportName) : file.text.includes(exportName)) {
+          return file.rel;
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
+/** Relative specifiers a module loads: `require("./x")`, `from "./x"`, `import("./x")`, `import "./x"`. */
+const RELATIVE_LOAD_RE =
+  /(?:\brequire\s*\(\s*|\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)["'`](\.{1,2}\/[^"'`\n]+?)["'`]/g;
+const MAX_ENTRY_GRAPH_SCAN_BYTES = 2 * 1024 * 1024;
+
+/**
+ * For every candidate, the candidates it loads through a relative
+ * `require` / `import` (input paths). Textual and bounded: good enough to tell
+ * "the CLI loads the library entry" from "two unrelated programs".
+ */
+function relativeLoadGraph(
+  candidates: readonly { readonly inputPath: string }[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const known = new Set(candidates.map((c) => c.inputPath));
+  const graph = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    const targets = new Set<string>();
+    graph.set(candidate.inputPath, targets);
+    let source: string;
+    try {
+      if (statSync(candidate.inputPath).size > MAX_ENTRY_GRAPH_SCAN_BYTES) continue;
+      source = readFileSync(candidate.inputPath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of source.matchAll(RELATIVE_LOAD_RE)) {
+      const base = resolve(dirname(candidate.inputPath), match[1]!);
+      const stem = base.replace(/\.[cm]?js$/i, "");
+      for (const guess of [
+        base,
+        `${base}.js`,
+        `${base}.cjs`,
+        `${base}.mjs`,
+        `${base}.ts`,
+        `${stem}.ts`,
+        `${stem}.tsx`,
+        `${stem}.mts`,
+        `${stem}.cts`,
+        join(base, "index.js"),
+        join(base, "index.cjs"),
+        join(base, "index.mjs"),
+        join(base, "index.ts"),
+      ]) {
+        if (guess !== candidate.inputPath && known.has(guess)) {
+          targets.add(guess);
+          break;
+        }
+      }
+    }
+  }
+  return graph;
+}
+
+/** Input paths `start` loads, directly or through other candidates (itself included). */
+function loadedFrom(
+  start: string,
+  graph: ReadonlyMap<string, ReadonlySet<string>>,
+): ReadonlySet<string> {
+  const seen = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    for (const next of graph.get(queue.shift()!) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return seen;
+}
+
+/**
+ * The JS module that carries the self-seal / sidecar strip⇒fail checks.
+ *
+ * Those checks only run when the module is loaded, so the entry has to be a
+ * file the program really executes. Order: the conventional `license.(cjs|js)`
+ * gate module, then whatever `package.json` declares as `main` / `bin` /
+ * `exports`, then a conventionally named start file, then the first candidate.
+ * (Without the manifest step the pick was alphabetical — often a lazily-loaded
+ * chunk whose checks never fire.)
+ *
+ * A package that is both a library and a CLI declares several entries, and the
+ * check lives in one module. The one the others load wins (`bin` requires
+ * `main` ⇒ host it in `main`, and both ways in are checked); a declared entry
+ * that never loads the host is reported by `entriesNotLoadingHost`.
+ */
+function pickJsEntry<T extends { readonly relativePath: string; readonly inputPath: string }>(
+  candidates: readonly T[],
+  runtimeEntries: ReadonlySet<string>,
+): T | undefined {
+  const norm = (c: T): string => c.relativePath.replaceAll("\\", "/");
+  // The check only runs when its host module loads, so prefer the file the
+  // program starts from over whichever name sorts first (`lib.cjs` < `main.cjs`).
+  const conventionalEntry = candidates
+    .filter((c) =>
+      /^(?:main|index|app|cli|server|start)\.[cm]?js$/i.test(norm(c).split("/").pop() ?? ""),
+    )
+    .sort((a, b) => norm(a).split("/").length - norm(b).split("/").length)[0];
+  const declared = candidates.filter((c) => runtimeEntries.has(c.inputPath));
+  let declaredEntry = declared[0];
+  if (declared.length > 1) {
+    const graph = relativeLoadGraph(candidates);
+    const reach = declared.map((d) => loadedFrom(d.inputPath, graph));
+    let best = -1;
+    for (const candidate of declared) {
+      const loadedBy = reach.filter((r) => r.has(candidate.inputPath)).length;
+      if (loadedBy > best) {
+        best = loadedBy;
+        declaredEntry = candidate;
+      }
+    }
+  }
+  return (
+    candidates.find((c) => /license\.(cjs|js)$/i.test(c.relativePath)) ??
+    declaredEntry ??
+    conventionalEntry ??
+    candidates[0]
+  );
+}
+
+/**
+ * Declared `package.json` entry points among `candidates` that never load
+ * `host` — starting the program through one of them runs no integrity check.
+ */
+function entriesNotLoadingHost<
+  T extends { readonly relativePath: string; readonly inputPath: string },
+>(host: T, candidates: readonly T[], runtimeEntries: ReadonlySet<string>): string[] {
+  const declared = candidates.filter(
+    (c) => runtimeEntries.has(c.inputPath) && c.inputPath !== host.inputPath,
+  );
+  if (declared.length === 0) return [];
+  const graph = relativeLoadGraph(candidates);
+  return declared
+    .filter((d) => !loadedFrom(d.inputPath, graph).has(host.inputPath))
+    .map((d) => d.relativePath.replaceAll("\\", "/"));
+}
+
+const posixRelativePath = (c: { readonly relativePath: string }): string =>
+  c.relativePath.replaceAll("\\", "/");
+
+/** The hardened file that is module `a.b.c` (`a/b/c.py` or `a/b/c/__init__.py`), if any. */
+function resolvePythonModuleFile<T extends { readonly relativePath: string }>(
+  module: string,
+  candidates: readonly T[],
+): T | undefined {
+  const base = module.split(".").join("/");
+  for (const wanted of [`${base}.py`, `${base}/__init__.py`]) {
+    const exact = candidates.find((c) => posixRelativePath(c) === wanted);
+    if (exact) return exact;
+    // `src/` layouts put the package below the harden target …
+    const below = candidates
+      .filter((c) => posixRelativePath(c).endsWith(`/${wanted}`))
+      .sort((a, b) => posixRelativePath(a).length - posixRelativePath(b).length)[0];
+    if (below) return below;
+    // … and a target inside the package sees only the tail of the module path.
+    const tail = candidates
+      .filter((c) => wanted.endsWith(`/${posixRelativePath(c)}`))
+      .sort((a, b) => posixRelativePath(b).length - posixRelativePath(a).length)[0];
+    if (tail) return tail;
+  }
+  return undefined;
+}
+
+/** Hardened files behind the console scripts the project declares, in declaration order. */
+function resolvePythonDeclaredEntryFiles<T extends { readonly relativePath: string }>(
+  absDir: string,
+  candidates: readonly T[],
+): T[] {
+  let dir = absDir;
+  try {
+    if (!statSync(absDir).isDirectory()) dir = dirname(absDir);
+  } catch {
+    return [];
+  }
+  let modules = readPythonDeclaredEntryModules(dir);
+  if (modules.length === 0) modules = readPythonDeclaredEntryModules(dirname(dir));
+  const files: T[] = [];
+  for (const module of modules) {
+    const file = resolvePythonModuleFile(module, candidates);
+    if (file !== undefined && !files.includes(file)) files.push(file);
+  }
+  return files;
+}
+
+/**
+ * `__init__.py` of the outermost package that contains `file`, among the
+ * hardened candidates. Python runs it before any module of the package, however
+ * the program was started.
+ */
+function outermostPythonPackageInit<T extends { readonly relativePath: string }>(
+  file: T,
+  candidates: readonly T[],
+): T | undefined {
+  const byPath = new Map(candidates.map((c) => [posixRelativePath(c), c] as const));
+  const segments = posixRelativePath(file).split("/").slice(0, -1);
+  let found: T | undefined;
+  for (let depth = segments.length; depth >= 0; depth--) {
+    const init = byPath.get([...segments.slice(0, depth), "__init__.py"].join("/"));
+    if (init === undefined) break;
+    found = init;
+  }
+  return found;
+}
+
+/**
+ * The Python module that carries the load-time sibling check. It only runs
+ * when that module is imported, so prefer one that always is: the conventional
+ * `policy.py`; then, when the project declares console scripts, the package
+ * those scripts import (an installed script never touches a `run.py` beside
+ * the package); then a program entry point, the shallowest package
+ * `__init__.py`, and only then the first file by name.
+ */
+function pickPythonEntry<T extends { readonly relativePath: string }>(
+  candidates: readonly T[],
+  declaredEntryFiles: readonly T[] = [],
+): T | undefined {
+  const norm = posixRelativePath;
+  const byBasename = (re: RegExp): T | undefined =>
+    candidates
+      .filter((c) => re.test(norm(c).split("/").pop() ?? ""))
+      .sort((a, b) => norm(a).split("/").length - norm(b).split("/").length)[0];
+  const declared = declaredEntryFiles[0];
+  return (
+    byBasename(/^policy\.py$/i) ??
+    (declared !== undefined
+      ? (outermostPythonPackageInit(declared, candidates) ?? declared)
+      : undefined) ??
+    byBasename(/^__main__\.py$/) ??
+    byBasename(/^(?:main|app|cli|manage|run|server|wsgi|asgi)\.py$/i) ??
+    byBasename(/^__init__\.py$/) ??
+    candidates[0]
+  );
+}
+
+/** Whether the Python source at `path` has an import statement naming module `name`. */
+function pythonSourceImportsModule(path: string, name: string): boolean {
+  let text: string;
+  try {
+    if (statSync(path).size > 512 * 1024) return false;
+    text = readFileSync(path, "latin1");
+  } catch {
+    return false;
+  }
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    String.raw`^[ \t]*(?:from[ \t]+[\w.]*\b${n}\b[\w.]*[ \t]+import\b|import[ \t]+[^#\n]*\b${n}\b|from[ \t]+[\w.]+[ \t]+import[ \t]+[^#\n]*\b${n}\b)`,
+    "m",
+  ).test(text);
+}
+
+/**
+ * Declared console-script modules that start the program without running the
+ * check in `host`: they are not `host`, not inside the package whose
+ * `__init__.py` it is, and do not import it.
+ */
+function pythonEntriesNotLoadingHost<
+  T extends { readonly relativePath: string; readonly inputPath: string },
+>(host: T, declaredEntryFiles: readonly T[]): string[] {
+  const hostRel = posixRelativePath(host);
+  const hostSegments = hostRel.split("/");
+  const hostFile = hostSegments[hostSegments.length - 1]!;
+  const hostIsPackage = hostFile === "__init__.py";
+  const hostDir = hostSegments.slice(0, -1).join("/");
+  const hostModule = hostIsPackage
+    ? (hostSegments[hostSegments.length - 2] ?? "")
+    : hostFile.replace(/\.py$/i, "");
+  return declaredEntryFiles
+    .filter((d) => {
+      const rel = posixRelativePath(d);
+      if (rel === hostRel) return false;
+      if (hostIsPackage && (hostDir.length === 0 || rel.startsWith(`${hostDir}/`))) return false;
+      return hostModule.length === 0 || !pythonSourceImportsModule(d.inputPath, hostModule);
+    })
+    .map(posixRelativePath);
+}
+
+/** `package.json` runtime entries visible from a harden target (and its project root). */
+function resolveRuntimeEntries(absDir: string): ReadonlySet<string> {
+  const entries = new Set<string>();
+  let dir = absDir;
+  try {
+    if (!statSync(absDir).isDirectory()) dir = dirname(absDir);
+  } catch {
+    return entries;
+  }
+  for (const entry of readPackageRuntimeEntries(dir)) entries.add(entry);
+  if ((BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(dir))) {
+    for (const entry of readPackageRuntimeEntries(dirname(dir))) entries.add(entry);
+  }
+  return entries;
 }
 
 /**
@@ -536,21 +1415,492 @@ export function hardenProject(
   rawOptions: HardenProjectOptions = {},
 ): HardenProjectReport {
   const absDir = resolve(rawOptions.directory ?? process.cwd());
-  let projectCfg: BlaProjectConfig | undefined;
-  if (existsSync(absDir)) {
-    const configDir = statSync(absDir).isDirectory() ? absDir : dirname(absDir);
-    const directLoaded = loadBlaConfig(configDir);
-    if (directLoaded.sourcePath !== null) {
-      projectCfg = directLoaded.config;
-    } else if (
-      (BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(configDir))
-    ) {
-      const parentLoaded = loadBlaConfig(dirname(configDir));
-      if (parentLoaded.sourcePath !== null) {
-        projectCfg = parentLoaded.config;
+  const stateDirectory = resolveApplyStateDirectory(absDir, rawOptions.applyStateRoot);
+  const dryRun = rawOptions.dryRun === true;
+  const relOfProject = (abs: string): string =>
+    (relative(absDir, abs) || basename(abs)).split(sep).join("/");
+
+  if (rawOptions.apply !== true) {
+    // Build output that still holds the hardened bytes of an earlier `apply`
+    // must not be fed to the hardener again: that hardens hardened code.
+    const stillApplied = existsSync(absDir) ? listAppliedFiles(absDir, stateDirectory) : [];
+    if (stillApplied.length > 0) {
+      throw new Error(
+        `${stillApplied.length} file(s) in ${absDir} are already hardened output promoted by an earlier apply run ` +
+          `(${stillApplied.slice(0, 3).join(", ")}${stillApplied.length > 3 ? ", …" : ""}). ` +
+          "Re-run with apply (bla harden --apply / bla_harden { apply: true }) to re-harden from the saved originals, " +
+          "restore the originals first (bla harden --restore / bla_harden { restore: true }), or rebuild the project.",
+      );
+    }
+    return withNextSteps(
+      rememberHardenedOutputs(hardenProjectCore(rawOptions, {}), rawOptions.applyStateRoot),
+      rawOptions,
+      absDir,
+    );
+  }
+
+  // ── apply: harden build output and promote it in place ──────────────────
+  const stagingRoot = rawOptions.outputDirectory ?? join(stateDirectory, "staging");
+  const coreOptions: HardenProjectOptions = { ...rawOptions, outputDirectory: stagingRoot };
+  const refuse = (reason: string, sourceFiles?: readonly string[]): HardenProjectReport => {
+    const preview = hardenProjectCore({ ...coreOptions, dryRun: true }, { buildOutputOnly: true });
+    return withNextSteps(
+      {
+        ...preview,
+        dryRun,
+        overallSuccess: false,
+        wouldOverwrite: [],
+        apply: { status: "refused", reason, ...(sourceFiles ? { sourceFiles } : {}) },
+      },
+      rawOptions,
+      absDir,
+    );
+  };
+  if (!existsSync(absDir) || !statSync(absDir).isDirectory()) {
+    throw new Error(
+      `apply needs a project or build directory, not a single file: ${absDir}. Use bla protect --in-place for one file.`,
+    );
+  }
+
+  // Originals first: discovery and the lints must see what the build produced,
+  // not the hardened bytes of the previous promotion. `suspension.resume()`
+  // puts those hardened bytes back if this run does not end in a promotion.
+  const suspension = dryRun
+    ? undefined
+    : suspendAppliedOutputs(absDir, stateDirectory);
+  let promoted = false;
+  try {
+    const applyExclude = mergedExcludeList(rawOptions, loadProjectConfigFor(absDir));
+    const promotable = discoverHardenTargets(absDir, {
+      ...(rawOptions.maxArtifacts !== undefined ? { maxArtifacts: rawOptions.maxArtifacts } : {}),
+      outputDirectory: stagingRoot,
+      buildOutputOnly: true,
+      ...(rawOptions.applyStateRoot !== undefined ? { stateRoot: rawOptions.applyStateRoot } : {}),
+      ...(applyExclude.length > 0 ? { exclude: applyExclude } : {}),
+    });
+    const outside = promotable.artifacts
+      .map((a) => a.relativePath.split(sep).join("/"))
+      .filter((rel) => !isInsideBuildOutput(rel, absDir, BLA_BUILD_OUTPUT_DIR_NAMES));
+    if (promotable.artifacts.length === 0) {
+      return refuse(
+        `No protectable build output found under ${absDir}. Build the project first (for example npm run build), then re-run with apply.`,
+      );
+    }
+    if (outside.length > 0) {
+      return refuse(
+        `apply only overwrites build output, but ${absDir} has no build-output directory (${BLA_BUILD_OUTPUT_DIR_NAMES.slice(0, 4).join(", ")}, …): ` +
+          `the ${outside.length} protectable file(s) found are source files, and overwriting them would replace your source code with hardened output. ` +
+          "Build the project and re-run, or harden without apply and overlay the hardened mirror onto a staging copy of the project.",
+        outside,
+      );
+    }
+    const everything = discoverHardenTargets(absDir, {
+      ...(rawOptions.maxArtifacts !== undefined ? { maxArtifacts: rawOptions.maxArtifacts } : {}),
+      outputDirectory: stagingRoot,
+      ...(rawOptions.applyStateRoot !== undefined ? { stateRoot: rawOptions.applyStateRoot } : {}),
+      ...(applyExclude.length > 0 ? { exclude: applyExclude } : {}),
+    });
+    const promotableSet = new Set(promotable.artifacts.map((a) => a.path));
+    const notPromoted = everything.artifacts
+      .filter((a) => !promotableSet.has(a.path))
+      .map((a) => a.relativePath.split(sep).join("/"));
+
+    if (dryRun) {
+      const preview = hardenProjectCore(coreOptions, { buildOutputOnly: true });
+      return withNextSteps(
+        {
+          ...preview,
+          // The staging tree is BLA-private state, not something of the user's.
+          wouldOverwrite: preview.artifacts.map((a) => a.inputPath),
+          apply: {
+            status: "planned",
+            applied: preview.artifacts.map((a) => relOfProject(a.inputPath)),
+          },
+          ...(notPromoted.length > 0 ? { notPromoted } : {}),
+        },
+        rawOptions,
+        absDir,
+      );
+    }
+
+    if (rawOptions.outputDirectory === undefined) {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+    const startedAtMs = Date.now();
+    const report = rememberHardenedOutputs(
+      hardenProjectCore(coreOptions, { buildOutputOnly: true }),
+      rawOptions.applyStateRoot,
+    );
+    const base = {
+      ...report,
+      wouldOverwrite: [] as readonly string[],
+      ...(notPromoted.length > 0 ? { notPromoted } : {}),
+    };
+    if (!report.overallSuccess) {
+      return withNextSteps(
+        {
+          ...base,
+          apply: {
+            status: "refused",
+            reason:
+              "Hardening did not fully succeed, so nothing was promoted" +
+              (suspension?.active === true
+                ? "; the build output still holds the hardened files of the previous apply run."
+                : "; the build output is unchanged."),
+          },
+        },
+        rawOptions,
+        absDir,
+      );
+    }
+    const applyReport = applyHardenedOutputs({
+      projectDirectory: absDir,
+      stateDirectory,
+      runId: report.runId,
+      buildDirNames: BLA_BUILD_OUTPUT_DIR_NAMES,
+      candidates: collectApplyCandidates({
+        projectDirectory: absDir,
+        outputRoot: report.outputDirectory,
+        artifactOutputPaths: report.artifacts.filter((a) => a.success).map((a) => a.outputPath),
+        notBeforeMs: startedAtMs,
+      }),
+    });
+    promoted = applyReport.status === "applied";
+    return withNextSteps(
+      { ...base, overallSuccess: promoted, apply: applyReport },
+      rawOptions,
+      absDir,
+    );
+  } finally {
+    if (promoted) suspension?.discard();
+    else suspension?.resume();
+  }
+}
+
+/**
+ * Record what a run wrote so later discovery / lint passes recognise it as
+ * BLA output instead of hardening (or "fixing") it again.
+ */
+function rememberHardenedOutputs(
+  report: HardenProjectReport,
+  stateRoot: string | undefined,
+): HardenProjectReport {
+  if (report.dryRun) return report;
+  for (const artifact of report.artifacts) {
+    if (artifact.success) registerBlaOutput(artifact.outputPath, stateRoot);
+  }
+  return report;
+}
+
+/**
+ * Undo `apply`: put the original build output back and drop the backups.
+ * Files that changed since the promotion (a rebuild) are left alone.
+ */
+export function restoreHardenedProject(
+  directory: string = process.cwd(),
+  options: { readonly applyStateRoot?: string } = {},
+): HardenApplyReport {
+  const absDir = resolve(directory);
+  return restoreAppliedOriginals(
+    absDir,
+    resolveApplyStateDirectory(absDir, options.applyStateRoot),
+  );
+}
+
+/** One `.gitignore` pattern as a matcher for a single path (anchored) or path segment. */
+function gitignorePatternToRegExp(pattern: string): RegExp {
+  const body = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${body}$`);
+}
+
+/**
+ * `true` when `dir` sits in a git work tree and none of the ignore files on
+ * the way down to it covers it — i.e. `git status` lists it as untracked.
+ * Reads `.gitignore` files and `.git/info/exclude` only; a global ignore file
+ * or a negated pattern is not consulted, so the answer errs towards "not
+ * ignored" (one extra hint), never towards hiding the hint from a clean repo.
+ */
+function isUntrackedInGitWorkTree(dir: string): boolean {
+  const abs = resolve(dir);
+  let repoRoot: string | undefined;
+  for (let cur = dirname(abs), depth = 0; depth < 64; cur = dirname(cur), depth++) {
+    if (existsSync(join(cur, ".git"))) {
+      repoRoot = cur;
+      break;
+    }
+    if (dirname(cur) === cur) break;
+  }
+  if (repoRoot === undefined) return false;
+  const segments = relative(repoRoot, abs).split(sep).filter((part) => part.length > 0);
+  if (segments.length === 0 || segments[0] === "..") return false;
+
+  const readLines = (file: string): string[] => {
+    try {
+      if (statSync(file).size > 512 * 1024) return [];
+      return readFileSync(file, "utf8").split(/\r?\n/);
+    } catch {
+      return [];
+    }
+  };
+  // Ignore files apply to paths below their own directory.
+  const sources: { lines: string[]; below: string[] }[] = [
+    { lines: readLines(join(repoRoot, ".git", "info", "exclude")), below: segments },
+  ];
+  for (let depth = 0; depth < segments.length; depth++) {
+    sources.push({
+      lines: readLines(join(repoRoot, ...segments.slice(0, depth), ".gitignore")),
+      below: segments.slice(depth),
+    });
+  }
+  for (const { lines, below } of sources) {
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line.length === 0 || line.startsWith("#") || line.startsWith("!")) continue;
+      let pattern = line.replace(/\/+$/, "");
+      // A pattern with a slash names a path from the ignore file's directory;
+      // one without (or behind `**/`) matches at any depth. Either way,
+      // ignoring a directory ignores everything in it.
+      const anyDepth = pattern.startsWith("**/") || !pattern.includes("/");
+      pattern = pattern.replace(/^\*\*\//, "").replace(/^\//, "");
+      if (pattern.length === 0) continue;
+      const matcher = gitignorePatternToRegExp(pattern);
+      for (let start = 0; start < (anyDepth ? below.length : 1); start++) {
+        for (let end = start + 1; end <= below.length; end++) {
+          if (matcher.test(below.slice(start, end).join("/"))) return false;
+        }
       }
     }
   }
+  return true;
+}
+
+/** Attach the caller's next actions to a finished report. */
+function withNextSteps(
+  report: HardenProjectReport,
+  options: HardenProjectOptions,
+  absDir: string,
+): HardenProjectReport {
+  const steps: string[] = [];
+  const failed = report.artifacts.filter((a) => !a.success && a.error !== undefined);
+  if (report.apply?.status === "refused" || report.apply?.status === "failed") {
+    steps.push(`apply did not promote anything: ${report.apply.reason ?? "see apply.reason"}`);
+  }
+  if (report.agentWeaveGateBlocked === true) {
+    steps.push(
+      `Stage 2 is pending: edit [${(report.agentWeaveAssessment?.unwovenSourceFiles ?? []).join(", ")}] as agentWeaveAssessment.surgicalWorkorders and agentActions describe, confirm with bla_verify_weave, rebuild, then call bla_harden again.`,
+    );
+  } else if (report.discoveredCount === 0) {
+    const already = report.skippedHardenedOutputs ?? [];
+    steps.push(
+      already.length > 0
+        ? `Nothing new to harden under ${absDir}: the protectable file(s) found (${already.slice(0, 3).join(", ")}${already.length > 3 ? ", …" : ""}) are already BLA output from an earlier run, and hardened output is never hardened twice. Rebuild the project to produce fresh output, then run again.`
+        : `Nothing protectable was found under ${absDir}. Build the project first, or point directory at the build output.`,
+    );
+  } else if (report.dryRun) {
+    steps.push(
+      report.apply?.status === "planned"
+        ? `Preview only. Calling again without dry_run (and with confirm_overwrite: true over MCP) hardens and then overwrites ${report.apply.applied?.length ?? 0} build-output file(s); the originals are backed up outside the project.`
+        : `Preview only — nothing was written. Call again without dry_run to harden ${report.discoveredCount} artifact(s).`,
+    );
+  } else if (failed.length > 0 || report.sidecarEntangleError !== undefined) {
+    steps.push(
+      `${failed.length} artifact(s) were not hardened — read artifacts[].error. Packaging refusals name the fix; bla_lint { "directory": "." } lists every gate with a remediation recipe.`,
+    );
+    if (report.hardenedCount > 0) {
+      steps.push(
+        "Do not ship a partially hardened build: fix the failures and re-run so every artifact is protected together.",
+      );
+    }
+    steps.push(
+      'A file the shield cannot process at all (a parse error, syntax it does not support) can be left out on purpose: repeat with it in "exclude". It then ships unprotected and is listed under excluded — never exclude a file just to get past a packaging refusal.',
+    );
+  } else if (report.apply?.status === "applied") {
+    steps.push(
+      `The build output now holds the hardened files (${(report.apply.applied ?? []).slice(0, 4).join(", ")}${(report.apply.applied?.length ?? 0) > 4 ? ", …" : ""}). Run the project's own tests or a smoke run against it before shipping — BLA checks structure, not your behaviour. If something breaks or a hot path is too slow: restore, then harden again at a lower intensity or with that one file in "exclude", and say so.`,
+    );
+    steps.push(
+      "Every rebuild regenerates unprotected output: harden with apply again after each build (for example from the postbuild script).",
+    );
+    steps.push(
+      'To undo: bla_harden { "directory": ".", "restore": true } (CLI: bla harden . --restore) puts the original build output back.',
+    );
+  } else if (report.overallSuccess) {
+    const allInBuildOutput = report.artifacts.every((a) =>
+      isInsideBuildOutput(a.relativePath.split(sep).join("/"), absDir, BLA_BUILD_OUTPUT_DIR_NAMES),
+    );
+    steps.push(
+      `Not shipped yet: ${report.outputDirectory} is a partial mirror holding only the ${report.hardenedCount} hardened file(s). The build output is unchanged and still unprotected, and the mirror cannot run on its own (untouched assets are not copied into it).`,
+    );
+    steps.push(
+      allInBuildOutput
+        ? 'Promote it: call bla_harden again with "apply": true and "confirm_overwrite": true (CLI: bla harden . --apply). That overwrites the build output in place, keeps the originals outside the project, and is undone by "restore": true.'
+        : "Some hardened files are source files, so apply will not overwrite them. Copy the project to a staging directory and overlay the mirror on top before packaging; never replace your source with hardened output.",
+    );
+    steps.push(
+      allInBuildOutput
+        ? "Then run the project's own tests or a smoke run against the promoted build before shipping — BLA checks structure, not your behaviour. If something breaks or a hot path is too slow: restore, then harden again at a lower intensity or with that one file in exclude, and say so."
+        : "Then run the project's own tests or a smoke run against that staged copy before shipping — BLA checks structure, not your behaviour. If something breaks or a hot path is too slow: harden again at a lower intensity or with that one file in exclude, and say so.",
+    );
+  }
+  const renamedWasm = report.artifacts.filter(
+    (a) => a.success && a.wasmExportRenames !== undefined && a.wasmExportRenames.length > 0,
+  );
+  if (renamedWasm.length > 0) {
+    const total = renamedWasm.reduce((n, a) => n + (a.wasmExportRenames?.length ?? 0), 0);
+    steps.push(
+      `${total} WASM export(s) were renamed in ${renamedWasm.map((a) => a.relativePath).join(", ")} — the old → new map is in artifacts[].wasmExportRenames. No file in this project calls them by the old name; a host outside it that does must be updated from the map, or keep the names with wasm_preserve_exports.`,
+    );
+  }
+  const withSurvivors = report.artifacts.filter(
+    (a) => a.success && a.plaintextSurvivors !== undefined,
+  );
+  if (withSurvivors.length > 0) {
+    const total = withSurvivors.reduce((n, a) => n + (a.plaintextSurvivors?.count ?? 0), 0);
+    const encodes = report.intensity === "maximum" || report.intensity === "bankrupt";
+    steps.push(
+      `${total} sensitive-looking literal(s) (digests, keys, tokens) are still readable in the hardened output of ${withSurvivors
+        .slice(0, 3)
+        .map((a) => a.relativePath)
+        .join(", ")}${withSurvivors.length > 3 ? ", …" : ""} — artifacts[].plaintextSurvivors lists them with source lines. ` +
+        (encodes
+          ? "The shield splits string and template text of 3 to 256 characters, and a secret-looking value of up to 4,096 characters wherever it is written (string, template, object key, regular expression). It cannot reach HTML attributes, tagged templates, class member names, the keys and `as const` values of a TypeScript source, or anything longer: move the value into a plain string literal (or off the client) and rebuild."
+          : `Intensity ${report.intensity} does not encode string literals: harden at maximum or bankrupt, or mask them first with bla_encrypt_strings.`),
+    );
+  }
+  if (report.integrityBindingSkipped !== undefined && report.integrityBindingSkipped.length > 0) {
+    const skipped = report.integrityBindingSkipped;
+    steps.push(
+      `The integrity binding (self_seal / sidecar_entangle) does not cover ${skipped.length} artifact(s) — ${skipped.slice(0, 3).map((b) => b.relativePath).join(", ")}${skipped.length > 3 ? ", …" : ""}; integrityBindingSkipped gives the reason for each. They are still hardened, but tampering with them is not detected at load time (for a web build use server-side checks and Subresource Integrity).`,
+    );
+  }
+  if (report.outputSize !== undefined) {
+    const { inputBytes, outputBytes, largestGrowth } = report.outputSize;
+    const growth = outputBytes - inputBytes;
+    // Worth a line only when it changes what the user ships: a megabyte or more.
+    if (growth >= 1024 * 1024) {
+      steps.push(
+        `The hardened files are ${formatByteSize(growth)} larger than the originals (${formatByteSize(inputBytes)} → ${formatByteSize(outputBytes)}${
+          largestGrowth !== undefined
+            ? `; ${largestGrowth.relativePath} alone grew by ${formatByteSize(largestGrowth.growthBytes)}`
+            : ""
+        }). The decoys are the protection, so this is expected at ${report.intensity} — but if download or install size matters, harden at a lower intensity${
+          report.intensity === "bankrupt" ? " (maximum keeps string encoding and export renaming at a fraction of the size)" : ""
+        }, or leave the largest files out with "exclude".`,
+      );
+    }
+  }
+  if (report.excluded !== undefined && report.excluded.length > 0) {
+    const excluded = report.excluded;
+    steps.push(
+      `${excluded.length} file(s) matched the exclude list and were left exactly as they are — unprotected (${excluded.slice(0, 4).join(", ")}${excluded.length > 4 ? ", …" : ""}). Tell the user; drop the pattern from exclude to protect a file again.`,
+    );
+  }
+  if (report.integrityBindingEntry !== undefined) {
+    const uncovered = report.integrityBindingUncoveredEntries ?? [];
+    const one = uncovered.length === 1;
+    steps.push(
+      `${report.integrityBindingEntry} carries the cross-file integrity check (it pins its hardened siblings): the check runs whenever that module is loaded, and only then.` +
+        (uncovered.length > 0
+          ? ` ${uncovered.slice(0, 3).join(", ")}${uncovered.length > 3 ? ", …" : ""} ${one ? "is" : "are"} also declared in package.json but never load${one ? "s" : ""} it, so a replaced or removed sibling goes unnoticed when the program starts there — load ${report.integrityBindingEntry} from ${one ? "it" : "them"} and harden again.`
+          : ""),
+    );
+  }
+  const sqliteHardened = report.artifacts.filter((a) => a.success && a.format === "sqlite");
+  if (sqliteHardened.length > 0 && report.dryRun !== true) {
+    const one = sqliteHardened.length === 1;
+    steps.push(
+      `${sqliteHardened
+        .slice(0, 3)
+        .map((a) => a.relativePath)
+        .join(", ")}${sqliteHardened.length > 3 ? ", …" : ""} now ${one ? "holds" : "hold"} decoy tables beside the application's own tables, which are stored exactly as before: anyone who opens the file reads them. BLA does not encrypt a database — keep secrets out of a shipped database, or encrypt it (SQLCipher, application-layer encryption). The score for ${one ? "it" : "them"} is capped for that reason.`,
+    );
+  }
+  if (report.sqliteEvalTrapArtifacts !== undefined && report.sqliteEvalTrapArtifacts.length > 0) {
+    const dbs = report.sqliteEvalTrapArtifacts;
+    steps.push(
+      `${dbs.slice(0, 3).join(", ")}${dbs.length > 3 ? ", …" : ""} ${dbs.length === 1 ? "carries" : "carry"} evaluation-trap columns (sqlite_eval_trap). The application's own tables read as before, but on any connection that does not register enclave_unseal_payload() the honey tables cannot be read and PRAGMA integrity_check, PRAGMA quick_check, VACUUM and a dump/restore fail. Ship ${dbs.length === 1 ? "it" : "them"} only if the application never runs those on ${dbs.length === 1 ? "this database" : "these databases"} — or have the application register a deterministic one-argument SQL function named enclave_unseal_payload on its own connection; otherwise harden again without the option.`,
+    );
+  }
+  if (report.pythonSidecarEntry !== undefined) {
+    const uncovered = report.pythonSidecarUncoveredEntries ?? [];
+    const one = uncovered.length === 1;
+    steps.push(
+      `${report.pythonSidecarEntry} now verifies the hardened files in its directory tree every time it is imported, and only then. Ship them exactly as hardened — loose files or a zipapp — and a changed or missing one stops it with "integrity binding mismatch". A bytecode-only tree (.pyc without .py) and PyInstaller / Nuitka / cx_Freeze bundles contain no sibling sources, so there the check lets the program start without verifying anything: the binding adds nothing to those targets.` +
+        (uncovered.length > 0
+          ? ` ${uncovered.slice(0, 3).join(", ")}${uncovered.length > 3 ? ", …" : ""} ${one ? "is" : "are"} declared as ${one ? "a console script" : "console scripts"} but never import${one ? "s" : ""} ${report.pythonSidecarEntry}, so started that way nothing is verified — import it from ${one ? "that module" : "those modules"} and harden again.`
+          : ""),
+    );
+  }
+  if (
+    report.discoveredCount > 0 &&
+    report.skippedHardenedOutputs !== undefined &&
+    report.skippedHardenedOutputs.length > 0
+  ) {
+    const already = report.skippedHardenedOutputs;
+    steps.push(
+      `${already.length} file(s) were left alone because they are already BLA output from an earlier run (${already.slice(0, 3).join(", ")}${already.length > 3 ? ", …" : ""}); hardened output is never hardened twice. Do not edit or lint them — work on the files they were built from.`,
+    );
+  }
+  if (report.notPromoted !== undefined && report.notPromoted.length > 0) {
+    steps.push(
+      `${report.notPromoted.length} protectable file(s) outside the build output were left alone (${report.notPromoted.slice(0, 3).join(", ")}). If they ship, harden them without apply and package the hardened copies.`,
+    );
+  }
+  if (
+    report.overallSuccess &&
+    report.selfSealRecommended &&
+    options.selfSeal !== true
+  ) {
+    steps.push(
+      'Several artifacts ship together: add "self_seal": true (and "sidecar_entangle": true) so the entry module refuses to run when a sibling file is swapped or stripped.',
+    );
+  }
+  if (
+    report.dryRun !== true &&
+    report.hardenedCount > 0 &&
+    isUntrackedInGitWorkTree(report.outputDirectory)
+  ) {
+    const mirror = relative(absDir, report.outputDirectory).split(sep).join("/");
+    steps.push(
+      `${mirror.length > 0 && !mirror.startsWith("..") ? mirror : report.outputDirectory} is generated output and git does not ignore it: add it to .gitignore so hardened copies are not committed by accident.`,
+    );
+  }
+  return steps.length > 0 ? { ...report, nextSteps: steps } : report;
+}
+
+/** The project config that applies to a harden target (its directory, or the project above a build dir). */
+function loadProjectConfigFor(absDir: string): BlaProjectConfig | undefined {
+  if (!existsSync(absDir)) return undefined;
+  const configDir = statSync(absDir).isDirectory() ? absDir : dirname(absDir);
+  const directLoaded = loadBlaConfig(configDir);
+  if (directLoaded.sourcePath !== null) return directLoaded.config;
+  if ((BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(configDir))) {
+    const parentLoaded = loadBlaConfig(dirname(configDir));
+    if (parentLoaded.sourcePath !== null) return parentLoaded.config;
+  }
+  return undefined;
+}
+
+/** `exclude` from the project config and from this call, de-duplicated. */
+function mergedExcludeList(
+  rawOptions: HardenProjectOptions,
+  projectCfg: BlaProjectConfig | undefined,
+): string[] {
+  return [...new Set([...(projectCfg?.exclude ?? []), ...(rawOptions.exclude ?? [])])];
+}
+
+function hardenProjectCore(
+  rawOptions: HardenProjectOptions,
+  internal: { readonly buildOutputOnly?: boolean },
+): HardenProjectReport {
+  const absDir = resolve(rawOptions.directory ?? process.cwd());
+  const projectCfg = loadProjectConfigFor(absDir);
+  const mergedExclude = mergedExcludeList(rawOptions, projectCfg);
   const resolvedSeed: string | number =
     rawOptions.seed !== undefined && String(rawOptions.seed).length > 0
       ? rawOptions.seed
@@ -583,6 +1933,10 @@ export function hardenProject(
     ...(rawOptions.requireAgentWeave !== undefined || projectCfg?.requireAgentWeave !== undefined
       ? { requireAgentWeave: rawOptions.requireAgentWeave ?? projectCfg?.requireAgentWeave }
       : {}),
+    ...((rawOptions.sqliteEvalTrap ?? projectCfg?.sqliteEvalTrap) === true
+      ? { sqliteEvalTrap: true }
+      : {}),
+    ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
     ...(mergedWasmPreserveExports.length > 0
       ? { wasmPreserveExports: mergedWasmPreserveExports }
       : {}),
@@ -645,8 +1999,15 @@ export function hardenProject(
   }
 
   const dryRun = options.dryRun === true;
-  const discovery = discoverHardenTargets(absDir, { maxArtifacts, outputDirectory: outputRoot });
+  const discovery = discoverHardenTargets(absDir, {
+    maxArtifacts,
+    outputDirectory: outputRoot,
+    ...(internal.buildOutputOnly === true ? { buildOutputOnly: true } : {}),
+    ...(options.applyStateRoot !== undefined ? { stateRoot: options.applyStateRoot } : {}),
+    ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
+  });
   const discovered = discovery.artifacts;
+  const runtimeEntries = resolveRuntimeEntries(absDir);
 
   const packagingBlocks = evaluateHardenProjectPackagingBlocks({
     directory: absDir,
@@ -684,9 +2045,40 @@ export function hardenProject(
 
   const bindableFormats = new Set(["javascript", "typescript", "wasm", "html-bundle"]);
   const bindable = discovered.filter((a) => bindableFormats.has(a.format));
+  // The integrity bindings are Node programs; a front-end bundle cannot host
+  // them (see browser-bundle.ts). Absolute input path → why it is one.
+  const jsDiscovered = discovered.filter(
+    (a) => a.format === "javascript" || a.format === "typescript",
+  );
+  const browserBundles = classifyBrowserBundles(jsDiscovered, absDir);
+  const hasNodeJsHost = jsDiscovered.some((a) => !browserBundles.has(a.path));
+  const integrityBindingRequested =
+    options.selfSeal === true || options.sidecarEntangle === true;
+  const integrityBindingSkipped: { relativePath: string; reason: string }[] = [];
+  if (integrityBindingRequested) {
+    for (const a of jsDiscovered) {
+      if (!browserBundles.has(a.path)) continue;
+      integrityBindingSkipped.push({
+        relativePath: a.relativePath.split(sep).join("/"),
+        reason: `browser bundle (${browserBundles.get(a.path)!}): the binding needs node:fs / node:crypto`,
+      });
+    }
+    // (A tree of databases only has no code that could pin one.)
+    const hasCodeHost = discovered.some((a) => !MUTABLE_DATA_FORMATS.has(a.format));
+    for (const a of hasCodeHost ? discovered : []) {
+      if (!MUTABLE_DATA_FORMATS.has(a.format)) continue;
+      integrityBindingSkipped.push({
+        relativePath: a.relativePath.split(sep).join("/"),
+        reason:
+          "mutable data: the application writes to this database, so a pinned hash would fail the integrity check after the first write",
+      });
+    }
+  }
   const selfSealRecommended =
     intensity === "bankrupt" &&
     bindable.length >= 2 &&
+    // Recommending a Node-only binding for a pure front-end build is bad advice.
+    (jsDiscovered.length === 0 || hasNodeJsHost) &&
     options.selfSeal !== true;
   const selfSealRecommendation = selfSealRecommended
     ? "Multi-artifact entitlement tree detected — pass self_seal / --self-seal so Node entry modules bind sibling JS/WASM/HTML bytes. Single-file trees stay opt-in only (never auto-enabled)."
@@ -771,16 +2163,24 @@ export function hardenProject(
       }
 
       if (weaveVerify.files.length > 0 || staleBuildMessage !== undefined) {
-        const weavePlan = buildWeavePlan(absDir, { maxTargets: maxArtifacts });
+        // Only the files that decide the verdict are "unwoven"; a formatter or
+        // a view component with no gate logic is advisory and never blocks.
+        const unwovenSourceFiles = weaveVerify.files
+          .filter((f) => !f.passed && f.scope !== "advisory")
+          .map((f) => f.relativePath);
+        // The workorders are the bulk of the payload. They are the agent's next
+        // step only when this run was refused for a missing weave; any other
+        // caller gets them from bla_weave_plan on demand.
         const workorderMap: Record<string, WeaveSurgicalWorkorder> = {};
-        for (const target of weavePlan.targets) {
-          if (target.surgicalWorkorder) {
-            workorderMap[target.relativePath] = target.surgicalWorkorder;
+        if (options.requireAgentWeave === true && unwovenSourceFiles.length > 0) {
+          const unwovenSet = new Set(unwovenSourceFiles);
+          const weavePlan = buildWeavePlan(absDir, { maxTargets: maxArtifacts });
+          for (const target of weavePlan.targets) {
+            if (target.surgicalWorkorder && unwovenSet.has(target.relativePath)) {
+              workorderMap[target.relativePath] = target.surgicalWorkorder;
+            }
           }
         }
-        const unwovenSourceFiles = weaveVerify.files
-          .filter((f) => !f.passed)
-          .map((f) => f.relativePath);
         if (staleBuildMessage !== undefined && unwovenSourceFiles.length === 0) {
           unwovenSourceFiles.push("dist/ (stale build)");
         }
@@ -796,7 +2196,18 @@ export function hardenProject(
                 },
               ]
             : [];
-        const combinedActions = [...extraActions, ...weaveVerify.agentActions];
+        // The per-check actions are the agent's work list only while the weave
+        // gate is in force; an ungated run points at bla_verify_weave instead of
+        // carrying a to-do list for an optional upgrade in every report.
+        const combinedActions =
+          options.requireAgentWeave === true
+            ? [...extraActions, ...weaveVerify.agentActions]
+            : [];
+        const unwovenAreBuildOutput =
+          unwovenSourceFiles.length > 0 &&
+          unwovenSourceFiles.every((rel) =>
+            isInsideBuildOutput(rel.split(sep).join("/"), absDir, BLA_BUILD_OUTPUT_DIR_NAMES),
+          );
         const weaveVerified =
           weaveVerify.files.length > 0 &&
           weaveVerify.overallPassed &&
@@ -804,13 +2215,21 @@ export function hardenProject(
         agentWeaveAssessment = {
           weaveVerified,
           weaveScore: staleBuildMessage !== undefined ? Math.min(weaveVerify.weaveScore, 50) : weaveVerify.weaveScore,
+          weaveScope: weaveVerify.scope,
           unwovenSourceFiles,
+          ...(weaveVerify.advisoryFiles.length > 0
+            ? { advisorySourceFiles: weaveVerify.advisoryFiles }
+            : {}),
           agentActions: combinedActions,
           surgicalWorkorders: workorderMap,
           agentPlaybookDirective: weaveVerified
-            ? `All ${weaveVerify.files.length} source file(s) passed Host-Agent structural weave verification (weaveScore=${weaveVerify.weaveScore}/100).`
+            ? `All ${weaveVerify.requiredFiles.length} ${weaveVerify.scope === "crown-jewels" ? "crown-jewel " : ""}source file(s) passed Host-Agent structural weave verification (weaveScore=${weaveVerify.weaveScore}/100).`
             : staleBuildMessage ??
-              `Host-Agent source surgery pending on [${unwovenSourceFiles.join(", ")}] (weaveScore=${weaveVerify.weaveScore}/100). Follow surgicalWorkorders + agentActions using your file-editing tools, verify with bla_verify_weave, then run bla_harden with weave_decoys:true and require_agent_weave:true.`,
+              (options.requireAgentWeave === true
+                ? `Host-Agent source surgery pending on [${unwovenSourceFiles.join(", ")}] (weaveScore=${weaveVerify.weaveScore}/100). Follow surgicalWorkorders + agentActions using your file-editing tools, verify with bla_verify_weave, rebuild, then run bla_harden with weave_decoys:true and require_agent_weave:true.`
+                : unwovenAreBuildOutput
+                  ? `Optional Stage-2 upgrade: [${unwovenSourceFiles.join(", ")}] hold gate/entitlement logic that is not woven (weaveScore=${weaveVerify.weaveScore}/100). This run hardened mechanically. They are build output — never edit them; for patch-resistant gates weave the source modules they are built from (bla_weave_plan / bla_verify_weave on the source directory), rebuild, then re-run bla_harden.`
+                  : `Optional Stage-2 upgrade: [${unwovenSourceFiles.join(", ")}] hold gate/entitlement logic that is not woven yet (weaveScore=${weaveVerify.weaveScore}/100). This run hardened mechanically. For patch-resistant gates, call bla_weave_plan for the surgicalWorkorders, edit the source, confirm with bla_verify_weave (it lists the exact actions), rebuild, then re-run bla_harden with weave_decoys:true and require_agent_weave:true.`),
         };
       } else if (options.requireAgentWeave === true) {
         agentWeaveAssessment = {
@@ -876,9 +2295,22 @@ export function hardenProject(
     dryRun,
     truncated: discovery.truncated,
     maxArtifacts: discovery.maxArtifacts,
+    ...(integrityBindingSkipped.length > 0
+      ? { integrityBindingSkipped: integrityBindingSkipped.slice() }
+      : {}),
     ...(discovery.readErrors.length > 0
       ? { discoveryReadErrors: discovery.readErrors }
       : {}),
+    ...(discovery.skippedDevTooling !== undefined
+      ? { skippedDevTooling: discovery.skippedDevTooling }
+      : {}),
+    ...(discovery.skippedSourceFiles !== undefined
+      ? { skippedSourceFiles: discovery.skippedSourceFiles }
+      : {}),
+    ...(discovery.skippedHardenedOutputs !== undefined
+      ? { skippedHardenedOutputs: discovery.skippedHardenedOutputs }
+      : {}),
+    ...(discovery.excluded !== undefined ? { excluded: discovery.excluded } : {}),
     wouldOverwrite,
     runId,
   } as const;
@@ -1053,15 +2485,23 @@ export function hardenProject(
       outputExisted,
       error: refusalByPath.get(resolve(artifact.path)) ?? `skipped: run blocked by ${blockParts.join(" / ")}`,
     }));
+    // A blocker that is itself a planned artifact already carries its refusal
+    // above; listing it a second time made failedCount exceed discoveredCount.
+    // Only blockers outside the plan (a seal.json, a leaked .env) are extra rows.
+    const plannedPaths = new Set(planned.map((p) => resolve(p.inputPath)));
+    const seenExtras = new Set<string>();
+    const extraBlockers = blockedExtras.filter((artifact) => {
+      const key = resolve(artifact.inputPath);
+      if (plannedPaths.has(key) || seenExtras.has(key)) return false;
+      seenExtras.add(key);
+      return true;
+    });
     return {
       ...reportBase,
       overallSuccess: false,
       hardenedCount: 0,
-      failedCount: planned.length + blockedExtras.length,
-      artifacts: [
-        ...planned,
-        ...blockedExtras,
-      ],
+      failedCount: planned.length + extraBlockers.length,
+      artifacts: [...planned, ...extraBlockers],
     };
   }
 
@@ -1072,17 +2512,20 @@ export function hardenProject(
       overallSuccess: false,
       hardenedCount: 0,
       failedCount: 0,
-      artifacts: plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
-        inputPath: artifact.path,
-        relativePath: artifact.relativePath,
-        format: artifact.format,
-        outputPath,
-        success: false,
-        defenseScore: 0,
-        tokenAmplificationFactor: 0,
-        costAmplificationFactor: 0,
-        outputExisted,
-      })),
+      artifacts: withArtifactSizes(
+        plannedOutputs.map(({ artifact, outputPath, outputExisted }) => ({
+          inputPath: artifact.path,
+          relativePath: artifact.relativePath,
+          format: artifact.format,
+          outputPath,
+          success: false,
+          defenseScore: 0,
+          tokenAmplificationFactor: 0,
+          costAmplificationFactor: 0,
+          outputExisted,
+        })),
+        true,
+      ),
     };
   }
 
@@ -1093,6 +2536,31 @@ export function hardenProject(
   const summaries: HardenArtifactSummary[] = [];
   const written: string[] = [];
   const total = plannedOutputs.length;
+  // SHA-256 of each output as its own protect step left it; later post-passes
+  // (sidecar entanglement) may rewrite the file.
+  const outputShaAfterProtect = new Map<string, string>();
+  let consumerIndex: WasmConsumerIndex | undefined;
+  const referencedWasmExports = (
+    wasmPath: string,
+  ): { name: string; referencedBy: string }[] => {
+    let exportNames: readonly string[];
+    try {
+      exportNames = inspectWasmBinary(readFileSync(wasmPath)).exportNames;
+    } catch {
+      return [];
+    }
+    if (exportNames.length === 0) return [];
+    consumerIndex ??= buildWasmConsumerIndex(absDir, outputRoot);
+    const found: { name: string; referencedBy: string }[] = [];
+    for (const name of exportNames) {
+      // `_start`, `memory`, … are never renamed whoever refers to them, so
+      // they are not a keep-decision to report (or to advise renaming).
+      if (isAbiMandatedWasmExport(name)) continue;
+      const referencedBy = consumerIndex.findReference(name);
+      if (referencedBy !== undefined) found.push({ name, referencedBy });
+    }
+    return found;
+  };
   const emitProgress = (
     phase: HardenProgressPhase,
     index: number,
@@ -1112,13 +2580,20 @@ export function hardenProject(
   // Identify the primary JS entry artifact so its siblings are hardened first
   // (allowing the entry's selfSeal expectedSiblingSha256 map to hash final
   // sibling bytes on disk without circular JS<->JS hash deadlocks).
-  const jsPlanned = plannedOutputs.filter(({ artifact }) =>
-    /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(artifact.relativePath.replaceAll("\\", "/")),
+  const jsPlanned = plannedOutputs.filter(
+    ({ artifact }) =>
+      /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(artifact.relativePath.replaceAll("\\", "/")) &&
+      // A browser bundle cannot host the Node integrity binding.
+      !browserBundles.has(artifact.path),
   );
-  const designatedEntryOutput =
-    (jsPlanned.find(({ artifact }) =>
-      /license\.(cjs|js)$/i.test(artifact.relativePath),
-    ) ?? jsPlanned[0])?.outputPath;
+  const designatedEntryOutput = pickJsEntry(
+    jsPlanned.map((p) => ({
+      relativePath: p.artifact.relativePath,
+      inputPath: p.artifact.path,
+      outputPath: p.outputPath,
+    })),
+    runtimeEntries,
+  )?.outputPath;
 
   const executionIndices =
     options.selfSeal === true
@@ -1144,6 +2619,20 @@ export function hardenProject(
     const { artifact, outputPath, outputExisted } = plannedOutputs[i]!;
     emitProgress("artifact", step, artifact.relativePath);
     mkdirSync(dirname(outputPath), { recursive: true });
+    // A renamed export breaks every caller that still uses the old name, and
+    // BLA cannot rewrite those callers. So names another project file refers
+    // to are kept (on top of the explicit keep-list); only exports nothing in
+    // the project mentions are renamed.
+    const autoPreserved =
+      artifact.format === "wasm" ? referencedWasmExports(artifact.path) : [];
+    const artifactPreserveExports = [
+      ...new Set([
+        ...(options.wasmPreserveExports ?? []),
+        ...autoPreserved.map((p) => p.name),
+      ]),
+    ];
+    const explicitPreserve = new Set(options.wasmPreserveExports ?? []);
+    const reportedAutoPreserved = autoPreserved.filter((p) => !explicitPreserve.has(p.name));
     try {
       const report: OneClickDefenseReport = defendTarget({
         inputPath: artifact.path,
@@ -1157,11 +2646,13 @@ export function hardenProject(
           ? { weaveDecoys: options.weaveDecoys }
           : {}),
         ...(options.selfSeal !== undefined
-          ? { selfSeal: options.selfSeal }
+          ? { selfSeal: options.selfSeal && !browserBundles.has(artifact.path) }
           : {}),
-        ...(options.wasmPreserveExports !== undefined &&
-        options.wasmPreserveExports.length > 0
-          ? { wasmPreserveExports: options.wasmPreserveExports }
+        ...(options.sqliteEvalTrap === true && artifact.format === "sqlite"
+          ? { sqliteEvalTrap: true }
+          : {}),
+        ...(artifactPreserveExports.length > 0
+          ? { wasmPreserveExports: artifactPreserveExports }
           : {}),
         ...(options.allowLaneIndependentGates === true
           ? { allowLaneIndependentGates: true }
@@ -1181,7 +2672,7 @@ export function hardenProject(
           ? { allowPanelOfflineOracle: true }
           : {}),
         ...((() => {
-          if (options.selfSeal !== true) return {};
+          if (options.selfSeal !== true || browserBundles.has(artifact.path)) return {};
           if (designatedEntryOutput !== undefined && outputPath !== designatedEntryOutput) {
             return {};
           }
@@ -1189,7 +2680,8 @@ export function hardenProject(
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
-                isProtectableFormat(p.artifact.format),
+                isProtectableFormat(p.artifact.format) &&
+                !MUTABLE_DATA_FORMATS.has(p.artifact.format),
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
             .filter((rel) => rel.length > 0 && !rel.startsWith(".."));
@@ -1199,7 +2691,8 @@ export function hardenProject(
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
-                isProtectableFormat(p.artifact.format),
+                isProtectableFormat(p.artifact.format) &&
+                !MUTABLE_DATA_FORMATS.has(p.artifact.format),
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
             .filter((rel) => rel.length > 0);
@@ -1223,9 +2716,23 @@ export function hardenProject(
         costAmplificationFactor:
           report.exhaustionSummary.costAmplificationFactor,
         outputExisted,
+        ...(report.protection.wasmExportRenames !== undefined &&
+        report.protection.wasmExportRenames.length > 0
+          ? { wasmExportRenames: report.protection.wasmExportRenames }
+          : {}),
+        ...(reportedAutoPreserved.length > 0
+          ? { wasmExportsAutoPreserved: reportedAutoPreserved }
+          : {}),
+        ...(() => {
+          const survivors = report.overallSuccess
+            ? findPlaintextSurvivors(artifact, report.outputPath)
+            : undefined;
+          return survivors !== undefined ? { plaintextSurvivors: survivors } : {};
+        })(),
       });
       if (report.overallSuccess && existsSync(report.outputPath)) {
         written.push(report.outputPath);
+        outputShaAfterProtect.set(report.outputPath, sha256File(report.outputPath));
       }
     } catch (err) {
       summaryByIndex.set(i, {
@@ -1288,26 +2795,34 @@ export function hardenProject(
   // first (excluding the JS entry, which is still rewritten later) and the
   // loader hook is prepended before the JS preamble, so both digests stay
   // consistent.
+  // Outputs whose bytes the JS entry's sidecar binding really measures.
+  const sidecarBoundOutputs = new Set<string>();
+  // Python entry that received a load-time sibling check, if any, and the
+  // declared console scripts that start the program without importing it.
+  let pythonSidecarEntry: string | undefined;
+  let pythonSidecarUncoveredEntries: readonly string[] = [];
+  // JS module that hosts the load-time checks, and declared entries that skip it.
+  let integrityBindingEntry: string | undefined;
+  let integrityBindingUncoveredEntries: readonly string[] = [];
   let sidecarEntangleError: string | undefined;
   if (options.sidecarEntangle === true && !dryRun && summaries.some((s) => s.success)) {
     try {
-      const jsLike = summaries.filter(
+      // Mutable data (a database the app writes to) is never part of a binding.
+      const bindableSummaries = summaries.filter((s) => !MUTABLE_DATA_FORMATS.has(s.format));
+      const jsLike = bindableSummaries.filter(
         (s) =>
           s.success &&
+          !browserBundles.has(s.inputPath) &&
           /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
-      const jsEntry =
-        jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
-        jsLike[0];
-      const pyLike = summaries.filter(
+      const jsEntry = pickJsEntry(jsLike, runtimeEntries);
+      const pyLike = bindableSummaries.filter(
         (s) =>
           s.success && /\.py$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
-      const pyEntry =
-        !jsEntry
-          ? pyLike.find((s) => /policy\.py$/i.test(s.relativePath)) ?? pyLike[0]
-          : undefined;
-      const wasmLike = summaries.filter(
+      const pyDeclaredEntries = !jsEntry ? resolvePythonDeclaredEntryFiles(absDir, pyLike) : [];
+      const pyEntry = !jsEntry ? pickPythonEntry(pyLike, pyDeclaredEntries) : undefined;
+      const wasmLike = bindableSummaries.filter(
         (s) =>
           s.success && /\.wasm$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
@@ -1327,7 +2842,7 @@ export function hardenProject(
         if (!existsSync(wasmAbs)) continue;
         const wasmDir = dirname(wasmAbs);
         const siblingSidecars: { pathLabel: string; bytes: Buffer }[] = [];
-        for (const s of summaries) {
+        for (const s of bindableSummaries) {
           if (!s.success || s.relativePath === wasmSum.relativePath) continue;
           const abs = join(outputRoot, s.relativePath);
           if (jsEntryAbs && abs === jsEntryAbs) continue;
@@ -1443,7 +2958,7 @@ export function hardenProject(
         if (!existsSync(entryAbs)) continue;
         const entryDir = dirname(entryAbs);
         const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-        for (const s of summaries) {
+        for (const s of bindableSummaries) {
           if (!s.success || s.relativePath === wasmSum.relativePath) continue;
           const abs = join(outputRoot, s.relativePath);
           if (jsEntryAbs && abs === jsEntryAbs) continue;
@@ -1473,12 +2988,14 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          const sidecarAbsPaths: string[] = [];
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === jsEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
             if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
             sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+            sidecarAbsPaths.push(abs);
           }
           if (sidecars.length > 0) {
             const entrySource = readFileSync(entryAbs, "utf8");
@@ -1497,6 +3014,13 @@ export function hardenProject(
               writeFileAtomicSync(entryAbs, finalized.content, "utf8", {
                 allowLinkWriteThrough: false,
               });
+              for (const abs of sidecarAbsPaths) sidecarBoundOutputs.add(abs);
+              integrityBindingEntry = jsEntry.relativePath.split(sep).join("/");
+              integrityBindingUncoveredEntries = entriesNotLoadingHost(
+                jsEntry,
+                jsLike,
+                runtimeEntries,
+              );
             }
           }
         }
@@ -1509,11 +3033,16 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          const outsideEntryTree: string[] = [];
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === pyEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
-            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            if (rel.length === 0 || !existsSync(abs)) continue;
+            if (rel.startsWith("..")) {
+              outsideEntryTree.push(s.relativePath.split(sep).join("/"));
+              continue;
+            }
             sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
           }
           if (sidecars.length > 0) {
@@ -1528,6 +3057,20 @@ export function hardenProject(
               writeFileAtomicSync(entryAbs, bound.code, "utf8", {
                 allowLinkWriteThrough: false,
               });
+              pythonSidecarEntry = pyEntry.relativePath.split(sep).join("/");
+              pythonSidecarUncoveredEntries = pythonEntriesNotLoadingHost(
+                pyEntry,
+                pyDeclaredEntries,
+              );
+              // The check reads files relative to its own module: whatever
+              // lives above or beside that directory is pinned by nothing.
+              for (const rel of outsideEntryTree) {
+                if (integrityBindingSkipped.some((b) => b.relativePath === rel)) continue;
+                integrityBindingSkipped.push({
+                  relativePath: rel,
+                  reason: `not bound: ${pythonSidecarEntry} only checks files in its own directory tree`,
+                });
+              }
             }
           }
         }
@@ -1547,7 +3090,7 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === wasmEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1574,7 +3117,7 @@ export function hardenProject(
       // CPython .pyc marshal-note entanglement only when no JS/Python/WASM
       // entry was bound — TYPE_ASCII trailer measured against FINAL siblings;
       // importlib ignores the trailer (executed code object unchanged).
-      const pycLike = summaries.filter(
+      const pycLike = bindableSummaries.filter(
         (s) =>
           s.success && /\.pyc$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
@@ -1588,7 +3131,7 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === pycEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1615,7 +3158,7 @@ export function hardenProject(
       // GGUF STRING-metadata entanglement only when no JS/Python/WASM/.pyc
       // entry was bound — bla.sidecar.v1 KV measured against FINAL siblings;
       // GGUF loaders ignore unknown STRING keys (tensor bytes stay bit-exact).
-      const ggufLike = summaries.filter(
+      const ggufLike = bindableSummaries.filter(
         (s) =>
           s.success &&
           (s.format === "model-gguf" ||
@@ -1630,7 +3173,7 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === ggufEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1657,7 +3200,7 @@ export function hardenProject(
       // Safetensors __metadata__ entanglement only when no JS/Python/WASM/.pyc/GGUF
       // entry was bound — bla.sidecar.v1 __metadata__ key measured against FINAL
       // siblings; tensor bytes stay bit-exact.
-      const safetensorsLike = summaries.filter(
+      const safetensorsLike = bindableSummaries.filter(
         (s) =>
           s.success &&
           (s.format === "model-safetensors" ||
@@ -1672,7 +3215,7 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === safetensorsEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1701,7 +3244,7 @@ export function hardenProject(
       // Safetensors entry was bound — bla.sidecar.v1 sort-last pool string
       // measured against FINAL siblings; existing string indices + insn bytes
       // stay unchanged.
-      const dexLike = summaries.filter(
+      const dexLike = bindableSummaries.filter(
         (s) =>
           s.success &&
           (s.format === "android-dex" ||
@@ -1716,7 +3259,7 @@ export function hardenProject(
         if (existsSync(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === dexEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1744,6 +3287,8 @@ export function hardenProject(
       // Safetensors/DEX entry was bound — reserved unused bla_sidecar_v1 VIEW
       // measured against FINAL siblings; user tables, rows, query results,
       // WAL/FK, and application_id/user_version stay unchanged.
+      // (This note is offline evidence carried BY a database, not a load-time
+      // check of one, so it works on the full list, databases included.)
       const sqliteLike = summaries.filter(
         (s) =>
           s.success &&
@@ -1794,7 +3339,7 @@ export function hardenProject(
       // binds the sibling `.bunfs-snapshot` planted by protect.
       // .pyc post-pass above runs first so Bun sidecar digests see final bytes.
       if (!jsEntry && !pyEntry && !wasmEntry) {
-        const nativeLike = summaries.filter(
+        const nativeLike = bindableSummaries.filter(
           (s) =>
             s.success &&
             (s.format === "native-elf" ||
@@ -1811,7 +3356,7 @@ export function hardenProject(
             { pathLabel: snapshotLabel, bytes: readFileSync(snapshotAbs) },
           ];
           const entryDir = dirname(entryAbs);
-          for (const s of summaries) {
+          for (const s of bindableSummaries) {
             if (!s.success || s.relativePath === nativeEntry.relativePath) continue;
             const abs = join(outputRoot, s.relativePath);
             const rel = relative(entryDir, abs).split(sep).join("/");
@@ -1838,7 +3383,7 @@ export function hardenProject(
 
       // ASAR archive-note post-pass only when no JS/Python/WASM/Bun entry was
       // bound — plant `.bla/sidecar.v1.json` binding the decoy bridge member.
-      const asarLike = summaries.filter(
+      const asarLike = bindableSummaries.filter(
         (s) =>
           s.success &&
           (s.format === "electron-asar" ||
@@ -1937,6 +3482,75 @@ export function hardenProject(
     }
   }
 
+  // Post-pass consistency. The sidecar pass above rewrites artifacts (WASM
+  // custom section, loader hook, entry preamble) AFTER the self-seal entry
+  // pinned its siblings' SHA-256 and AFTER each manifest recorded its
+  // artifact's hash. Left alone, the untouched hardened tree fails its own
+  // integrity check at startup and `verify-manifest --require-artifact`
+  // rejects an artifact nobody modified. Re-pin and re-attest from final bytes.
+  let postPassConsistencyError: string | undefined;
+  if (!dryRun && summaries.some((s) => s.success)) {
+    try {
+      if (
+        options.selfSeal === true &&
+        designatedEntryOutput !== undefined &&
+        existsSync(designatedEntryOutput)
+      ) {
+        let entryBytes: Buffer = readFileSync(designatedEntryOutput);
+        let repinned = false;
+        for (const s of summaries) {
+          if (!s.success || s.outputPath === designatedEntryOutput) continue;
+          const pinned = outputShaAfterProtect.get(s.outputPath);
+          if (pinned === undefined || !existsSync(s.outputPath)) continue;
+          const current = sha256File(s.outputPath);
+          if (current === pinned) continue;
+          const stale = Buffer.from(pinned, "latin1");
+          const fresh = Buffer.from(current, "latin1");
+          let at = entryBytes.indexOf(stale);
+          if (at === -1) continue;
+          entryBytes = Buffer.from(entryBytes);
+          while (at !== -1) {
+            fresh.copy(entryBytes, at);
+            at = entryBytes.indexOf(stale, at + stale.length);
+          }
+          repinned = true;
+        }
+        if (repinned) {
+          const refinalized = finalizeSelfSealSelfDigest(entryBytes);
+          writeFileAtomicSync(designatedEntryOutput, refinalized.content, undefined, {
+            allowLinkWriteThrough: false,
+          });
+        }
+      }
+      if (emitManifest) {
+        let signingKeyPem: string | undefined;
+        for (const s of summaries) {
+          if (!s.success || !existsSync(s.outputPath)) continue;
+          const manifestPath = `${s.outputPath}.bla-manifest.json`;
+          if (!existsSync(manifestPath)) continue;
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+          const current = sha256File(s.outputPath);
+          if (manifest.protectedSha256 === current) continue;
+          const { signature, ...unsigned } = manifest;
+          const refreshed: Record<string, unknown> = { ...unsigned, protectedSha256: current };
+          let toWrite = refreshed;
+          if (signature !== undefined) {
+            signingKeyPem ??= readManifestSigningKeyOrThrow(options.manifestSigningKeyPath ?? "");
+            toWrite = signManifestPayload(refreshed, signingKeyPem);
+          }
+          writeFileAtomicSync(manifestPath, `${JSON.stringify(toWrite, null, 2)}\n`, "utf8");
+        }
+      }
+    } catch (err) {
+      postPassConsistencyError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (postPassConsistencyError !== undefined && sidecarEntangleError === undefined) {
+    // Same contract as a failed entanglement: the tree is not self-consistent,
+    // so the run must not report success.
+    sidecarEntangleError = `post-pass integrity re-pin failed: ${postPassConsistencyError}`;
+  }
+
   let integrityCoveragePath: string | undefined;
   let integrityCoverageSelfVerified: boolean | undefined;
   if (options.selfSeal === true && !dryRun && summaries.some((s) => s.success)) {
@@ -1944,28 +3558,54 @@ export function hardenProject(
       const jsLike = summaries.filter(
         (s) =>
           s.success &&
+          !browserBundles.has(s.inputPath) &&
           /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(s.relativePath.replaceAll("\\", "/")),
       );
-      const entry =
-        jsLike.find((s) => /license\.(cjs|js)$/i.test(s.relativePath)) ??
-        jsLike[0];
+      const entry = pickJsEntry(jsLike, runtimeEntries);
       if (entry) {
-        const sidecars = summaries
-          .filter((s) => s.success && s.relativePath !== entry.relativePath)
-          .map((s) => s.relativePath.replaceAll("\\", "/"));
-        const plan = planSidecarEntanglement({
-          entryPath: entry.relativePath.replaceAll("\\", "/"),
-          sidecarPaths: sidecars,
-          seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
-          baseDir: outputRoot,
-        });
         const entryRel = entry.relativePath.replaceAll("\\", "/");
         const entryAbs = join(outputRoot, entryRel);
+        const entryBytes = existsSync(entryAbs) ? readFileSync(entryAbs) : undefined;
         integrityCoverageSelfVerified =
-          existsSync(entryAbs) && verifySelfSealSelfDigest(readFileSync(entryAbs)).verified;
+          entryBytes !== undefined && verifySelfSealSelfDigest(entryBytes).verified;
+        // The matrix is evidence, so it lists only what the hardened tree
+        // enforces: the entry module is the one checker, and a file is covered
+        // only when the entry pins its final SHA-256 (self-seal) or measures
+        // its bytes (sidecar binding). Everything else is reported as unbound
+        // instead of being drawn into a mesh nobody checks.
+        const expectedSha256: Record<string, string> = {};
+        if (entryBytes !== undefined) expectedSha256[entryRel] = sha256Hex(entryBytes);
+        const coveredNodes: string[] = [];
+        for (const s of summaries) {
+          if (!s.success || s.relativePath === entry.relativePath) continue;
+          const rel = s.relativePath.replaceAll("\\", "/");
+          const abs = join(outputRoot, s.relativePath);
+          if (!existsSync(abs)) continue;
+          const digest = sha256File(abs);
+          const pinned = entryBytes !== undefined && entryBytes.includes(digest);
+          if (pinned || sidecarBoundOutputs.has(abs)) {
+            coveredNodes.push(rel);
+            expectedSha256[rel] = digest;
+          } else if (!integrityBindingSkipped.some((b) => b.relativePath === rel)) {
+            integrityBindingSkipped.push({
+              relativePath: rel,
+              reason: `not bound: ${entryRel} only checks files in its own directory tree that Node can read at load time`,
+            });
+          }
+        }
+        if (coveredNodes.length > 0 && integrityBindingEntry === undefined) {
+          integrityBindingEntry = entryRel;
+          integrityBindingUncoveredEntries = entriesNotLoadingHost(entry, jsLike, runtimeEntries);
+        }
+        const plannedMatrix = buildInterleavedCoverageMatrix({
+          fileNodes: [entryRel, ...coveredNodes],
+          checkerHosts: [entryRel],
+          expectedSha256,
+          colocatedSites: 2,
+        });
         const matrix = integrityCoverageSelfVerified
-          ? plan.coverageMatrix
-          : withoutHostSelfCoverage(plan.coverageMatrix, entryRel);
+          ? plannedMatrix
+          : withoutHostSelfCoverage(plannedMatrix, entryRel);
         integrityCoveragePath = join(outputRoot, "integrity-coverage.json");
         writeFileAtomicSync(
           integrityCoveragePath,
@@ -1983,6 +3623,12 @@ export function hardenProject(
   if (!cancelled) {
     emitProgress("done", total > 0 ? total - 1 : -1);
   }
+  const sizedArtifacts = withArtifactSizes(summaries, dryRun);
+  const outputSize = summarizeOutputSize(sizedArtifacts);
+  const sqliteEvalTrapArtifacts =
+    options.sqliteEvalTrap === true && !dryRun
+      ? summaries.filter((s) => s.success && s.format === "sqlite").map((s) => s.relativePath)
+      : [];
   return {
     ...reportBase,
     overallSuccess:
@@ -1992,7 +3638,9 @@ export function hardenProject(
       sidecarEntangleError === undefined,
     hardenedCount,
     failedCount,
-    artifacts: summaries,
+    artifacts: sizedArtifacts,
+    ...(outputSize !== undefined ? { outputSize } : {}),
+    ...(sqliteEvalTrapArtifacts.length > 0 ? { sqliteEvalTrapArtifacts } : {}),
     written: written.slice(),
     ...(cancelled ? { cancelled: true } : {}),
     ...(summaryPath !== undefined ? { summaryPath } : {}),
@@ -2002,8 +3650,80 @@ export function hardenProject(
     ...(integrityCoverageSelfVerified !== undefined
       ? { integrityCoverageSelfVerified }
       : {}),
+    ...(integrityBindingSkipped.length > 0 ? { integrityBindingSkipped } : {}),
+    ...(pythonSidecarEntry !== undefined ? { pythonSidecarEntry } : {}),
+    ...(pythonSidecarUncoveredEntries.length > 0
+      ? { pythonSidecarUncoveredEntries: pythonSidecarUncoveredEntries.slice() }
+      : {}),
+    ...(integrityBindingEntry !== undefined ? { integrityBindingEntry } : {}),
+    ...(integrityBindingUncoveredEntries.length > 0
+      ? { integrityBindingUncoveredEntries: integrityBindingUncoveredEntries.slice() }
+      : {}),
     ...(sidecarEntangleError !== undefined ? { sidecarEntangleError } : {}),
   };
+}
+
+function fileSizeOrUndefined(path: string): number | undefined {
+  try {
+    const stats = statSync(path);
+    return stats.isFile() ? stats.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Attach on-disk sizes (after every post-pass) to each summary. */
+function withArtifactSizes(
+  summaries: readonly HardenArtifactSummary[],
+  dryRun: boolean,
+): HardenArtifactSummary[] {
+  return summaries.map((summary) => {
+    const inputBytes = fileSizeOrUndefined(summary.inputPath);
+    const outputBytes =
+      !dryRun && summary.success ? fileSizeOrUndefined(summary.outputPath) : undefined;
+    return {
+      ...summary,
+      ...(inputBytes !== undefined ? { inputBytes } : {}),
+      ...(outputBytes !== undefined ? { outputBytes } : {}),
+    };
+  });
+}
+
+function summarizeOutputSize(
+  artifacts: readonly HardenArtifactSummary[],
+): HardenProjectReport["outputSize"] {
+  let inputBytes = 0;
+  let outputBytes = 0;
+  let largest: { relativePath: string; growthBytes: number } | undefined;
+  let counted = 0;
+  for (const artifact of artifacts) {
+    if (artifact.inputBytes === undefined || artifact.outputBytes === undefined) continue;
+    counted += 1;
+    inputBytes += artifact.inputBytes;
+    outputBytes += artifact.outputBytes;
+    const growthBytes = artifact.outputBytes - artifact.inputBytes;
+    if (largest === undefined || growthBytes > largest.growthBytes) {
+      largest = { relativePath: artifact.relativePath.split(sep).join("/"), growthBytes };
+    }
+  }
+  if (counted === 0) return undefined;
+  return {
+    inputBytes,
+    outputBytes,
+    ...(largest !== undefined && largest.growthBytes > 0 ? { largestGrowth: largest } : {}),
+  };
+}
+
+/** `1536` → `1.5 KB`; binary units, one decimal below 10. */
+export function formatByteSize(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 export function formatHardenProjectReport(report: HardenProjectReport): string {
@@ -2059,6 +3779,29 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
         ? `  ✓ ${safe(a.relativePath)} [${a.format}] score=${a.defenseScore} tokens×${a.tokenAmplificationFactor.toFixed(1)} → ${safe(a.outputPath)}`
         : `  ✗ ${safe(a.relativePath)} [${a.format}] ${a.error === undefined ? "failed" : safe(a.error)}`,
     );
+    for (const rename of a.wasmExportRenames ?? []) {
+      lines.push(`      export renamed: ${safe(rename.from)} → ${safe(rename.to)} (${rename.kind})`);
+    }
+    for (const kept of a.wasmExportsAutoPreserved ?? []) {
+      lines.push(`      export kept: ${safe(kept.name)} (referenced by ${safe(kept.referencedBy)})`);
+    }
+    if (a.plaintextSurvivors !== undefined) {
+      lines.push(
+        `      ⚠ ${a.plaintextSurvivors.count} sensitive literal(s) still readable: ${a.plaintextSurvivors.samples
+          .map((s) => `${safe(s.preview)}${s.line !== undefined ? ` (line ${s.line})` : ""}`)
+          .join(", ")}`,
+      );
+    }
+  }
+  if (report.outputSize !== undefined) {
+    const size = report.outputSize;
+    lines.push(
+      `Size: ${formatByteSize(size.inputBytes)} → ${formatByteSize(size.outputBytes)}${
+        size.largestGrowth !== undefined
+          ? ` (largest: ${safe(size.largestGrowth.relativePath)} +${formatByteSize(size.largestGrowth.growthBytes)})`
+          : ""
+      }`,
+    );
   }
   if (report.truncated) {
     lines.push(
@@ -2082,11 +3825,23 @@ export function formatHardenProjectReport(report: HardenProjectReport): string {
     );
   } else {
     lines.push(`Output: ${safe(report.outputDirectory)}`);
-    lines.push(
-      report.dryRun
-        ? "Next: re-run without --dry-run (MCP: dry_run=false) to write the hardened copies."
-        : "Next: ship or point your release at the hardened copies above (originals are untouched). See DISCLAIMER.md.",
-    );
+  }
+  if (report.apply !== undefined) {
+    const applied = report.apply.applied ?? [];
+    if (report.apply.status === "applied") {
+      lines.push(`Applied: ${applied.length} build-output file(s) now hold the hardened bytes`);
+      for (const rel of applied) lines.push(`  ⇒ ${safe(rel)}`);
+      for (const rel of report.apply.added ?? []) lines.push(`  + ${safe(rel)}`);
+    } else if (report.apply.status === "planned") {
+      lines.push(`Apply (dry-run): would overwrite ${applied.length} build-output file(s)`);
+      for (const rel of applied) lines.push(`  ⇒ ${safe(rel)}`);
+    } else {
+      lines.push(`Apply ${report.apply.status.toUpperCase()}: ${safe(report.apply.reason ?? "")}`);
+    }
+  }
+  if (report.nextSteps !== undefined && report.nextSteps.length > 0) {
+    lines.push("Next:");
+    report.nextSteps.forEach((step, idx) => lines.push(`  ${idx + 1}. ${safe(step)}`));
   }
   lines.push(`Tip: ${safe(report.oneSentenceUsage)}`);
   return lines.join("\n");

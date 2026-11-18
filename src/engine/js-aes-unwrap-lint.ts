@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const JS_AES_UNWRAP_SCHEMA = "bla-js-aes-unwrap-lint/v1" as const;
 
@@ -300,7 +301,8 @@ export function discoverAndLintJsAesUnwrap(
   }
   const candidates: string[] = [];
   walkJsCandidates(abs, 0, candidates);
-  return candidates.map((p) => lintJsAesUnwrapFile(p));
+  // Hardened output is decoys by design; lint what it was built from.
+  return withoutKnownBlaOutputs(candidates).map((p) => lintJsAesUnwrapFile(p));
 }
 
 export function jsAesUnwrapRefuseMessage(

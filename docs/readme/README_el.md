@@ -4,13 +4,13 @@
 
 # BLA: Blind LLM Agents
 
-### Ένα ενιαίο MCP για την προστασία εκτελέσιμων αρχείων, εφαρμογών και συμπεριφοράς εκτέλεσης από αντίστροφηวิศวกรรม AI.
+### Ένα ενιαίο MCP για την προστασία εκτελέσιμων αρχείων, εφαρμογών και συμπεριφοράς εκτέλεσης από αντίστροφη μηχανική AI.
 
 **Προστατέψτε τις λειτουργίες που δημιουργήσατε. Τυφλώστε τους πράκτορες AI που προσπαθούν να τις κλωνοποιήσουν σε δυαδικό επίπεδο.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
+[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.23.4_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#showcases)
 [![MIT license](https://img.shields.io/badge/license-MIT-38bdf8?style=flat-square)](../../LICENSE)
 
@@ -126,7 +126,7 @@ npx bla-agents@latest setup
 | Flutter / Dart AOT      | Injects `66 > 64` Dart snapshot headers (`0xf5f5dcdc`) + `6 > 4` LLVM toolchain lines             | `bla protect libapp.so` · Trips `SnapshotHashScanner (capped: true)`                                |
 | WASM artifacts          | Strips debug sections; injects honey `"name"` section (`tee_hardware_enclave_stub`) + custom chaff | `bla protect core.wasm` · Built-in LEB128 binary parser; 100% `WebAssembly.validate`                |
 | Python & `.pyc`         | Injects Python tarpit state machines into `.py` & `TYPE_ASCII` marshal chaff into `.pyc` pools    | `bla protect module.pyc` · Built-in CPython 3.7–3.14 `.pyc` marshal shield                         |
-| SQLite databases        | Injects 3 enclave honey tables with `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` traps | `bla protect data.sqlite` · Trips `SqliteColumnEvaluationFailure` on REA preview                    |
+| SQLite databases        | Injects 3 enclave honey tables with `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` traps | `bla protect data.sqlite --sqlite-eval-trap` · Trips `SqliteColumnEvaluationFailure` on REA preview                    |
 | Model artifacts         | Injects `35 > 32` nested JSON/ARRAY headers into `.safetensors` and `.gguf` model headers         | `bla protect weights.safetensors` · Trips `ModelFormatFailure (json-nesting / metadata-nesting > 32)` |
 | Android DEX & IL2CPP    | Injects `Lcom/enclave/sgx/...` decoy classes into `classes.dex` (valid SHA-1/Adler32) & `Il2Cpp` | `bla protect classes.dex` or `global-metadata.dat` · Pollutes JADX/JEB & IL2CPP recovery           |
 

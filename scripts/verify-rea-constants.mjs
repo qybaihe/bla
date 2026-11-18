@@ -143,33 +143,30 @@ function countObligationFamilies(files) {
   };
 }
 
-/** Catalog of BLA-tracked REA constants (name → expected numeric value). */
+/** Catalog of BLA-tracked REA constants (name → expected numeric value).
+ *  `altNames` lists alternative names REA may have renamed the constant to.
+ */
 const NUMERIC_EXPECTATIONS = [
-  { name: "SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT", expected: 256 },
-  { name: "SEMANTIC_EXPRESSION_DEPTH_LIMIT", expected: 256 },
-  { name: "SEMANTIC_GETTER_EXPANSION_LIMIT", expected: 512 },
-  { name: "SEMANTIC_ALIAS_SELECTION_LIMIT", expected: 512 },
-  { name: "SEMANTIC_PRIMITIVE_JSON_BYTES_LIMIT", expected: 1_048_576 },
-  { name: "WASM_INTERFACE_REPRESENTATION_BYTES", expected: 32 * 1024 * 1024 },
+  // JS semantic limits moved to JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS object — see OBJECT_PROP section.
+  // WASM representation budget renamed.
+  { name: "WASM_INTERFACE_REPRESENTATION_BYTES", altNames: ["DEFAULT_WASM_INTERFACE_REPRESENTATION_BYTES"], expected: 32 * 1024 * 1024 },
   { name: "MODEL_JSON_NESTING", expected: 32 },
   { name: "MODEL_METADATA_NESTING", expected: 32 },
-  { name: "MAX_JSON_DEPTH", expected: 64, fileHint: "fridaCaptureLimits" },
-  { name: "MAX_MESSAGE_TEXT_BYTES", expected: 32 * 1024 },
+  // Frida capture MAX_JSON_DEPTH / MAX_MESSAGE_TEXT_BYTES are schema defaults now —
+  // see SCHEMA_DEFAULT_EXPECTATIONS. (REA's global MAX_JSON_DEPTH in jsonValue.ts is
+  // a different, larger bound: the ceiling a caller may raise the capture depth to.)
   { name: "DEFAULT_ASAR_MAX_HEADER_BYTES", expected: 16 * 1024 * 1024 },
   { name: "DEFAULT_REGEX_MATCHING_DEADLINE_MS", expected: 5_000 },
-  { name: "MAX_TRACE_FRAMES", expected: 65_536 },
-  { name: "MAX_OTHER_STOPS", expected: 256 },
-  { name: "MAX_TRACE_BYTES", expected: 8 * 1024 * 1024 },
+  // Native call capture limits moved to NATIVE_CALL_CAPTURE_DEFAULTS — see OBJECT_PROP section.
   { name: "MAX_COMMAND_OUTPUT_RECORDS", expected: 16_384, fileHint: "GdbSessionManager" },
   { name: "MAX_COMMAND_FRAMES", expected: 4096, fileHint: "RizinDebugSessionManager" },
   { name: "STEP_DIFFERENCE_LIMIT", expected: 20 },
-  { name: "MAX_RUSTC_HASHES", expected: 64 },
+  // Rust hash limit renamed.
+  { name: "MAX_RUSTC_HASHES", altNames: ["DEFAULT_RUSTC_HASH_LIMIT"], expected: 64 },
   { name: "MAX_SNAPSHOT_HASH_CANDIDATES", expected: 64 },
   { name: "PYTHON_PYC_CONST_PREVIEW_LIMIT", expected: 80 },
-  { name: "MAX_BUILD_INFO_BYTES", expected: 1_048_576, fileHint: "GoBinaryImage" },
-  { name: "MAX_HEADER_SEARCH_BYTES", expected: 256 * 1024 * 1024, fileHint: "GoBinaryImage" },
-  { name: "MAX_POOL_URIS", expected: 500, fileHint: "FlutterBuildProvider" },
-  { name: "MAX_POOL_TOKENS", expected: 2_000, fileHint: "FlutterBuildProvider" },
+  // Go limits moved to GO_ANALYSIS_BUDGET_DEFAULTS — see OBJECT_PROP section.
+  // Flutter pool limits moved to DART_POOL_DEFAULTS — see OBJECT_PROP section.
   { name: "MAX_INSPECT_ERLANG_BEAM_CHUNKS", expected: 256 },
   { name: "MAX_INSPECT_ERLANG_BEAM_ATOMS", expected: 65_536 },
   { name: "TSHARK_JSON_MAX_BYTES", expected: 8 * 1024 * 1024 },
@@ -184,16 +181,123 @@ const NUMERIC_EXPECTATIONS = [
   { name: "MAX_XREF_TEXT_BYTES", expected: 8 * 1024 * 1024 - 1024 },
   { name: "BUN_RECORD_BYTES_1_3_3", expected: 36 },
   { name: "BUN_RECORD_BYTES_1_3_9", expected: 52 },
-  { name: "MAX_BUN_MODULE_COUNT", expected: 100_000 },
-  { name: "MAX_BUN_RETAINED_BYTES", expected: 256 * 1024 * 1024 },
-  { name: "MAX_LOGICAL_PATH_PARTS", expected: 256 },
-  { name: "MAX_LOGICAL_PATH_NODES", expected: 250_000 },
+  // Bun/Deno path limits renamed.
+  { name: "MAX_LOGICAL_PATH_PARTS", altNames: ["MAX_DENO_LOGICAL_PATH_PARTS"], expected: 256 },
+  { name: "MAX_LOGICAL_PATH_NODES", altNames: ["MAX_DENO_LOGICAL_PATH_NODES"], expected: 250_000 },
   // UF2 firmware container (REA #8230)
   { name: "UF2_BLOCK_BYTES", expected: 512 },
   { name: "UF2_MAX_REGIONS", expected: 65_536 },
 ];
 
 const OBJECT_PROP_EXPECTATIONS = [
+  // JS semantic precision defaults (renamed from standalone SEMANTIC_* constants).
+  {
+    objectName: "JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS",
+    propName: "primitive_candidates",
+    expected: 256,
+    label: "SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT",
+  },
+  {
+    objectName: "JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS",
+    propName: "expression_depth",
+    expected: 256,
+    label: "SEMANTIC_EXPRESSION_DEPTH_LIMIT",
+  },
+  {
+    objectName: "JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS",
+    propName: "getter_expansions",
+    expected: 512,
+    label: "SEMANTIC_GETTER_EXPANSION_LIMIT",
+  },
+  {
+    objectName: "JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS",
+    propName: "alias_selections",
+    expected: 512,
+    label: "SEMANTIC_ALIAS_SELECTION_LIMIT",
+  },
+  {
+    objectName: "JAVASCRIPT_SEMANTIC_PRECISION_DEFAULTS",
+    propName: "primitive_bytes",
+    expected: 1_048_576,
+    label: "SEMANTIC_PRIMITIVE_JSON_BYTES_LIMIT",
+  },
+  // Native call capture defaults (renamed from standalone MAX_TRACE_* constants).
+  {
+    objectName: "NATIVE_CALL_CAPTURE_DEFAULTS",
+    propName: "trace_frames",
+    expected: 65_536,
+    label: "MAX_TRACE_FRAMES",
+  },
+  {
+    objectName: "NATIVE_CALL_CAPTURE_DEFAULTS",
+    propName: "other_stops",
+    expected: 256,
+    label: "MAX_OTHER_STOPS",
+  },
+  {
+    objectName: "NATIVE_CALL_CAPTURE_DEFAULTS",
+    propName: "trace_bytes",
+    expected: 8 * 1024 * 1024,
+    label: "MAX_TRACE_BYTES",
+  },
+  // Go analysis budget defaults (renamed from standalone MAX_BUILD_INFO_BYTES etc.).
+  {
+    objectName: "GO_ANALYSIS_BUDGET_DEFAULTS",
+    propName: "max_build_info_bytes",
+    expected: 1_048_576,
+    label: "MAX_BUILD_INFO_BYTES",
+  },
+  {
+    objectName: "GO_ANALYSIS_BUDGET_DEFAULTS",
+    propName: "max_header_search_bytes",
+    expected: 256 * 1024 * 1024,
+    label: "MAX_HEADER_SEARCH_BYTES",
+  },
+  // Dart / Flutter pool defaults (renamed from standalone MAX_POOL_* constants).
+  {
+    objectName: "DART_POOL_DEFAULTS",
+    propName: "uri_limit",
+    expected: 500,
+    label: "MAX_POOL_URIS",
+  },
+  {
+    objectName: "DART_POOL_DEFAULTS",
+    propName: "token_limit",
+    expected: 2_000,
+    label: "MAX_POOL_TOKENS",
+  },
+  // Bun standalone reader limits (renamed from standalone MAX_BUN_* constants).
+  {
+    objectName: "DEFAULT_BUN_READER_LIMITS",
+    propName: "module_count",
+    expected: 100_000,
+    label: "MAX_BUN_MODULE_COUNT",
+  },
+  {
+    objectName: "DEFAULT_BUN_READER_LIMITS",
+    propName: "representation_bytes",
+    expected: 256 * 1024 * 1024,
+    label: "MAX_BUN_RETAINED_BYTES",
+  },
+  // EVM limits renamed from EVM_INTERFACE_LIMITS to EVM_PRODUCER_LIMIT_DEFAULTS.
+  {
+    objectName: "EVM_PRODUCER_LIMIT_DEFAULTS",
+    propName: "input_bytes",
+    expected: 4 * 1024 * 1024,
+    label: "EVM_INTERFACE_LIMITS.inputBytes",
+  },
+  {
+    objectName: "EVM_PRODUCER_LIMIT_DEFAULTS",
+    propName: "output_bytes",
+    expected: 16 * 1024 * 1024,
+    label: "EVM_INTERFACE_LIMITS.outputBytes",
+  },
+  {
+    objectName: "EVM_PRODUCER_LIMIT_DEFAULTS",
+    propName: "diagnostic_bytes",
+    expected: 1 * 1024 * 1024,
+    label: "EVM_INTERFACE_LIMITS.diagnosticBytes",
+  },
   {
     objectName: "WEB_RUNTIME_LIMITS",
     propName: "sourceBytes",
@@ -205,24 +309,6 @@ const OBJECT_PROP_EXPECTATIONS = [
     propName: "retainedEventBytes",
     expected: 8 * 1024 * 1024,
     label: "WEB_RUNTIME_LIMITS.retainedEventBytes",
-  },
-  {
-    objectName: "EVM_INTERFACE_LIMITS",
-    propName: "inputBytes",
-    expected: 4 * 1024 * 1024,
-    label: "EVM_INTERFACE_LIMITS.inputBytes",
-  },
-  {
-    objectName: "EVM_INTERFACE_LIMITS",
-    propName: "outputBytes",
-    expected: 16 * 1024 * 1024,
-    label: "EVM_INTERFACE_LIMITS.outputBytes",
-  },
-  {
-    objectName: "EVM_INTERFACE_LIMITS",
-    propName: "diagnosticBytes",
-    expected: 1 * 1024 * 1024,
-    label: "EVM_INTERFACE_LIMITS.diagnosticBytes",
   },
   {
     objectName: "PROGUARD_MAPPING_LIMITS",
@@ -377,6 +463,43 @@ const EXPECTED_OBLIGATION_FAMILIES = [
   "url-scheme",
 ];
 
+/**
+ * Limits REA declares as the default of a per-call schema field
+ * (`json_depth: z.int().min(1).max(…).default(64)`). The value BLA sizes its
+ * payloads for is that default; a caller of REA can raise it.
+ */
+const SCHEMA_DEFAULT_EXPECTATIONS = [
+  {
+    label: "MAX_JSON_DEPTH",
+    fileHint: "fridaCapturePolicy",
+    field: "json_depth",
+    expected: 64,
+  },
+  {
+    label: "MAX_MESSAGE_TEXT_BYTES",
+    fileHint: "fridaCapturePolicy",
+    field: "message_text_bytes",
+    expected: 32 * 1024,
+  },
+];
+
+/** First `.default(<expr>)` of `field` in a schema file whose path contains `fileHint`. */
+function findSchemaDefault(files, fileHint, field) {
+  const re = new RegExp(String.raw`\b${field}\s*:\s*z\b[\s\S]{0,400}?\.default\(([^)]*)\)`);
+  for (const file of files) {
+    if (!file.includes(fileHint) || /\.(?:test|spec)\.[jt]s$/.test(file)) continue;
+    let text;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const match = re.exec(text);
+    if (match) return { file: file.slice(REA_ROOT.length + 1), expr: match[1].trim() };
+  }
+  return null;
+}
+
 function main() {
   console.log("BLA ↔ REA constant drift verification");
   console.log(`  BLA_ROOT = ${BLA_ROOT}`);
@@ -407,6 +530,13 @@ function main() {
     if (spec.fileHint) {
       const hinted = hits.filter((h) => h.file.includes(spec.fileHint));
       if (hinted.length) hits = hinted;
+    }
+    // Try alternative names when primary name not found (renamed constants).
+    if (hits.length === 0 && spec.altNames) {
+      for (const alt of spec.altNames) {
+        hits = findAssignments(files, alt).filter((h) => !h.isTest);
+        if (hits.length > 0) break;
+      }
     }
     if (hits.length === 0) {
       rows.push({
@@ -484,6 +614,37 @@ function main() {
         status: "FAIL",
         label: spec.label,
         detail: `expected ${spec.expected}, found ${actual} in ${hit.file}`,
+      });
+      failures++;
+    }
+  }
+
+  for (const spec of SCHEMA_DEFAULT_EXPECTATIONS) {
+    const hit = findSchemaDefault(files, spec.fileHint, spec.field);
+    if (hit === null) {
+      rows.push({ status: "FAIL", label: spec.label, detail: `schema default of ${spec.field} not found` });
+      failures++;
+      continue;
+    }
+    let actual;
+    try {
+      actual = evalNumericExpr(hit.expr);
+    } catch (err) {
+      rows.push({ status: "FAIL", label: spec.label, detail: `cannot parse '${hit.expr}': ${err.message}` });
+      failures++;
+      continue;
+    }
+    if (actual === spec.expected) {
+      rows.push({
+        status: "PASS",
+        label: spec.label,
+        detail: `${actual}  (${hit.file}, default of ${spec.field})`,
+      });
+    } else {
+      rows.push({
+        status: "FAIL",
+        label: spec.label,
+        detail: `expected ${spec.expected}, found default ${actual} for ${spec.field} in ${hit.file}`,
       });
       failures++;
     }
@@ -573,6 +734,15 @@ function main() {
       ? `OK  ${rows.length} checks passed — BLA catalog is aligned with REA.`
       : `DRIFT  ${failures}/${rows.length} checks failed — update src/identity.ts / rea-budget-matrix.ts / obligation-flooder.ts.`,
   );
+  // A matching number is not the whole story any more: say so every run.
+  const adjustable =
+    OBJECT_PROP_EXPECTATIONS.filter((spec) => /(?:^DEFAULT_|_DEFAULTS$)/.test(spec.objectName)).length +
+    SCHEMA_DEFAULT_EXPECTATIONS.length;
+  if (adjustable > 0) {
+    console.log(
+      `NOTE  ${adjustable} of these limits are per-call defaults in this REA revision (…_DEFAULTS objects, schema defaults): a caller of REA can raise them. A match means BLA's payloads trip REA as it runs by default — not that they outlast a raised budget.`,
+    );
+  }
   process.exit(failures === 0 ? 0 : 1);
 }
 

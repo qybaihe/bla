@@ -10,7 +10,7 @@
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents-2563eb?style=flat-square&logo=npm)](https://www.npmjs.com/package/bla-agents)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-3b82f6?style=flat-square)](../cli-and-mcp.md)
-[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.13_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
+[![Node.js requirements](https://img.shields.io/badge/Node.js-%5E22.23.4_%7C%7C_%3E%3D24-0284c7?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-protect)
 [![Counter-REA Verified](https://img.shields.io/badge/Counter--REA-BLUE_SHIELD-1d4ed8?style=flat-square)](#showcases)
 [![MIT license](https://img.shields.io/badge/license-MIT-38bdf8?style=flat-square)](../../LICENSE)
 
@@ -78,7 +78,7 @@ npx -y bla-agents@latest protect /absolute/path/to/app -o /absolute/path/to/app.
 # 3. Verifikasi ketahanan terhadap Counter-REA
 npx -y bla-agents@latest verify /absolute/path/to/app.shielded /absolute/path/to/app
 
-# 4. Jalankan pengujian Counter-REA terhadap 8 target
+# 4. Jalankan pengujian Counter-REA terhadap 14 target
 npx -y bla-agents@latest benchmark
 
 # 5. Hasilkan header pertahanan C/C++, Rust, atau Go saat kompilasi
@@ -128,7 +128,7 @@ npx bla-agents@latest setup
 | Flutter / Dart AOT | Menyisipkan 66 header snapshot Dart (`0xf5f5dcdc`) + 6 baris toolchain LLVM, melampaui batas 4 baris | `bla protect libapp.so` · Memicu `SnapshotHashScanner (capped: true)` |
 | Artefak WASM | Menghapus bagian debug; menyisipkan bagian `"name"` umpan (`tee_hardware_enclave_stub`) + data pengalih khusus | `bla protect core.wasm` · Parser biner LEB128 bawaan; validasi `WebAssembly.validate` tetap 100% |
 | Python & `.pyc` | Menyisipkan mesin status jebakan Python ke `.py` dan data pengalih marshal `TYPE_ASCII` ke kumpulan `.pyc` | `bla protect module.pyc` · Perlindungan marshal `.pyc` CPython 3.7–3.14 bawaan |
-| Basis Data SQLite | Menyisipkan 3 tabel enclave umpan dengan jebakan `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` | `bla protect data.sqlite` · Memicu `SqliteColumnEvaluationFailure` saat pratinjau REA |
+| Basis Data SQLite | Menyisipkan 3 tabel enclave umpan dengan jebakan `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` | `bla protect data.sqlite --sqlite-eval-trap` · Memicu `SqliteColumnEvaluationFailure` saat pratinjau REA |
 | Artefak Model AI | Menyisipkan `35 > 32` header JSON/ARRAY bertingkat ke header model `.safetensors` dan `.gguf` | `bla protect weights.safetensors` · Memicu `ModelFormatFailure (json-nesting / metadata-nesting > 32)` |
 | Android DEX & IL2CPP | Menyisipkan kelas umpan `Lcom/enclave/sgx/...` ke `classes.dex` (SHA-1/Adler32 tetap valid) dan `Il2Cpp` | `bla protect classes.dex` atau `global-metadata.dat` · Mengacaukan proses pemulihan JADX/JEB & IL2CPP |
 

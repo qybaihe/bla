@@ -60,12 +60,27 @@ export interface SqlitePolicyEvaluationReport {
   readonly residualRiskNotice: string;
 }
 
+/**
+ * How the generated decoy ("trap") columns of the honey tables are defined.
+ *
+ * - `"none"`: the database has no such columns.
+ * - `"stock"`: plain SQL (`'ENCLAVE_SEALED:' || <column>`). Every SQLite
+ *   connection evaluates it, so the database stays fully usable.
+ * - `"eval"`: a call to `enclave_unseal_payload()`, a function no connection
+ *   but BLA's own registers. Any other client fails when it reads a honey
+ *   table — and when it runs `PRAGMA integrity_check` / `quick_check`,
+ *   `VACUUM`, `VACUUM INTO`, or restores a `.dump` of the database.
+ */
+export type SqliteTrapMode = "none" | "stock" | "eval";
+
 export interface SqliteInspectionSummary {
   readonly validSqlite: boolean;
   readonly tableNames: readonly string[];
   readonly businessTables: readonly string[];
   readonly honeyTablesCount: number;
+  /** True for both trap modes (`trapMode !== "none"`). */
   readonly hasGeneratedTrapColumns: boolean;
+  readonly trapMode: SqliteTrapMode;
   readonly blaProtected: boolean;
   readonly decorationState: "decorated" | "undecorated" | "unsupported-or-encrypted";
   readonly businessDataState: "business-data-preserved" | "empty" | "unknown";
@@ -109,6 +124,97 @@ function sqlStringLiteral(value: string): string {
 
 function isHoneyTableName(name: string): boolean {
   return SQLITE_HONEY_TABLE_NAME_SET.has(name) || name.includes("enclave_");
+}
+
+/**
+ * Generated decoy ("trap") columns on the honey tables, in one of two forms
+ * (see {@link SqliteTrapMode}).
+ *
+ * Releases up to 3.4.3 only had the function form. A generated column is
+ * resolved whenever its table is touched, so on every connection that does not
+ * register `enclave_unseal_payload()` not just a read of a honey table failed
+ * but also `PRAGMA integrity_check` / `quick_check`, `VACUUM`, `VACUUM INTO`
+ * and restoring a `.dump` of the whole database. The default is therefore the
+ * stock form: string concatenation, which every SQLite build that understands
+ * generated columns evaluates, producing exactly the values the function
+ * produces. The function form is an explicit opt-in (`evalTrap`).
+ *
+ * There is no middle ground: an expression that only fails when it is read
+ * cannot hold rows, because INSERT evaluates VIRTUAL generated columns too.
+ */
+const TRAP_VALUE_PREFIX = "ENCLAVE_SEALED:";
+const EVAL_TRAP_FUNCTION = "enclave_unseal_payload";
+
+type TrapExpression = (sourceColumn: string) => string;
+
+const stockTrapExpression: TrapExpression = (sourceColumn) =>
+  `'${TRAP_VALUE_PREFIX}' || ${sourceColumn}`;
+
+const evalTrapExpression: TrapExpression = (sourceColumn) =>
+  `${EVAL_TRAP_FUNCTION}(${sourceColumn})`;
+
+interface HoneyTrapTable {
+  readonly name: string;
+  /** Ordinary (stored) columns, in declaration order. */
+  readonly storedColumns: readonly string[];
+  /** Parenthesised column list of the CREATE TABLE statement. */
+  readonly columnsSql: (trap: TrapExpression) => string;
+}
+
+const HONEY_TRAP_TABLES: readonly HoneyTrapTable[] = [
+  {
+    name: SQLITE_HONEY_TABLES.keyHierarchy,
+    storedColumns: ["slot_id", "key_domain", "enclave_cid", "sealed_payload", "attestation_notice"],
+    columnsSql: (trap) => `(
+          slot_id INTEGER PRIMARY KEY,
+          key_domain TEXT NOT NULL,
+          enclave_cid INTEGER NOT NULL DEFAULT 16,
+          sealed_payload TEXT NOT NULL,
+          attestation_notice TEXT NOT NULL,
+          unsealed_preview TEXT GENERATED ALWAYS AS (${trap("sealed_payload")}) VIRTUAL
+        )`,
+  },
+  {
+    name: SQLITE_HONEY_TABLES.attestationLedger,
+    storedColumns: ["quote_id", "pcr0_sha256", "monotonic_counter", "enclave_manifest"],
+    columnsSql: (trap) => `(
+          quote_id TEXT PRIMARY KEY,
+          pcr0_sha256 TEXT NOT NULL,
+          monotonic_counter INTEGER NOT NULL,
+          enclave_manifest TEXT NOT NULL,
+          verified_state TEXT GENERATED ALWAYS AS (${trap("pcr0_sha256")}) VIRTUAL
+        )`,
+  },
+  {
+    name: SQLITE_HONEY_TABLES.sessionLeases,
+    storedColumns: ["lease_token", "tier_scope", "expires_epoch", "hardware_bound"],
+    columnsSql: (trap) => `(
+          lease_token TEXT PRIMARY KEY,
+          tier_scope TEXT NOT NULL,
+          expires_epoch INTEGER NOT NULL,
+          hardware_bound INTEGER NOT NULL DEFAULT 1,
+          enclave_claim TEXT GENERATED ALWAYS AS (${trap("lease_token")}) VIRTUAL
+        )`,
+  },
+];
+
+/**
+ * Which trap form a schema carries. Ordinary application generated columns
+ * match neither. One function-form column is enough to make the database
+ * unusable for stock tools, so `"eval"` wins over `"stock"`.
+ */
+function trapModeOfSchema(tables: readonly { readonly sql: string | null }[]): SqliteTrapMode {
+  let mode: SqliteTrapMode = "none";
+  for (const { sql } of tables) {
+    if (typeof sql !== "string" || !/GENERATED\s+ALWAYS\s+AS\b/i.test(sql)) continue;
+    if (sql.includes(EVAL_TRAP_FUNCTION)) return "eval";
+    if (sql.includes(`'${TRAP_VALUE_PREFIX}'`)) mode = "stock";
+  }
+  return mode;
+}
+
+function normalizeSchemaSql(sql: string): string {
+  return sql.replace(/\s+/g, " ").trim();
 }
 
 function hasValidSqlite3Header(bytes: Buffer): boolean {
@@ -165,10 +271,25 @@ export function validateSqliteFileInput(dbPath: string): Buffer {
  * snapshot (not in WAL mode requiring external `-wal` state) and passes `PRAGMA integrity_check`.
  */
 export function validateSqliteStandaloneBuffer(bytes: Buffer): void {
+  const failure = describeStandaloneSqliteFailure(bytes, true);
+  if (failure !== null) throw new SqliteWalConsistencyError(failure);
+}
+
+/**
+ * Returns why `bytes` is not a self-contained, consistent SQLite 3 snapshot, or
+ * null when it is one.
+ *
+ * `withTrapFunction` registers the function that eval-mode trap columns call,
+ * so a database hardened in that mode (the only mode of releases up to 3.4.3)
+ * is admitted instead of being rejected as corrupt. It must be false when the
+ * question is whether an unmodified SQLite can use the database.
+ */
+function describeStandaloneSqliteFailure(
+  bytes: Buffer,
+  withTrapFunction: boolean,
+): string | null {
   if (!hasValidSqlite3Header(bytes)) {
-    throw new SqliteWalConsistencyError(
-      "Input is not a valid SQLite 3 database header (minimum 100 bytes with 'SQLite format 3\\0' magic).",
-    );
+    return "Input is not a valid SQLite 3 database header (minimum 100 bytes with 'SQLite format 3\\0' magic).";
   }
   const pageSizeRaw = bytes.readUInt16BE(16);
   const pageSize = pageSizeRaw === 1 ? 65536 : pageSizeRaw;
@@ -178,14 +299,10 @@ export function validateSqliteStandaloneBuffer(bytes: Buffer): void {
     (pageSize & (pageSize - 1)) !== 0 ||
     bytes.length % pageSize !== 0
   ) {
-    throw new SqliteWalConsistencyError(
-      `SQLite file size (${bytes.length}) is not an exact multiple of valid page size (${pageSize}); database appears truncated.`,
-    );
+    return `SQLite file size (${bytes.length}) is not an exact multiple of valid page size (${pageSize}); database appears truncated.`;
   }
   if (isSqliteHeaderWalMode(bytes)) {
-    throw new SqliteWalConsistencyError(
-      "SQLite header indicates WAL mode (format write/read version 2 at bytes 18..19). A single buffer cannot guarantee that committed WAL frames are included. Export a standalone DELETE-mode backup (e.g. VACUUM INTO or PRAGMA journal_mode=DELETE) before protection.",
-    );
+    return "SQLite header indicates WAL mode (format write/read version 2 at bytes 18..19). A single buffer cannot guarantee that committed WAL frames are included. Export a standalone DELETE-mode backup (e.g. VACUUM INTO or PRAGMA journal_mode=DELETE) before protection.";
   }
 
   const DatabaseSync = getDatabaseSyncClass();
@@ -195,25 +312,21 @@ export function validateSqliteStandaloneBuffer(bytes: Buffer): void {
     writeFileSync(dbPath, bytes);
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
-      db.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
-        `ENCLAVE_SEALED:${String(blob ?? "")}`,
-      );
+      if (withTrapFunction) registerEvalTrapFunction(db);
       const integrity = db.prepare("PRAGMA integrity_check").all() as Array<{
         integrity_check?: string;
       }>;
       if (integrity.length !== 1 || integrity[0]?.integrity_check !== "ok") {
-        throw new SqliteWalConsistencyError("SQLite PRAGMA integrity_check failed.");
+        return "SQLite PRAGMA integrity_check failed.";
       }
       // Also ensure sqlite_schema is readable
       db.prepare("SELECT count(*) FROM sqlite_schema").get();
+      return null;
     } finally {
       db.close();
     }
   } catch (err) {
-    if (err instanceof SqliteWalConsistencyError) throw err;
-    throw new SqliteWalConsistencyError(
-      `SQLite database failed read/integrity validation: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    return `SQLite database failed read/integrity validation: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -234,18 +347,22 @@ function snapshotBusinessTables(
     )
     .all() as Array<{ name: string }>;
 
+  // Read integers as BigInt: a 64-bit value (snowflake id, nanosecond timestamp)
+  // does not fit a JavaScript number and would otherwise abort the whole run.
+  const readRows = (sql: string): unknown[] => {
+    const statement = db.prepare(sql);
+    statement.setReadBigInts(true);
+    return statement.all();
+  };
+
   const digests: BusinessTableDigest[] = [];
   for (const { name } of tables) {
     if (isHoneyTableName(name)) continue;
     let rows: unknown[];
     try {
-      rows = db
-        .prepare(`SELECT * FROM ${quoteIdentifier(name)} ORDER BY rowid`)
-        .all();
+      rows = readRows(`SELECT * FROM ${quoteIdentifier(name)} ORDER BY rowid`);
     } catch {
-      rows = db
-        .prepare(`SELECT * FROM ${quoteIdentifier(name)}`)
-        .all();
+      rows = readRows(`SELECT * FROM ${quoteIdentifier(name)}`);
     }
     const hash = createHash("sha256")
       .update(
@@ -305,12 +422,7 @@ export function evaluateSqliteSensitivityPolicy(
       const tableNames = rows.map((r) => r.name);
       const honeyTablesCount = tableNames.filter(isHoneyTableName).length;
       const businessTables = tableNames.filter((n) => !isHoneyTableName(n));
-      const hasGeneratedTrapColumns = rows.some(
-        (r) =>
-          typeof r.sql === "string" &&
-          /GENERATED\s+ALWAYS\s+AS\b/i.test(r.sql) &&
-          r.sql.includes("enclave_unseal_payload"),
-      );
+      const hasGeneratedTrapColumns = trapModeOfSchema(rows) !== "none";
       const decorated = honeyTablesCount > 0 || hasGeneratedTrapColumns;
 
       let totalBusinessRows = 0;
@@ -409,6 +521,7 @@ export function inspectSqliteBuffer(
       businessTables: [],
       honeyTablesCount: 0,
       hasGeneratedTrapColumns: false,
+      trapMode: "none",
       blaProtected: false,
       decorationState: "unsupported-or-encrypted",
       businessDataState: "unknown",
@@ -433,12 +546,8 @@ export function inspectSqliteBuffer(
       const tableNames = rows.map((r) => r.name);
       const honeyTablesCount = tableNames.filter(isHoneyTableName).length;
       const businessTables = tableNames.filter((n) => !isHoneyTableName(n));
-      const hasGeneratedTrapColumns = rows.some(
-        (r) =>
-          typeof r.sql === "string" &&
-          /GENERATED\s+ALWAYS\s+AS\b/i.test(r.sql) &&
-          r.sql.includes("enclave_unseal_payload"),
-      );
+      const trapMode = trapModeOfSchema(rows);
+      const hasGeneratedTrapColumns = trapMode !== "none";
       const blaProtected = honeyTablesCount > 0 || hasGeneratedTrapColumns;
       const policyEval = evaluateSqliteSensitivityPolicy(bytes, policy);
 
@@ -448,6 +557,7 @@ export function inspectSqliteBuffer(
         businessTables,
         honeyTablesCount,
         hasGeneratedTrapColumns,
+        trapMode,
         blaProtected,
         decorationState: blaProtected ? "decorated" : "undecorated",
         businessDataState: policyEval.businessDataState,
@@ -464,6 +574,7 @@ export function inspectSqliteBuffer(
       businessTables: [],
       honeyTablesCount: 0,
       hasGeneratedTrapColumns: false,
+      trapMode: "none",
       blaProtected: false,
       decorationState: "unsupported-or-encrypted",
       businessDataState: "unknown",
@@ -514,17 +625,39 @@ export function minimizeSqliteDatabaseBuffer(
  * NOTE: This decorates the database against automated schema/row harvesting; it does
  * NOT encrypt business columns (`confidentialityState: "confidentiality-not-established"`).
  * Fails closed (`SqliteWalConsistencyError`) if the input is in WAL mode, truncated, or corrupt.
+ *
+ * By default everything added is plain SQL: the output passes `PRAGMA integrity_check`,
+ * `VACUUM` and a dump/restore round trip on a connection that registers no functions,
+ * and the function refuses to return a database for which that does not hold.
  */
 export function protectSqliteBuffer(
   bytes: Buffer,
   options: {
     readonly intensity?: ProtectionIntensity;
     readonly seed?: string | number;
+    /**
+     * Opt in to the function form of the generated trap columns
+     * (`trapMode: "eval"`), exactly as releases up to 3.4.3 wrote them.
+     *
+     * The columns then call `enclave_unseal_payload()`, which only BLA's own
+     * connections register. A tool that reads a honey table on its own
+     * connection fails (REA: `SqliteColumnEvaluationFailure`) — and so does
+     * anyone, the application included, who runs `PRAGMA integrity_check` /
+     * `quick_check`, `VACUUM`, `VACUUM INTO` or restores a `.dump` of this
+     * database. Only for a database that is shipped to be queried and never
+     * maintained. Default false (`trapMode: "stock"`).
+     *
+     * A database whose honey tables are in the other mode is switched: the
+     * tables are rebuilt in the requested mode and keep their rows.
+     */
+    readonly evalTrap?: boolean;
   } = {},
 ): {
   readonly buffer: Buffer;
   readonly honeyTablesInjected: number;
   readonly generatedTrapColumnsAdded: number;
+  /** Form of the generated trap columns in `buffer`; what `inspectSqliteBuffer` reports for it. */
+  readonly trapMode: Exclude<SqliteTrapMode, "none">;
   readonly chaffPayloadsEmbedded: number;
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
@@ -536,6 +669,8 @@ export function protectSqliteBuffer(
 
   const DatabaseSync = getDatabaseSyncClass();
   const intensity = options.intensity ?? "balanced";
+  const trapMode = options.evalTrap === true ? "eval" : "stock";
+  const trapExpression = trapMode === "eval" ? evalTrapExpression : stockTrapExpression;
   const prng = new SeededPrng(options.seed ?? "bla-sqlite-shield-v1");
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
@@ -554,36 +689,16 @@ export function protectSqliteBuffer(
     try {
       beforeDigests = snapshotBusinessTables(db);
 
-      // Register the scalar function during protection so INSERT/DDL validation succeeds cleanly
-      db.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
-        `ENCLAVE_SEALED:${String(blob ?? "")}`,
-      );
+      // Needed to create or read eval-mode honey tables; the stock form does
+      // not use it.
+      registerEvalTrapFunction(db);
+      switchTrapTablesTo(db, trapExpression);
 
       db.exec(`
-        CREATE TABLE IF NOT EXISTS ${SQLITE_HONEY_TABLES.keyHierarchy} (
-          slot_id INTEGER PRIMARY KEY,
-          key_domain TEXT NOT NULL,
-          enclave_cid INTEGER NOT NULL DEFAULT 16,
-          sealed_payload TEXT NOT NULL,
-          attestation_notice TEXT NOT NULL,
-          unsealed_preview TEXT GENERATED ALWAYS AS (enclave_unseal_payload(sealed_payload)) VIRTUAL
-        );
-
-        CREATE TABLE IF NOT EXISTS ${SQLITE_HONEY_TABLES.attestationLedger} (
-          quote_id TEXT PRIMARY KEY,
-          pcr0_sha256 TEXT NOT NULL,
-          monotonic_counter INTEGER NOT NULL,
-          enclave_manifest TEXT NOT NULL,
-          verified_state TEXT GENERATED ALWAYS AS (enclave_unseal_payload(pcr0_sha256)) VIRTUAL
-        );
-
-        CREATE TABLE IF NOT EXISTS ${SQLITE_HONEY_TABLES.sessionLeases} (
-          lease_token TEXT PRIMARY KEY,
-          tier_scope TEXT NOT NULL,
-          expires_epoch INTEGER NOT NULL,
-          hardware_bound INTEGER NOT NULL DEFAULT 1,
-          enclave_claim TEXT GENERATED ALWAYS AS (enclave_unseal_payload(lease_token)) VIRTUAL
-        );
+        ${HONEY_TRAP_TABLES.map(
+          (table) =>
+            `CREATE TABLE IF NOT EXISTS ${table.name} ${table.columnsSql(trapExpression)};`,
+        ).join("\n\n        ")}
 
         CREATE VIEW IF NOT EXISTS ${SQLITE_HONEY_TABLES.activeTopologyView} AS
           SELECT slot_id, key_domain, enclave_cid, attestation_notice
@@ -692,13 +807,20 @@ export function protectSqliteBuffer(
     }
 
     const outBuffer = readFileSync(dbPath);
-    validateSqliteStandaloneBuffer(outBuffer);
+    if (trapMode === "eval") {
+      // Consistent for a connection that registers the trap function; by
+      // design not for any other.
+      validateSqliteStandaloneBuffer(outBuffer);
+    } else {
+      assertUsableByStockSqlite(outBuffer);
+    }
     const policyEval = evaluateSqliteSensitivityPolicy(outBuffer);
 
     return {
       buffer: outBuffer,
       honeyTablesInjected,
       generatedTrapColumnsAdded,
+      trapMode,
       chaffPayloadsEmbedded: chaffPayloads.length,
       canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
       diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
@@ -767,12 +889,71 @@ export function readSqliteHeaderIdentity(bytes: Uint8Array): {
   };
 }
 
-function registerProtectFunctions(
+/**
+ * Registers the function that eval-mode trap columns call, so BLA's own
+ * connection can create, read and check such tables. The stock form does not
+ * depend on it.
+ */
+function registerEvalTrapFunction(
   db: InstanceType<ReturnType<typeof getDatabaseSyncClass>>,
 ): void {
-  db.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
-    `ENCLAVE_SEALED:${String(blob ?? "")}`,
+  db.function(EVAL_TRAP_FUNCTION, { deterministic: true }, (blob: unknown) =>
+    `${TRAP_VALUE_PREFIX}${String(blob ?? "")}`,
   );
+}
+
+/**
+ * Rebuilds honey tables whose trap column is in the other form, so that the
+ * requested mode holds for the whole database (`CREATE TABLE IF NOT EXISTS`
+ * alone would keep them). This is also what repairs a database that a release
+ * up to 3.4.3 left unusable for stock tools.
+ *
+ * A table is rebuilt only when its definition is exactly the one BLA writes
+ * for the other mode, which makes it BLA's own decoy; its rows are carried
+ * over unchanged. A table already in the requested mode, and anything BLA did
+ * not write, is left alone.
+ */
+function switchTrapTablesTo(
+  db: InstanceType<ReturnType<typeof getDatabaseSyncClass>>,
+  wanted: TrapExpression,
+): void {
+  const other = wanted === stockTrapExpression ? evalTrapExpression : stockTrapExpression;
+  const definition = db.prepare(
+    "SELECT sql FROM main.sqlite_schema WHERE type = 'table' AND name = ?",
+  );
+  for (const table of HONEY_TRAP_TABLES) {
+    const row = definition.get(table.name) as { sql: string | null } | undefined;
+    if (typeof row?.sql !== "string") continue;
+    const otherSql = `CREATE TABLE ${table.name} ${table.columnsSql(other)}`;
+    if (normalizeSchemaSql(row.sql) !== normalizeSchemaSql(otherSql)) continue;
+
+    const columns = table.storedColumns.join(", ");
+    const carried = quoteIdentifier(`${table.name}_carried_rows`);
+    db.exec(`
+      CREATE TEMP TABLE ${carried} AS SELECT ${columns} FROM main.${table.name} ORDER BY rowid;
+      DROP TABLE main.${table.name};
+      CREATE TABLE main.${table.name} ${table.columnsSql(wanted)};
+      INSERT INTO main.${table.name} (${columns}) SELECT ${columns} FROM temp.${carried} ORDER BY rowid;
+      DROP TABLE temp.${carried};
+    `);
+  }
+}
+
+/**
+ * Post-condition of `protectSqliteBuffer` in the default (stock) mode: the
+ * hardened database must work on a connection that registers nothing, i.e. for
+ * the application that ships it and for `sqlite3`, backup and migration tools.
+ * `PRAGMA integrity_check` resolves every generated column, CHECK constraint
+ * and index expression, so it fails here exactly when routine maintenance
+ * would fail for the user.
+ */
+function assertUsableByStockSqlite(bytes: Buffer): void {
+  const failure = describeStandaloneSqliteFailure(bytes, false);
+  if (failure !== null) {
+    throw new SqliteWalConsistencyError(
+      `The hardened database would not be usable by an unmodified SQLite (${failure}); refusing to emit it. If the input carries eval-mode trap columns that are not BLA's own honey tables, harden the original database instead, or opt in to evalTrap.`,
+    );
+  }
 }
 
 /**
@@ -880,7 +1061,7 @@ export function plantSqliteSidecarSchemaComment(
     writeFileSync(dbPath, input);
     const db = new DatabaseSync(dbPath);
     try {
-      registerProtectFunctions(db);
+      registerEvalTrapFunction(db);
       const before = snapshotBusinessTables(db);
       db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
       db.exec(
@@ -934,7 +1115,7 @@ export function stripSqliteSidecarSchemaComment(bytes: Uint8Array): Buffer {
     writeFileSync(dbPath, input);
     const db = new DatabaseSync(dbPath);
     try {
-      registerProtectFunctions(db);
+      registerEvalTrapFunction(db);
       const before = snapshotBusinessTables(db);
       db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
       const after = snapshotBusinessTables(db);

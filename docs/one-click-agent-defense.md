@@ -31,6 +31,30 @@ The agent should invoke:
 `.sqlite`, models, DEX, …) and runs **audit → defend (bankrupt) → verify**.
 Agents must **not** ask which files to protect.
 
+## From "hardened" to "shipped"
+
+`bla_harden` writes `.bla-hardened/`, a partial mirror holding only the hardened files.
+The build output is still the unprotected one. The result's **`nextSteps`** says so, and
+the agent finishes the job:
+
+1. Call `bla_harden` again with `{ "directory": ".", "apply": true }`. It answers
+   `confirmation_required` and lists `wouldOverwrite`; the agent asks the user, then
+   repeats with `"confirm_overwrite": true`. Only files inside a build-output directory
+   are overwritten — never source — and the originals are kept outside the project.
+2. Run the project's own tests or a smoke run against the promoted build.
+3. `{ "directory": ".", "restore": true, "confirm_overwrite": true }` puts the originals
+   back if anything is wrong. A later `apply` hardens from those originals again.
+4. If one hardened file is what breaks a test (or slows a hot path), the agent hardens
+   again with only that file left out — `"exclude": ["dist/vendor/heavy.js"]` — instead
+   of giving up, and reports which files ship unprotected (`excluded`).
+
+CLI: `npx bla-agents@latest harden . --apply` and `harden . --restore`.
+
+Things an agent should not do, and the server says so in its `initialize` instructions:
+edit, lint or re-harden BLA's own output (discovery lists it under
+`skippedHardenedOutputs`); write hardened code over source files; retry an `isError`
+result unchanged instead of reading `artifacts[].error` and `nextSteps`.
+
 ## Named single artifact
 
 When a specific file is already known:
@@ -73,7 +97,24 @@ See [`weave-decoy-mcp.md`](./weave-decoy-mcp.md). Do **not** add dismissible
 
 Pass `--self-seal` / MCP `self_seal: true` / `.blarc` `"selfSeal": true` so JS/Node harden paths inject sibling-module integrity binding and entangle the opaque seed. Off by default.
 
+The report states what the binding covers instead of implying it covers everything:
+`integrityBindingEntry` is the module that pins its hardened siblings (when `bin` loads
+`main`, the check is hosted in `main`, so both ways in run it);
+`integrityBindingUncoveredEntries` names declared entry points that never load it; and
+`integrityBindingSkipped` lists what was hardened without the binding — browser bundles
+(it needs `node:fs` / `node:crypto`; use Subresource Integrity there) and mutable data
+such as a SQLite database the application writes to.
+
+A SQLite database is decorated, not hidden: BLA adds honey tables beside the application's
+own, which stay readable to anyone who opens the file (the report says so, and caps the
+score). By default those honey tables are plain SQL, so the database still passes
+`PRAGMA integrity_check`, `VACUUM` and a dump/restore everywhere. `sqlite_eval_trap`
+(CLI `--sqlite-eval-trap`) switches their generated columns to a function no stock
+connection has: an inspector's row read of a honey table then fails — and so do those
+maintenance commands for the application, unless it registers the function itself. Use
+it only for a database the application just queries.
+
 ## WASM export rename / preserve (#40.3)
 
-At `maximum`/`bankrupt`, BLA renames **all** non-preserved WASM exports. Pass `--wasm-preserve-exports main,add` / MCP `wasm_preserve_exports` / `.blarc` `"wasmPreserveExports": ["main","add"]` only when the public ABI must stay; otherwise consume the rename map. Do not leave independent JS lane tables — `bla lint-lanes` / harden refuse unless `--allow-lane-independent`.
+At `maximum`/`bankrupt`, BLA renames non-preserved WASM exports. Three kinds of name stay: the ones you list (`--wasm-preserve-exports main,add` / MCP `wasm_preserve_exports` / `.blarc` `"wasmPreserveExports": ["main","add"]`), the ones another file in the project refers to (reported per artifact as `wasmExportsAutoPreserved`, with the file that uses them), and the ones a host looks up by specification (`_start`, `memory`, `__wbindgen_*`, …). Everything else is renamed and the old → new map comes back in `artifacts[].wasmExportRenames` for callers outside the project. Do not leave independent JS lane tables — `bla lint-lanes` / harden refuse unless `--allow-lane-independent`.
 

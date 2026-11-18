@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { BLA_ROOT } from "./paths.mjs";
@@ -51,6 +52,7 @@ export async function loadBla() {
     SeededPrng: (await import(join(BLA_ROOT, "dist/core/prng.js"))).SeededPrng,
     REA_INTERNAL_LIMITS: (await import(join(BLA_ROOT, "dist/identity.js")))
       .REA_INTERNAL_LIMITS,
+    BLA_VERSION: require(join(BLA_ROOT, "package.json")).version,
     transformJavaScriptWithBlaShield: (
       await import(join(BLA_ROOT, "dist/shields/javascript/ast-shield.js"))
     ).transformJavaScriptWithBlaShield,
@@ -252,7 +254,8 @@ export async function buildSampleMatrix() {
   };
   try {
     sqliteRaw = bla.buildSampleSqliteDatabase();
-    sqliteHard = bla.protectSqliteBuffer(sqliteRaw, { intensity, seed });
+    // The probe below validates the evaluation trap, which is opt-in.
+    sqliteHard = bla.protectSqliteBuffer(sqliteRaw, { intensity, seed, evalTrap: true });
   } catch (err) {
     sqliteHard = {
       buffer: sqliteRaw,
@@ -294,11 +297,37 @@ module.exports = { balanced, bankrupt, quote, BASE_RATE, VAT_RATE };
     sourceType: "commonjs",
   });
 
+  // JavaScript strings — three known values, to see what REA recovers of them
+  // at its default budgets and with every semantic_precision budget raised.
+  const jsStringValues = {
+    endpoint: "https://licensing.acme-internal.example/v2/activate",
+    channel: "license:activate",
+    digest: createHash("sha256").update("bla-redteam-js-strings").digest("hex"),
+  };
+  const jsStringsRawText = `const API = ${JSON.stringify(jsStringValues.endpoint)};
+const CHANNEL = ${JSON.stringify(jsStringValues.channel)};
+const EXPECTED = ${JSON.stringify(jsStringValues.digest)};
+function check(h) { return h === EXPECTED; }
+function activate(send) { return send(CHANNEL, API); }
+module.exports = { API, CHANNEL, check, activate };
+`;
+  const jsStringsHard = bla.transformJavaScriptWithBlaShield(jsStringsRawText, {
+    intensity,
+    seed: `${seed}:js-strings`,
+    sourceType: "commonjs",
+  });
+
   return {
     bla,
     intensity,
     seed,
     samples: {
+      javascript_strings: {
+        format: "javascript_strings",
+        before: Buffer.from(jsStringsRawText, "utf8"),
+        after: Buffer.from(jsStringsHard.code, "utf8"),
+        meta: { values: jsStringValues },
+      },
       go_flutter_elf: {
         format: "go_flutter_elf",
         before: elfRaw,
@@ -336,6 +365,7 @@ module.exports = { balanced, bankrupt, quote, BASE_RATE, VAT_RATE };
           estimatedTsharkJsonBytes: pcapHard.estimatedTsharkJsonBytes,
           exceedsTsharkJsonBudget: pcapHard.exceedsTsharkJsonBudget,
           packetsInjected: pcapHard.packetsInjected,
+          answerFloodPackets: pcapHard.answerFloodPackets ?? 0,
         },
       },
       gpu_ptx: {

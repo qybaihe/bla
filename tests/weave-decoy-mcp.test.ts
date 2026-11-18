@@ -108,6 +108,75 @@ describe("weave-decoy MCP descriptors", () => {
     ).contents;
     expect(contents[0]!.uri).toBe(WEAVE_DIRECTIVES_URI);
     expect(contents[0]!.text).toContain("bla_weave_plan");
+
+    // The doc resource is a pointer, not the same document a second time.
+    const pointer = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 31,
+      method: "resources/read",
+      params: { uri: "bla://docs/weave-decoy-mcp" },
+    });
+    const pointerText = (pointer?.result as { contents: Array<{ text: string }> }).contents[0]!.text;
+    expect(pointerText).toContain(WEAVE_DIRECTIVES_URI);
+    expect(pointerText.length).toBeLessThan(600);
+  });
+
+  it("serves the skill bundle as resources, by exact URI only", async () => {
+    const listed = await handleMcpRequest({ jsonrpc: "2.0", id: 40, method: "resources/list" });
+    const resources = (
+      listed?.result as { resources: Array<{ uri: string; description: string; mimeType: string }> }
+    ).resources;
+    const uris = resources.map((r) => r.uri);
+    expect(uris).toEqual(
+      expect.arrayContaining([
+        "bla://skill/SKILL.md",
+        "bla://skill/references/format-javascript.md",
+        "bla://skill/references/format-wasm.md",
+        "bla://skill/references/format-python.md",
+      ]),
+    );
+    expect(new Set(uris).size).toBe(uris.length);
+    for (const r of resources) {
+      expect(r.mimeType).toBe("text/markdown");
+      expect(r.description.length).toBeGreaterThan(10);
+    }
+
+    const guide = await handleMcpRequest({
+      jsonrpc: "2.0",
+      id: 41,
+      method: "resources/read",
+      params: { uri: "bla://skill/SKILL.md" },
+    });
+    const guideText = (guide?.result as { contents: Array<{ text: string; uri: string }> }).contents[0]!;
+    expect(guideText.uri).toBe("bla://skill/SKILL.md");
+    expect(guideText.text).toContain("bla_harden");
+    expect(guideText.text).toContain("nextSteps");
+
+    // Every link the guide makes into its own bundle resolves to a listed resource.
+    const linked = [...guideText.text.matchAll(/\]\((references\/[A-Za-z0-9._-]+\.md)\)/g)].map(
+      (m) => `bla://skill/${m[1]}`,
+    );
+    expect(linked.length).toBeGreaterThan(0);
+    for (const uri of linked) expect(uris, uri).toContain(uri);
+
+    // Lookup is by exact URI: nothing outside the bundle can be named.
+    for (const uri of [
+      "bla://skill/../../package.json",
+      "bla://skill/references/../SKILL.md",
+      "bla://skill/",
+      "bla://skill/skill.md",
+    ]) {
+      const bad = await handleMcpRequest({
+        jsonrpc: "2.0",
+        id: 42,
+        method: "resources/read",
+        params: { uri },
+      });
+      expect(bad?.error?.code, uri).toBe(-32602);
+    }
+
+    const init = await handleMcpRequest({ jsonrpc: "2.0", id: 43, method: "initialize" });
+    expect((init?.result as { instructions: string }).instructions).toContain("bla://skill/SKILL.md");
   });
 
   it("tools/call bla_weave_plan returns structured plan", async () => {

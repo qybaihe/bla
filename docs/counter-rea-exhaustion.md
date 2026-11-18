@@ -11,7 +11,7 @@ BLA's Resource Exhaustion Engine is engineered directly from a line-by-line audi
 | `javascriptSemanticResourceLimits.ts:13` | `SEMANTIC_ALIAS_SELECTION_LIMIT` | `512` states | Generates $\ge 520$ dynamic property selector states (`_blaAliasTbl[k]`). |
 | `javascriptSemanticResourceLimits.ts:15` | `SEMANTIC_PRIMITIVE_JSON_BYTES_LIMIT` | `1,048,576` bytes | Exploits REA's `codeUnits * 6 + 2` Cartesian concatenation formula (`32 x 32` 220-byte strings = 2.7 MB charge from 14 KB of code). |
 | `wasmInterface.ts:90` | `WASM_INTERFACE_REPRESENTATION_BYTES` | `33,554,432` bytes | Maximizes `1024 + (module.length + name.length + wat_form.length) * 6 + (params.length + results.length) * 16` per Wasm entry. |
-| `SqliteDatabaseLimits.ts:28` | `SqliteColumnEvaluationFailure` | `1` uncomputable cell | Injects `GENERATED ALWAYS AS (bla_enclave_unseal(...)) VIRTUAL` columns that fail on REA's bare read-only connection. |
+| `SqliteDatabaseLimits.ts:28` | `SqliteColumnEvaluationFailure` | `1` uncomputable cell | With `--sqlite-eval-trap` / `sqlite_eval_trap` (opt-in): injects `GENERATED ALWAYS AS (enclave_unseal_payload(...)) VIRTUAL` columns that fail on REA's bare read-only connection — and on the application's own `PRAGMA integrity_check` / `VACUUM`. The default decoy columns are plain SQL. |
 | `SafetensorsHeader.ts:74` / `GgufHeader.ts:121` | `MODEL_JSON_NESTING` / `MODEL_METADATA_NESTING` | `32` levels | Embeds 35-level nested JSON / GGUF ARRAY structures. |
 
 ## 2. 22-Family `ReconstructionObligationLedger` Flood (`obligation-flooder.ts`)

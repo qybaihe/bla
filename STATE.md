@@ -1,6 +1,6 @@
 # BLA state of the project
 
-**Version:** 3.4.4 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
+**Version:** 3.5.0 (`package.json` ↔ `src/identity.ts`, verified by build; see `CHANGELOG.md`)  
 **Status:** CI matrix runs typecheck, build, tests and the benchmark on ubuntu / macos / windows with Node 24, plus ubuntu on the pinned engines floor Node 22.23.4. Windows checkouts keep `challenge/**` LF via `.gitattributes` so the CrackMe seals verify.  
 **Publishing:** tagged releases (`git tag bla-agents-<version>`) plus GitHub Releases. The release workflow can also publish the packed tarball to npm with provenance when `NPM_TOKEN`/OIDC is configured; a release cut may intentionally skip the npm step (see `CHANGELOG.md`).
 
@@ -22,7 +22,7 @@ Also: `bla_harden` MCP tool with `{ "directory": "." }`.
 | WebAssembly | ✓ export decoys | **verified** — Wabt `WASM_INTERFACE_REPRESENTATION_BYTES` / partial | needs Wabt for REA path |
 | Python `.py` / `.pyc` | ✓ | designed-for | `.py` AST weave + `.pyc` remmarshal `co_consts` CODE weave when `weave_decoys` |
 | Native ELF (Go/Flutter/Electron fuses) | ✓ | **verified** — `MAX_BUILD_INFO_BYTES`, pool URIs/tokens, fuse sentinels | |
-| SQLite | ✓ honey + trap columns | **verified** on Node 24 — `SqliteColumnEvaluationFailure`; Node 22 soft `capability_gated` | |
+| SQLite | ✓ honey tables; eval-trap columns opt-in (`--sqlite-eval-trap`) | **verified** on Node 24 with the eval trap — `SqliteColumnEvaluationFailure`; Node 22 soft `capability_gated` | default output is decoys only and stays usable (`integrity_check`, `VACUUM`); application tables are never hidden |
 | Safetensors | ✓ nesting breaker | **verified** — `MODEL_JSON_NESTING` (HF-loadable) | |
 | GGUF | ✓ | **verified** — `MODEL_METADATA_NESTING` | |
 | Erlang BEAM | ✓ | **verified** — `max_chunks` | |

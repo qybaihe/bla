@@ -71,6 +71,8 @@ export interface OneClickDefenseOptions {
   readonly allowReleaseHygieneLeak?: boolean;
   /** Sibling paths forwarded into self-seal when enabled (multi-artifact harden). */
   readonly selfSealSiblingPaths?: readonly string[];
+  /** SQLite only, opt-in: evaluation-trap columns (see `ProtectionOptions.sqliteEvalTrap`). */
+  readonly sqliteEvalTrap?: boolean;
 }
 
 export interface OneClickDefenseStageSummary {
@@ -227,6 +229,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     options.selfSealSiblingPaths.length > 0
       ? { selfSealSiblingPaths: options.selfSealSiblingPaths }
       : {}),
+    ...(options.sqliteEvalTrap === true ? { sqliteEvalTrap: true } : {}),
     ...(options.sidecarEntangle !== undefined
       ? { sidecarEntangle: options.sidecarEntangle }
       : {}),

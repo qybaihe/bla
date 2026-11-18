@@ -91,7 +91,7 @@ export const REA_BUDGET_BREAKER_MATRIX: readonly ReaSubsystemBudgetSpec[] = [
     failureClassOrStatus:
       'SqliteColumnEvaluationFailure("column-evaluation") on read-only snapshot',
     counterStrategy:
-      "Inject VIRTUAL generated columns invoking application-defined scalar functions absent on REA's bare read-only connection.",
+      "Opt-in (sqliteEvalTrap): inject VIRTUAL generated columns invoking an application-defined scalar function absent on REA's bare read-only connection. The default decoy columns are plain SQL and do not trip this limit.",
   },
   {
     id: "safetensors-json-nesting",
@@ -241,7 +241,7 @@ export const REA_BUDGET_BREAKER_MATRIX: readonly ReaSubsystemBudgetSpec[] = [
     unit: "bytes",
     failureClassOrStatus: "tshark JSON output exceeds 8 MiB",
     counterStrategy:
-      "Inject high-volume decoy packets whose decoded JSON projection exceeds TSHARK_JSON_MAX_BYTES.",
+      "Append DNS responses whose answers name a 251-character owner through 2-byte compression pointers: REA's tshark field pass prints every name in full and passes TSHARK_JSON_MAX_BYTES, which no REA setting raises (bankrupt).",
   },
   {
     id: "gpu-report-bytes",

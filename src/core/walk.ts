@@ -7,6 +7,8 @@ export interface BoundedWalkOptions {
   /** Stop after this many accepted files. Use Number.MAX_SAFE_INTEGER for no cap. */
   readonly maxFiles: number;
   readonly skipDirs?: ReadonlySet<string>;
+  /** Do not descend into a subdirectory for which this returns true. */
+  readonly skipDir?: (fullPath: string, name: string) => boolean;
   /** Skip directories whose name starts with "." (hidden files are still allowed). */
   readonly skipHiddenDirs?: boolean;
   /** Sort directory entries by name for stable, platform-independent paging. */
@@ -40,6 +42,7 @@ export function walkBounded(root: string, options: BoundedWalkOptions): string[]
     maxDepth,
     maxFiles,
     skipDirs,
+    skipDir,
     skipHiddenDirs = false,
     sortEntries = false,
     descendAtMaxDepth = true,
@@ -66,6 +69,7 @@ export function walkBounded(root: string, options: BoundedWalkOptions): string[]
         if (skipDirs?.has(entry.name)) continue;
         if (skipHiddenDirs && entry.name.startsWith(".")) continue;
         if (!descendAtMaxDepth && depth >= maxDepth) continue;
+        if (skipDir?.(join(dir, entry.name), entry.name) === true) continue;
         visit(join(dir, entry.name), depth + 1);
         continue;
       }

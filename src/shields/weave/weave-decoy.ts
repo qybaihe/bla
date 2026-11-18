@@ -12,10 +12,23 @@ import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
 import * as t from "@babel/types";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, join, relative, resolve } from "node:path";
-import { detectArtifactFormat } from "../../core/detector.js";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
+import {
+  detectArtifactFormat,
+  isTypeScriptDeclarationPath,
+} from "../../core/detector.js";
+import { isDevToolingFile, readPackageToolingScripts } from "../../core/dev-tooling.js";
 import type { ArtifactFormat } from "../../core/types.js";
 import { lintLaneIndependence } from "../../engine/lane-independence-lint.js";
+
+/**
+ * Project-relative path as reports spell it: forward slashes on every
+ * platform, so a plan or verdict reads the same on Windows and matches the
+ * paths `bla_harden` reports.
+ */
+function posixRelative(from: string, to: string): string {
+  return relative(from, to).split(sep).join("/");
+}
 
 type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
 type TraverseFn = UnwrapDefault<typeof _traverse>;
@@ -193,6 +206,26 @@ export interface WeaveAgentAction {
   readonly verifyTool: "bla_verify_weave" | "bla_lint" | "bla_verify";
 }
 
+/**
+ * `required` files decide the verdict; `advisory` files are reported but never
+ * block it (a date formatter does not need shadow business logic).
+ */
+export type WeaveFileScope = "required" | "advisory";
+
+/**
+ * Which files decided the verdict:
+ *
+ * - `crown-jewels` — the directory holds files with gate / auth / entitlement
+ *   logic (by function name, file name, or a detected crown-jewel weakness);
+ *   exactly those must pass.
+ * - `agent-selected` — nothing in the directory looks like a gate by name, so
+ *   the host agent picks the module that holds the proprietary logic; at least
+ *   one source file must pass.
+ * - `all` — every verified file must pass (a single-file target, or the strict
+ *   `scope: "all"` option).
+ */
+export type WeaveVerifyScope = "crown-jewels" | "agent-selected" | "all";
+
 export interface WeaveFileVerification {
   readonly path: string;
   readonly relativePath: string;
@@ -205,6 +238,10 @@ export interface WeaveFileVerification {
   readonly unreferencedFunctions: readonly string[];
   readonly sharedStateVars: readonly string[];
   readonly syntaxValid?: boolean;
+  /** Set by `verifyWeaveTarget`: does this file count toward `overallPassed`? */
+  readonly scope?: WeaveFileScope;
+  /** Why the file is `required` (empty for advisory files). */
+  readonly crownJewelSignals?: readonly string[];
 }
 
 export interface WeaveVerificationReport {
@@ -213,9 +250,24 @@ export interface WeaveVerificationReport {
   readonly verifiedAtIso: string;
   readonly overallPassed: boolean;
   readonly weaveScore: number;
+  readonly scope: WeaveVerifyScope;
+  /** Relative paths that decide `overallPassed`. */
+  readonly requiredFiles: readonly string[];
+  /** Relative paths verified for information only. */
+  readonly advisoryFiles: readonly string[];
   readonly files: readonly WeaveFileVerification[];
+  /** Actions for `required` files only — an empty list means nothing is pending. */
   readonly agentActions: readonly WeaveAgentAction[];
   readonly summary: string;
+}
+
+export interface VerifyWeaveOptions {
+  readonly maxTargets?: number;
+  /**
+   * `auto` (default): scope a directory verdict to its crown-jewel files.
+   * `all`: every verified source file must pass.
+   */
+  readonly scope?: "auto" | "all";
 }
 
 export const WEAVE_AGENT_PLAYBOOK: readonly WeaveAgentPlaybookPhase[] =
@@ -548,18 +600,238 @@ function hasScareStem(identifier: string): boolean {
 const FORBIDDEN_BANNER_REGEX =
   /(?:\b_bla_[a-zA-Z0-9_]*|\bBLA[-_]SHIELD\b|\bTODO:\s*decoy\b|\bfake_honeypot\b)/;
 
-function classifyFunctionRole(
+/**
+ * Lowercase words of an identifier: camelCase / PascalCase humps, acronym runs
+ * (`verifyJWTToken` → verify, jwt, token), snake_case, `$`, and letter↔digit
+ * boundaries (`verify2fa` → verify, 2, fa).
+ */
+function splitIdentifierWords(identifier: string): string[] {
+  return identifier
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])/)
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length > 0);
+}
+
+/**
+ * Gate / auth vocabulary, matched per word from the word's start.
+ *
+ * Tuple: [stem id, stem pattern, benign continuation]. A word that starts with
+ * the stem is a gate word unless what follows the stem is a benign continuation
+ * — the English words that merely *contain* a gate stem: `author`, `tokenize`,
+ * `checkbox`, `checkout`, `checkpoint`, `checksum`, `gateway`, `signal`,
+ * `significant`. Words where the stem is not at the start (`navigate`,
+ * `aggregate`, `delegate`, `design`, `assign`, `conceal`, `invalidate`) never
+ * match at all, which is the point: a substring test classified every one of
+ * them as an auth gate and then demanded crown-jewel surgery on a router.
+ */
+const GATE_WORD_RULES: readonly (readonly [string, RegExp, RegExp | null])[] = [
+  ["auth", /^o?auth/, /^(?:or(?:s|ed|ing|ship)?|entic)$/],
+  ["verify", /^verif(?:y|ie[ds]|ier|ication)/, null],
+  ["license", /^licen[sc]/, null],
+  ["unlock", /^unlock/, null],
+  ["seal", /^(?:un)?seal/, null],
+  ["token", /^token/, /^i[sz](?:e|es|ed|er|ers|ing|ation)$/],
+  ["check", /^check/, /^(?:box(?:es)?|outs?|points?|marks?|lists?|sums?|erboard)$/],
+  ["gate", /^gat(?:e|ing)/, /^ways?$/],
+  ["validate", /^validat(?:e|ion|or|ing)/, null],
+  [
+    "sign",
+    /^sign/,
+    /^(?:al(?:s|ed|ing|led|ling|er|i[sz]e)?|if(?:y|ies|ied|icant|icance)|posts?|age)$/,
+  ],
+];
+
+/**
+ * Verb / noun prefixes that may precede a gate stem inside a boundary-less
+ * lowercase compound (`islicensed`, `recheck`, `pwcheck`, `sigverify`). Kept
+ * closed on purpose: `un` would turn `unsigned` / `unchecked` into gates.
+ */
+const GATE_COMPOUND_PREFIX_RE =
+  /^(?:is|has|can|do|did|get|set|re|pre|self|needs?|requires?|ensure|assert|must|should|key|pw|pass|sig|crc|hash|flag|serial|user|api|jwt|access|session|id|my|run|try)/;
+
+/** `healthCheck`, `checkForUpdates`, `typeCheck`: probes, not entitlement gates. */
+const BENIGN_CHECK_CONTEXT_WORDS: ReadonlySet<string> = new Set([
+  "health",
+  "heartbeat",
+  "liveness",
+  "readiness",
+  "spell",
+  "type",
+  "lint",
+  "update",
+  "updates",
+  "upgrade",
+  "upgrades",
+  "version",
+  "overflow",
+  "bounds",
+  "collision",
+  "collisions",
+  "null",
+  "nan",
+  "empty",
+]);
+
+/** `validateEmail`, `validateForm`, `validateSchema`: input validation, not entitlement. */
+const BENIGN_VALIDATE_CONTEXT_WORDS: ReadonlySet<string> = new Set([
+  "email",
+  "form",
+  "forms",
+  "input",
+  "inputs",
+  "field",
+  "fields",
+  "schema",
+  "props",
+  "args",
+  "arguments",
+  "params",
+  "options",
+  "config",
+  "json",
+  "date",
+  "url",
+  "uri",
+  "phone",
+  "address",
+  "payload",
+  "body",
+  "query",
+  "type",
+  "types",
+  "shape",
+  "format",
+  "range",
+  "length",
+]);
+
+const ROUTE_WORD_RE =
+  /^(?:rout(?:e|er|es|ing)|handl(?:e|er|ers|es|ing)|controllers?|dispatch|request|endpoint|apis?$|main$|init)/;
+
+function gateStemOfWord(word: string): string | null {
+  for (const [id, stem, benign] of GATE_WORD_RULES) {
+    const match = stem.exec(word);
+    if (match === null) continue;
+    if (benign !== null && benign.test(word.slice(match[0].length))) continue;
+    return id;
+  }
+  return null;
+}
+
+/**
+ * Gate stems carried by an identifier, in word order (empty = not a gate name).
+ * `LicenseError` / `TokenExpiredException` name error types, not decisions.
+ */
+function gateStemsOfIdentifier(name: string): string[] {
+  const words = splitIdentifierWords(name);
+  const lastWord = words[words.length - 1];
+  if (lastWord === undefined || /^(?:errors?|exceptions?)$/.test(lastWord)) {
+    return [];
+  }
+  const stems: string[] = [];
+  for (const word of words) {
+    let stem = gateStemOfWord(word);
+    if (stem === null) {
+      const prefix = GATE_COMPOUND_PREFIX_RE.exec(word);
+      if (prefix !== null && prefix[0].length < word.length) {
+        stem = gateStemOfWord(word.slice(prefix[0].length));
+      }
+    }
+    if (stem !== null) stems.push(stem);
+  }
+  if (
+    stems.length > 0 &&
+    stems.every((stem) => stem === "check") &&
+    words.some((word) => BENIGN_CHECK_CONTEXT_WORDS.has(word))
+  ) {
+    return [];
+  }
+  if (
+    stems.length > 0 &&
+    stems.every((stem) => stem === "validate") &&
+    words.some((word) => BENIGN_VALIDATE_CONTEXT_WORDS.has(word))
+  ) {
+    return [];
+  }
+  return stems;
+}
+
+export function classifyFunctionRole(
   name: string,
   exported: boolean,
 ): WeaveFunctionCandidate["role"] {
-  const cleaned = name.replace(/checkpoint/gi, "");
-  if (/auth|verify|license|unlock|token|check|gate|seal|validate|sign/i.test(cleaned)) {
+  if (gateStemsOfIdentifier(name).length > 0) {
     return "gate-or-auth";
   }
-  if (/route|handle|controller|dispatch|request|endpoint|api|main|init/i.test(cleaned)) {
+  if (splitIdentifierWords(name).some((word) => ROUTE_WORD_RE.test(word))) {
     return "route-handler";
   }
   return exported ? "exported-api" : "internal-helper";
+}
+
+/**
+ * Entitlement vocabulary beyond the gate stems. Only used to decide which
+ * files a directory-level verdict depends on — never for the strict per-gate
+ * checks, where a false "gate" would demand crown-jewel surgery.
+ */
+const ENTITLEMENT_WORD_RE =
+  /^(?:entitle|premium$|paywall|subscription|passw(?:or)?d|passcode|passphrase|credential|permission|secrets?$|activation|drm$|tamper)/;
+
+/** True when an identifier (function or file stem) names gate / entitlement logic. */
+export function isCrownJewelIdentifier(name: string): boolean {
+  if (gateStemsOfIdentifier(name).length > 0) return true;
+  const words = splitIdentifierWords(name);
+  const lastWord = words[words.length - 1];
+  if (lastWord === undefined || /^(?:errors?|exceptions?)$/.test(lastWord)) {
+    return false;
+  }
+  return words.some((word) => ENTITLEMENT_WORD_RE.test(word));
+}
+
+/** Evidence that a verified file carries logic worth entangling. */
+function crownJewelSignalsOf(report: WeaveFileVerification): string[] {
+  const signals: string[] = [];
+  if (report.syntaxValid === false) {
+    signals.push("syntax error — the file cannot be verified until it parses");
+  }
+  const gateFns = report.discoveredFunctions.filter(isCrownJewelIdentifier);
+  if (gateFns.length > 0) {
+    signals.push(
+      `gate/entitlement function(s): ${gateFns.slice(0, 4).join(", ")}${gateFns.length > 4 ? `, +${gateFns.length - 4} more` : ""}`,
+    );
+  }
+  const crownCheck = report.checks.find((c) => c.id === "crown-jewel-entanglement");
+  if (crownCheck !== undefined && !crownCheck.passed && report.syntaxValid !== false) {
+    signals.push("crown-jewel weakness detected (see the crown-jewel-entanglement check)");
+  }
+  const fileStem = basename(report.relativePath).replace(/\.[^.]+$/, "");
+  if (isCrownJewelIdentifier(fileStem)) {
+    signals.push(`file name '${basename(report.relativePath)}'`);
+  }
+  return signals;
+}
+
+/**
+ * Public method / accessor names of a class body, as `extractJsFunctionName`
+ * reports them (identifier keys only; no constructor, no `#private` members).
+ */
+function publicClassMethodNames(
+  classNode: t.ClassDeclaration | t.ClassExpression,
+): string[] {
+  const names: string[] = [];
+  for (const member of classNode.body.body) {
+    if (
+      t.isClassMethod(member) &&
+      t.isIdentifier(member.key) &&
+      !member.computed &&
+      member.key.name !== "constructor"
+    ) {
+      names.push(member.key.name);
+    }
+  }
+  return names;
 }
 
 function extractJsFunctionName(path: any): string {
@@ -1643,6 +1915,10 @@ function walkWeaveCandidateFiles(
 ): string[] {
   const out: string[] = [];
   const scanCap = Math.max(limit * 6, 256);
+  // Build / test / release scripts are toolchain, not product: asking an agent
+  // to weave shadow business logic into `build.js` or `vite.config.ts` protects
+  // nothing and can break the build that produces the real artifact.
+  const toolingScripts = readPackageToolingScripts(root, SCAN_SKIP_BUILD_DIRS);
   const stack = [root];
   while (stack.length > 0 && out.length < scanCap) {
     const dir = stack.pop()!;
@@ -1664,8 +1940,8 @@ function walkWeaveCandidateFiles(
       }
       if (!ent.isFile()) continue;
       if (EMITTED_SHIELD_HEADER_FILES.has(ent.name.toLowerCase())) continue;
-      if (/\.d\.ts$/i.test(ent.name)) continue;
-      if (/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name)) continue;
+      if (isTypeScriptDeclarationPath(ent.name)) continue;
+      if (isDevToolingFile(full, ent.name) || toolingScripts.has(full)) continue;
       if (/\.shielded(\.|$)/i.test(ent.name)) continue;
       const ext = extname(ent.name).toLowerCase();
       if (INTERESTING_EXT.has(ext) || ent.name === "global-metadata.dat") {
@@ -1699,7 +1975,7 @@ function buildTargetEntry(
 ): WeaveTargetEntry {
   const format = detectArtifactFormat(absPath);
   const rawMaturity = maturityForFormat(format);
-  const relPath = relative(rootAbs, absPath) || basename(absPath) || ".";
+  const relPath = posixRelative(rootAbs, absPath) || basename(absPath) || ".";
   const surgicalWorkorder = buildSurgicalWorkorderForFile(
     absPath,
     relPath,
@@ -2101,6 +2377,12 @@ function verifyJsWeaveFile(
   const discoveredFunctions: string[] = [];
   const fnParamCounts = new Map<string, number>();
   const fnHasAnyCall = new Set<string>();
+  // Functions that touch instance state (`this` / `super`): never "disconnected".
+  const fnUsesInstanceState = new Set<string>();
+  // `get x()` / `set x(v)` accessors: a constant-returning getter is ordinary API.
+  const accessorFunctions = new Set<string>();
+  // Public method names per top-level class, so exporting the class exports them.
+  const classMethodsByName = new Map<string, string[]>();
   const entryFunctions = new Set<string>();
   const topLevelReferencedFunctions = new Set<string>();
   const callEdges = new Map<string, Set<string>>();
@@ -2140,6 +2422,16 @@ function verifyJsWeaveFile(
     traverse(ast, {
       Program(progPath) {
         for (const stmt of progPath.node.body) {
+          const classDecl =
+            (t.isExportNamedDeclaration(stmt) || t.isExportDefaultDeclaration(stmt)) &&
+            t.isClassDeclaration(stmt.declaration)
+              ? stmt.declaration
+              : t.isClassDeclaration(stmt)
+                ? stmt
+                : null;
+          if (classDecl?.id) {
+            classMethodsByName.set(classDecl.id.name, publicClassMethodNames(classDecl));
+          }
           const varDecl =
             t.isExportNamedDeclaration(stmt) &&
             t.isVariableDeclaration(stmt.declaration)
@@ -2150,6 +2442,10 @@ function verifyJsWeaveFile(
           if (!varDecl) continue;
           for (const d of varDecl.declarations) {
             if (!t.isIdentifier(d.id)) continue;
+            if (t.isClassExpression(d.init)) {
+              classMethodsByName.set(d.id.name, publicClassMethodNames(d.init));
+              continue;
+            }
             if (
               varDecl.kind === "let" ||
               varDecl.kind === "var" ||
@@ -2167,15 +2463,7 @@ function verifyJsWeaveFile(
         if (t.isFunctionDeclaration(decl) && decl.id) {
           entryFunctions.add(decl.id.name);
         } else if (t.isClassDeclaration(decl)) {
-          for (const item of decl.body.body) {
-            if (
-              t.isClassMethod(item) &&
-              t.isIdentifier(item.key) &&
-              item.key.name !== "constructor"
-            ) {
-              entryFunctions.add(item.key.name);
-            }
-          }
+          for (const name of publicClassMethodNames(decl)) entryFunctions.add(name);
         } else if (t.isVariableDeclaration(decl)) {
           for (const d of decl.declarations) {
             if (t.isIdentifier(d.id)) entryFunctions.add(d.id.name);
@@ -2193,16 +2481,8 @@ function verifyJsWeaveFile(
           entryFunctions.add(decl.id.name);
         } else if (t.isIdentifier(decl)) {
           entryFunctions.add(decl.name);
-        } else if (t.isClassDeclaration(decl)) {
-          for (const item of decl.body.body) {
-            if (
-              t.isClassMethod(item) &&
-              t.isIdentifier(item.key) &&
-              item.key.name !== "constructor"
-            ) {
-              entryFunctions.add(item.key.name);
-            }
-          }
+        } else if (t.isClassDeclaration(decl) || t.isClassExpression(decl)) {
+          for (const name of publicClassMethodNames(decl)) entryFunctions.add(name);
         }
       },
       AssignmentExpression(path) {
@@ -2217,6 +2497,10 @@ function verifyJsWeaveFile(
           }
           if (t.isIdentifier(path.node.right)) {
             entryFunctions.add(path.node.right.name);
+          } else if (t.isClassExpression(path.node.right)) {
+            for (const name of publicClassMethodNames(path.node.right)) {
+              entryFunctions.add(name);
+            }
           } else if (t.isObjectExpression(path.node.right)) {
             for (const prop of path.node.right.properties) {
               if (
@@ -2227,12 +2511,24 @@ function verifyJsWeaveFile(
               }
               if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
                 entryFunctions.add(prop.value.name);
+              } else if (t.isObjectProperty(prop) && t.isClassExpression(prop.value)) {
+                for (const name of publicClassMethodNames(prop.value)) {
+                  entryFunctions.add(name);
+                }
               }
             }
           }
         }
       },
     });
+
+    // A class exported by reference (`module.exports = { Ledger }`,
+    // `export { Ledger }`, `export default Ledger`) exposes its public methods
+    // to every other module: they are entry points, not dead code.
+    for (const [className, methodNames] of classMethodsByName) {
+      if (!entryFunctions.has(className)) continue;
+      for (const name of methodNames) entryFunctions.add(name);
+    }
 
     // First pass: collect all named top-level / assigned / method / route-callback functions
     traverse(ast, {
@@ -2248,6 +2544,12 @@ function verifyJsWeaveFile(
           path.parent.arguments.some((a) => a === path.node)
         ) {
           entryFunctions.add(fnName);
+        }
+        if (
+          (t.isClassMethod(path.node) || t.isObjectMethod(path.node)) &&
+          (path.node.kind === "get" || path.node.kind === "set")
+        ) {
+          accessorFunctions.add(fnName);
         }
         fnParamCounts.set(fnName, path.node.params.length);
         if (!callEdges.has(fnName)) {
@@ -2293,7 +2595,11 @@ function verifyJsWeaveFile(
             t.isReturnStatement(stmts[0]) &&
             (!stmts[0].argument ||
               t.isLiteral(stmts[0].argument) ||
-              inspectRawBooleanReturnValue(stmts[0].argument).isRawBool)
+              inspectRawBooleanReturnValue(stmts[0].argument).isRawBool) &&
+            // `get kind() { return "ledger"; }` is ordinary polymorphic API, not
+            // a filterable decoy stub. A raw-boolean *gate* accessor is still
+            // caught by the crown-jewel check below.
+            !accessorFunctions.has(fnName)
           ) {
             emptyOrStubFunctions.push(fnName);
           }
@@ -2323,6 +2629,14 @@ function verifyJsWeaveFile(
         path.traverse({
           Function(innerPath) {
             innerPath.skip();
+          },
+          ThisExpression(thisPath) {
+            if (isInsideDeadBranch(thisPath)) return;
+            fnUsesInstanceState.add(fnName);
+          },
+          Super(superPath) {
+            if (isInsideDeadBranch(superPath)) return;
+            fnUsesInstanceState.add(fnName);
           },
           CallExpression(callPath) {
             if (isInsideDeadBranch(callPath)) return;
@@ -2570,7 +2884,9 @@ function verifyJsWeaveFile(
           fnRole === "gate-or-auth" &&
           (isEntryFn ||
             ![...entryFunctions].some(
-              (ef) => classifyFunctionRole(ef, true) === "gate-or-auth",
+              (ef) =>
+                discoveredSet.has(ef) &&
+                classifyFunctionRole(ef, true) === "gate-or-auth",
             ));
         if (
           checkGateBool &&
@@ -2663,6 +2979,10 @@ function verifyJsWeaveFile(
         !functionsMutatingState.has(fn) &&
         !functionsReadingState.has(fn) &&
         !fnHasAnyCall.has(fn) &&
+        // A method working on `this` reads instance state the module-level
+        // analysis cannot see; an accessor is API surface, not a helper call.
+        !fnUsesInstanceState.has(fn) &&
+        !accessorFunctions.has(fn) &&
         (callEdges.get(fn)?.size ?? 0) === 0
       ) {
         emptyOrStubFunctions.push(fn);
@@ -2895,6 +3215,9 @@ function verifyJsWeaveFile(
   const cosmeticOnlyGateEntries: string[] = [];
   if (!isPostHardenLabyrinth) {
     for (const fn of entryFunctions) {
+      // `entryFunctions` also holds exported classes and constants; only a real
+      // function can be a cosmetic gate.
+      if (!discoveredFunctions.includes(fn)) continue;
       const role = classifyFunctionRole(fn, true);
       if (role !== "gate-or-auth") continue;
       const callees = [...(callEdges.get(fn) ?? [])].filter(
@@ -3584,7 +3907,7 @@ function verifyNativeWeaveFile(
 
 export function verifyWeaveTarget(
   targetPath: string,
-  options: { readonly maxTargets?: number } = {},
+  options: VerifyWeaveOptions = {},
 ): WeaveVerificationReport {
   const abs = resolve(targetPath);
   if (!existsSync(abs)) {
@@ -3592,18 +3915,21 @@ export function verifyWeaveTarget(
   }
   const maxTargets = options.maxTargets ?? 48;
   const st = statSync(abs);
-  const candidateFiles = st.isDirectory()
+  const isDirectoryTarget = st.isDirectory();
+  const candidateFiles = isDirectoryTarget
     ? listCandidateFiles(abs, maxTargets)
     : [abs];
-  const rootAbs = st.isDirectory() ? abs : resolve(abs, "..");
+  const rootAbs = isDirectoryTarget ? abs : resolve(abs, "..");
 
-  const fileReports: WeaveFileVerification[] = [];
-  const allActions: WeaveAgentAction[] = [];
+  const verified: Array<{
+    readonly fileReport: WeaveFileVerification;
+    readonly actions: readonly WeaveAgentAction[];
+  }> = [];
 
   for (const file of candidateFiles) {
     const format = detectArtifactFormat(file);
     const ext = extname(file).toLowerCase();
-    const relPath = relative(rootAbs, file) || basename(file);
+    const relPath = posixRelative(rootAbs, file) || basename(file);
     if (
       format === "javascript" ||
       format === "typescript" ||
@@ -3615,19 +3941,10 @@ export function verifyWeaveTarget(
       if (format === "html-bundle" && src.trim().length === 0) {
         continue;
       }
-      const { fileReport, actions } = verifyJsWeaveFile(
-        file,
-        relPath,
-        format,
-        src,
-      );
-      fileReports.push(fileReport);
-      allActions.push(...actions);
+      verified.push(verifyJsWeaveFile(file, relPath, format, src));
     } else if (format === "python-source") {
       const src = readFileSync(file, "utf8");
-      const { fileReport, actions } = verifyPythonWeaveFile(file, relPath, src);
-      fileReports.push(fileReport);
-      allActions.push(...actions);
+      verified.push(verifyPythonWeaveFile(file, relPath, src));
     } else if (
       ext === ".c" ||
       ext === ".cpp" ||
@@ -3636,32 +3953,97 @@ export function verifyWeaveTarget(
       ext === ".go"
     ) {
       const src = readFileSync(file, "utf8");
-      const { fileReport, actions } = verifyNativeWeaveFile(
-        file,
-        relPath,
-        src,
-        ext,
-      );
-      fileReports.push(fileReport);
-      allActions.push(...actions);
+      verified.push(verifyNativeWeaveFile(file, relPath, src, ext));
     }
   }
 
+  // Decide which files the verdict depends on.
+  const signalsByIndex = verified.map((v) => crownJewelSignalsOf(v.fileReport));
+  let scope: WeaveVerifyScope;
+  let requiredIndexes: Set<number>;
+  if (!isDirectoryTarget || options.scope === "all") {
+    scope = "all";
+    requiredIndexes = new Set(verified.map((_, i) => i));
+  } else {
+    const crownJewelIndexes = verified
+      .map((_, i) => i)
+      .filter((i) => signalsByIndex[i]!.length > 0);
+    if (crownJewelIndexes.length > 0) {
+      scope = "crown-jewels";
+      requiredIndexes = new Set(crownJewelIndexes);
+    } else {
+      // Nothing is recognizable as a gate by name: the host agent chooses the
+      // module that holds the proprietary logic. Files that already pass carry
+      // the verdict; until one does, the closest candidate is the one to weave.
+      scope = "agent-selected";
+      const passedIndexes = verified
+        .map((_, i) => i)
+        .filter((i) => verified[i]!.fileReport.passed);
+      if (passedIndexes.length > 0) {
+        requiredIndexes = new Set(passedIndexes);
+      } else {
+        let best = -1;
+        verified.forEach((v, i) => {
+          if (best < 0 || v.fileReport.score > verified[best]!.fileReport.score) {
+            best = i;
+          }
+        });
+        requiredIndexes = new Set(best >= 0 ? [best] : []);
+      }
+    }
+  }
+
+  const fileReports: WeaveFileVerification[] = verified.map((v, i) => ({
+    ...v.fileReport,
+    scope: requiredIndexes.has(i) ? ("required" as const) : ("advisory" as const),
+    ...(requiredIndexes.has(i) && signalsByIndex[i]!.length > 0
+      ? { crownJewelSignals: signalsByIndex[i]! }
+      : {}),
+  }));
+  const requiredReports = fileReports.filter((f) => f.scope === "required");
+  const advisoryReports = fileReports.filter((f) => f.scope === "advisory");
+  const allActions: WeaveAgentAction[] = [];
+  verified.forEach((v, i) => {
+    if (requiredIndexes.has(i)) allActions.push(...v.actions);
+  });
+
   const overallPassed =
-    fileReports.length > 0 && fileReports.every((f) => f.passed);
+    requiredReports.length > 0 && requiredReports.every((f) => f.passed);
   const weaveScore =
-    fileReports.length > 0
+    requiredReports.length > 0
       ? Math.round(
-          fileReports.reduce((acc, f) => acc + f.score, 0) / fileReports.length,
+          requiredReports.reduce((acc, f) => acc + f.score, 0) /
+            requiredReports.length,
         )
       : 0;
 
+  if (scope === "agent-selected" && !overallPassed && requiredReports[0] !== undefined) {
+    allActions.unshift({
+      priority: "high",
+      file: requiredReports[0].relativePath,
+      checkId: "crown-jewel-entanglement",
+      instruction: `No function or file in ${basename(abs)}/ is named like a gate (auth / license / verify / token / entitlement …), so the verifier cannot tell which module holds the logic worth protecting. Choose the module that carries your proprietary or entitlement logic, weave it per its bla_weave_plan surgicalWorkorder, and re-run bla_verify_weave: at least one source file must pass. '${requiredReports[0].relativePath}' is only the closest candidate so far — its actions follow.`,
+      verifyTool: "bla_verify_weave",
+    });
+  }
+
+  const pendingRequired = requiredReports.filter((f) => !f.passed);
+  const advisoryNote =
+    advisoryReports.length > 0
+      ? ` ${advisoryReports.length} other file(s) carry no gate/entitlement logic and are advisory only.`
+      : "";
+  const scopePhrase =
+    scope === "crown-jewels"
+      ? `${requiredReports.length} crown-jewel file(s)`
+      : scope === "agent-selected"
+        ? `${requiredReports.length} agent-selected file(s)`
+        : `${requiredReports.length} file(s)`;
   const summary =
     fileReports.length === 0
       ? "No JS/TS/Python source files found to verify weave entanglement."
       : overallPassed
-        ? `All ${fileReports.length} file(s) passed structural weave verification (weaveScore: ${weaveScore}/100). Ready for bla_harden.`
-        : `${fileReports.filter((f) => !f.passed).length}/${fileReports.length} file(s) need structural weave adjustments (weaveScore: ${weaveScore}/100). Follow the ${allActions.length} agentActions and re-run bla_verify_weave.`;
+        ? `All ${scopePhrase} passed structural weave verification (weaveScore: ${weaveScore}/100). Ready for bla_harden.${advisoryNote}`
+        : `${pendingRequired.length}/${scopePhrase} need structural weave adjustments (weaveScore: ${weaveScore}/100). Follow the ${allActions.length} agentActions and re-run bla_verify_weave.${advisoryNote}`;
 
   return {
     schema: WEAVE_VERIFY_SCHEMA,
@@ -3669,7 +4051,10 @@ export function verifyWeaveTarget(
     verifiedAtIso: new Date().toISOString(),
     overallPassed,
     weaveScore,
-    files: fileReports,
+    scope,
+    requiredFiles: requiredReports.map((f) => f.relativePath),
+    advisoryFiles: advisoryReports.map((f) => f.relativePath),
+    files: [...requiredReports, ...advisoryReports],
     agentActions: allActions,
     summary,
   };

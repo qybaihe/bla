@@ -167,6 +167,22 @@ export function looksLikeInternalWasmExport(name: string): boolean {
 }
 
 /**
+ * Exports a host or toolchain glue looks up by a fixed, specified name: the
+ * WASI entry points, the default memory / table, wasm-ld linker symbols, and
+ * the wasm-bindgen / Emscripten / component-model runtime glue.
+ *
+ * No consumer edit can follow a rename of these — a WASI host calls `_start`
+ * because the spec says so — and they carry no secret, so they are never
+ * renamed at any intensity.
+ */
+const WASM_ABI_MANDATED_EXPORT_RE =
+  /^(?:_start|_initialize|memory|__indirect_function_table|__heap_base|__data_end|__stack_pointer|__stack_high|__stack_low|__global_base|__memory_base|__table_base|__tls_base|__tls_size|__tls_align|__dso_handle|__wasm_call_ctors|__wasm_call_dtors|__wasm_apply_data_relocs|__wasm_init_memory|__wasm_init_tls|__main_argc_argv|__main_void|__original_main|__errno_location|cabi_realloc|cabi_post_.+|cabi_import_realloc|cabi_export_realloc|__wbindgen_.+|__wbg_.+|__externref_.+|__cxa_.+|_emscripten_.+|emscripten_.+|asyncify_.+|__asyncify_.+|dynCall_.+|stackSave|stackRestore|stackAlloc|setThrew|setTempRet0|getTempRet0|wasi_thread_start|__wasi_.+|__component_type_object_force_link_.+)$/;
+
+export function isAbiMandatedWasmExport(name: string): boolean {
+  return WASM_ABI_MANDATED_EXPORT_RE.test(name);
+}
+
+/**
  * Rename export names that are NOT in `preserveExports`.
  * When `onlyInternal` is true, only names matching {@link looksLikeInternalWasmExport}
  * are renamed (safer default). Function indices / kinds are preserved so
@@ -201,7 +217,7 @@ export function renameWasmExports(
   }
   const renames: WasmExportRename[] = [];
   const rewritten: WasmExportEntry[] = entries.map((e) => {
-    if (preserve.has(e.name)) return e;
+    if (preserve.has(e.name) || isAbiMandatedWasmExport(e.name)) return e;
     if (onlyInternal && !looksLikeInternalWasmExport(e.name)) return e;
     const tag = prng.hex(4);
     const to = `ops_${tag}_${prng.identifier({ style: "snake", hint: "dispatch", entropy: 3 })}`;

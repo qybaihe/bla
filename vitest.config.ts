@@ -1,10 +1,22 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "vitest/config";
+
+// `bla harden` keeps per-user state (apply backups, the registry of files it
+// wrote) under the user's cache directory. Tests get a throwaway root so a
+// test run never reads or writes the developer's real BLA state.
+const stateDir = mkdtempSync(join(tmpdir(), "bla-vitest-state-"));
+process.on("exit", () => {
+  rmSync(stateDir, { recursive: true, force: true });
+});
 
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 30000,
     environment: "node",
+    env: { BLA_STATE_DIR: stateDir },
     coverage: {
       provider: "v8",
       // Product code only — tests, scripts, challenge fixtures, and the

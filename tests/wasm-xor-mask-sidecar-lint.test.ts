@@ -32,6 +32,26 @@ describe("wasm-xor-mask-sidecar-lint", () => {
     expect(looksLikeXorMaskedEntitlementPack(Buffer.alloc(100)).ok).toBe(false);
   });
 
+  it("does not mistake a zero-filled region beside a small-integer table for a masked pack", () => {
+    // Stock Go / Rust runtimes are full of little-endian u32 tables. With zeros
+    // in front, "blob XOR table" is the table itself, and a table shaped
+    // {x, 40, a, b, c, d, 57, y} satisfies the pack layout by construction:
+    // rounds = 40, four non-zero words, clen = 57, blob length 26 + 57.
+    const table = Buffer.alloc(32);
+    [0x11, 40, 0x33, 0x44, 0x55, 0x66, 57, 0x77].forEach((value, i) => table.writeUInt32LE(value, i * 4));
+    const blobLen = 26 + 57;
+    const payload = Buffer.concat([Buffer.alloc(blobLen), table]);
+
+    // The layout really does hold — only the entropy bars tell it apart.
+    const plain = Buffer.from(payload.subarray(0, blobLen).map((byte, i) => byte ^ table[i % 32]!));
+    expect([plain[4], plain[5], plain[6], plain[7], plain.readUInt16LE(24)]).toEqual([40, 0, 0, 0, 57]);
+
+    expect(looksLikeXorMaskedEntitlementPack(payload).ok).toBe(false);
+    // A real mask (32 key bytes) in the same position is still recognised.
+    const wasm = buildTestWasmWithXorMaskSidecar({});
+    expect(lintWasmXorMaskSidecarBuffer(wasm).shouldRefuseBankrupt).toBe(true);
+  });
+
   it("does not refuse masked entitlement pack without adjacent plaintext mask (r7 key-dep style)", () => {
     const wasm = buildTestWasmWithXorMaskSidecar({ omitMaskSidecar: true });
     const report = lintWasmXorMaskSidecarBuffer(wasm, { path: "keydep.wasm" });

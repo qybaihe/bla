@@ -93,6 +93,99 @@ describe("REA observability engine (C2)", () => {
     expect(result.reason).toMatch(/dist not ready/i);
     expect(result.executed).toBe(false);
   });
+
+  it("execute:true against a REA checkout the harness cannot call is unverified, not fail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-moved-"));
+    tempDirs.push(dir);
+    // Built as far as the readiness check can tell, but REA's analyzers are not
+    // where the harness names them — what a REA refactor looks like from here.
+    const fakeRea = join(dir, "rea");
+    mkdirSync(join(fakeRea, "src"), { recursive: true });
+    mkdirSync(join(fakeRea, "dist", "go"), { recursive: true });
+    writeFileSync(join(fakeRea, "dist", "go", "GoBinaryImage.js"), "// placeholder\n", "utf8");
+    expect(reaDistReady(fakeRea)).toBe(true);
+
+    const result = getRedteamReport({
+      reaRoot: fakeRea,
+      execute: true,
+      reportPath: join(dir, "out.json"),
+    });
+
+    expect(result.executed).toBe(true);
+    expect(result.exitCode).toBe(2);
+    // `fail` would tell the caller REA read a hardened sample. Nothing was read.
+    expect(result.status).toBe("unverified");
+    expect(result.reason).toMatch(/could not call REA/);
+    expect(result.reason).toMatch(/not a verdict on a shield/);
+    expect(result.stderr).toMatch(/UNVERIFIED: the harness could not load REA's analyzers/);
+    expect(result.report).toBeUndefined();
+  });
+
+  it("a report on disk that records harness errors reads as unverified, report attached", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-unmeasured-"));
+    tempDirs.push(dir);
+    const reportPath = join(dir, "empirical.json");
+    const fixture = {
+      schema: "bla-redteam-rea/v1",
+      status: "unverified",
+      pairs: [],
+      harnessErrors: [
+        { format: "javascript", reason: "rea.analyzeJavaScriptStaticSource is not a function" },
+      ],
+    };
+    writeFileSync(reportPath, JSON.stringify(fixture), "utf8");
+
+    const result = getRedteamReport({ reaRoot: join(dir, "rea-absent"), reportPath });
+
+    expect(result.status).toBe("unverified");
+    expect(result.executed).toBe(false);
+    expect(result.reason).toContain("could not call REA for 1 probe:");
+    expect(result.reason).toContain(
+      "javascript (rea.analyzeJavaScriptStaticSource is not a function)",
+    );
+    expect(result.reason).toMatch(/not measured/);
+    expect(result.report).toMatchObject(fixture);
+  });
+
+  it("a measured report on disk still reads as available", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-measured-"));
+    tempDirs.push(dir);
+    const reportPath = join(dir, "empirical.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({ schema: "bla-redteam-rea/v1", status: "measured", pairs: [], harnessErrors: [] }),
+      "utf8",
+    );
+
+    const result = getRedteamReport({ reaRoot: join(dir, "rea-absent"), reportPath });
+
+    expect(result.status).toBe("available");
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("a report on disk names the formats whose plant REA read through", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-not-stopped-"));
+    tempDirs.push(dir);
+    const reportPath = join(dir, "empirical.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({
+        schema: "bla-redteam-rea/v1",
+        status: "measured",
+        pairs: [],
+        notStopped: ["pcap_capture"],
+        harnessErrors: [],
+      }),
+      "utf8",
+    );
+
+    const result = getRedteamReport({ reaRoot: join(dir, "rea-absent"), reportPath });
+
+    // Still an on-disk read, not a fresh verdict — but it says what it found.
+    expect(result.status).toBe("available");
+    expect(result.reason).toContain("pcap_capture");
+    expect(result.reason).toContain("REA read the hardened sample");
+  });
 });
 
 describe("REA observability MCP tools (C2)", () => {
@@ -141,6 +234,35 @@ describe("REA observability MCP tools (C2)", () => {
     };
     expect(missResult.isError).toBe(true);
     expect(missResult.structuredContent.status).toBe("unverified");
+  });
+
+  it("bla_redteam_report is an error for a report whose probes never reached REA", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-rt-mcp-unmeasured-"));
+    tempDirs.push(dir);
+    const reportPath = join(dir, "empirical.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({
+        schema: "bla-redteam-rea/v1",
+        status: "unverified",
+        pairs: [],
+        harnessErrors: [{ format: "electron_asar", reason: "AsarHeader.js not found" }],
+      }),
+      "utf8",
+    );
+
+    const res = await call("bla_redteam_report", {
+      report_path: reportPath,
+      rea_root: join(dir, "no-rea"),
+    });
+
+    const result = res!.result as {
+      isError: boolean;
+      structuredContent: { status: string; reason: string };
+    };
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent.status).toBe("unverified");
+    expect(result.structuredContent.reason).toContain("electron_asar (AsarHeader.js not found)");
   });
 
   it("resolveReaRoot honors REA_ROOT override path shape", () => {

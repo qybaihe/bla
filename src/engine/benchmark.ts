@@ -470,10 +470,8 @@ export async function runShowcaseBenchmark(
         const protRows = protDb
           .prepare("SELECT account_id, plan_tier, offline_token FROM license_cache ORDER BY account_id")
           .all();
-        // Register the application UDF to run full PRAGMA integrity_check across all tables:
-        protDb.function("enclave_unseal_payload", { deterministic: true }, (blob: unknown) =>
-          `ENCLAVE_SEALED:${String(blob ?? "")}`,
-        );
+        // No function is registered: the default output has to pass on a
+        // connection exactly like the application's own.
         const integrity = protDb.prepare("PRAGMA integrity_check").get() as
           | { integrity_check?: string }
           | undefined;
@@ -490,7 +488,7 @@ export async function runShowcaseBenchmark(
         sqlParityOk &&
         afterAudit.protectionStatus === "BLA_PROTECTED" &&
         afterAudit.reaSimulation.triggeredResourceLimits.some((l) =>
-          l.includes("SqliteColumnEvaluationFailure"),
+          l.includes("sqlite-enclave-honey-tables"),
         );
       cases.push(buildCaseResult("sqlite-db", "Local SQLite Entitlement Database (.sqlite)", "REA inspect_sqlite_database", res, functionalOk));
     }

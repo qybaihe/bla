@@ -11,6 +11,8 @@
  */
 
 import { basename, relative, resolve, sep } from "node:path";
+import { listKnownBlaOutputs } from "../core/output-registry.js";
+import { BLA_BUILD_OUTPUT_DIR_NAMES, isInsideBuildOutput } from "./harden-apply.js";
 import { sanitizeTerminalText } from "../core/terminal-text.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import {
@@ -102,6 +104,21 @@ export type PackagingGateId =
   | "bind-scope"
   | "release-hygiene";
 
+/** One concrete hit behind a gate finding — what was matched and where. */
+export interface PackagingGateEvidence {
+  /** Sub-finding id from the underlying lint (e.g. `plaintext-flag-literal`). */
+  readonly id: string;
+  /** `warning` hits never refuse on their own. Absent when the lint has no severity. */
+  readonly severity?: "warning" | "error";
+  /** Short excerpt or description of what was matched. */
+  readonly detail?: string;
+  /** 1-based source line, when the lint could place the hit. */
+  readonly line?: number;
+}
+
+/** Upper bound on evidence rows per gate finding (the rest is counted in `findingCount`). */
+export const MAX_GATE_EVIDENCE = 5;
+
 export interface PackagingGateFinding {
   readonly gate: PackagingGateId;
   readonly path: string;
@@ -110,15 +127,45 @@ export interface PackagingGateFinding {
   readonly refuseMessage?: string;
   readonly oneLineAdvice: string;
   readonly findingCount: number;
+  /**
+   * Up to `MAX_GATE_EVIDENCE` concrete hits, errors first, so an agent can act
+   * on the finding without a second per-file lint call.
+   */
+  readonly evidence?: readonly PackagingGateEvidence[];
   readonly remediationRecipe?: string;
   readonly recommendedMcpTool?: string;
+  /**
+   * Whether `bla_harden` itself refuses the run because of this finding.
+   * `false` is either advisory (a warning that blocks nothing) or a lint-only
+   * hygiene gate: this scan fails on it, but a harden run still goes ahead.
+   */
+  readonly enforcedByHarden?: boolean;
+  /**
+   * Source files (project-relative) that carry this same finding because this
+   * build-output file was made from them. They are not listed as findings of
+   * their own: fix the value there and rebuild — never rewrite the source
+   * file with a masking tool.
+   */
+  readonly sameFindingInSource?: readonly string[];
 }
+
+/**
+ * Gates `bla_harden` does not enforce — `bla lint` is the only place they
+ * fail. Everything else is refused by harden at project level or by the
+ * per-file protect step.
+ */
+const LINT_ONLY_GATES: ReadonlySet<PackagingGateId> = new Set<PackagingGateId>([
+  "plaintext-secret",
+  "integrity-coverage",
+  "bind-scope",
+]);
 
 export interface PackagingGateRemediation {
   readonly gate: PackagingGateId;
   readonly path: string;
   readonly relativePath: string;
-  readonly priority: "critical" | "high" | "medium";
+  /** `low` = advisory the engine already handles; no source change required. */
+  readonly priority: "critical" | "high" | "medium" | "low";
   readonly owner: "agent-source-refactor" | "mcp-tool-call";
   readonly recommendedMcpTool?: string;
   readonly sourceRefactorRecipe: string;
@@ -169,6 +216,12 @@ export interface PackagingGatesReport {
   readonly gateCounts: Readonly<Record<PackagingGateId, number>>;
   readonly oneLineAdvice: string;
   readonly honestyNote: string;
+  /**
+   * Files this scan left out because they are BLA's own hardened output
+   * (project-relative, capped). Their decoys are bait, not findings — lint the
+   * files they were built from. Present only when non-empty.
+   */
+  readonly skippedHardenedOutputs?: readonly string[];
   /** Raw per-gate reports for agents that need detail. */
   readonly details: {
     readonly seals: readonly SealCommitmentReport[];
@@ -194,6 +247,67 @@ function relPath(absDir: string, filePath: string): string {
   return (relative(absDir, filePath) || basename(filePath)).split(sep).join("/");
 }
 
+/** JS / TS / HTML: the files a build copies, transpiles or bundles into its output. */
+const BUILD_INPUT_EXT_RE = /\.(?:[cm]?[jt]sx?|html?)$/i;
+
+/**
+ * A copy or transpile build leaves the same finding twice: on
+ * `dist/license.cjs`, which ships, and on the `src/license.cjs` it was made
+ * from. Listed as two findings, the remediation plan sends an agent to run a
+ * rewriting tool on a source file. The build output keeps the finding and
+ * names its source (`sameFindingInSource`); the source is not listed again.
+ *
+ * Two findings are the same when gate, file stem and evidence agree — line
+ * numbers do not have to, a transpiler moves them. Only this presentation is
+ * folded: `details` keeps every file, and that is what `bla_harden` refuses on.
+ */
+function foldBuildInputTwins(
+  findings: readonly PackagingGateFinding[],
+  absDir: string,
+  counts: Record<PackagingGateId, number>,
+): PackagingGateFinding[] {
+  const shipped = (f: PackagingGateFinding): boolean =>
+    isInsideBuildOutput(f.relativePath, absDir, BLA_BUILD_OUTPUT_DIR_NAMES);
+  const keyOf = (f: PackagingGateFinding): string =>
+    JSON.stringify([
+      f.gate,
+      (basename(f.relativePath).split(".")[0] ?? "").toLowerCase(),
+      f.shouldRefuseBankrupt,
+      f.findingCount,
+      (f.evidence ?? []).map((e) => [e.id, e.severity ?? "", e.detail ?? ""]),
+    ]);
+  const outputByKey = new Map<string, number>();
+  findings.forEach((f, index) => {
+    if (!BUILD_INPUT_EXT_RE.test(f.relativePath) || !shipped(f)) return;
+    const key = keyOf(f);
+    if (!outputByKey.has(key)) outputByKey.set(key, index);
+  });
+  if (outputByKey.size === 0) return [...findings];
+
+  const sourcesOf = new Map<number, string[]>();
+  const folded = new Set<number>();
+  findings.forEach((f, index) => {
+    if (!BUILD_INPUT_EXT_RE.test(f.relativePath) || shipped(f)) return;
+    const target = outputByKey.get(keyOf(f));
+    if (target === undefined) return;
+    sourcesOf.set(target, [...(sourcesOf.get(target) ?? []), f.relativePath]);
+    folded.add(index);
+    counts[f.gate] -= 1;
+  });
+  return findings.flatMap((f, index) => {
+    if (folded.has(index)) return [];
+    const sources = sourcesOf.get(index);
+    return [sources !== undefined ? { ...f, sameFindingInSource: sources } : f];
+  });
+}
+
+/** What a recipe adds for a finding that also sits in the file's source. */
+function sourceTwinNote(f: PackagingGateFinding): string {
+  const sources = f.sameFindingInSource;
+  if (sources === undefined || sources.length === 0) return "";
+  return ` Also in ${sources.map((s) => `\`${s}\``).join(", ")} — the source this file is built from, not listed as a finding of its own. A fix made there needs a rebuild; a fix made only in the build output lasts until the next build. Tools that rewrite a file (\`bla_encrypt_strings\`, \`bla_harden\`) belong on the build output, never on the source.`;
+}
+
 function emptyCounts(): Record<PackagingGateId, number> {
   return {
     "seal-commitment": 0,
@@ -211,13 +325,57 @@ function emptyCounts(): Record<PackagingGateId, number> {
   };
 }
 
+/**
+ * Project the heterogeneous per-lint finding shapes onto compact evidence rows.
+ * Errors sort first so the cap never hides the reason a gate refuses.
+ */
+function summarizeEvidence(
+  findings: ReadonlyArray<unknown>,
+): readonly PackagingGateEvidence[] | undefined {
+  const rows: PackagingGateEvidence[] = [];
+  for (const raw of findings) {
+    if (typeof raw === "string") {
+      rows.push({ id: "reason", detail: sanitizeTerminalText(raw).slice(0, 160) });
+      continue;
+    }
+    if (typeof raw !== "object" || raw === null) continue;
+    const f = raw as Record<string, unknown>;
+    const id =
+      typeof f.id === "string" ? f.id : typeof f.kind === "string" ? f.kind : "finding";
+    const detailSource =
+      typeof f.evidence === "string" && f.evidence.length > 0
+        ? f.evidence
+        : typeof f.summary === "string"
+          ? f.summary
+          : undefined;
+    rows.push({
+      id,
+      ...(f.severity === "warning" || f.severity === "error"
+        ? { severity: f.severity }
+        : {}),
+      ...(detailSource !== undefined
+        ? { detail: sanitizeTerminalText(detailSource).replace(/\s+/g, " ").slice(0, 160) }
+        : {}),
+      ...(typeof f.line === "number" ? { line: f.line } : {}),
+    });
+  }
+  if (rows.length === 0) return undefined;
+  rows.sort(
+    (a, b) => Number(b.severity === "error") - Number(a.severity === "error"),
+  );
+  return rows.slice(0, MAX_GATE_EVIDENCE);
+}
+
 function buildGateRemediationMeta(
   gate: PackagingGateId,
   rel: string,
+  evidenceIds: ReadonlySet<string> = new Set(),
 ): {
   readonly owner: "agent-source-refactor" | "mcp-tool-call";
   readonly recommendedMcpTool?: string;
   readonly sourceRefactorRecipe: string;
+  /** True when the finding needs no source change (the engine already covers it). */
+  readonly advisoryOnly?: boolean;
 } {
   switch (gate) {
     case "lane-independence":
@@ -256,16 +414,45 @@ function buildGateRemediationMeta(
         owner: "agent-source-refactor",
         sourceRefactorRecipe: `In \`${rel}\`, remove public \`seal.revision\` digests from the XOR-masked WASM payload (known-plaintext recovers the repeating XOR mask without a key); store public commitments in a separate unmasked segment.`,
       };
-    case "panel-derive":
+    case "panel-derive": {
+      const onlyFnvConstants =
+        evidenceIds.size > 0 &&
+        [...evidenceIds].every((id) => id === "classic-fnv-prime-literal");
+      if (onlyFnvConstants) {
+        // A readable FNV-1a prime is not an oracle; do not send the agent hunting
+        // for a `deriveLocal` / `panelTokenSha256` pair that is not in the file.
+        return {
+          owner: "mcp-tool-call",
+          recommendedMcpTool: "bla_harden",
+          advisoryOnly: true,
+          sourceRefactorRecipe: `Advisory only — no source change needed. \`${rel}\` contains readable FNV-1a constants (0x811c9dc5 / 0x01000193); \`bla_harden\` at \`maximum\`/\`bankrupt\` rewrites integer literals into opaque expressions, so they do not survive in the hardened output.`,
+        };
+      }
+      const parts: string[] = [];
+      if (evidenceIds.has("panel-token-sha-oracle")) {
+        parts.push(
+          "stop shipping a callable local derive next to the plaintext `panelTokenSha256` it can be checked against (move the derive behind the server or into WASM, or drop the digest from the shipped tree)",
+        );
+      }
+      if (
+        evidenceIds.has("stable-panel-derive-global") ||
+        evidenceIds.has("stable-local-derive") ||
+        parts.length === 0
+      ) {
+        parts.push(
+          "let `bla_harden` at `bankrupt` intensity rewrite the stable `__vaultPanelDerive_*` / `deriveLocal` symbols to seed-stable identifiers (do not pass `allow_stable_panel_derive` outside a lab)",
+        );
+      }
       return {
         owner: "agent-source-refactor",
-        sourceRefactorRecipe: `In \`${rel}\`, remove the offline oracle combo (\`deriveLocal\` + plaintext \`panelTokenSha256\`) and let \`bla_harden\` at \`bankrupt\` intensity rewrite \`__vaultPanelDerive_*\` symbols to seed-stable identifiers.`,
+        sourceRefactorRecipe: `In \`${rel}\`: ${parts.join("; ")}.`,
       };
+    }
     case "plaintext-secret":
       return {
         owner: "mcp-tool-call",
         recommendedMcpTool: "bla_encrypt_strings",
-        sourceRefactorRecipe: `Call MCP \`bla_encrypt_strings\` on \`${rel}\` with your project seed to XOR-mask cleartext sensitive literals (\`FLAG{...}\`, high-entropy tokens, derive key names), then re-run \`bla_lint\`.`,
+        sourceRefactorRecipe: `Call MCP \`bla_encrypt_strings\` on \`${rel}\` with your project seed to XOR-mask the cleartext literals listed in \`evidence\`, then re-run \`bla_lint\`. It replaces whole string literals and \`\`…\`\` templates without \`\${}\`; a secret inside an interpolated template, a regular expression or an HTML attribute must be moved into a plain string literal (or out of the shipped file) by hand first. This gate is lint-only: \`bla_harden\` does not refuse on it. At \`maximum\`/\`bankrupt\` it splits string and template text of 3–256 characters itself, and a secret-looking value of up to 4,096 characters wherever it is written (string, template, object key, regular expression); whatever it could not reach (HTML attributes, tagged templates, class member names, TypeScript object keys and \`as const\` values, longer values) is listed in \`artifacts[].plaintextSurvivors\`.`,
       };
     case "integrity-coverage":
       return {
@@ -333,6 +520,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of wasmParams) {
@@ -348,6 +539,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of jsAes) {
@@ -363,6 +558,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of jsHydrateDump) {
@@ -378,6 +577,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of wasmXorMask) {
@@ -393,6 +596,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of wasmSealXor) {
@@ -408,6 +615,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of lanes) {
@@ -421,6 +632,10 @@ export function scanPackagingGates(
       refuseMessage: laneIndependenceRefuseMessage(r, r.path),
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of panelDerive) {
@@ -437,6 +652,10 @@ export function scanPackagingGates(
       refuseMessage: refuse ? panelDeriveRefuseMessage(r, r.path) : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of plaintextSecrets) {
@@ -452,6 +671,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of integrityCoverage) {
@@ -467,6 +690,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.reasons.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.reasons);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of bindScope) {
@@ -482,6 +709,10 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.reasons.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.reasons);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
   for (const r of releaseHygiene) {
@@ -497,24 +728,50 @@ export function scanPackagingGates(
         : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
+      ...(() => {
+        const evidence = summarizeEvidence(r.findings);
+        return evidence !== undefined ? { evidence } : {};
+      })(),
     });
   }
 
-  const enrichedFindings: PackagingGateFinding[] = findings.map((f) => {
-    const meta = buildGateRemediationMeta(f.gate, f.relativePath);
+  // Recipes are chosen from the sub-findings actually present, so guidance
+  // never names a construct that is not in the file.
+  const evidenceIdsOf = (f: PackagingGateFinding): ReadonlySet<string> => {
+    const raw =
+      f.gate === "panel-derive"
+        ? panelDerive.find((r) => r.path === f.path)?.findings
+        : undefined;
+    return new Set((raw ?? f.evidence ?? []).map((e) => e.id));
+  };
+
+  const listedFindings = foldBuildInputTwins(findings, absDir, counts);
+  const enrichedFindings: PackagingGateFinding[] = listedFindings.map((f) => {
+    const meta = buildGateRemediationMeta(f.gate, f.relativePath, evidenceIdsOf(f));
     return {
       ...f,
-      remediationRecipe: meta.sourceRefactorRecipe,
+      remediationRecipe: `${meta.sourceRefactorRecipe}${sourceTwinNote(f)}`,
       ...(meta.recommendedMcpTool !== undefined
         ? { recommendedMcpTool: meta.recommendedMcpTool }
         : {}),
+      enforcedByHarden: !LINT_ONLY_GATES.has(f.gate),
     };
   });
 
+  const blockingUnmarked = filterBlockingFindings(enrichedFindings, intensity, options);
+  // A warning blocks nothing, so it is not "enforced" either — only a finding
+  // that fails this scan can be one harden refuses on.
+  const blockingRefs = new Set<PackagingGateFinding>(blockingUnmarked);
+  for (let i = 0; i < enrichedFindings.length; i++) {
+    const f = enrichedFindings[i]!;
+    if (f.enforcedByHarden === true && !blockingRefs.has(f)) {
+      enrichedFindings[i] = { ...f, enforcedByHarden: false };
+    }
+  }
   const blocking = filterBlockingFindings(enrichedFindings, intensity, options);
 
   const remediationPlan: PackagingGateRemediation[] = enrichedFindings.map((f) => {
-    const meta = buildGateRemediationMeta(f.gate, f.relativePath);
+    const meta = buildGateRemediationMeta(f.gate, f.relativePath, evidenceIdsOf(f));
     const isBlocking = blocking.some(
       (b) => b.gate === f.gate && b.path === f.path,
     );
@@ -522,22 +779,48 @@ export function scanPackagingGates(
       gate: f.gate,
       path: f.path,
       relativePath: f.relativePath,
-      priority: isBlocking ? "critical" : f.shouldRefuseBankrupt ? "high" : "medium",
+      priority: isBlocking
+        ? "critical"
+        : f.shouldRefuseBankrupt
+          ? "high"
+          : meta.advisoryOnly === true
+            ? "low"
+            : "medium",
       owner: meta.owner,
       ...(meta.recommendedMcpTool !== undefined
         ? { recommendedMcpTool: meta.recommendedMcpTool }
         : {}),
-      sourceRefactorRecipe: meta.sourceRefactorRecipe,
+      sourceRefactorRecipe: `${meta.sourceRefactorRecipe}${sourceTwinNote(f)}`,
       verifyCommand: "bla_lint",
     };
   });
 
+  const skippedHardenedOutputs = listKnownBlaOutputs(absDir);
+  const foldedSources = enrichedFindings.reduce(
+    (n, f) => n + (f.sameFindingInSource?.length ?? 0),
+    0,
+  );
+  const skippedNote =
+    (skippedHardenedOutputs.length > 0
+      ? ` ${skippedHardenedOutputs.length} BLA-hardened output file(s) were not linted (see skippedHardenedOutputs) — lint the files they were built from.`
+      : "") +
+    (foldedSources > 0
+      ? ` ${foldedSources} finding(s) repeat in the source a build-output file was made from; they are listed once, on the file that ships (sameFindingInSource).`
+      : "");
+  // Say which failures actually stop `bla_harden`: an agent told "harden would
+  // refuse" about a lint-only gate goes off fixing something that blocks nothing.
+  const hardenRefusing = blocking.filter((f) => f.enforcedByHarden !== false).length;
+  const lintOnly = blocking.length - hardenRefusing;
+  const blockingAdvice =
+    hardenRefusing === 0
+      ? `ERROR: ${blocking.length} packaging gate finding(s) fail this lint at ${intensity}. bla_harden does not refuse on them (enforcedByHarden: false) — it will still run; fix them per remediationPlan or pass the matching --allow-* / allow_* flag (lab only).`
+      : `ERROR: ${hardenRefusing} packaging gate(s) would refuse ${intensity} harden${lintOnly > 0 ? `, and ${lintOnly} more fail this lint only (enforcedByHarden: false)` : ""}. Follow remediationPlan to refactor source or pass the matching --allow-* / allow_* flag (lab only).`;
   const oneLineAdvice =
-    blocking.length === 0
+    (blocking.length === 0
       ? enrichedFindings.length === 0
         ? "No packaging footgun findings (heuristic). Gates ≠ white-box secrecy."
         : `Packaging scan: ${enrichedFindings.length} finding(s), none refuse under current intensity/allows.`
-      : `ERROR: ${blocking.length} packaging gate(s) would refuse bankrupt harden. Follow remediationPlan to refactor source or pass the matching --allow-* / allow_* flag (lab only).`;
+      : blockingAdvice) + skippedNote;
 
   return {
     schema: PACKAGING_GATES_SCHEMA,
@@ -550,6 +833,7 @@ export function scanPackagingGates(
     gateCounts: counts,
     oneLineAdvice,
     honestyNote: HONESTY_NOTE,
+    ...(skippedHardenedOutputs.length > 0 ? { skippedHardenedOutputs } : {}),
     details: {
       seals,
       wasmParams,
@@ -736,6 +1020,11 @@ export function formatPackagingGatesReport(report: PackagingGatesReport): string
       `  [${tag}] ${f.gate} · ${sanitizeTerminalText(f.relativePath)} · ${f.findingCount} finding(s)`,
     );
     lines.push(`    ${sanitizeTerminalText(f.oneLineAdvice)}`);
+    if (f.sameFindingInSource !== undefined && f.sameFindingInSource.length > 0) {
+      lines.push(
+        `    same finding in its source: ${f.sameFindingInSource.map((s) => sanitizeTerminalText(s)).join(", ")}`,
+      );
+    }
   }
   if (report.blocking.length > 0) {
     lines.push(`blocking (${report.blocking.length}):`);

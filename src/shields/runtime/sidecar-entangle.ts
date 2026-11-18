@@ -708,6 +708,14 @@ export function generateSidecarPythonPreamble(
   lines.push(`${bindingName} = 0`);
   lines.push(`try:`);
   lines.push(`    _sc_expected_${tag} = ${expectedLiteral}`);
+  // A bytecode-only tree (`python main.pyc`), a PyInstaller / cx_Freeze bundle
+  // (`sys.frozen`) or a Nuitka build (`__compiled__`) ships no sibling
+  // sources at all. There is nothing to hash there, and refusing to start an
+  // untouched program is a false alarm — so that one case is let through.
+  lines.push(
+    `    _sc_packaged_${tag} = bool(getattr(__import__("sys"), "frozen", False)) or ("__compiled__" in globals()) or str(globals().get("__file__", "")).endswith((".pyc", ".pyo"))`,
+  );
+  lines.push(`    _sc_missing_${tag} = 0`);
   lines.push(`    _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
   lines.push(`    _sc_entry_label_${tag} = ${entryLiteral}`);
   lines.push(`    _sc_h_${tag}.update(_sc_entry_label_${tag}.encode("utf-8"))`);
@@ -723,17 +731,31 @@ export function generateSidecarPythonPreamble(
   lines.push(`        try:`);
   lines.push(`            _sc_h_${tag}.update(_sc_sp_path_${tag}.read_bytes())`);
   lines.push(`        except Exception:`);
-  lines.push(`            _sc_h_${tag}.update(("missing:" + str(_sc_sp_${tag})).encode("utf-8"))`);
+  // Inside a zipapp (.pyz) the siblings are archive members, not files: ask
+  // the module's own loader for the same bytes before calling them missing.
+  lines.push(`            try:`);
+  lines.push(
+    `                _sc_h_${tag}.update(__loader__.get_data(__import__("os").path.join(__import__("os").path.dirname(__file__), _sc_sp_${tag})))`,
+  );
+  lines.push(`            except Exception:`);
+  lines.push(`                _sc_missing_${tag} += 1`);
+  lines.push(`                _sc_h_${tag}.update(("missing:" + str(_sc_sp_${tag})).encode("utf-8"))`);
   lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`    _sc_h_${tag}.update(${seedLiteral}.encode("utf-8"))`);
   lines.push(`    _sc_hex_${tag} = _sc_h_${tag}.hexdigest()`);
   lines.push(`    ${bindingName} = int(_sc_hex_${tag}[:8], 16) & 0xffffffff`);
+  lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
+  lines.push(
+    `        if _sc_packaged_${tag} and _sc_missing_${tag} == len(_sc_sidecars_${tag}):`,
+  );
+  lines.push(
+    `            ${bindingName} = int(_sc_expected_${tag}[:8], 16) & 0xffffffff`,
+  );
+  lines.push(`        else:`);
   if (softFold) {
-    lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
-    lines.push(`        ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
+    lines.push(`            ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
   } else {
-    lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
-    lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+    lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   }
   lines.push(`except Exception as _sc_err_${tag}:`);
   if (softFold) {

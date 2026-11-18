@@ -10,6 +10,8 @@ This repository contains **BLA (`bla-agents` — Blind LLM Agents)**, an open-so
   - `detector.ts`: Magic-byte and file-extension format detection across 26 artifact formats (`ArtifactFormat` in `types.ts`, plus the `directory` and `unknown` sentinels).
   - `sqlite-runtime.ts`: Lazy `node:sqlite` `DatabaseSync` loader validating Node `^22.23.4 || >=24.0.0`.
   - `output-path.ts`: Safe output path admission checks (`assertSafeOutputPath`).
+  - `output-registry.ts`: Per-user, content-addressed registry of files BLA wrote (`registerBlaOutput`, `isKnownBlaOutput`, `resolveBlaStateRoot`; `BLA_STATE_DIR` overrides the location) so hardened output is never discovered, linted, or hardened again.
+  - `dev-tooling.ts`: Narrow filename / `package.json` heuristics that keep toolchain files (tool configs, tests, build/release scripts) out of discovery, and the declared runtime entries (`main` / `bin` / `exports`) in; also reads the console scripts a Python project declares (`readPythonDeclaredEntryModules`).
   - `release-exposure.ts`: Bounded read-only source-map & symbol exposure scanner (`inspectReleaseExposure`).
   - `prng.ts`: Deterministic xorshift/mulberry32 PRNG (`SeededPrng`).
   - `token-estimator.ts`: Models REA MCP tool turns and token cost across Claude Opus 4, Sonnet 4, and o3.
@@ -23,8 +25,8 @@ This repository contains **BLA (`bla-agents` — Blind LLM Agents)**, an open-so
   - `weave/weave-decoy.ts`: AST-level surgical weave workorder + structural weave verifier (`bla-weave-plan/v1`, `bla-weave-verify/v1`).
   - `formats/`: Format-specific shields — `sourcemap.ts`, `asar.ts`, `electron-fuses.ts`, `wasm.ts`, `python.ts`, `python-ast-weave.ts`, `python-pyc-weave.ts`, `native.ts`, `sqlite.ts`, `model.ts`, `gguf-layout.ts`, `mobile-game.ts`, `apple-plist.ts`, `dotnet-managed.ts`, `headers.ts`, `archive.ts`, `android-dex-xref.ts`, `dex-layout.ts`, `android-manifest.ts`, `android-r8.ts`, `bun-standalone.ts`, `erlang-beam.ts`, `evm-bytecode.ts`, `firmware-uf2.ts`, `go-flutter-exhaustion.ts`, `gpu-ptx.ts`, `jvm-bytecode.ts`, and `pcap-capture.ts`.
 - `src/bundler/index.ts`: Vite, Rollup, Webpack, and esbuild bundler plugins (`bla-agents/bundler`).
-- `src/engine/`: `defender.ts` (One-Click 5-Stage `defendTarget`), `auditor.ts`, `protector.ts`, `verifier.ts`, and `benchmark.ts` (14-target showcase benchmark); plus `harden.ts`, `bind-scope.ts`, `encrypt-strings.ts`, `packaging-gates.ts`, `integrity-coverage.ts`, `run-evidence.ts`, `polymorph-report.ts`, `rea-observability.ts`, `defense-score-honesty.ts`, and the `*-lint.ts` packaging / red-blue gates.
-- `src/mcp/server.ts`: JSON-RPC 2.0 MCP stdio server exposing 31 tools (full catalogue in `docs/cli-and-mcp.md`), including `bla_harden`, `bla_defend`, `bla_audit`, `bla_protect`, `bla_verify`, `bla_benchmark`, `bla_lint`, `bla_weave_plan`, `bla_verify_weave`, `bla_emit_headers`, and `bla_doctor`.
+- `src/engine/`: `defender.ts` (One-Click 5-Stage `defendTarget`), `auditor.ts`, `protector.ts`, `verifier.ts`, and `benchmark.ts` (14-target showcase benchmark); plus `harden.ts` (discovery, `hardenProject`, the report's `nextSteps`), `harden-apply.ts` (`apply` / `restore`: promote hardened files over build output with out-of-project backups), `browser-bundle.ts` (which JS artifacts run in a browser and therefore cannot host the Node integrity bindings), `bind-scope.ts`, `encrypt-strings.ts`, `packaging-gates.ts`, `integrity-coverage.ts`, `run-evidence.ts`, `polymorph-report.ts`, `rea-observability.ts`, `defense-score-honesty.ts`, and the `*-lint.ts` packaging / red-blue gates.
+- `src/mcp/server.ts`: JSON-RPC 2.0 MCP stdio server exposing 31 tools (full catalogue in `docs/cli-and-mcp.md`), including `bla_harden`, `bla_defend`, `bla_audit`, `bla_protect`, `bla_verify`, `bla_benchmark`, `bla_lint`, `bla_weave_plan`, `bla_verify_weave`, `bla_emit_headers`, and `bla_doctor`. It also owns the agent contract: protocol-revision negotiation, the `initialize` `instructions` playbook (`BLA_MCP_INSTRUCTIONS`), `isError` semantics, and compaction of large reports.
 - `src/setup/`: Auto-registration for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and Antigravity.
 
 ## Build & Test Commands
@@ -35,3 +37,13 @@ npm test
 node dist/cli.js benchmark
 node dist/cli.js defend ./dist --manifest
 ```
+
+`npm run build` ends with `scripts/link-self-bin.mjs`, which links this package's own bins into `node_modules/.bin`. Inside the repo, `npx bla-agents@<version> mcp` (the checked-in `.mcp.json`) resolves to the local package, and without those links it fails with `bla: command not found`.
+
+Tests run with `BLA_STATE_DIR` pointed at a throwaway directory (`vitest.config.ts`), so they never read or write the developer's real BLA state. Set it yourself when running `dist/cli.js` by hand against scratch projects.
+
+## Contracts worth keeping
+
+- **A hardened program must still run.** Changes to a shield need an equivalence test that executes the hardened output (`tests/js-shield-consumer-contract.test.ts`, `tests/js-shield-cjs-named-exports.test.ts`, `tests/harden-integrity-honesty.test.ts`, the `fuzz-regression-*` suites), not only a structural assertion.
+- **Reports say what was not done.** When a binding, rename, or encoding cannot reach something, the harden report names it (`integrityBindingSkipped`, `integrityBindingUncoveredEntries`, `plaintextSurvivors`, `skippedDevTooling`, …) and `nextSteps` tells the caller what to do about it.
+- **Lints that refuse must be precise.** A gate that blocks `bla_harden` is measured against ordinary code first (`tests/lane-independence-precision.test.ts`).

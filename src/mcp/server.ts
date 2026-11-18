@@ -2,6 +2,7 @@ import { BLA_IDENTITY } from "../identity.js";
 import { initBlaConfig } from "../core/config.js";
 import { verifyManifestFile } from "../core/manifest-verify.js";
 import { inspectReleaseExposure } from "../core/release-exposure.js";
+import { registerBlaOutput } from "../core/output-registry.js";
 import type { ProtectionIntensity } from "../core/types.js";
 import { auditTarget } from "../engine/auditor.js";
 import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js";
@@ -9,8 +10,13 @@ import { verifyTarget, type VerifyTargetOptions } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { resolve as resolvePath } from "node:path";
-import { discoverHardenTargets, hardenProject } from "../engine/harden.js";
+import { join as joinPath, resolve as resolvePath } from "node:path";
+import {
+  discoverHardenTargets,
+  hardenProject,
+  restoreHardenedProject,
+} from "../engine/harden.js";
+import { listAppliedFiles, resolveApplyStateDirectory } from "../engine/harden-apply.js";
 import {
   lintLaneIndependence,
   type LaneIndependenceReport,
@@ -82,6 +88,7 @@ import {
   type NativeHeaderLanguage,
 } from "../shields/formats/headers.js";
 import { runDoctor } from "../setup/doctor.js";
+import { resolveBundledSkillBundle } from "../setup/setup.js";
 import {
   buildWeavePlan,
   getWeaveDirectivesMarkdown,
@@ -214,7 +221,39 @@ const DEFAULT_ENGINE_HANDLERS: McpEngineHandlers = Object.freeze({
 export const SUPPORTED_MCP_PROTOCOL_VERSIONS = Object.freeze([
   "2024-11-05",
   "2025-03-26",
+  "2025-06-18",
 ] as const);
+
+/** Answer for a requested revision this server does not speak (MCP lifecycle: the latest it supports). */
+const LATEST_MCP_PROTOCOL_VERSION =
+  SUPPORTED_MCP_PROTOCOL_VERSIONS[SUPPORTED_MCP_PROTOCOL_VERSIONS.length - 1]!;
+/** Answer for a client that sent no revision at all. */
+const OLDEST_MCP_PROTOCOL_VERSION = SUPPORTED_MCP_PROTOCOL_VERSIONS[0];
+
+/**
+ * Server instructions returned from `initialize`. Hosts hand these to the
+ * model, so an agent that has the MCP server but not the skill still walks the
+ * whole path: harden → promote into the build output → test what ships.
+ */
+export const BLA_MCP_INSTRUCTIONS = [
+  "BLA hardens a developer's own build artifacts against AI reverse-engineering agents. Defensive use only: never use it to analyse, unpack or bypass someone else's software.",
+  "",
+  "Hardening a project:",
+  '1. Build the project, then call bla_harden { "directory": "." } (dry_run: true previews). It discovers the build output itself — do not ask which files to protect.',
+  "2. Read nextSteps in every result and follow them. A plain run writes a partial mirror (.bla-hardened/) and ships nothing: the build output is still unprotected.",
+  '3. Promote it: bla_harden { "directory": ".", "apply": true } replaces the build output in place (originals are backed up outside the project; restore: true undoes it). It answers confirmation_required first — ask the user, then repeat with confirm_overwrite: true.',
+  "4. Run the project's own tests or a smoke run against the promoted build. BLA verifies structure, not behaviour.",
+  "5. A test fails or a hot path is too slow? restore: true, then harden again with that one file in exclude (or at a lower intensity) and tell the user what ships unprotected.",
+  "",
+  "Rules:",
+  "- isError: true means the call did not succeed. Read artifacts[].error, apply.reason and nextSteps; do not retry unchanged.",
+  "- Never edit, lint or re-harden BLA's own output (it is decoys by design; discovery lists it under skippedHardenedOutputs). Change the source, rebuild, harden again.",
+  "- Hardened code is unreadable: never write it over source files.",
+  "- Report scores for what they are: structural checks and cost estimates, not measured attacker results.",
+  "- Optional stage 2 for licence / entitlement checks: bla_weave_plan → edit the source as the workorder says → bla_verify_weave → rebuild → bla_harden with weave_decoys: true.",
+  "- bla_lint lists packaging footguns before hardening; only findings with enforcedByHarden: true make bla_harden refuse.",
+  "- No BLA skill in your client? The full guide is the resource bla://skill/SKILL.md; per-format notes are under bla://skill/references/.",
+].join("\n");
 
 const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
   "bla_harden",
@@ -307,6 +346,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
+        sqlite_eval_trap: {
+          type: "boolean",
+          description:
+            "SQLite only, opt-in. Honey-table columns call a function no stock connection has: an inspector's row read of those tables fails — and so do PRAGMA integrity_check, VACUUM and a dump/restore in the application itself. Use only for a database the application just queries. Default false: decoy columns every SQLite build evaluates.",
+        },
         sidecar_entangle: {
           type: "boolean",
           description:
@@ -315,7 +359,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         require_agent_weave: {
           type: "boolean",
           description:
-            "Agent-First Closed-Loop gate: when true, refuses mechanical hardening if any JS/TS/Python source file has not yet passed Host-Agent structural weave verification (bla_verify_weave), returning agentWeaveAssessment (surgicalWorkorders + agentActions) so the Host Agent edits the source code first. Default false.",
+            "Agent-First Closed-Loop gate: when true, refuses mechanical hardening until the crown-jewel source files — the ones holding gate / auth / license / entitlement logic — have passed Host-Agent structural weave verification (bla_verify_weave), returning agentWeaveAssessment (weaveScope, unwovenSourceFiles, surgicalWorkorders + agentActions) so the Host Agent edits the source code first. Files without gate logic are advisory and never block; when nothing is named like a gate, at least one source file of your choosing must pass. Default false.",
         },
         wasm_preserve_exports: {
           type: "array",
@@ -398,6 +442,22 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           description:
             "Optional root directory for hardened outputs (same as CLI `harden -o`). Default: <directory>/.bla-hardened.",
         },
+        exclude: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Project-relative paths or globs to leave out — for the one file that breaks or slows the program when hardened, so everything else is still protected. A pattern with a slash is anchored at the project root and covers everything beneath a matching directory (dist/vendor, dist/chunks/heavy-*.js); one without matches any path segment (vendor, *.min.js). Excluded files ship unprotected and are listed in the result's excluded. Merged with the project config's exclude.",
+        },
+        apply: {
+          type: "boolean",
+          description:
+            "Ship it: after hardening, overwrite the build output with the hardened files so the tree that gets packaged is the protected one (CLI --apply). Only files inside a build-output directory (dist/, build/, out/, release/, …) are overwritten — never source files. The originals are backed up outside the project, restore:true puts them back, and re-running re-hardens from those originals instead of hardening twice. Always needs confirm_overwrite:true. Default false: hardened copies go to output_directory (a partial mirror) and the build output stays unprotected.",
+        },
+        restore: {
+          type: "boolean",
+          description:
+            "Undo a previous apply: put the original build output back and harden nothing (CLI --restore). Files that changed since the apply (for example after a rebuild) are left alone. Needs confirm_overwrite:true.",
+        },
       },
       additionalProperties: false,
     },
@@ -422,6 +482,12 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           type: "number",
           integer: true,
           description: "Zero-based offset into the stable discovery order (use prior nextOffset to page). Default 0.",
+        },
+        exclude: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Project-relative paths or globs to leave out, with the same syntax as bla_harden's exclude. Matching files are listed in excluded instead of artifacts.",
         },
       },
       additionalProperties: false,
@@ -472,6 +538,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
+        },
+        sqlite_eval_trap: {
+          type: "boolean",
+          description:
+            "SQLite only, opt-in. Honey-table columns call a function no stock connection has: an inspector's row read of those tables fails — and so do PRAGMA integrity_check, VACUUM and a dump/restore in the application itself. Use only for a database the application just queries. Default false: decoy columns every SQLite build evaluates.",
         },
         sidecar_entangle: {
           type: "boolean",
@@ -604,6 +675,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
+        },
+        sqlite_eval_trap: {
+          type: "boolean",
+          description:
+            "SQLite only, opt-in. Honey-table columns call a function no stock connection has: an inspector's row read of those tables fails — and so do PRAGMA integrity_check, VACUUM and a dump/restore in the application itself. Use only for a database the application just queries. Default false: decoy columns every SQLite build evaluates.",
         },
         sidecar_entangle: {
           type: "boolean",
@@ -794,13 +870,23 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_doctor",
     description:
-      "Checks readiness of all BLA protection engines and agent MCP registrations.",
+      "Checks readiness of all BLA protection engines and agent MCP registrations: which clients have the server registered, whether each pins this release (versionSkew), and what to run to repair them (nextSteps). Also reads the project's own MCP configs (.mcp.json, .cursor/mcp.json, .vscode/mcp.json, …) into projectRegistrations. Clients that are not installed are only named in clientsNotDetected.",
     inputSchema: {
       type: "object",
       properties: {
         home_dir: {
           type: "string",
           description: "Optional home directory path to inspect",
+        },
+        directory: {
+          type: "string",
+          description:
+            "Project whose own MCP config files are checked for a BLA entry (default: the server's working directory).",
+        },
+        verify_handshake: {
+          type: "boolean",
+          description:
+            "Also start each registered BLA server locally and check that it answers the MCP initialize handshake (default false: registrations are only read from disk).",
         },
       },
       additionalProperties: false,
@@ -876,7 +962,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_verify_weave",
     description:
-      "Read-only structural weave verifier (bla-weave-verify/v1): validates Agent-authored source weave edits and hardened outputs against all 7 WEAVE_ACCEPTANCE_TESTS (no forbidden banners, mixed mundane/security stems, shared-state mutation across functions, customer entry call-graph reachability, opaque-true entanglement, filter resistance, and crown-jewel entanglement). Returns weaveScore and actionable agentActions for autonomous self-repair.",
+      "Read-only structural weave verifier (bla-weave-verify/v1): validates Agent-authored source weave edits and hardened outputs against all 7 WEAVE_ACCEPTANCE_TESTS (no forbidden banners, mixed mundane/security stems, shared-state mutation across functions, customer entry call-graph reachability, opaque-true entanglement, filter resistance, and crown-jewel entanglement). For a directory, overallPassed depends only on the crown-jewel files (requiredFiles: gate / auth / license / entitlement logic); files without gate logic are listed in advisoryFiles and never block, so you never have to weave a formatter or a view. Returns weaveScore, scope, and actionable agentActions (required files only) for autonomous self-repair.",
     inputSchema: {
       type: "object",
       properties: {
@@ -888,6 +974,17 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           type: "number",
           integer: true,
           description: "Optional cap on files to verify (default 48)",
+        },
+        scope: {
+          type: "string",
+          enum: ["auto", "all"],
+          description:
+            "Which files decide overallPassed for a directory. 'auto' (default): only crown-jewel files — those holding gate / auth / license / entitlement logic — must pass; every other source file is advisory. When nothing is named like a gate, at least one file you choose must pass. 'all': every verified source file must pass. A single-file path is always verified strictly.",
+        },
+        verbose: {
+          type: "boolean",
+          description:
+            "Include the full per-check reports of advisory files too (default false: advisory files are only listed by path in advisoryFiles).",
         },
       },
       required: ["path"],
@@ -1329,7 +1426,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_redteam_report",
     description:
-      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report and unready REA → status unverified. Pass execute:true only when sibling REA dist is built.",
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report, unready REA, or a harness that could not call this REA checkout for a probe → status unverified (nothing measured; not a verdict on a shield). Pass execute:true only when sibling REA dist is built.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1379,6 +1476,64 @@ export const BLA_MCP_RESOURCES: readonly McpResourceDefinition[] = Object.freeze
     mimeType: "text/markdown",
   },
 ]);
+
+/** URI prefix of the agent guide (the skill bundle), served so an MCP-only agent can read it. */
+export const BLA_SKILL_RESOURCE_PREFIX = "bla://skill/" as const;
+
+function skillResourceDescription(relativePath: string): string {
+  if (relativePath === "SKILL.md") {
+    return "The full BLA agent guide (the skill): stages, decision tree, how to read a harden report, how to recover. Read this when the skill is not installed in your client.";
+  }
+  const base = relativePath.replace(/^references\//, "").replace(/\.md$/, "");
+  const format = /^format-(.+)$/.exec(base);
+  return format
+    ? `Skill appendix: what hardening does to ${format[1]} artifacts and what callers can still rely on.`
+    : `Skill appendix: ${base}.`;
+}
+
+let skillResourceCache:
+  | { readonly definitions: readonly McpResourceDefinition[]; readonly bodies: ReadonlyMap<string, string> }
+  | undefined;
+
+/**
+ * The bundled skill as MCP resources (`bla://skill/SKILL.md`,
+ * `bla://skill/references/…`). A client that only registered the server — a
+ * checked-in `.mcp.json`, say — has the tools and the short `instructions`,
+ * but not the guide; this is how it gets the rest. Bodies are looked up by
+ * exact URI, never by joining a path from the request.
+ */
+function skillResources(): NonNullable<typeof skillResourceCache> {
+  if (skillResourceCache !== undefined) return skillResourceCache;
+  const definitions: McpResourceDefinition[] = [];
+  const bodies = new Map<string, string>();
+  let files: ReturnType<typeof resolveBundledSkillBundle> = [];
+  try {
+    files = resolveBundledSkillBundle();
+  } catch {
+    files = [];
+  }
+  for (const file of files) {
+    if (!file.relativePath.endsWith(".md")) continue;
+    const uri = `${BLA_SKILL_RESOURCE_PREFIX}${file.relativePath}`;
+    definitions.push({
+      uri,
+      name:
+        file.relativePath === "SKILL.md"
+          ? "bla-skill-guide"
+          : `bla-skill-${file.relativePath.replace(/^references\//, "").replace(/\.md$/, "")}`,
+      description: skillResourceDescription(file.relativePath),
+      mimeType: "text/markdown",
+    });
+    bodies.set(uri, file.content);
+  }
+  skillResourceCache = { definitions, bodies };
+  return skillResourceCache;
+}
+
+/** Every resource the server lists: the weave directives plus the skill bundle. */
+export function listBlaMcpResources(): readonly McpResourceDefinition[] {
+  return [...BLA_MCP_RESOURCES, ...skillResources().definitions];
+}
 
 export const BLA_MCP_PROMPTS: readonly McpPromptDefinition[] = Object.freeze([
   {
@@ -1458,13 +1613,23 @@ function existingPaths(paths: readonly string[]): string[] {
 function confirmationRequiredPayload(
   tool: string,
   wouldOverwrite: readonly string[],
+  action?: "apply" | "restore",
 ): Record<string, unknown> {
+  const n = wouldOverwrite.length;
+  // Say what the overwrite is: "choose a new output path" is no way out of an
+  // apply or a restore, and the user is being asked about their build output.
+  const what =
+    action === "restore"
+      ? `${tool} restore would put the original file(s) back over ${n} hardened file(s) in the build output`
+      : action === "apply"
+        ? `${tool} apply would replace ${n} build-output file(s) with their hardened versions (the originals are kept outside the project; restore: true brings them back)`
+        : `${tool} would overwrite ${n} existing file(s)`;
   return {
     status: "confirmation_required",
     tool,
     wrote: [],
     wouldOverwrite,
-    message: `${tool} would overwrite ${wouldOverwrite.length} existing file(s); nothing was written. Confirm with the user, then retry with confirm_overwrite: true (or choose a new output path).`,
+    message: `${what}; nothing was written. Confirm with the user, then retry with confirm_overwrite: true${action === undefined ? " (or choose a new output path)" : ""}.`,
   };
 }
 
@@ -1548,6 +1713,115 @@ function stringListArg(value: unknown): readonly string[] | undefined {
   return list.length > 0 ? list : undefined;
 }
 
+/**
+ * Tool results land in the calling agent's context window, so they must stay
+ * small. An audit lists every exposed item; after hardening that list is the
+ * injected decoys themselves — megabytes for one WASM module (a single
+ * `bla_defend` returned 6 MB, with 12 KB decoy export names). Keep the head of
+ * each list plus its true count, clip oversized names, and state the coverage
+ * contract once instead of once per nested audit. The CLI (`--json`) still
+ * prints everything.
+ */
+const MAX_EXPOSED_ITEMS_BEFORE = 40;
+const MAX_EXPOSED_ITEMS_AFTER = 8;
+const MAX_EXPOSED_ITEM_TEXT = 160;
+
+function clipExposedItemText(item: unknown): unknown {
+  if (typeof item !== "object" || item === null) return item;
+  let clipped: Record<string, unknown> | undefined;
+  for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
+    if (typeof value !== "string" || value.length <= MAX_EXPOSED_ITEM_TEXT) continue;
+    clipped ??= { ...(item as Record<string, unknown>) };
+    clipped[key] =
+      `${value.slice(0, MAX_EXPOSED_ITEM_TEXT)}…[+${value.length - MAX_EXPOSED_ITEM_TEXT} chars]`;
+  }
+  return clipped ?? item;
+}
+
+function compactAudit(audit: unknown, maxItems: number): unknown {
+  if (typeof audit !== "object" || audit === null) return audit;
+  const record = { ...(audit as Record<string, unknown>) };
+  const items = record.exposedItems;
+  if (Array.isArray(items)) {
+    record.exposedItems = items.slice(0, maxItems).map(clipExposedItemText);
+    if (items.length > maxItems) {
+      record.exposedItemsTotal = items.length;
+      record.exposedItemsTruncated = true;
+    }
+  }
+  // "Fix now: bla-agents protect <file>" is advice for an exposed artifact;
+  // on one that is already shielded it would have the agent protect it twice.
+  if (record.protectionStatus === "BLA_PROTECTED") delete record.recommendedCommand;
+  return record;
+}
+
+function withoutCoverageContract(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const { coverageContract: _dropped, ...rest } = value as Record<string, unknown>;
+  return rest;
+}
+
+function compactArtifactReport(report: unknown): unknown {
+  if (typeof report !== "object" || report === null) return report;
+  let out = { ...(report as Record<string, unknown>) };
+  // `bla_audit`: the report is the audit itself.
+  if ("exposedItems" in out) {
+    return compactAudit(out, MAX_EXPOSED_ITEMS_BEFORE);
+  }
+  if ("beforeAudit" in out) out.beforeAudit = compactAudit(out.beforeAudit, MAX_EXPOSED_ITEMS_BEFORE);
+  if ("afterAudit" in out) out.afterAudit = compactAudit(out.afterAudit, MAX_EXPOSED_ITEMS_AFTER);
+  const protection = out.protection;
+  if (typeof protection === "object" && protection !== null) {
+    const { beforeAudit: nestedBefore, ...rest } = protection as Record<string, unknown>;
+    out.protection = {
+      ...rest,
+      // The defend report already carries the same audit at the top level.
+      ...("beforeAudit" in out || nestedBefore === undefined
+        ? {}
+        : { beforeAudit: compactAudit(nestedBefore, MAX_EXPOSED_ITEMS_BEFORE) }),
+      ...("afterAudit" in rest
+        ? { afterAudit: compactAudit(rest.afterAudit, MAX_EXPOSED_ITEMS_AFTER) }
+        : {}),
+    };
+  }
+
+  // One coverage contract for the whole result — the one describing the final
+  // artifact — instead of an identical 1.7 KB block under every nested report.
+  const nestedProtection = out.protection as Record<string, unknown> | undefined;
+  const contractHolders: unknown[] = [
+    out.verification,
+    nestedProtection?.afterAudit,
+    out.afterAudit,
+    nestedProtection?.beforeAudit,
+    out.beforeAudit,
+  ];
+  const contract = contractHolders
+    .map((holder) =>
+      typeof holder === "object" && holder !== null
+        ? (holder as Record<string, unknown>).coverageContract
+        : undefined,
+    )
+    .find((candidate) => candidate !== undefined);
+  if (contract !== undefined) {
+    if ("verification" in out) out.verification = withoutCoverageContract(out.verification);
+    if ("beforeAudit" in out) out.beforeAudit = withoutCoverageContract(out.beforeAudit);
+    if ("afterAudit" in out) out.afterAudit = withoutCoverageContract(out.afterAudit);
+    if (nestedProtection !== undefined) {
+      out.protection = {
+        ...nestedProtection,
+        ...("afterAudit" in nestedProtection
+          ? { afterAudit: withoutCoverageContract(nestedProtection.afterAudit) }
+          : {}),
+        ...("beforeAudit" in nestedProtection
+          ? { beforeAudit: withoutCoverageContract(nestedProtection.beforeAudit) }
+          : {}),
+      };
+    }
+    out = { ...out, coverageContract: contract };
+  }
+  return out;
+}
+
 function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): unknown {
   const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
   return handlers.defendTarget({
@@ -1572,6 +1846,7 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
     sidecarEntangle: Boolean(args.sidecar_entangle),
+    ...(args.sqlite_eval_trap === true ? { sqliteEvalTrap: true } : {}),
     ...(args.require_agent_weave === true ? { requireAgentWeave: true } : {}),
     ...(wasmPreserveExports !== undefined ? { wasmPreserveExports } : {}),
     ...(args.allow_lane_independent === true
@@ -1618,6 +1893,7 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
     sidecarEntangle: Boolean(args.sidecar_entangle),
+    ...(args.sqlite_eval_trap === true ? { sqliteEvalTrap: true } : {}),
     ...(typeof args.honey_source_maps === "boolean"
       ? { honeySourceMaps: args.honey_source_maps }
       : {}),
@@ -2036,10 +2312,11 @@ export async function handleMcpRequest(
           };
         }
         const negotiatedVersion =
-          typeof requestedVersion === "string" &&
-          (SUPPORTED_MCP_PROTOCOL_VERSIONS as readonly string[]).includes(requestedVersion)
-            ? requestedVersion
-            : "2024-11-05";
+          typeof requestedVersion !== "string"
+            ? OLDEST_MCP_PROTOCOL_VERSION
+            : (SUPPORTED_MCP_PROTOCOL_VERSIONS as readonly string[]).includes(requestedVersion)
+              ? requestedVersion
+              : LATEST_MCP_PROTOCOL_VERSION;
 
         return {
           jsonrpc: "2.0",
@@ -2055,6 +2332,7 @@ export async function handleMcpRequest(
               name: BLA_IDENTITY.mcpServerName,
               version: BLA_IDENTITY.version,
             },
+            instructions: BLA_MCP_INSTRUCTIONS,
           },
         };
       }
@@ -2080,7 +2358,7 @@ export async function handleMcpRequest(
           jsonrpc: "2.0",
           id: req.id,
           result: {
-            resources: BLA_MCP_RESOURCES,
+            resources: listBlaMcpResources(),
           },
         };
 
@@ -2096,8 +2374,9 @@ export async function handleMcpRequest(
           };
         }
         const uri = req.params.uri;
+        const skillBody = skillResources().bodies.get(uri);
         const known = BLA_MCP_RESOURCES.find((r) => r.uri === uri);
-        if (!known) {
+        if (!known && skillBody === undefined) {
           return {
             jsonrpc: "2.0",
             id: req.id,
@@ -2107,7 +2386,14 @@ export async function handleMcpRequest(
             },
           };
         }
-        const markdown = getWeaveDirectivesMarkdown();
+        // The doc resource is a pointer: returning the directives a second
+        // time under another URI only spends the reader's context twice.
+        const markdown =
+          skillBody !== undefined
+            ? skillBody
+            : uri === WEAVE_DIRECTIVES_URI
+              ? getWeaveDirectivesMarkdown()
+              : `# Weave-decoy theory pack\n\nThe executable checklist is the resource \`${WEAVE_DIRECTIVES_URI}\` — read that one. The longer theory pack lives in the BLA repository at \`${WEAVE_DECOY_DOC_PATH}\` and is not shipped in the npm package.\n`;
         return {
           jsonrpc: "2.0",
           id: req.id,
@@ -2191,10 +2477,12 @@ export async function handleMcpRequest(
               ? String(promptArgs.directory)
               : ".";
           promptText =
-            `Harden my software against REA in one step: call bla_harden with { "directory": ${JSON.stringify(directory)} }. ` +
+            `Harden my software against REA: call bla_harden with { "directory": ${JSON.stringify(directory)} }. ` +
             `It auto-discovers build outputs, runs audit→defend→verify with the bankrupt profile on every artifact, and returns a per-artifact summary. ` +
             `Do not ask which files to protect — discover them. ` +
-            `To preview without writing, pass dry_run: true. If the tool returns confirmation_required, ask the user before retrying with confirm_overwrite: true.`;
+            `To preview without writing, pass dry_run: true. If the tool returns confirmation_required, ask the user before retrying with confirm_overwrite: true. ` +
+            `Then follow the result's nextSteps: the run writes a partial mirror that is not shipped yet, so promote it into the build output with apply: true (the originals are backed up; restore: true undoes it) and run the project's own tests against the promoted build before calling it done. ` +
+            `isError: true means the run did not succeed — read artifacts[].error and nextSteps instead of retrying unchanged.`;
         } else if (promptDef.name === "bla-weave-decoy") {
           const targetPath =
             typeof promptArgs.target_path === "string" && promptArgs.target_path.trim().length > 0
@@ -2266,6 +2554,9 @@ export async function handleMcpRequest(
                 ? { maxArtifacts: optionalCount(args.max_artifacts)! }
                 : {}),
               ...(offset !== undefined ? { offset } : {}),
+              ...(stringListArg(args.exclude) !== undefined
+                ? { exclude: stringListArg(args.exclude)! }
+                : {}),
             },
           );
         } else if (name === "bla_harden") {
@@ -2280,19 +2571,48 @@ export async function handleMcpRequest(
             args.output_directory.trim().length > 0
               ? (args.output_directory as string)
               : undefined;
+          const applyMode = args.apply === true;
+          const exclude = stringListArg(args.exclude);
           let preOverwrite: readonly string[] = [];
+          if (args.restore === true) {
+            if (applyMode) {
+              throw new Error("apply and restore cannot be combined");
+            }
+            const hardenRoot = resolvePath(hardenDir);
+            const pending = listAppliedFiles(
+              hardenRoot,
+              resolveApplyStateDirectory(hardenRoot),
+            ).map((rel) => joinPath(hardenRoot, rel));
+            if (pending.length > 0 && !confirmed && !dryRun) {
+              refused = true;
+              payload = confirmationRequiredPayload(name, pending, "restore");
+            } else if (dryRun) {
+              payload = { status: "planned", restored: pending };
+            } else {
+              const restored = restoreHardenedProject(hardenRoot);
+              refused = restored.status === "failed";
+              payload = restored;
+            }
+          } else {
           if (!dryRun && existsSync(hardenDir)) {
-            // Zero-write preview with the real engine to find clobbered outputs.
+            // Zero-write preview with the real engine to find clobbered outputs
+            // (with apply: the build-output files that would be replaced).
             preOverwrite = hardenProject({
               directory: hardenDir,
               dryRun: true,
+              ...(applyMode ? { apply: true } : {}),
               ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
               ...(outputDirectory !== undefined ? { outputDirectory } : {}),
+              ...(exclude !== undefined ? { exclude } : {}),
             }).wouldOverwrite;
           }
           if (!dryRun && preOverwrite.length > 0 && !confirmed) {
             refused = true;
-            payload = confirmationRequiredPayload(name, preOverwrite);
+            payload = confirmationRequiredPayload(
+              name,
+              preOverwrite,
+              applyMode ? "apply" : undefined,
+            );
           } else {
             const wasmPreserveExports = stringListArg(args.wasm_preserve_exports);
             const preAborted =
@@ -2310,8 +2630,10 @@ export async function handleMcpRequest(
               report = handlers.hardenProject({
                 directory: hardenDir,
                 dryRun,
+                ...(applyMode ? { apply: true } : {}),
                 ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
                 ...(outputDirectory !== undefined ? { outputDirectory } : {}),
+                ...(exclude !== undefined ? { exclude } : {}),
                 ...(typeof args.intensity === "string"
                   ? { intensity: args.intensity as ProtectionIntensity }
                   : {}),
@@ -2337,6 +2659,7 @@ export async function handleMcpRequest(
                 ...(typeof args.sidecar_entangle === "boolean"
                   ? { sidecarEntangle: args.sidecar_entangle }
                   : {}),
+                ...(args.sqlite_eval_trap === true ? { sqliteEvalTrap: true } : {}),
                 ...(typeof args.require_agent_weave === "boolean"
                   ? { requireAgentWeave: args.require_agent_weave }
                   : {}),
@@ -2411,13 +2734,27 @@ export async function handleMcpRequest(
               if (report.summaryPath !== undefined) {
                 wrote.push(report.summaryPath);
               }
+              if (report.apply?.status === "applied") {
+                const hardenRoot = resolvePath(hardenDir);
+                for (const rel of [...(report.apply.applied ?? []), ...(report.apply.added ?? [])]) {
+                  wrote.push(joinPath(hardenRoot, rel));
+                }
+              }
               payload = {
                 ...report,
-                writeReceipt: writeReceipt(wrote, preOverwrite, confirmed),
+                writeReceipt: writeReceipt(
+                  wrote,
+                  report.apply !== undefined && report.apply.status !== "applied" ? [] : preOverwrite,
+                  confirmed,
+                ),
               };
+              // A run that hardened nothing, failed an artifact, or could not
+              // promote is not a success the agent may build on.
+              if (!report.overallSuccess) refused = true;
             } else {
               payload = report;
             }
+          }
           }
         } else if (name === "bla_defend" || name === "bla_protect") {
           const inPlace = args.in_place === true;
@@ -2436,9 +2773,12 @@ export async function handleMcpRequest(
             refused = true;
             payload = confirmationRequiredPayload(name, clobbered);
           } else {
-            const report = (name === "bla_defend"
-              ? runDefend(handlers, args)
-              : runProtect(handlers, args)) as Record<string, unknown>;
+            const report = compactArtifactReport(
+              name === "bla_defend" ? runDefend(handlers, args) : runProtect(handlers, args),
+            ) as Record<string, unknown>;
+            // A later bla_harden / bla_lint must recognise this file as hardened
+            // output, not as a fresh artifact full of plaintext "secrets".
+            if (typeof report.outputPath === "string") registerBlaOutput(report.outputPath);
             const withRun = attachArtifactRunEvidence(
               name,
               args.input_path as string,
@@ -2454,7 +2794,7 @@ export async function handleMcpRequest(
             };
           }
         } else if (name === "bla_audit") {
-          payload = handlers.auditTarget(args.path as string);
+          payload = compactArtifactReport(handlers.auditTarget(args.path as string));
         } else if (name === "bla_verify") {
           const verification = handlers.verifyTarget(
             args.target_path as string,
@@ -2514,9 +2854,33 @@ export async function handleMcpRequest(
             },
           );
         } else if (name === "bla_doctor") {
-          payload = handlers.runDoctor(
-            typeof args.home_dir === "string" ? args.home_dir : undefined,
+          const doctor = handlers.runDoctor({
+            ...(typeof args.home_dir === "string" ? { homeDir: args.home_dir } : {}),
+            ...(args.verify_handshake === true ? { verifyHandshake: true } : {}),
+            projectDirectory:
+              typeof args.directory === "string" && args.directory.trim().length > 0
+                ? args.directory
+                : process.cwd(),
+          });
+          // Agent-facing shape: one client list (not the `clients` alias too),
+          // absent clients as names only, and no 4 KB table of REA constants.
+          const {
+            clients: _clientsAlias,
+            reaLimitsTargeted,
+            agentClients,
+            ...doctorRest
+          } = doctor;
+          const present = (agentClients ?? []).filter(
+            (c) => c.detected || c.configured || c.skillInstalled,
           );
+          payload = {
+            ...doctorRest,
+            agentClients: present,
+            clientsNotDetected: (agentClients ?? [])
+              .filter((c) => !present.includes(c))
+              .map((c) => c.id),
+            reaLimitsTargetedCount: Object.keys(reaLimitsTargeted ?? {}).length,
+          };
         } else if (name === "bla_inspect_release") {
           const maxFiles = optionalCount(args.max_files);
           const maxTotalBytes = optionalCount(args.max_total_bytes);
@@ -2540,8 +2904,17 @@ export async function handleMcpRequest(
             ...(typeof args.max_targets === "number"
               ? { maxTargets: args.max_targets }
               : {}),
+            ...(args.scope === "all" ? { scope: "all" as const } : {}),
           });
-          payload = verifyReport;
+          // Advisory files never block the verdict; their per-check detail is
+          // noise for the agent unless it asks for it.
+          payload =
+            args.verbose === true
+              ? verifyReport
+              : {
+                  ...verifyReport,
+                  files: verifyReport.files.filter((f) => f.scope !== "advisory"),
+                };
           refused = !verifyReport.overallPassed;
         } else if (name === "bla_lint") {
           const full = runPackagingGatesLint(args);

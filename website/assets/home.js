@@ -89,7 +89,7 @@ const SCENARIOS = {
     blueTrace: `$ npx bla-agents defend ./weights.safetensors --manifest
 • SafetensorsHeader: ModelFormatFailure("json-nesting" > 32)
 • GgufHeader: ModelFormatFailure("metadata-nesting" > 32)
-• SQLite: SqliteColumnEvaluationFailure on read-only connection`,
+• SQLite (--sqlite-eval-trap): SqliteColumnEvaluationFailure on read-only connection`,
   },
 };
 

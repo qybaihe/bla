@@ -8,6 +8,8 @@ coverage/
 .env.*
 tmp/
 .bla-cache/
+# Mirror written by `bla harden` (dogfooding the checkout hardens dist/)
+.bla-hardened/
 
 # Per-project BLA config / seed (local)
 .blarc

@@ -19,6 +19,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { walkBounded } from "../core/walk.js";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const WASM_XOR_MASK_SIDECAR_SCHEMA = "bla-wasm-xor-mask-sidecar-lint/v1" as const;
 
@@ -224,13 +225,31 @@ export function extractWasmDataPayloads(buffer: Buffer): Array<{ memOff: number;
   return out;
 }
 
+/**
+ * A real XOR mask is 32 key bytes: ~30 distinct values and essentially no
+ * zeros. The old `>= 8 distinct` bar also accepted a table of small
+ * little-endian integers (`28 00 00 00 39 00 00 00 …`), and with a zero-filled
+ * region in front of it the "unmasked" blob IS that table — which satisfies the
+ * pack layout by construction. Stock Go / Rust runtimes are full of such
+ * tables, so every `GOOS=wasip1` hello-world was refused as an entitlement pack.
+ */
 function maskEntropyOk(mask: Buffer): boolean {
   if (mask.length !== MASK_LEN) return false;
-  if (mask.every((b) => b === 0)) return false;
-  const first = mask[0]!;
-  if (mask.every((b) => b === first)) return false;
-  const seen = new Set(mask);
-  return seen.size >= 8;
+  let zeros = 0;
+  for (const b of mask) if (b === 0) zeros++;
+  if (zeros > 6) return false;
+  return new Set(mask).size >= 16;
+}
+
+/**
+ * The stored blob is plaintext XOR key bytes, so it looks random too. A run of
+ * zeros or padding in front of a table is not a masked pack.
+ */
+function maskedBlobEntropyOk(blob: Buffer): boolean {
+  let zeros = 0;
+  for (const b of blob) if (b === 0) zeros++;
+  if (zeros > Math.floor(blob.length / 8)) return false;
+  return new Set(blob).size >= Math.floor(blob.length / 2);
 }
 
 /**
@@ -244,6 +263,7 @@ export function looksLikeXorMaskedEntitlementPack(
   for (let N = MIN_BLOB; N <= Math.min(MAX_BLOB, payload.length - base - MASK_LEN); N++) {
     const mask = payload.subarray(base + N, base + N + MASK_LEN);
     if (!maskEntropyOk(mask)) continue;
+    if (!maskedBlobEntropyOk(payload.subarray(base, base + N))) continue;
     const plain = Buffer.alloc(N);
     for (let i = 0; i < N; i++) plain[i] = payload[base + i]! ^ mask[i % MASK_LEN]!;
     if (plain[5] || plain[6] || plain[7]) continue;
@@ -361,7 +381,10 @@ export function discoverAndLintWasmXorMaskSidecars(directory: string): WasmXorMa
   const abs = resolve(directory);
   const files: string[] = [];
   if (existsSync(abs) && statSync(abs).isFile() && /\.wasm$/i.test(abs)) files.push(abs);
-  else if (existsSync(abs) && statSync(abs).isDirectory()) files.push(...walkWasmFiles(abs));
+  else if (existsSync(abs) && statSync(abs).isDirectory()) {
+    // Hardened output is decoys by design; lint what it was built from.
+    files.push(...withoutKnownBlaOutputs(walkWasmFiles(abs)));
+  }
   return files.map((f) => lintWasmXorMaskSidecarFile(f));
 }
 

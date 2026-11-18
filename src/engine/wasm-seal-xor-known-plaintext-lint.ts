@@ -21,6 +21,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { extractWasmDataPayloads } from "./wasm-xor-mask-sidecar-lint.js";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const WASM_SEAL_XOR_KNOWN_PLAINTEXT_SCHEMA =
   "bla-wasm-seal-xor-known-plaintext-lint/v1" as const;
@@ -342,7 +343,12 @@ export function discoverAndLintWasmSealXorKnownPlaintext(
   const abs = resolve(directory);
   const files: string[] = [];
   if (existsSync(abs) && statSync(abs).isFile() && /\.wasm$/i.test(abs)) files.push(abs);
-  else if (existsSync(abs) && statSync(abs).isDirectory()) walkWasmFiles(abs, files, 0);
+  else if (existsSync(abs) && statSync(abs).isDirectory()) {
+    const walked: string[] = [];
+    walkWasmFiles(abs, walked, 0);
+    // Hardened output is decoys by design; lint what it was built from.
+    files.push(...withoutKnownBlaOutputs(walked));
+  }
   return files.map((f) => lintWasmSealXorKnownPlaintextFile(f));
 }
 

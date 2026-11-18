@@ -23,6 +23,8 @@ export type DefenseScoreGapId =
   | "safetensors-sidecar-host-verify-only"
   | "dex-sidecar-host-verify-only"
   | "sqlite-sidecar-host-verify-only"
+  | "sqlite-business-data-readable"
+  | "sqlite-decoy-columns-evaluable"
   | "wasm-sidecar-host-verify-only"
   | "esm-import-hoist-before-hooks"
   | "numeric-template-hygiene-partial"
@@ -59,6 +61,12 @@ export interface DefenseScoreHonestyInput {
    * the .wasm). Clears `wasm-sidecar-host-verify-only`.
    */
   readonly wasmSidecarLoaderHookApplied?: boolean;
+  /**
+   * How a SQLite database's generated decoy columns are defined: `"eval"`
+   * when they call the function no stock connection has (opt-in), otherwise
+   * plain SQL. Unknown counts as plain SQL.
+   */
+  readonly sqliteTrapMode?: "none" | "stock" | "eval";
 }
 
 export interface DefenseScoreHonesty {
@@ -189,6 +197,24 @@ export function collectDefenseScoreGaps(
         "sidecarEntangle planted a SQLite bla.sidecar.v1 schema-comment view verified only by host verifySqliteSidecarSchemaComment; SQLite still opens after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
       scoreCap: 93,
     });
+  }
+
+  // The SQLite shield decorates a database; it hides nothing in it.
+  if (input.detectedFormat === "sqlite") {
+    gaps.push({
+      id: "sqlite-business-data-readable",
+      summary:
+        "The SQLite shield adds honey tables and decoy rows beside the application's own tables, which are stored exactly as before: any SQLite client reads them. This is decoration, not confidentiality — keep secrets out of a shipped database, or encrypt it (SQLCipher, application-layer encryption).",
+      scoreCap: 78,
+    });
+    if (input.sqliteTrapMode !== "eval") {
+      gaps.push({
+        id: "sqlite-decoy-columns-evaluable",
+        summary:
+          "The honey tables' generated columns are plain SQL (the default), so an inspector reads those tables like any other. The form that makes that read fail is opt-in (sqlite_eval_trap / --sqlite-eval-trap) because it also breaks PRAGMA integrity_check, VACUUM and dump/restore for the application.",
+        scoreCap: 68,
+      });
+    }
   }
 
   // Standalone WASM custom-section is host-verify only until a Node CJS/ESM

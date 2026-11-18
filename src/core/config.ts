@@ -24,8 +24,19 @@ export interface BlaProjectConfig {
   readonly sidecarEntangle?: boolean;
   /** Enforce Agent-First Closed-Loop: refuse hardening if source files lack verified Stage 2 surgical weave. */
   readonly requireAgentWeave?: boolean;
+  /**
+   * SQLite only, opt-in: evaluation-trap columns on the honey tables. They stop a
+   * row read by an inspector, and also `PRAGMA integrity_check`, `VACUUM` and a
+   * dump/restore in the application. Parity with CLI `--sqlite-eval-trap` / MCP `sqlite_eval_trap`.
+   */
+  readonly sqliteEvalTrap?: boolean;
   /** WASM export names that must remain the public ABI when export rename runs (issue #40.3). */
   readonly wasmPreserveExports?: readonly string[];
+  /**
+   * Project-relative paths or globs `harden` leaves out (hot-path modules, a
+   * file that cannot be hardened). They ship unprotected and are reported.
+   */
+  readonly exclude?: readonly string[];
   /** When true, allow harden/defend of lane-independent JS gates (issue #40.1). Default false. */
   readonly allowLaneIndependentGates?: boolean;
   /** When true, allow bankrupt harden despite plaintext/reversible seal sidecars (red-blue round-2). Default false. */
@@ -88,6 +99,7 @@ const BOOLEAN_CONFIG_KEYS = [
   "selfSeal",
   "sidecarEntangle",
   "requireAgentWeave",
+  "sqliteEvalTrap",
   "allowLaneIndependentGates",
   "allowPlaintextSeal",
   "allowWasmClearParamCarriers",
@@ -140,6 +152,12 @@ export function validateBlaConfigShape(value: unknown, source: string): BlaProje
       !obj.wasmPreserveExports.every((v) => typeof v === "string"))
   ) {
     throw new Error(`Invalid BLA config at ${source}: 'wasmPreserveExports' must be an array of strings`);
+  }
+  if (
+    obj.exclude !== undefined &&
+    (!Array.isArray(obj.exclude) || !obj.exclude.every((v) => typeof v === "string"))
+  ) {
+    throw new Error(`Invalid BLA config at ${source}: 'exclude' must be an array of strings`);
   }
   return obj as BlaProjectConfig;
 }

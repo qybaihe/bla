@@ -248,6 +248,14 @@ export interface ProtectionOptions {
   readonly sidecarEntanglePaths?: readonly string[];
   /** Soft-fold mismatch into opaque seed instead of hard throw. Default false. */
   readonly sidecarEntangleSoftFold?: boolean;
+  /**
+   * SQLite only, opt-in. The honey tables' generated columns call a function
+   * no stock connection has, so a row read of those tables fails for an
+   * inspector — and so do `PRAGMA integrity_check`, `VACUUM` and a
+   * dump/restore for the application itself. Default false: decoy columns
+   * every SQLite build can evaluate.
+   */
+  readonly sqliteEvalTrap?: boolean;
 }
 
 export interface ProtectionMetrics {
@@ -281,6 +289,16 @@ export interface ProtectionResult {
   readonly wasmSidecarLoaderHookApplied?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
+  /**
+   * The rename map behind `wasmExportRenameApplied` (`from` → `to`). Code that
+   * calls a renamed export by its old name no longer works: update the call
+   * sites from this map, or keep the names with `wasmPreserveExports`.
+   */
+  readonly wasmExportRenames?: readonly {
+    readonly from: string;
+    readonly to: string;
+    readonly kind: string;
+  }[];
   /** Present when WASM export-section order was seed-shuffled (red-blue round-11). */
   readonly wasmExportOrderShuffled?: boolean;
   /** Count of long-name decoy export aliases injected (red-blue round-10/12 hygiene). */

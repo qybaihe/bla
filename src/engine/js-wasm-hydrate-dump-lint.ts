@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { withoutKnownBlaOutputs } from "../core/output-registry.js";
 
 export const JS_WASM_HYDRATE_DUMP_SCHEMA = "bla-js-wasm-hydrate-dump-lint/v1" as const;
 
@@ -288,7 +289,8 @@ export function discoverAndLintJsWasmHydrateDump(
   }
   const candidates: string[] = [];
   walkJsCandidates(abs, 0, candidates);
-  return candidates.map((p) => lintJsWasmHydrateDumpFile(p));
+  // Hardened output is decoys by design; lint what it was built from.
+  return withoutKnownBlaOutputs(candidates).map((p) => lintJsWasmHydrateDumpFile(p));
 }
 
 export function jsWasmHydrateDumpRefuseMessage(
