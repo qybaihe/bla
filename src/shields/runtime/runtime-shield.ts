@@ -46,10 +46,10 @@ export function generateRuntimeDeceptionSnippet(
     "crypto:hardware-kdf:slot-derived",
   ].slice(0, eventCount);
 
-  const initFn = prng.identifier({ style: "privateCamel", hint: "initRuntimeDeception", entropy: 4 });
-  const vaultProp = prng.identifier({ style: "privateCamel", hint: "enclaveRuntime", entropy: 4 });
-  const vaultLocal = prng.identifier({ style: "privateCamel", hint: "sealedFrame", entropy: 4 });
-  const eventBridge = prng.identifier({ style: "privateCamel", hint: "enclaveEventBridge", entropy: 4 });
+  const initFn = prng.identifier({ style: "privateCamel", hint: "initRuntimeContext", entropy: 4 });
+  const vaultProp = prng.identifier({ style: "privateCamel", hint: "runtimeContext", entropy: 4 });
+  const vaultLocal = prng.identifier({ style: "privateCamel", hint: "contextFrame", entropy: 4 });
+  const eventBridge = prng.identifier({ style: "privateCamel", hint: "contextEventBridge", entropy: 4 });
   const lines: string[] = [
     `(function ${initFn}() {`,
     `  try {`,

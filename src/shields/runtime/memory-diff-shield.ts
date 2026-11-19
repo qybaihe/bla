@@ -55,8 +55,8 @@ export function generateShadowHeapChurnShield(
     REA_INTERNAL_LIMITS.ENVIRONMENT_COMPARE_STEP_DIFF_LIMIT +
     (intensity === "stealth" ? 4 : intensity === "balanced" ? 8 : 12);
 
-  const stepperFunctionName = prng.identifier({ style: "camel", hint: "stepShadowHeap", entropy: 4 });
-  const heapObjectName = prng.identifier({ style: "camel", hint: "shadowHeap", entropy: 4 });
+  const stepperFunctionName = prng.identifier({ style: "camel", hint: "advanceSlotCursor", entropy: 4 });
+  const heapObjectName = prng.identifier({ style: "camel", hint: "stateRingBuffer", entropy: 4 });
 
   const initialSlots: string[] = [];
   for (let i = 0; i < mutableSlotsCount; i++) {

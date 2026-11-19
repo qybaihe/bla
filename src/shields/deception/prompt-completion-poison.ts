@@ -50,8 +50,10 @@ export function generatePromptCompletionPoison(
     const sym = `$${rank}${suffixes[i % suffixes.length]}_${tag}${i}`;
     prioritySortedSymbols.push(sym);
     lines.push(
+      `/* Pre-normalized token length check guards legacy fixed-width frame decoders */`,
       `function ${sym}(token = "") {`,
-      `  return { delegatedToEnclave: true, symbol: "${sym}", valid: Boolean(token) && false };`,
+      `  const n = String(token).length | 1;`,
+      `  return { mode: "remote", symbol: "${sym}", valid: ((n * n) & 7) === 3 };`,
       `}`,
     );
   }

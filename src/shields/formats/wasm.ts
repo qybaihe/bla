@@ -33,6 +33,23 @@ function encodeUnsignedLeb128(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
+function encodeSignedLeb128(value: number): Buffer {
+  const bytes: number[] = [];
+  let v = value | 0;
+  let more = true;
+  while (more) {
+    let byte = v & 0x7f;
+    v >>= 7;
+    if ((v === 0 && (byte & 0x40) === 0) || (v === -1 && (byte & 0x40) !== 0)) {
+      more = false;
+    } else {
+      byte |= 0x80;
+    }
+    bytes.push(byte);
+  }
+  return Buffer.from(bytes);
+}
+
 function decodeUnsignedLeb128(buf: Buffer, startOffset: number): { value: number; nextOffset: number } {
   let result = 0;
   let shift = 0;
@@ -685,6 +702,395 @@ export function isLinkingCriticalCustomSection(name: string): boolean {
   return LINKING_CRITICAL_CUSTOM_SECTIONS.has(name) || name.startsWith("reloc.");
 }
 
+/**
+ * Parses a WASM Type section (`sectionId === 1`) into parameter value-type lists
+ * for each standard `0x60` functype. Returns `null` if non-MVP GC/typed-ref types
+ * are present so bytecode flower injection fails safe without touching exotic layouts.
+ */
+function parseWasmTypeParamTypes(typeSectionPayload: Buffer): (readonly number[])[] | null {
+  try {
+    const { value: count, nextOffset } = decodeUnsignedLeb128(typeSectionPayload, 0);
+    let p = nextOffset;
+    const out: (readonly number[])[] = [];
+    for (let i = 0; i < count; i++) {
+      if (p >= typeSectionPayload.length || typeSectionPayload[p++] !== 0x60) {
+        return null;
+      }
+      const { value: nParams, nextOffset: afterParams } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterParams;
+      if (p + nParams > typeSectionPayload.length) return null;
+      const params: number[] = [];
+      for (let j = 0; j < nParams; j++) {
+        const vt = typeSectionPayload[p++]!;
+        // Typed ref types (0x63/0x64) carry a heaptype immediate; skip injection safely.
+        if (vt === 0x63 || vt === 0x64) return null;
+        params.push(vt);
+      }
+      const { value: nResults, nextOffset: afterResults } = decodeUnsignedLeb128(
+        typeSectionPayload,
+        p,
+      );
+      p = afterResults;
+      if (p + nResults > typeSectionPayload.length) return null;
+      for (let j = 0; j < nResults; j++) {
+        const vt = typeSectionPayload[p++]!;
+        if (vt === 0x63 || vt === 0x64) return null;
+      }
+      out.push(params);
+    }
+    return p === typeSectionPayload.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function wasmI32Const(value: number): Buffer {
+  return Buffer.concat([Buffer.from([0x41]), encodeSignedLeb128(value)]);
+}
+
+function wasmLocalGet(index: number): Buffer {
+  return Buffer.concat([Buffer.from([0x20]), encodeUnsignedLeb128(index)]);
+}
+
+/**
+ * Builds a stack-neutral (`[] -> []`) WebAssembly 1.0 MVP opaque-false flower
+ * block (`if (void) <ARX + select + nested block + br_if> end`).
+ *
+ * When the enclosing function takes an `i32` or `i64` parameter, the guard couples
+ * directly to that real parameter via exact mod-2/mod-8/mod-16 algebraic zero
+ * identities over Z/2^32Z (or Z/2^64Z), defeating trivial constant folding while
+ * guaranteeing zero execution of the dead block across all 2^32 / 2^64 inputs.
+ */
+function buildWasmOpaqueFlowerBlock(
+  prng: SeededPrng,
+  paramTypes: readonly number[],
+  variant: number,
+): Buffer {
+  const i32ParamIdx = paramTypes.indexOf(0x7f);
+  const i64ParamIdx = paramTypes.indexOf(0x7e);
+
+  let guard: Buffer;
+  if (i32ParamIdx >= 0) {
+    const mode = variant % 3;
+    const pGet = wasmLocalGet(i32ParamIdx);
+    if (mode === 0) {
+      // (((x | 1) * (x | 1)) & 7) ^ 1 === 0 for every i32 x (odd^2 === 1 mod 8)
+      const oddX = Buffer.concat([pGet, wasmI32Const(1), Buffer.from([0x72])]);
+      guard = Buffer.concat([
+        oddX,
+        oddX,
+        Buffer.from([0x6c]), // i32.mul
+        wasmI32Const(7),
+        Buffer.from([0x71]), // i32.and
+        wasmI32Const(1),
+        Buffer.from([0x73]), // i32.xor
+      ]);
+    } else if (mode === 1) {
+      // ((y * (y + 1)) & 1) === 0 for every i32 y = x ^ mask
+      const mask = prng.nextInt(0x101, 0x3fffffff);
+      const y = Buffer.concat([pGet, wasmI32Const(mask), Buffer.from([0x73])]);
+      guard = Buffer.concat([
+        y,
+        y,
+        wasmI32Const(1),
+        Buffer.from([0x6a]), // i32.add
+        Buffer.from([0x6c]), // i32.mul
+        wasmI32Const(1),
+        Buffer.from([0x71]), // i32.and
+      ]);
+    } else {
+      // (((z^2 * z^2) & 15) ^ 1) === 0 for odd z = (x ^ mask) | 1 (odd^4 === 1 mod 16)
+      const mask = prng.nextInt(0x101, 0x3fffffff);
+      const z = Buffer.concat([
+        pGet,
+        wasmI32Const(mask),
+        Buffer.from([0x73]),
+        wasmI32Const(1),
+        Buffer.from([0x72]),
+      ]);
+      const zSq = Buffer.concat([z, z, Buffer.from([0x6c])]);
+      guard = Buffer.concat([
+        zSq,
+        zSq,
+        Buffer.from([0x6c]), // z^4
+        wasmI32Const(15),
+        Buffer.from([0x71]), // i32.and
+        wasmI32Const(1),
+        Buffer.from([0x73]), // i32.xor
+      ]);
+    }
+  } else if (i64ParamIdx >= 0) {
+    // (((x | 1) * (x | 1)) & 7) ^ 1 === 0n for every i64 x -> i64.eqz (1) -> i32.eqz (0)
+    const pGet64 = wasmLocalGet(i64ParamIdx);
+    const oddX64 = Buffer.concat([pGet64, Buffer.from([0x42, 0x01, 0x84])]);
+    guard = Buffer.concat([
+      oddX64,
+      oddX64,
+      Buffer.from([0x7e, 0x42, 0x07, 0x83, 0x42, 0x01, 0x85, 0x50, 0x45]),
+    ]);
+  } else {
+    // 0-param or float-only function: odd-square mod-8 algebraic invariant
+    const oddK = prng.nextInt(0x1001, 0x3fffffff) | 1;
+    guard = Buffer.concat([
+      wasmI32Const(oddK),
+      wasmI32Const(oddK),
+      Buffer.from([0x6c]),
+      wasmI32Const(7),
+      Buffer.from([0x71]),
+      wasmI32Const(1),
+      Buffer.from([0x73]),
+    ]);
+  }
+
+  // Dense, plausible ARX + nested block + select + br_if dead flower body (stack: [] -> [])
+  const initVal =
+    i32ParamIdx >= 0
+      ? wasmLocalGet(i32ParamIdx)
+      : wasmI32Const(prng.nextInt(0x10000, 0x7fffffff));
+  const rounds: Buffer[] = [initVal];
+  for (let r = 0; r < 3; r++) {
+    const kXor = prng.nextInt(0x1000, 0x7fffffff);
+    const rot = prng.nextInt(3, 29);
+    const kMul = prng.nextInt(0x1001, 0x7fffffff) | 1;
+    const kAdd = prng.nextInt(0x100, 0x7fffffff);
+    rounds.push(
+      wasmI32Const(kXor),
+      Buffer.from([0x73]), // i32.xor
+      wasmI32Const(rot),
+      Buffer.from([0x77]), // i32.rotl
+      wasmI32Const(kMul),
+      Buffer.from([0x6c]), // i32.mul
+      wasmI32Const(kAdd),
+      Buffer.from([0x6a]), // i32.add
+    );
+  }
+  const altVal = wasmI32Const(prng.nextInt(0x1000, 0x7fffffff));
+  const selCond = Buffer.concat([
+    i32ParamIdx >= 0
+      ? wasmLocalGet(i32ParamIdx)
+      : wasmI32Const(prng.nextInt(0x100, 0xffff)),
+    wasmI32Const(0x1f),
+    Buffer.from([0x71]), // i32.and
+  ]);
+  const cmpConst = wasmI32Const(prng.nextInt(0x100, 0x7fffffff));
+  const tailArx = Buffer.concat([
+    wasmI32Const(prng.nextInt(0x10000, 0x7fffffff)),
+    wasmI32Const(prng.nextInt(0x1000, 0x7fffffff)),
+    Buffer.from([0x73]), // i32.xor
+    wasmI32Const(prng.nextInt(5, 27)),
+    Buffer.from([0x78]), // i32.rotr
+    wasmI32Const(prng.nextInt(0x1001, 0x7fffffff) | 1),
+    Buffer.from([0x6c]), // i32.mul
+    Buffer.from([0x1a]), // drop
+  ]);
+
+  return Buffer.concat([
+    guard,
+    Buffer.from([0x04, 0x40]), // if (void)
+    Buffer.from([0x02, 0x40]), // block (void)
+    ...rounds,
+    altVal,
+    selCond,
+    Buffer.from([0x1b]), // select
+    cmpConst,
+    Buffer.from([0x46, 0x0d, 0x00]), // i32.eq; br_if 0
+    tailArx,
+    Buffer.from([0x0b, 0x0b]), // end block; end if
+  ]);
+}
+
+export interface WasmBytecodeFlowerResult {
+  readonly buffer: Buffer;
+  readonly functionsHardened: number;
+  readonly flowerBlocksInjected: number;
+  readonly addedCodeBytes: number;
+}
+
+/**
+ * Injects WebAssembly 1.0 MVP parameter-coupled opaque-false flower bytecode blocks
+ * directly into defined function bodies in the Code section (`sectionId === 10`),
+ * right after local declarations (stack height 0, branch depth 0).
+ *
+ * Preserves local indices, branch targets, call/memory/global/table indices, and
+ * exact runtime behavior. Automatically skips dynamically-relocatable modules that
+ * carry `reloc.*` sections and verifies output with `WebAssembly.validate()`.
+ */
+export function injectWasmBytecodeFlowerInstructions(
+  bytes: Buffer,
+  options: {
+    readonly intensity?: ProtectionIntensity;
+    readonly seed?: string | number;
+  } = {},
+): WasmBytecodeFlowerResult {
+  const noop: WasmBytecodeFlowerResult = {
+    buffer: bytes,
+    functionsHardened: 0,
+    flowerBlocksInjected: 0,
+    addedCodeBytes: 0,
+  };
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x00 ||
+    bytes[1] !== 0x61 ||
+    bytes[2] !== 0x73 ||
+    bytes[3] !== 0x6d
+  ) {
+    return noop;
+  }
+
+  const intensity = options.intensity ?? "balanced";
+  const blocksPerFn =
+    intensity === "stealth"
+      ? 1
+      : intensity === "balanced"
+        ? 2
+        : intensity === "maximum"
+          ? 3
+          : 4;
+  const maxFunctions =
+    intensity === "stealth"
+      ? 64
+      : intensity === "balanced"
+        ? 128
+        : intensity === "maximum"
+          ? 256
+          : 512;
+  const prng = new SeededPrng(options.seed ?? "bla-wasm-flower-v1");
+
+  let typeParamTypes: (readonly number[])[] | null = null;
+  let funcTypeIndices: number[] | null = null;
+  let codeSectionRange: { start: number; payloadStart: number; end: number } | null = null;
+
+  let offset = 8;
+  while (offset < bytes.length) {
+    const sectionStart = offset;
+    const sectionId = bytes[offset++]!;
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) return noop;
+    const { value: sectionSize, nextOffset } = header;
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) return noop;
+    const payload = bytes.subarray(nextOffset, sectionEnd);
+
+    if (sectionId === 0 && payload.length > 0) {
+      try {
+        const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
+        const customName = payload.subarray(nameStart, nameStart + nameLen).toString("utf8");
+        if (customName.startsWith("reloc.")) return noop;
+      } catch {
+        // Ignore malformed custom section name
+      }
+    } else if (sectionId === 1) {
+      typeParamTypes = parseWasmTypeParamTypes(payload);
+    } else if (sectionId === 3) {
+      funcTypeIndices = parseWasmFuncTypeIndices(payload);
+    } else if (sectionId === 10) {
+      codeSectionRange = { start: sectionStart, payloadStart: nextOffset, end: sectionEnd };
+    }
+    offset = sectionEnd;
+  }
+
+  if (!typeParamTypes || !funcTypeIndices || !codeSectionRange) {
+    return noop;
+  }
+
+  const codePayload = bytes.subarray(codeSectionRange.payloadStart, codeSectionRange.end);
+  const bodyCountDec = tryDecodeUnsignedLeb128(codePayload, 0);
+  if (!bodyCountDec || bodyCountDec.value !== funcTypeIndices.length || bodyCountDec.value === 0) {
+    return noop;
+  }
+
+  let cursor = bodyCountDec.nextOffset;
+  const rewrittenBodies: Buffer[] = [];
+  let functionsHardened = 0;
+  let flowerBlocksInjected = 0;
+  let addedCodeBytes = 0;
+
+  for (let i = 0; i < bodyCountDec.value; i++) {
+    const bodySizeDec = tryDecodeUnsignedLeb128(codePayload, cursor);
+    if (!bodySizeDec) return noop;
+    const bodyStart = bodySizeDec.nextOffset;
+    const bodyEnd = bodyStart + bodySizeDec.value;
+    if (bodyEnd > codePayload.length || bodySizeDec.value === 0) return noop;
+    const body = codePayload.subarray(bodyStart, bodyEnd);
+    cursor = bodyEnd;
+
+    // Parse local_decl_vec inside the function body
+    const localCountDec = tryDecodeUnsignedLeb128(body, 0);
+    if (!localCountDec) return noop;
+    let codeStart = localCountDec.nextOffset;
+    for (let l = 0; l < localCountDec.value; l++) {
+      const cntDec = tryDecodeUnsignedLeb128(body, codeStart);
+      if (!cntDec || cntDec.nextOffset >= body.length) return noop;
+      const vt = body[cntDec.nextOffset]!;
+      if (vt === 0x63 || vt === 0x64) return noop;
+      codeStart = cntDec.nextOffset + 1;
+    }
+    if (codeStart >= body.length || body[body.length - 1] !== 0x0b) {
+      return noop;
+    }
+
+    const typeIdx = funcTypeIndices[i]!;
+    const paramTypes = typeParamTypes[typeIdx];
+    if (!paramTypes || i >= maxFunctions) {
+      rewrittenBodies.push(encodeUnsignedLeb128(body.length), body);
+      continue;
+    }
+
+    const flowerChunks: Buffer[] = [];
+    for (let b = 0; b < blocksPerFn; b++) {
+      flowerChunks.push(buildWasmOpaqueFlowerBlock(prng, paramTypes, i + b));
+    }
+    const flowerPayload = Buffer.concat(flowerChunks);
+    const newBody = Buffer.concat([
+      body.subarray(0, codeStart),
+      flowerPayload,
+      body.subarray(codeStart),
+    ]);
+    rewrittenBodies.push(encodeUnsignedLeb128(newBody.length), newBody);
+    functionsHardened += 1;
+    flowerBlocksInjected += blocksPerFn;
+    addedCodeBytes += flowerPayload.length;
+  }
+
+  if (cursor !== codePayload.length || functionsHardened === 0) {
+    return noop;
+  }
+
+  const newCodePayload = Buffer.concat([
+    encodeUnsignedLeb128(bodyCountDec.value),
+    ...rewrittenBodies,
+  ]);
+  const newCodeSection = Buffer.concat([
+    Buffer.from([0x0a]),
+    encodeUnsignedLeb128(newCodePayload.length),
+    newCodePayload,
+  ]);
+  const candidate = Buffer.concat([
+    bytes.subarray(0, codeSectionRange.start),
+    newCodeSection,
+    bytes.subarray(codeSectionRange.end),
+  ]);
+
+  if (
+    typeof WebAssembly !== "undefined" &&
+    typeof WebAssembly.validate === "function" &&
+    !WebAssembly.validate(new Uint8Array(candidate))
+  ) {
+    return noop;
+  }
+
+  return {
+    buffer: candidate,
+    functionsHardened,
+    flowerBlocksInjected,
+    addedCodeBytes,
+  };
+}
+
 export function protectWasmBinary(
   bytes: Buffer,
   options: {
@@ -723,6 +1129,10 @@ export function protectWasmBinary(
   readonly exportsRenamed: readonly WasmExportRename[];
   /** True when export-section entry order was seed-shuffled (round-11). */
   readonly exportsOrderShuffled: boolean;
+  /** Number of defined WASM Code-section functions hardened with opaque flower bytecode. */
+  readonly codeFunctionsHardened: number;
+  /** Total parameter-coupled opaque-false bytecode flower blocks injected into section 10. */
+  readonly bytecodeFlowerBlocksInjected: number;
 } {
   if (
     bytes.length < 8 ||
@@ -739,6 +1149,14 @@ export function protectWasmBinary(
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
+  // Inject parameter-coupled opaque-false flower bytecode into real Code-section
+  // function bodies (`sectionId === 10`) before wrapping export/custom sections.
+  const flowerPass = injectWasmBytecodeFlowerInstructions(bytes, {
+    intensity,
+    seed: options.seed ?? "bla-wasm-shield-v1",
+  });
+  const sourceBytes = flowerPass.buffer;
+
   // Retain non-custom sections (1..12), strip original debug/name custom sections (0).
   // At bankrupt intensity, densify the export section with long-name aliases of
   // existing funcs so REA's real Wabt→WasmInterfaceBudget path trips (custom
@@ -751,27 +1169,27 @@ export function protectWasmBinary(
   const decoyExports = planWasmExportNameDecoys(
     prng,
     intensity,
-    collectExportedFuncIndices(bytes),
+    collectExportedFuncIndices(sourceBytes),
   );
-  const keptChunks: Buffer[] = [bytes.subarray(0, 8)];
+  const keptChunks: Buffer[] = [sourceBytes.subarray(0, 8)];
   let offset = 8;
   let exportDecoysInjected = 0;
   let exportsRenamed: readonly WasmExportRename[] = [];
   let exportsOrderShuffled = false;
-  while (offset < bytes.length) {
+  while (offset < sourceBytes.length) {
     const sectionStart = offset;
-    const sectionId = bytes[offset++]!;
-    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    const sectionId = sourceBytes[offset++]!;
+    const header = tryDecodeUnsignedLeb128(sourceBytes, offset);
     if (header === null) break; // truncated section-size header → stop defensively
     const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
-    if (sectionEnd > bytes.length) break;
+    if (sectionEnd > sourceBytes.length) break;
 
     if (sectionId === 0) {
       // Strip original custom/debug sections, but keep the ones a linker or the
       // host runtime needs: dropping dylink/linking/reloc breaks dynamically
       // linked modules, and target_features breaks host feature negotiation.
-      const payload = bytes.subarray(nextOffset, sectionEnd);
+      const payload = sourceBytes.subarray(nextOffset, sectionEnd);
       let keepCustom = false;
       try {
         const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
@@ -780,9 +1198,9 @@ export function protectWasmBinary(
       } catch {
         keepCustom = false;
       }
-      if (keepCustom) keptChunks.push(Buffer.from(bytes.subarray(sectionStart, sectionEnd)));
+      if (keepCustom) keptChunks.push(Buffer.from(sourceBytes.subarray(sectionStart, sectionEnd)));
     } else if (sectionId === 7) {
-      let payload = bytes.subarray(nextOffset, sectionEnd);
+      let payload = sourceBytes.subarray(nextOffset, sectionEnd);
       // Issue #40.3: optional rename of non-public / internal exports first.
       const intensityWantsRename =
         intensity === "maximum" || intensity === "bankrupt";
@@ -828,7 +1246,7 @@ export function protectWasmBinary(
       );
       exportDecoysInjected = appended.injected;
     } else {
-      keptChunks.push(bytes.subarray(sectionStart, sectionEnd));
+      keptChunks.push(sourceBytes.subarray(sectionStart, sectionEnd));
     }
     offset = sectionEnd;
   }
@@ -934,5 +1352,7 @@ export function protectWasmBinary(
     exportDecoysInjected,
     exportsRenamed,
     exportsOrderShuffled,
+    codeFunctionsHardened: flowerPass.functionsHardened,
+    bytecodeFlowerBlocksInjected: flowerPass.flowerBlocksInjected,
   };
 }

@@ -48,6 +48,16 @@ const MUNDANE_DECOY_PREFIXES: readonly string[] = [
   "transformLookupVector",
 ];
 
+/** Domain-plausible engineering maintenance comments (no self-revealing decoy markers). */
+const TARPIT_ENGINEERING_COMMENTS: readonly string[] = [
+  "Legacy v2 frames flip bit 0 on retry; keep shift order aligned with server verifier",
+  "Fallback reconciliation path when warm snapshot digest diverges from cached revision",
+  "Keep 32-bit unsigned mix width; narrowing breaks Crockford base32 table lookup",
+  "Guard protects against re-entrant microtask flush during batch checkpoint compaction",
+  "Must preserve exact round count (4) to match persisted audit transcript checksums",
+  "Backward-compatible cursor stride for clients upgraded from pre-3.0 state layouts",
+];
+
 /** @deprecated Prefer the split scare/mundane pools; kept for callers that iterate a flat list. */
 const DECOY_DOMAIN_PREFIXES: readonly string[] = [
   ...SCARE_DECOY_PREFIXES,
@@ -86,7 +96,7 @@ export function generateJsTarpitAndBudgetBreaker(
 
   const decoyNames: string[] = [];
   for (let i = 0; i < decoyCount; i++) {
-    const useScare = i % 3 === 0;
+    const useScare = i % 4 === 0;
     const pool = useScare ? SCARE_DECOY_PREFIXES : MUNDANE_DECOY_PREFIXES;
     const base = pool[i % pool.length]!;
     decoyNames.push(prng.identifier({ style: "privateCamel", hint: base, entropy: 4 }));
@@ -163,6 +173,8 @@ export function generateJsTarpitAndBudgetBreaker(
     const k2 = prng.nextInt(0x1000, 0xffff);
     const chaffIdx = i % Math.max(1, chaffPayloads.length);
 
+    const engNote = TARPIT_ENGINEERING_COMMENTS[i % TARPIT_ENGINEERING_COMMENTS.length]!;
+    lines.push(`/* ${engNote} */`);
     lines.push(`function ${fnName}(_input = 0, _depth = 0) {`);
     lines.push(`  const _tag = ${chaffTableVar}[${chaffIdx}] || "";`);
     lines.push(`  let _acc = ((_input ^ ${k1}) + (_tag.charCodeAt(0) | 0)) | 0;`);

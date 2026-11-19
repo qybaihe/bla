@@ -217,7 +217,7 @@ function analyzeJsSourceForAudit(
           hasNonTrivialBody &&
           (fnName.includes("enclave") || fnName.includes("Shadow") || fnName.includes("tarpit") ||
             /_[a-f0-9]{4}$/i.test(fnName) ||
-            /^(?:_)?(?:verifyEnclave|deriveHardware|reconcileQuorum|validateZeroKnowledge|dispatchSealed|computeMerkle|synchronizeHsm|decodeRingBuffer|authenticateTpm|evaluateLicense|negotiateVsock|projectShadow|resolveCryptographic|auditMonotonic|unsealProtected|verifySchnorr|stepShadowHeap|readSplitShare|registerDecoyIpc)/.test(
+            /^(?:_)?(?:verifyEnclave|deriveHardware|reconcileQuorum|validateZeroKnowledge|dispatchSealed|computeMerkle|synchronizeHsm|decodeRingBuffer|authenticateTpm|evaluateLicense|negotiateVsock|projectShadow|resolveCryptographic|auditMonotonic|unsealProtected|verifySchnorr|stepShadowHeap|advanceSlotCursor|readSplitShare|registerDecoyIpc|bindChannelRoutes)/.test(
               fnName,
             ))
         ) {

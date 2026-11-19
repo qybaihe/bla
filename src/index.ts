@@ -54,7 +54,12 @@ export {
   type ElectronHardeningContext,
   type ElectronHardeningReport,
 } from "./shields/formats/electron-fuses.js";
-export { inspectWasmBinary, protectWasmBinary } from "./shields/formats/wasm.js";
+export {
+  inspectWasmBinary,
+  protectWasmBinary,
+  injectWasmBytecodeFlowerInstructions,
+  type WasmBytecodeFlowerResult,
+} from "./shields/formats/wasm.js";
 export {
   comparePolymorphArtifacts,
   POLYMORPH_REPORT_SCHEMA,

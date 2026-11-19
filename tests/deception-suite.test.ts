@@ -19,7 +19,7 @@ describe("Counter-REA Model-Misjudgment Induction Suite", () => {
     expect(res.archetypesInjected).toHaveLength(4);
     expect(res.shadowProceduresCreated).toHaveLength(4);
     expect(res.code).toContain("RFC8032-Ed25519-Shamir-3-of-5");
-    expect(res.code).toContain("bla.enterprise.billing.v4");
+    expect(res.code).toContain("core.enterprise.billing.v4");
     expect(res.code).toContain("TPM2.0-Quote-PCR0-PCR7");
   });
 

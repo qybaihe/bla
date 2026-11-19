@@ -3271,8 +3271,9 @@ export function transformJavaScriptWithBlaShield(
     intensity === "stealth" ? 4 : intensity === "balanced" ? 8 : 10;
   const selectedDecoyRoutes = DECOY_ROUTES.slice(0, decoyRouteCount);
 
-  const decoyIpcFnName = prng.identifier({ style: "camel", hint: "registerDecoyIpcAndRoutes", entropy: 4 });
+  const decoyIpcFnName = prng.identifier({ style: "camel", hint: "bindChannelRoutes", entropy: 4 });
   mirageLines.push(
+    `/* Channel bindings kept for legacy renderer handshake compatibility; do not drop unused handlers */`,
     `function ${decoyIpcFnName}(_ipcMain, _ipcRenderer, _router) {`,
   );
   mirageLines.push(
@@ -3283,16 +3284,16 @@ export function transformJavaScriptWithBlaShield(
     // Register duplicate ambiguous literal channels on both ipcMain and ipcRenderer
     // to defeat REA's unique exact literal IPC channel pairing rule!
     mirageLines.push(
-      `    _ipcMain?.handle(${JSON.stringify(ch)}, () => ({ delegatedToEnclave: true, channel: ${JSON.stringify(ch)} }));`,
+      `    _ipcMain?.handle(${JSON.stringify(ch)}, () => ({ status: "deferred", channel: ${JSON.stringify(ch)} }));`,
     );
     mirageLines.push(
-      `    _ipcMain?.on(${JSON.stringify(ch)}, () => ({ fallbackStub: true }));`,
+      `    _ipcMain?.on(${JSON.stringify(ch)}, () => ({ queued: true }));`,
     );
     mirageLines.push(
-      `    _ipcRenderer?.invoke(${JSON.stringify(ch)}, { probe: "enclave_shadow_1" });`,
+      `    _ipcRenderer?.invoke(${JSON.stringify(ch)}, { seq: 1 });`,
     );
     mirageLines.push(
-      `    _ipcRenderer?.send(${JSON.stringify(ch)}, { probe: "enclave_shadow_2" });`,
+      `    _ipcRenderer?.send(${JSON.stringify(ch)}, { seq: 2 });`,
     );
     ipcAmbiguitySitesInjected += 4;
   }
@@ -3407,7 +3408,7 @@ export function transformJavaScriptWithBlaShield(
   // Scrub static generator prefixes in combinedInjectedAst so hardened output has
   // zero greppable template stems while preserving _[0-9a-f]{4} auditor entropy tags.
   const INJECTED_RAW_PREFIX_RE =
-    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault)_[A-Za-z0-9_]+$/i;
+    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault)_[A-Za-z0-9_]+$/i;
   const injectedRenameSites = collectRenameSites(combinedInjectedAst);
   traverse(combinedInjectedAst, {
     Program(progPath) {
