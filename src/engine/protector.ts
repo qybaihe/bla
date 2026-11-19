@@ -116,6 +116,11 @@ import {
   listPycLoaderSearchDirectories,
   relativePycPathFromLoader,
   PYC_SIDECAR_LOADER_MARKER,
+  entangleGgufLoaderWithSidecars,
+  discoverPythonGgufLoader,
+  listGgufLoaderSearchDirectories,
+  relativeGgufPathFromLoader,
+  GGUF_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -453,6 +458,59 @@ function applySidecarEntangleToGguf(
   });
   if (!bound) return { buffer: ggufBytes, applied: false };
   return { buffer: bound.bytes, applied: true };
+}
+
+function applySidecarGgufLoaderAutoWire(options: {
+  readonly ggufBytes: Uint8Array;
+  readonly ggufBasenames: readonly string[];
+  readonly outputDir: string;
+  readonly sourceDir: string;
+  readonly outputGgufPath: string;
+}): { applied: boolean; destPath?: string } {
+  const search: string[] = [];
+  const seen = new Set<string>();
+  const addDir = (dir: string): void => {
+    if (!dir || seen.has(dir)) return;
+    seen.add(dir);
+    search.push(dir);
+  };
+  addDir(options.outputDir);
+  if (options.sourceDir !== options.outputDir) addDir(options.sourceDir);
+  for (const extra of listGgufLoaderSearchDirectories(options.outputGgufPath)) {
+    addDir(extra);
+  }
+
+  const names = [...new Set(options.ggufBasenames.filter((n) => /\.gguf$/i.test(n)))];
+  let found: ReturnType<typeof discoverPythonGgufLoader> = null;
+  for (const ggufBasename of names) {
+    found = discoverPythonGgufLoader({
+      ggufBasename,
+      searchDirectories: search,
+    });
+    if (found) break;
+  }
+  if (!found) return { applied: false };
+  let destPath = found.absPath;
+  const foundDir = dirname(found.absPath);
+  if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
+    destPath = join(options.outputDir, found.name);
+    if (existsSync(destPath) && destPath !== found.absPath) {
+      return { applied: false };
+    }
+  }
+  const ggufRel = relativeGgufPathFromLoader(destPath, options.outputGgufPath);
+  const entangled = entangleGgufLoaderWithSidecars({
+    loaderSource: found.source,
+    ggufBytes: options.ggufBytes,
+    ggufRelPath: ggufRel,
+  });
+  if (entangled.code === found.source && destPath === found.absPath) {
+    return found.source.includes(GGUF_SIDECAR_LOADER_MARKER)
+      ? { applied: true, destPath }
+      : { applied: false };
+  }
+  writeFileAtomicSync(destPath, entangled.code, "utf8");
+  return { applied: true, destPath };
 }
 
 function applySidecarEntangleToSafetensors(
@@ -799,6 +857,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let sidecarEntangleApplied = false;
   let wasmSidecarLoaderHookApplied = false;
   let pycSidecarLoaderHookApplied = false;
+  let ggufSidecarLoaderHookApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -1446,10 +1505,17 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalGguf = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
-        // Host-verify STRING KV only: GGUF loaders ignore unknown metadata
-        // keys, so strip / sibling delete still load. Do not record
-        // gguf-sidecar-entangle until a load-time hook lands (same honesty
-        // bar as .pyc marshal trailer / ASAR archive-note-only).
+        const hook = applySidecarGgufLoaderAutoWire({
+          ggufBytes: finalGguf,
+          ggufBasenames: [basename(absInput), basename(absOutput)],
+          outputDir: dirname(absOutput),
+          sourceDir: dirname(absInput),
+          outputGgufPath: absOutput,
+        });
+        if (hook.applied) {
+          ggufSidecarLoaderHookApplied = true;
+          counteredVectors.add("gguf-sidecar-entangle");
+        }
       }
     }
     writeProtectedOutput(absOutput, finalGguf);
@@ -1720,6 +1786,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),
+    ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportRenames.length > 0 ? { wasmExportRenames } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),

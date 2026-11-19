@@ -3419,7 +3419,7 @@ const MAX_PYC_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
 const MAX_PYC_LOADER_AUTOWIRE_CHARS = 64 * 1024;
 const PYC_LOADER_EXTENSIONS = [".py"] as const;
 const ALREADY_ENTANGLED_PY_RE =
-  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook/;
+  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook|_installGgufSidecarLoaderHook/;
 
 /** Module stem of a CPython cache filename (`sample.cpython-312.opt-1.pyc` → `sample`). */
 export function pycModuleStemFromBasename(filename: string): string {
@@ -3794,7 +3794,7 @@ export function bindGgufSidecarEntanglement(
     ...plan,
     entryHookKind: "gguf-metadata-note",
     status: "bound",
-    note: "Bound — GGUF bla.sidecar.v1 STRING metadata note planted; ship sidecars alongside and verify via verifyGgufSidecarMetadataNote. Host verify fails closed on strip/alter; GGUF loaders ignore unknown STRING KVs (no process-start fail until a load-time hook lands). Tensor bytes stay bit-exact.",
+    note: "Bound — GGUF bla.sidecar.v1 STRING metadata note planted; ship sidecars alongside and verify via verifyGgufSidecarMetadataNote. Host verify fails closed on strip/alter; GGUF loaders ignore unknown STRING KVs unless a same-directory Python loader was auto-wired with the load-time hook. Tensor bytes stay bit-exact.",
   };
   return {
     plan: boundPlan,
@@ -3814,8 +3814,9 @@ export function entangleGgufEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  readonly allowEmptySidecars?: boolean;
 }): SidecarGgufBindResult | null {
-  if (options.sidecars.length === 0) return null;
+  if (options.sidecars.length === 0 && options.allowEmptySidecars !== true) return null;
   return bindGgufSidecarEntanglement({
     entryPath: options.entryPath,
     sidecarPaths: options.sidecars.map((s) => s.pathLabel),
@@ -3912,8 +3913,9 @@ export function stripGgufSidecarMetadataNote(entryBytes: Uint8Array): Buffer {
  * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
  *
  * DEFENSIVE ONLY — for tests, loaders, and harden post-pass verification.
- * GGUF loaders ignore unknown STRING KVs, so strip does not break load until
- * a load-time hook lands (same honesty bar as .pyc marshal trailer).
+ * GGUF loaders ignore unknown STRING KVs, so strip does not break load unless
+ * a same-directory Python loader was auto-wired with the load-time hook
+ * (same honesty bar as the .pyc import-time hook).
  */
 export function verifyGgufSidecarMetadataNote(
   options: GgufSidecarVerifyOptions,
@@ -3970,6 +3972,552 @@ export function verifyGgufSidecarMetadataNote(
     softFold: note.softFold,
   };
 }
+
+
+/**
+ * SHA-256 of a GGUF container with the `bla.sidecar.v1` STRING KV stripped
+ * (alignment-safe rebuild). Files that do not carry the note hash as-is, so
+ * the identity is stable across planting for canonically padded inputs.
+ *
+ * DEFENSIVE ONLY.
+ */
+export function computeGgufSidecarCodeIdentity(bytes: Uint8Array): string {
+  let stripped: Buffer;
+  try {
+    stripped = stripGgufSidecarMetadataNote(bytes);
+  } catch {
+    stripped = Buffer.from(bytes);
+  }
+  return createHash("sha256").update(stripped).digest("hex");
+}
+
+/** Idempotence marker inserted with the optional GGUF load-time hook. */
+export const GGUF_SIDECAR_LOADER_MARKER = "_installGgufSidecarLoaderHook" as const;
+
+export interface SidecarGgufLoaderInjectOptions {
+  /**
+   * SHA-256 hex (or list) of the protected GGUF with the sidecar metadata
+   * note stripped. Files whose identity matches MUST present a valid
+   * `bla.sidecar.v1` STRING KV; other GGUF files pass through unchanged.
+   */
+  readonly codeIdentityHex: string | readonly string[];
+  /**
+   * Paths to the protected `.gguf`, relative to the loader file's directory
+   * (`Path(__file__).resolve().parent`). Sidecar paths inside the note are
+   * resolved against the `.gguf` file's own directory.
+   */
+  readonly ggufRelPaths: readonly string[];
+  readonly bindingName?: string;
+}
+
+export interface SidecarGgufLoaderInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly codeIdentityHexes: readonly string[];
+  readonly ggufRelPaths: readonly string[];
+}
+
+function normalizeGgufCodeIdentity(hex: string): string {
+  const value = hex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("codeIdentityHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  return value;
+}
+
+/**
+ * Emit a self-contained host Python snippet that, at import time of the
+ * loader it is inserted into, reads the sibling `.gguf`, and when the
+ * stripped-body identity matches, verifies the `bla.sidecar.v1` STRING
+ * metadata note and sibling sidecar digest. Strip or sibling delete fails
+ * closed. Unrelated GGUF files (identity mismatch) and a missing file pass
+ * through so a later open can fail naturally.
+ *
+ * The hook does not rewrite the `.gguf` (tensor infos, relative tensor
+ * offsets, and tensor bytes stay untouched; the existing alignment-safe
+ * metadata note is the only GGUF mutation, and it is planted separately).
+ * It is host-opt-in: `protectTarget` / `hardenProject` auto-wire it only
+ * into a known same-directory Python loader (`loader.py`, `__init__.py`,
+ * `__main__.py`) that already mentions the `.gguf` basename — never a
+ * test / already-entangled / self-seal file. Only then is
+ * `gguf-sidecar-entangle` recorded and `gguf-sidecar-host-verify-only`
+ * cleared.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarGgufLoaderSnippet(
+  options: SidecarGgufLoaderInjectOptions,
+): SidecarGgufLoaderInjectResult {
+  const raw = options.codeIdentityHex;
+  const list = (Array.isArray(raw) ? raw : [raw]).map((hex) =>
+    normalizeGgufCodeIdentity(hex),
+  );
+  if (list.length === 0) {
+    throw new Error("codeIdentityHex must contain at least one digest");
+  }
+  const relPaths = (options.ggufRelPaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (relPaths.length === 0) {
+    throw new Error("ggufRelPaths must contain at least one path");
+  }
+  const tag = list[0]!.slice(0, 8);
+  const bindingName = options.bindingName ?? `${GGUF_SIDECAR_LOADER_MARKER}_${tag}`;
+  const idsLiteral = JSON.stringify(list);
+  const pathsLiteral = JSON.stringify(relPaths);
+  const keyLiteral = JSON.stringify(GGUF_SIDECAR_METADATA_KEY);
+  const schemaLiteral = JSON.stringify(SIDECAR_ENTANGLE_SCHEMA);
+  const kindLiteral = JSON.stringify(GGUF_SIDECAR_METADATA_KIND);
+
+  const lines: string[] = [];
+  lines.push(`# ${GGUF_SIDECAR_LOADER_MARKER}`);
+  lines.push(`def ${bindingName}():`);
+  lines.push(`    import hashlib as _sc_hashlib_${tag}`);
+  lines.push(`    import json as _sc_json_${tag}`);
+  lines.push(`    import pathlib as _sc_pathlib_${tag}`);
+  lines.push(`    _sc_ids_${tag} = ${idsLiteral}`);
+  lines.push(`    _sc_idset_${tag} = set(_sc_ids_${tag})`);
+  lines.push(`    _sc_paths_${tag} = ${pathsLiteral}`);
+  lines.push(`    _sc_key_${tag} = ${keyLiteral}`);
+  lines.push(`    _sc_schema_${tag} = ${schemaLiteral}`);
+  lines.push(`    _sc_kind_${tag} = ${kindLiteral}`);
+  lines.push(`    _sc_base_${tag} = _sc_pathlib_${tag}.Path(__file__).resolve().parent`);
+  lines.push(`    def _sc_skip_${tag}(_sc_buf_${tag}, _sc_off_${tag}, _sc_ty_${tag}, _sc_depth_${tag}):`);
+  lines.push(`        if _sc_depth_${tag} > 64 or _sc_off_${tag} > len(_sc_buf_${tag}):`);
+  lines.push(`            return None`);
+  lines.push(`        if _sc_ty_${tag} in (0, 1, 7):`);
+  lines.push(`            return _sc_off_${tag} + 1 if _sc_off_${tag} + 1 <= len(_sc_buf_${tag}) else None`);
+  lines.push(`        if _sc_ty_${tag} in (2, 3):`);
+  lines.push(`            return _sc_off_${tag} + 2 if _sc_off_${tag} + 2 <= len(_sc_buf_${tag}) else None`);
+  lines.push(`        if _sc_ty_${tag} in (4, 5, 6):`);
+  lines.push(`            return _sc_off_${tag} + 4 if _sc_off_${tag} + 4 <= len(_sc_buf_${tag}) else None`);
+  lines.push(`        if _sc_ty_${tag} in (10, 11, 12):`);
+  lines.push(`            return _sc_off_${tag} + 8 if _sc_off_${tag} + 8 <= len(_sc_buf_${tag}) else None`);
+  lines.push(`        if _sc_ty_${tag} == 8:`);
+  lines.push(`            if _sc_off_${tag} + 8 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_ln_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag}:_sc_off_${tag} + 8], "little")`);
+  lines.push(`            _sc_end_${tag} = _sc_off_${tag} + 8 + _sc_ln_${tag}`);
+  lines.push(`            return _sc_end_${tag} if _sc_end_${tag} <= len(_sc_buf_${tag}) else None`);
+  lines.push(`        if _sc_ty_${tag} == 9:`);
+  lines.push(`            if _sc_off_${tag} + 12 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_elem_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag}:_sc_off_${tag} + 4], "little")`);
+  lines.push(`            _sc_cnt_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag} + 4:_sc_off_${tag} + 12], "little")`);
+  lines.push(`            if _sc_cnt_${tag} > len(_sc_buf_${tag}) - (_sc_off_${tag} + 12):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_cur_${tag} = _sc_off_${tag} + 12`);
+  lines.push(`            for _sc_i_${tag} in range(_sc_cnt_${tag}):`);
+  lines.push(`                _sc_nxt_${tag} = _sc_skip_${tag}(_sc_buf_${tag}, _sc_cur_${tag}, _sc_elem_${tag}, _sc_depth_${tag} + 1)`);
+  lines.push(`                if _sc_nxt_${tag} is None:`);
+  lines.push(`                    return None`);
+  lines.push(`                _sc_cur_${tag} = _sc_nxt_${tag}`);
+  lines.push(`            return _sc_cur_${tag}`);
+  lines.push(`        return None`);
+  lines.push(`    def _sc_parse_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        if len(_sc_buf_${tag}) < 24 or _sc_buf_${tag}[0:4] != b"GGUF":`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_ver_${tag} = int.from_bytes(_sc_buf_${tag}[4:8], "little")`);
+  lines.push(`        if _sc_ver_${tag} not in (2, 3):`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_tc_${tag} = int.from_bytes(_sc_buf_${tag}[8:16], "little")`);
+  lines.push(`        _sc_kc_${tag} = int.from_bytes(_sc_buf_${tag}[16:24], "little")`);
+  lines.push(`        if _sc_kc_${tag} > 100000 or _sc_tc_${tag} > 1000000:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_off_${tag} = 24`);
+  lines.push(`        _sc_kvs_${tag} = []`);
+  lines.push(`        _sc_align_${tag} = 32`);
+  lines.push(`        for _sc_i_${tag} in range(_sc_kc_${tag}):`);
+  lines.push(`            _sc_start_${tag} = _sc_off_${tag}`);
+  lines.push(`            if _sc_off_${tag} + 8 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_klen_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag}:_sc_off_${tag} + 8], "little")`);
+  lines.push(`            _sc_kend_${tag} = _sc_off_${tag} + 8 + _sc_klen_${tag}`);
+  lines.push(`            if _sc_kend_${tag} + 4 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_key_${tag}2 = _sc_buf_${tag}[_sc_off_${tag} + 8:_sc_kend_${tag}].decode("utf-8", "replace")`);
+  lines.push(`            _sc_vty_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_kend_${tag}:_sc_kend_${tag} + 4], "little")`);
+  lines.push(`            _sc_nxt_${tag} = _sc_skip_${tag}(_sc_buf_${tag}, _sc_kend_${tag} + 4, _sc_vty_${tag}, 0)`);
+  lines.push(`            if _sc_nxt_${tag} is None:`);
+  lines.push(`                return None`);
+  lines.push(`            if _sc_key_${tag}2 == "general.alignment" and _sc_vty_${tag} == 4:`);
+  lines.push(`                _sc_a_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_kend_${tag} + 4:_sc_kend_${tag} + 8], "little")`);
+  lines.push(`                if _sc_a_${tag} > 0 and _sc_a_${tag} % 8 == 0:`);
+  lines.push(`                    if _sc_a_${tag} > 1048576:`);
+  lines.push(`                        return None`);
+  lines.push(`                    _sc_align_${tag} = _sc_a_${tag}`);
+  lines.push(`            _sc_kvs_${tag}.append((_sc_key_${tag}2, _sc_start_${tag}, _sc_nxt_${tag}, _sc_vty_${tag}))`);
+  lines.push(`            _sc_off_${tag} = _sc_nxt_${tag}`);
+  lines.push(`        _sc_kvend_${tag} = _sc_off_${tag}`);
+  lines.push(`        for _sc_t_${tag} in range(_sc_tc_${tag}):`);
+  lines.push(`            if _sc_off_${tag} + 8 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_nlen_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag}:_sc_off_${tag} + 8], "little")`);
+  lines.push(`            _sc_nend_${tag} = _sc_off_${tag} + 8 + _sc_nlen_${tag}`);
+  lines.push(`            if _sc_nend_${tag} + 4 > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_off_${tag} = _sc_nend_${tag}`);
+  lines.push(`            _sc_ndims_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_off_${tag}:_sc_off_${tag} + 4], "little")`);
+  lines.push(`            if _sc_ndims_${tag} > 8:`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_off_${tag} += 4`);
+  lines.push(`            _sc_tail_${tag} = _sc_ndims_${tag} * 8 + 4 + 8`);
+  lines.push(`            if _sc_off_${tag} + _sc_tail_${tag} > len(_sc_buf_${tag}):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_off_${tag} += _sc_tail_${tag}`);
+  lines.push(`        _sc_tiend_${tag} = _sc_off_${tag}`);
+  lines.push(`        _sc_has_${tag} = len(_sc_buf_${tag}) > _sc_tiend_${tag}`);
+  lines.push(`        _sc_rem_${tag} = _sc_tiend_${tag} % _sc_align_${tag}`);
+  lines.push(`        _sc_dstart_${tag} = _sc_tiend_${tag} if _sc_rem_${tag} == 0 else _sc_tiend_${tag} + (_sc_align_${tag} - _sc_rem_${tag})`);
+  lines.push(`        return (_sc_ver_${tag}, _sc_tc_${tag}, _sc_kvs_${tag}, _sc_kvend_${tag}, _sc_tiend_${tag}, _sc_align_${tag}, _sc_dstart_${tag}, _sc_has_${tag})`);
+  lines.push(`    def _sc_strip_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_lay_${tag} = _sc_parse_${tag}(_sc_buf_${tag})`);
+  lines.push(`        if _sc_lay_${tag} is None:`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        _sc_ver_${tag}, _sc_tc_${tag}, _sc_kvs_${tag}, _sc_kvend_${tag}, _sc_tiend_${tag}, _sc_align_${tag}, _sc_dstart_${tag}, _sc_has_${tag} = _sc_lay_${tag}`);
+  lines.push(`        if not any(_sc_kv_${tag}[0] == _sc_key_${tag} for _sc_kv_${tag} in _sc_kvs_${tag}):`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        _sc_kept_${tag} = [_sc_kv_${tag} for _sc_kv_${tag} in _sc_kvs_${tag} if _sc_kv_${tag}[0] != _sc_key_${tag}]`);
+  lines.push(`        _sc_hdr_${tag} = bytearray(24)`);
+  lines.push(`        _sc_hdr_${tag}[0:4] = b"GGUF"`);
+  lines.push(`        _sc_hdr_${tag}[4:8] = int(_sc_ver_${tag}).to_bytes(4, "little")`);
+  lines.push(`        _sc_hdr_${tag}[8:16] = int(_sc_tc_${tag}).to_bytes(8, "little")`);
+  lines.push(`        _sc_hdr_${tag}[16:24] = int(len(_sc_kept_${tag})).to_bytes(8, "little")`);
+  lines.push(`        _sc_parts_${tag} = [bytes(_sc_hdr_${tag})]`);
+  lines.push(`        for _sc_kv_${tag} in _sc_kept_${tag}:`);
+  lines.push(`            _sc_parts_${tag}.append(_sc_buf_${tag}[_sc_kv_${tag}[1]:_sc_kv_${tag}[2]])`);
+  lines.push(`        _sc_parts_${tag}.append(_sc_buf_${tag}[_sc_kvend_${tag}:_sc_tiend_${tag}])`);
+  lines.push(`        _sc_meta_${tag} = b"".join(_sc_parts_${tag})`);
+  lines.push(`        if not _sc_has_${tag}:`);
+  lines.push(`            return _sc_meta_${tag}`);
+  lines.push(`        if _sc_dstart_${tag} > len(_sc_buf_${tag}):`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        _sc_prem_${tag} = len(_sc_meta_${tag}) % _sc_align_${tag}`);
+  lines.push(`        _sc_pad_${tag} = 0 if _sc_prem_${tag} == 0 else _sc_align_${tag} - _sc_prem_${tag}`);
+  lines.push(`        return _sc_meta_${tag} + (b"\\x00" * _sc_pad_${tag}) + _sc_buf_${tag}[_sc_dstart_${tag}:]`);
+  lines.push(`    def _sc_extract_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_lay_${tag} = _sc_parse_${tag}(_sc_buf_${tag})`);
+  lines.push(`        if _sc_lay_${tag} is None:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_kvs_${tag} = _sc_lay_${tag}[2]`);
+  lines.push(`        _sc_hit_${tag} = None`);
+  lines.push(`        for _sc_kv_${tag} in _sc_kvs_${tag}:`);
+  lines.push(`            if _sc_kv_${tag}[0] == _sc_key_${tag} and _sc_kv_${tag}[3] == 8:`);
+  lines.push(`                _sc_hit_${tag} = _sc_kv_${tag}`);
+  lines.push(`                break`);
+  lines.push(`        if _sc_hit_${tag} is None:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_start_${tag} = _sc_hit_${tag}[1]`);
+  lines.push(`        _sc_klen_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_start_${tag}:_sc_start_${tag} + 8], "little")`);
+  lines.push(`        _sc_vstart_${tag} = _sc_start_${tag} + 8 + _sc_klen_${tag} + 4`);
+  lines.push(`        if _sc_vstart_${tag} + 8 > len(_sc_buf_${tag}):`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_vlen_${tag} = int.from_bytes(_sc_buf_${tag}[_sc_vstart_${tag}:_sc_vstart_${tag} + 8], "little")`);
+  lines.push(`        if _sc_vstart_${tag} + 8 + _sc_vlen_${tag} > len(_sc_buf_${tag}):`);
+  lines.push(`            return None`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_obj_${tag} = _sc_json_${tag}.loads(_sc_buf_${tag}[_sc_vstart_${tag} + 8:_sc_vstart_${tag} + 8 + _sc_vlen_${tag}].decode("utf-8"))`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return None`);
+  lines.push(`        if _sc_obj_${tag}.get("schema") != _sc_schema_${tag} or _sc_obj_${tag}.get("kind") != _sc_kind_${tag}:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_dig_${tag} = _sc_obj_${tag}.get("digest")`);
+  lines.push(`        if not isinstance(_sc_dig_${tag}, str) or len(_sc_dig_${tag}) != 64:`);
+  lines.push(`            return None`);
+  lines.push(`        return _sc_obj_${tag}`);
+  lines.push(`    def _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}):`);
+  lines.push(`        _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`        _sc_h_${tag}.update(_sc_entry_${tag}.encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        for _sc_sp_${tag}, _sc_data_${tag} in _sc_parts_${tag}:`);
+  lines.push(`            _sc_h_${tag}.update(_sc_sp_${tag}.encode("utf-8"))`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`            _sc_h_${tag}.update(_sc_data_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
+  lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
+  lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
+  lines.push(`        if not _sc_path_${tag}.is_absolute():`);
+  lines.push(`            _sc_path_${tag} = _sc_base_${tag} / _sc_rel_${tag}`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
+  lines.push(`        except Exception:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
+  lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_note_${tag} = _sc_extract_${tag}(_sc_raw_${tag})`);
+  lines.push(`        if _sc_note_${tag} is None:`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        _sc_parts_${tag} = []`);
+  lines.push(`        _sc_dir_${tag} = _sc_path_${tag}.parent`);
+  lines.push(`        _sc_sp_list_${tag} = _sc_note_${tag}.get("sidecarPaths") or []`);
+  lines.push(`        if not isinstance(_sc_sp_list_${tag}, list):`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        for _sc_sp_${tag} in _sc_sp_list_${tag}:`);
+  lines.push(`            if not isinstance(_sc_sp_${tag}, str) or len(_sc_sp_${tag}) == 0:`);
+  lines.push(`                continue`);
+  lines.push(`            _sc_sib_${tag} = _sc_pathlib_${tag}.Path(_sc_sp_${tag})`);
+  lines.push(`            if not _sc_sib_${tag}.is_absolute():`);
+  lines.push(`                _sc_sib_${tag} = _sc_dir_${tag} / _sc_sp_${tag}`);
+  lines.push(`            try:`);
+  lines.push(`                _sc_parts_${tag}.append((_sc_sp_${tag}, _sc_sib_${tag}.read_bytes()))`);
+  lines.push(`            except Exception:`);
+  lines.push(`                raise RuntimeError("integrity binding mismatch") from None`);
+  lines.push(`        _sc_seed_${tag} = _sc_note_${tag}.get("seedTag")`);
+  lines.push(`        if not isinstance(_sc_seed_${tag}, str) or len(_sc_seed_${tag}) == 0:`);
+  lines.push(`            _sc_seed_${tag} = "bla-sidecar-v1"`);
+  lines.push(`        _sc_entry_${tag} = _sc_note_${tag}.get("entryPath")`);
+  lines.push(`        if not isinstance(_sc_entry_${tag}, str):`);
+  lines.push(`            _sc_entry_${tag} = ""`);
+  lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        return`);
+  lines.push(`try:`);
+  lines.push(`    ${bindingName}()`);
+  lines.push(`finally:`);
+  lines.push(`    del ${bindingName}`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    codeIdentityHexes: list,
+    ggufRelPaths: relPaths,
+  };
+}
+
+/**
+ * Insert a GGUF load-time hook after shebang / encoding / docstring /
+ * `from __future__`, idempotent when {@link GGUF_SIDECAR_LOADER_MARKER} is
+ * already present. Preserves surrounding newlines the same way
+ * `bindPythonSidecarEntanglement` does.
+ */
+export function prependGgufSidecarLoaderHook(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(GGUF_SIDECAR_LOADER_MARKER)) return entrySource;
+  const eol = entrySource.includes("\r\n") ? "\r\n" : "\n";
+  const analysis = findPythonPrologueInsertionOffset(entrySource);
+  const headRaw = entrySource.slice(0, analysis.insertOffset);
+  const tailRaw = entrySource.slice(analysis.insertOffset);
+  const head = headRaw.replace(/(?:\r?\n)+$/, "");
+  const tail = tailRaw.replace(/^(?:\r?\n)+/, "");
+  const body = preamble.replace(/\r?\n/g, eol).replace(/(?:\r?\n)+$/, "");
+  const parts: string[] = [];
+  if (head.length > 0) parts.push(head);
+  parts.push(body);
+  if (tail.length > 0) parts.push(tail);
+  return (
+    parts.join(eol) +
+    (entrySource.endsWith("\n") || entrySource.endsWith("\r\n") ? eol : "")
+  );
+}
+
+/**
+ * Convenience: prepend a loader hook bound to this GGUF file's stripped
+ * identity. Idempotent when the marker is already present.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function entangleGgufLoaderWithSidecars(options: {
+  readonly loaderSource: string;
+  readonly ggufBytes: Uint8Array;
+  readonly ggufRelPath: string | readonly string[];
+}): { readonly code: string; readonly identity: string } {
+  const identity = computeGgufSidecarCodeIdentity(options.ggufBytes);
+  const paths = (
+    Array.isArray(options.ggufRelPath) ? options.ggufRelPath : [options.ggufRelPath]
+  ).filter((p) => p.length > 0);
+  const inject = generateSidecarGgufLoaderSnippet({
+    codeIdentityHex: identity,
+    ggufRelPaths: paths,
+  });
+  return {
+    code: prependGgufSidecarLoaderHook(options.loaderSource, inject.preamble),
+    identity,
+  };
+}
+
+const MAX_GGUF_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
+const MAX_GGUF_LOADER_AUTOWIRE_CHARS = 64 * 1024;
+
+/**
+ * True when `source` mentions `ggufBasename` in a quoted string / template.
+ */
+export function sourceMentionsGgufFile(source: string, ggufBasename: string): boolean {
+  const name = (ggufBasename.replaceAll("\\", "/").split("/").pop() ?? "");
+  if (!name || !name.toLowerCase().endsWith(".gguf")) return false;
+  const quoted = new RegExp(
+    `['"\`](?:[^'"\`\\\\]|\\\\.)*${escapeRegExpLiteral(name)}['"\`]`,
+  );
+  return quoted.test(source);
+}
+
+/**
+ * Conservative auto-wire predicate: a Python file with a known loader name
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * target `.gguf` basename. Test, already-entangled, and oversized files
+ * return false.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function isSafePythonGgufLoader(options: {
+  readonly source: string;
+  readonly filename: string;
+  readonly ggufBasename: string;
+}): boolean {
+  if (!isPythonPycLoaderFilename(options.filename)) return false;
+  if (options.source.length > MAX_GGUF_LOADER_AUTOWIRE_CHARS) return false;
+  if (ALREADY_ENTANGLED_PY_RE.test(options.source)) return false;
+  return sourceMentionsGgufFile(options.source, options.ggufBasename);
+}
+
+function ggufLoaderPreference(loaderName: string): number {
+  const base = basename(loaderName);
+  if (/^loader\.py$/i.test(base)) return 0;
+  if (/^__init__\.py$/i.test(base)) return 1;
+  if (/^__main__\.py$/i.test(base)) return 2;
+  return 3;
+}
+
+export interface PythonGgufLoaderCandidate {
+  readonly name: string;
+  readonly source: string;
+}
+
+/**
+ * Pick a single same-directory Python loader, or `null` when none qualify
+ * or several unranked files all qualify (do not guess). Preferred names:
+ * `loader.py`, then `__init__.py`, then `__main__.py`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function selectPythonGgufLoader(
+  ggufBasename: string,
+  candidates: readonly PythonGgufLoaderCandidate[],
+): string | null {
+  const qualifying = candidates.filter((c) =>
+    isSafePythonGgufLoader({
+      source: c.source,
+      filename: c.name,
+      ggufBasename,
+    }),
+  );
+  if (qualifying.length === 0) return null;
+  const scored = qualifying.map((c) => ({
+    c,
+    score: ggufLoaderPreference(c.name),
+  }));
+  scored.sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name));
+  const best = scored[0]!;
+  if (best.score >= 3) return null;
+  const ties = scored.filter((s) => s.score === best.score);
+  if (ties.length > 1) return null;
+  return best.c.name;
+}
+
+export interface DiscoveredPythonGgufLoader {
+  readonly absPath: string;
+  readonly name: string;
+  readonly source: string;
+}
+
+function readGgufLoaderCandidateSource(absPath: string): string | null {
+  try {
+    const st = statSync(absPath);
+    if (!st.isFile() || st.size <= 0 || st.size > MAX_GGUF_LOADER_CANDIDATE_BYTES) {
+      return null;
+    }
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Directories to search for a Python loader next to a `.gguf`. */
+export function listGgufLoaderSearchDirectories(ggufPath: string): string[] {
+  return [dirname(ggufPath)];
+}
+
+/**
+ * List same-directory `.py` candidates (no recursion). Unreadable or
+ * oversized files are skipped.
+ */
+export function listSameDirPythonGgufLoaderCandidates(
+  directory: string,
+): DiscoveredPythonGgufLoader[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const out: DiscoveredPythonGgufLoader[] = [];
+  for (const name of names) {
+    if (!isPythonPycLoaderFilename(name)) continue;
+    const absPath = join(directory, name);
+    const source = readGgufLoaderCandidateSource(absPath);
+    if (source === null) continue;
+    out.push({ absPath, name, source });
+  }
+  return out;
+}
+
+/**
+ * Discover the unique safe Python loader for `ggufBasename` in the first
+ * search directory that yields a selection. Later directories are not
+ * consulted once one directory produces a hit (output dir wins over source).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function discoverPythonGgufLoader(options: {
+  readonly ggufBasename: string;
+  readonly searchDirectories: readonly string[];
+}): DiscoveredPythonGgufLoader | null {
+  const seen = new Set<string>();
+  for (const directory of options.searchDirectories) {
+    if (typeof directory !== "string" || directory.length === 0) continue;
+    if (seen.has(directory)) continue;
+    seen.add(directory);
+    const candidates = listSameDirPythonGgufLoaderCandidates(directory);
+    const selected = selectPythonGgufLoader(options.ggufBasename, candidates);
+    if (!selected) continue;
+    const hit = candidates.find((c) => c.name === selected || c.absPath === selected);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * True when a same-directory Python file already carries the GGUF load-time
+ * hook bound to this file's code identity (used by defenseScore honesty).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function isGgufSidecarLoaderHookWired(options: {
+  readonly ggufBytes: Uint8Array;
+  readonly ggufPath: string;
+}): boolean {
+  const identity = computeGgufSidecarCodeIdentity(options.ggufBytes);
+  const directories = listGgufLoaderSearchDirectories(options.ggufPath);
+  return directories.some((directory) =>
+    listSameDirPythonGgufLoaderCandidates(directory).some(
+      (c) =>
+        c.source.includes(GGUF_SIDECAR_LOADER_MARKER) && c.source.includes(identity),
+    ),
+  );
+}
+
+/** Relative path from a loader file's directory to the protected `.gguf`. */
+export function relativeGgufPathFromLoader(loaderPath: string, ggufPath: string): string {
+  const rel = relative(dirname(loaderPath), ggufPath).split("\\").join("/");
+  return rel.length === 0 ? basename(ggufPath) : rel;
+}
+
 
 /** Test/helper: strip the sidecar note section from a WASM binary. */
 export function stripWasmSidecarCustomSection(bytes: Uint8Array): Buffer {

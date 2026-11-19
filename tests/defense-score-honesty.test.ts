@@ -105,6 +105,14 @@ describe("Issue #40.6: defenseScore honesty", () => {
     expect(hostOnly.gaps.map((g) => g.id)).toContain("gguf-sidecar-host-verify-only");
     expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
     expect(hostOnly.cappedScore).toBe(93);
+
+    const hooked = applyDefenseScoreHonesty(99, {
+      detectedFormat: "model-gguf",
+      sidecarEntangleEnabled: true,
+      ggufSidecarLoaderHookApplied: true,
+    });
+    expect(hooked.gaps.map((g) => g.id)).not.toContain("gguf-sidecar-host-verify-only");
+    expect(hooked.cappedScore).toBe(99);
   });
 
   it("keeps a SQLite host-only schema-comment note from closing the strip⇒fail gap", () => {

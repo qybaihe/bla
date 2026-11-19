@@ -289,6 +289,8 @@ export interface ProtectionResult {
   readonly wasmSidecarLoaderHookApplied?: boolean;
   /** Present when a same-directory Python loader was auto-wired with the `.pyc` import-time hook. */
   readonly pycSidecarLoaderHookApplied?: boolean;
+  /** Present when a same-directory Python loader was auto-wired with the GGUF load-time hook. */
+  readonly ggufSidecarLoaderHookApplied?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
   /**

@@ -68,6 +68,12 @@ export interface DefenseScoreHonestyInput {
    */
   readonly pycSidecarLoaderHookApplied?: boolean;
   /**
+   * True when a same-directory Python loader was auto-wired with
+   * `entangleGgufLoaderWithSidecars` (or the hook is already present next to
+   * the .gguf). Clears `gguf-sidecar-host-verify-only`.
+   */
+  readonly ggufSidecarLoaderHookApplied?: boolean;
+  /**
    * How a SQLite database's generated decoy columns are defined: `"eval"`
    * when they call the function no stock connection has (opt-in), otherwise
    * plain SQL. Unknown counts as plain SQL.
@@ -170,12 +176,18 @@ export function collectDefenseScoreGaps(
     });
   }
 
-  // GGUF STRING KV is host-verify only (loaders ignore unknown metadata keys).
-  if (input.detectedFormat === "model-gguf" && input.sidecarEntangleEnabled === true) {
+  // GGUF STRING KV is host-verify only (loaders ignore unknown metadata keys)
+  // until a same-directory Python load-time hook is actually auto-wired (or
+  // already present) beside the model.
+  if (
+    input.detectedFormat === "model-gguf" &&
+    input.sidecarEntangleEnabled === true &&
+    input.ggufSidecarLoaderHookApplied !== true
+  ) {
     gaps.push({
       id: "gguf-sidecar-host-verify-only",
       summary:
-        "sidecarEntangle planted a GGUF bla.sidecar.v1 STRING metadata note verified only by host verifyGgufSidecarMetadataNote; GGUF loaders still load after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+        "sidecarEntangle planted a GGUF bla.sidecar.v1 STRING metadata note verified by host verifyGgufSidecarMetadataNote; GGUF loaders still load after strip or sibling delete unless a same-directory Python loader (loader.py / __init__.py / __main__.py) was auto-wired with the load-time hook (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

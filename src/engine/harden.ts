@@ -95,6 +95,13 @@ import {
   extractPycSidecarMarshalNote,
   relativePycPathFromLoader,
   PYC_SIDECAR_LOADER_MARKER,
+  generateSidecarGgufLoaderSnippet,
+  prependGgufSidecarLoaderHook,
+  selectPythonGgufLoader,
+  computeGgufSidecarCodeIdentity,
+  extractGgufSidecarMetadataNote,
+  relativeGgufPathFromLoader,
+  GGUF_SIDECAR_LOADER_MARKER,
   verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
@@ -3102,6 +3109,114 @@ function hardenProjectCore(
         // protectTarget honesty; the loader rewrite above is the act.
       }
 
+      const ggufPlantedAbs = new Set<string>();
+      const ggufLikeEarly = bindableSummaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "model-gguf" ||
+            /\.gguf$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      for (const ggufSum of ggufLikeEarly) {
+        const ggufAbs = join(outputRoot, ggufSum.relativePath);
+        if (!existsSync(ggufAbs)) continue;
+        const ggufDir = dirname(ggufAbs);
+        const searchDirs = [ggufDir];
+        const loaderCandidates: {
+          name: string;
+          source: string;
+          absPath: string;
+        }[] = [];
+        for (const s of pyLike) {
+          const outAbs = join(outputRoot, s.relativePath);
+          if (!searchDirs.includes(dirname(outAbs))) continue;
+          if (!isPythonPycLoaderFilename(s.relativePath)) continue;
+          let predicateSource: string | null = null;
+          try {
+            if (s.inputPath && existsSync(s.inputPath)) {
+              predicateSource = readFileSync(s.inputPath, "utf8");
+            }
+          } catch {
+            predicateSource = null;
+          }
+          if (predicateSource === null && existsSync(outAbs)) {
+            try {
+              predicateSource = readFileSync(outAbs, "utf8");
+            } catch {
+              predicateSource = null;
+            }
+          }
+          if (predicateSource === null) continue;
+          loaderCandidates.push({
+            name: basename(outAbs),
+            source: predicateSource,
+            absPath: outAbs,
+          });
+        }
+        const selectedName = selectPythonGgufLoader(
+          basename(ggufAbs),
+          loaderCandidates,
+        );
+        const found = selectedName
+          ? loaderCandidates.find((c) => c.name === selectedName)
+          : undefined;
+        if (!found) continue;
+        const alreadyNoted =
+          extractGgufSidecarMetadataNote(readFileSync(ggufAbs)) !== null;
+        const otherPrimary =
+          (jsEntryAbs !== undefined && found.absPath !== jsEntryAbs) ||
+          (pyEntryAbs !== undefined && found.absPath !== pyEntryAbs);
+        // A foreign JS/Python entry may already bake a digest of this
+        // model. Hooking without a note would fail-closed at import;
+        // planting a new metadata KV would break that digest.
+        if (otherPrimary && !alreadyNoted) continue;
+
+        if (!otherPrimary) {
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of bindableSummaries) {
+            if (!s.success || s.relativePath === ggufSum.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            if (jsEntryAbs && abs === jsEntryAbs) continue;
+            if (pyEntryAbs && abs === pyEntryAbs) continue;
+            if (abs === found.absPath) continue;
+            const rel = relative(ggufDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          const bound = entangleGgufEntryWithSidecars({
+            entryPath: basename(ggufAbs),
+            entryBytes: readFileSync(ggufAbs),
+            sidecars,
+            seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
+            allowEmptySidecars: true,
+          });
+          if (bound) {
+            writeFileAtomicSync(ggufAbs, bound.bytes, undefined, {
+              allowLinkWriteThrough: false,
+            });
+            ggufPlantedAbs.add(ggufAbs);
+          }
+        }
+
+        const identity = computeGgufSidecarCodeIdentity(readFileSync(ggufAbs));
+        const existing = readFileSync(found.absPath, "utf8");
+        const already = existing.includes(GGUF_SIDECAR_LOADER_MARKER);
+        const ggufRel = relativeGgufPathFromLoader(found.absPath, ggufAbs);
+        const inject = already
+          ? null
+          : generateSidecarGgufLoaderSnippet({
+              codeIdentityHex: identity,
+              ggufRelPaths: [ggufRel],
+            });
+        const next = inject
+          ? prependGgufSidecarLoaderHook(existing, inject.preamble)
+          : existing;
+        if (next !== existing) {
+          writeFileAtomicSync(found.absPath, next, "utf8", {
+            allowLinkWriteThrough: false,
+          });
+        }
+      }
+
       if (jsEntry) {
         const entryAbs = join(outputRoot, jsEntry.relativePath);
         if (existsSync(entryAbs)) {
@@ -3289,7 +3404,7 @@ function hardenProjectCore(
           : undefined;
       if (ggufEntry) {
         const entryAbs = join(outputRoot, ggufEntry.relativePath);
-        if (existsSync(entryAbs)) {
+        if (existsSync(entryAbs) && !ggufPlantedAbs.has(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
           for (const s of bindableSummaries) {

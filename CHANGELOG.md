@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Optional GGUF load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` metadata note or a sibling sidecar fails closed at import. Tensor bytes stay bit-exact. Default remains OFF.
+- REA catalog hygiene on tip `c84fde05e` (honesty only; no new 1:1 densify counters): `FDO_ALLOWANCE`, `BUNDLE_INFO_PLIST_INPUT_BYTES`, `INFO_PLIST_DECODE_MIB`, `MAX_WASM_SECTIONS`.
+
 ## [3.5.1] — 2026-11-18
 
 Optional `.pyc` import-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the module, stripping the marshal note or a sibling sidecar fails closed at import. Default remains OFF.

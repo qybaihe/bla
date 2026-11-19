@@ -15,7 +15,7 @@ import { inspectNativeBinary } from "../shields/formats/native.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
-import { isWasmSidecarLoaderHookWired, isPycSidecarLoaderHookWired } from "../shields/runtime/sidecar-entangle.js";
+import { isWasmSidecarLoaderHookWired, isPycSidecarLoaderHookWired, isGgufSidecarLoaderHookWired } from "../shields/runtime/sidecar-entangle.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
@@ -194,6 +194,18 @@ export function verifyTarget(
     }
   }
 
+  let ggufSidecarLoaderHookApplied = false;
+  if (afterAudit.detectedFormat === "model-gguf") {
+    try {
+      ggufSidecarLoaderHookApplied = isGgufSidecarLoaderHookWired({
+        ggufBytes: readFileSync(absTarget),
+        ggufPath: absTarget,
+      });
+    } catch {
+      ggufSidecarLoaderHookApplied = false;
+    }
+  }
+
   let esmImportHoistBeforeHooks = false;
   if (
     afterAudit.detectedFormat === "javascript" ||
@@ -231,6 +243,7 @@ export function verifyTarget(
     ...(esmImportHoistBeforeHooks ? { esmImportHoistBeforeHooks: true } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true } : {}),
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true } : {}),
+    ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true } : {}),
   });
 
   const agentActions: VerificationAgentAction[] = [];

@@ -1,5 +1,65 @@
 # BLA nightly development log
 
+## 2026-11-19 ~America/Los_Angeles / ~2026-11-20 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `31aaec6b4` → `c84fde05e` (**+345** commits). Dirty
+  `third_party/*` submodule checkouts were left untouched.
+- No new 1:1 trip-able densify constants. The delta is mostly fix / refactor /
+  test / perf (230 fix / 41 refactor / 22 test / 19 perf / 14 docs / 9 ci /
+  10 feat). Feat commits add inspection capability, not plantable densify
+  targets: FDO packaging/dlopen notes (#7237), Ghidra prototype conflicts
+  (#8161), MIPS32 PIC shared images, RISC-V initializers / PIC, cargo-auditable
+  dependencies from WASM (#5069), DOS COM import, Ghidra 12.2, EM_PPC64
+  classification. New or newly advertised ceilings are admission / decode /
+  format-validation caps, not plantable without breaking the artifact:
+  - `FDO_ALLOWANCE` = 64 KiB (`ElfFdoNote.ts`, #7237) — shared per-report JSON
+    decode cap for ELF FDO packaging / dlopen notes; overflow is left
+    undecoded, and planting dense 64 KiB notes would bloat the ELF.
+  - `BUNDLE_INFO_PLIST_INPUT_BYTES` = 64 MiB and `INFO_PLIST_DECODE_MIB` = 16
+    (`AppBundleExecutable.ts`) — Info.plist admission / decode caps; a 64 MiB
+    property list would bloat or break the app bundle.
+  - `MAX_WASM_SECTIONS` = 65,536 (`RustWasmImage.ts`, #5069) — cargo-auditable
+    WASM walk cap; planting 65,536 sections would bloat or break the module.
+  - Also noted, not catalogued as new trip targets: `MIPS_GNU_ATTRIBUTES_MAX_BYTES`
+    (4096, format validation), PE resource `METADATA_BYTES` (8 MiB),
+    `ASN1_DEPTH_BUDGET` (64, Authenticode nesting), `GUARDIAN_READINESS_BYTES`
+    (4096, JADX workspace). `MAX_VENDOR_HEADER_SIZE` (1 MiB) was already
+    catalogued as `ANDROID_BOOT_MAX_HEADER_SIZE`.
+- Catalogued the new headline maxima in `REA_INTERNAL_LIMITS` (honesty only).
+
+### Done tonight
+- Landed the GGUF load-time hook (`generateSidecarGgufLoaderSnippet` /
+  `prependGgufSidecarLoaderHook` / `entangleGgufLoaderWithSidecars` /
+  `computeGgufSidecarCodeIdentity`; marker `_installGgufSidecarLoaderHook`;
+  `protectTarget` + `hardenProject` post-pass). Auto-wired only into a
+  same-directory Python loader named `loader.py`, `__init__.py`, or
+  `__main__.py` that already mentions the `.gguf` basename
+  (`selectPythonGgufLoader` / `discoverPythonGgufLoader` /
+  `isSafePythonGgufLoader` / `isGgufSidecarLoaderHookWired` /
+  `sourceMentionsGgufFile`). The hook does not rewrite the `.gguf` (tensor
+  infos, relative tensor offsets, and tensor bytes stay bit-exact; the
+  existing alignment-safe `bla.sidecar.v1` STRING metadata note remains the
+  only GGUF mutation). Test / already-entangled / self-seal / unknown helper
+  files are never hooked. Vector `gguf-sidecar-entangle` is recorded and
+  `gguf-sidecar-host-verify-only` is cleared only when that hook was actually
+  written. Default OFF via existing `sidecarEntangle`.
+- Live BLA tree was pulled `4bb09a6` / `3.5.1` → `1d4d490` (still `3.5.1`,
+  unreleased daytime work already on main: WASM Code-section opaque flower
+  bytecode, decoy-tell scrub, rare-CJK BPE amplification).
+- Gates: build OK, tests **1296 passed / 5 skipped**, benchmark **14/14**
+  runtime-equivalent.
+
+### Next step (following night)
+1. Safetensors / DEX / SQLite load-time hooks (same honesty bar: only record
+   the vector / clear `*-host-verify-only` when a real load-time hook was
+   written). Safetensors Python loaders are the closest remaining analogue.
+2. Browser WASM loader auto-wire (the hook still needs Node `fs` /
+   `crypto`; a browser snippet would have to verify without those).
+3. ESM hook that runs before hoisted *user* imports; MCP one-click
+   polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-18 ~America/Los_Angeles / ~2026-11-19 02:00 Asia/Shanghai
 
 ### REA delta

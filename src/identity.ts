@@ -354,4 +354,33 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
    */
   ANDROID_PACKED_TABLE_BYTES: 16_777_216,
   MAX_PE_OPTIONAL_HEADER_BYTES: 4_096,
+  /**
+   * New REA ceilings on tip c84fde05e (345 commits after 31aaec6b4; 230 fix /
+   * 41 refactor / 22 test / 19 perf / 14 docs / 9 ci / 10 feat). The feat
+   * commits add inspection capability (FDO packaging/dlopen notes #7237,
+   * Ghidra prototype conflicts #8161, MIPS32 PIC shared images, RISC-V
+   * initializers / PIC, cargo-auditable dependencies from WASM #5069,
+   * DOS COM import, Ghidra 12.2, EM_PPC64 classification) — not plantable
+   * densify trip targets. Honesty catalog only:
+   *
+   * - `FDO_ALLOWANCE` (64 KiB) is a shared per-report JSON decode cap for
+   *   ELF FDO packaging / dlopen notes (`ElfFdoNote.ts`, #7237). Planting
+   *   dense 64 KiB notes would bloat the ELF; overflow is left undecoded.
+   * - `BUNDLE_INFO_PLIST_INPUT_BYTES` (64 MiB) and `INFO_PLIST_DECODE_MIB`
+   *   (16) cap Info.plist admission / decode (`AppBundleExecutable.ts`).
+   *   A 64 MiB property list would bloat or break the app bundle.
+   * - `MAX_WASM_SECTIONS` (65,536) caps cargo-auditable WASM walks
+   *   (`RustWasmImage.ts`, #5069). Planting 65,536 sections would bloat
+   *   or break the module.
+   * - Also noted, not catalogued as new trip targets: `MIPS_GNU_ATTRIBUTES_MAX_BYTES`
+   *   (4096, format validation), PE resource `METADATA_BYTES` (8 MiB),
+   *   `ASN1_DEPTH_BUDGET` (64, Authenticode nesting — planting would
+   *   invalidate the certificate), `GUARDIAN_READINESS_BYTES` (4096, JADX
+   *   workspace, not plantable). `MAX_VENDOR_HEADER_SIZE` (1 MiB) was
+   *   already catalogued as `ANDROID_BOOT_MAX_HEADER_SIZE`.
+   */
+  FDO_ALLOWANCE: 65_536,
+  BUNDLE_INFO_PLIST_INPUT_BYTES: 64 * 1024 * 1024,
+  INFO_PLIST_DECODE_MIB: 16,
+  MAX_WASM_SECTIONS: 65_536,
 });
