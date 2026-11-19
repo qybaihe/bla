@@ -109,6 +109,16 @@ export default defineConfig({
 });
 ```
 
+> [!WARNING]
+> **The Vite plugin runs inside your build process and has access to `process.env` and all resolved `VITE_*` values.** Any Vite plugin — including this one — can read every environment variable present in your CI shell at build time. If you are building in an environment with production secrets (API keys, database credentials, signing tokens), and you are concerned about supply chain risk, prefer the **CLI post-build approach** instead:
+>
+> ```bash
+> npm run build
+> npx bla-agents harden dist/ --apply
+> ```
+>
+> The CLI operates only on the already-emitted `dist/` files and does not run inside the Node.js build process, so it has no access to your CI environment secrets.
+
 ---
 
 ## 🧠 How BLA Works: Agent-Driven Closed Loop
