@@ -6,8 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Optional GGUF load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` metadata note or a sibling sidecar fails closed at import. Tensor bytes stay bit-exact. Default remains OFF.
-- REA catalog hygiene on tip `c84fde05e` (honesty only; no new 1:1 densify counters): `FDO_ALLOWANCE`, `BUNDLE_INFO_PLIST_INPUT_BYTES`, `INFO_PLIST_DECODE_MIB`, `MAX_WASM_SECTIONS`.
+## [3.5.2] — 2026-11-19
+
+Optional GGUF load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` metadata note or a sibling sidecar fails closed at import. Tensor bytes stay bit-exact. Default remains OFF.
+
+### Added
+- **GGUF load-time hook (`generateSidecarGgufLoaderSnippet` / `prependGgufSidecarLoaderHook` / `entangleGgufLoaderWithSidecars`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` post-pass auto-wire a self-contained Python snippet into a same-directory loader named `loader.py`, `__init__.py`, or `__main__.py` that already mentions the `.gguf` basename (`selectPythonGgufLoader` / `discoverPythonGgufLoader` / `isSafePythonGgufLoader` / `isGgufSidecarLoaderHookWired`). The hook reads the sibling `.gguf` at import time and, when the stripped-body identity matches, verifies the `bla.sidecar.v1` STRING metadata note and sidecar digest — strip or sibling delete fails closed. The hook does not rewrite the `.gguf` (tensor infos, relative tensor offsets, and tensor bytes stay bit-exact; the existing alignment-safe metadata note remains the only GGUF mutation). Test files, already-entangled entries, and unknown helpers such as `helper.py` are never hooked. Vector `gguf-sidecar-entangle` is recorded and defenseScore gap `gguf-sidecar-host-verify-only` is cleared only when that hook was actually written. Default still OFF.
+- **REA catalog hygiene** on tip `c84fde05e` (honesty only; no new 1:1 densify counters): `FDO_ALLOWANCE`, `BUNDLE_INFO_PLIST_INPUT_BYTES`, `INFO_PLIST_DECODE_MIB`, `MAX_WASM_SECTIONS`.
+- **WASM Code-section opaque flower bytecode, decoy-tell scrub, and rare-CJK BPE amplification** (daytime, `1d4d490`): landed on main after 3.5.1 and is included in this release.
 
 ## [3.5.1] — 2026-11-18
 
