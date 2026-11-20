@@ -121,6 +121,11 @@ import {
   listGgufLoaderSearchDirectories,
   relativeGgufPathFromLoader,
   GGUF_SIDECAR_LOADER_MARKER,
+  entangleSafetensorsLoaderWithSidecars,
+  discoverPythonSafetensorsLoader,
+  listSafetensorsLoaderSearchDirectories,
+  relativeSafetensorsPathFromLoader,
+  SAFETENSORS_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -513,6 +518,59 @@ function applySidecarGgufLoaderAutoWire(options: {
   return { applied: true, destPath };
 }
 
+function applySidecarSafetensorsLoaderAutoWire(options: {
+  readonly safetensorsBytes: Uint8Array;
+  readonly safetensorsBasenames: readonly string[];
+  readonly outputDir: string;
+  readonly sourceDir: string;
+  readonly outputSafetensorsPath: string;
+}): { applied: boolean; destPath?: string } {
+  const search: string[] = [];
+  const seen = new Set<string>();
+  const addDir = (dir: string): void => {
+    if (!dir || seen.has(dir)) return;
+    seen.add(dir);
+    search.push(dir);
+  };
+  addDir(options.outputDir);
+  if (options.sourceDir !== options.outputDir) addDir(options.sourceDir);
+  for (const extra of listSafetensorsLoaderSearchDirectories(options.outputSafetensorsPath)) {
+    addDir(extra);
+  }
+
+  const names = [...new Set(options.safetensorsBasenames.filter((n) => /\.safetensors$/i.test(n)))];
+  let found: ReturnType<typeof discoverPythonSafetensorsLoader> = null;
+  for (const safetensorsBasename of names) {
+    found = discoverPythonSafetensorsLoader({
+      safetensorsBasename,
+      searchDirectories: search,
+    });
+    if (found) break;
+  }
+  if (!found) return { applied: false };
+  let destPath = found.absPath;
+  const foundDir = dirname(found.absPath);
+  if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
+    destPath = join(options.outputDir, found.name);
+    if (existsSync(destPath) && destPath !== found.absPath) {
+      return { applied: false };
+    }
+  }
+  const stRel = relativeSafetensorsPathFromLoader(destPath, options.outputSafetensorsPath);
+  const entangled = entangleSafetensorsLoaderWithSidecars({
+    loaderSource: found.source,
+    safetensorsBytes: options.safetensorsBytes,
+    safetensorsRelPath: stRel,
+  });
+  if (entangled.code === found.source && destPath === found.absPath) {
+    return found.source.includes(SAFETENSORS_SIDECAR_LOADER_MARKER)
+      ? { applied: true, destPath }
+      : { applied: false };
+  }
+  writeFileAtomicSync(destPath, entangled.code, "utf8");
+  return { applied: true, destPath };
+}
+
 function applySidecarEntangleToSafetensors(
   safetensorsBytes: Buffer,
   options: ProtectionOptions,
@@ -858,6 +916,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let wasmSidecarLoaderHookApplied = false;
   let pycSidecarLoaderHookApplied = false;
   let ggufSidecarLoaderHookApplied = false;
+  let safetensorsSidecarLoaderHookApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -1488,8 +1547,17 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalSafetensors = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
-        // Host-verify __metadata__ note only: Safetensors loaders ignore unknown
-        // __metadata__ keys, so strip / sibling delete still load.
+        const hook = applySidecarSafetensorsLoaderAutoWire({
+          safetensorsBytes: finalSafetensors,
+          safetensorsBasenames: [basename(absInput), basename(absOutput)],
+          outputDir: dirname(absOutput),
+          sourceDir: dirname(absInput),
+          outputSafetensorsPath: absOutput,
+        });
+        if (hook.applied) {
+          safetensorsSidecarLoaderHookApplied = true;
+          counteredVectors.add("safetensors-sidecar-entangle");
+        }
       }
     }
     writeProtectedOutput(absOutput, finalSafetensors);
@@ -1787,6 +1855,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),
     ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true as const } : {}),
+    ...(safetensorsSidecarLoaderHookApplied ? { safetensorsSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportRenames.length > 0 ? { wasmExportRenames } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),

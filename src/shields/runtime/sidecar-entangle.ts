@@ -3419,7 +3419,7 @@ const MAX_PYC_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
 const MAX_PYC_LOADER_AUTOWIRE_CHARS = 64 * 1024;
 const PYC_LOADER_EXTENSIONS = [".py"] as const;
 const ALREADY_ENTANGLED_PY_RE =
-  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook|_installGgufSidecarLoaderHook/;
+  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook|_installGgufSidecarLoaderHook|_installSafetensorsSidecarLoaderHook/;
 
 /** Module stem of a CPython cache filename (`sample.cpython-312.opt-1.pyc` → `sample`). */
 export function pycModuleStemFromBasename(filename: string): string {
@@ -4668,7 +4668,7 @@ export function bindSafetensorsSidecarEntanglement(
     ...plan,
     entryHookKind: "safetensors-metadata-note",
     status: "bound",
-    note: "Bound — Safetensors __metadata__ bla.sidecar.v1 note planted (tensor bytes bit-exact); verify via verifySafetensorsSidecarMetadataNote.",
+    note: "Bound — Safetensors __metadata__ bla.sidecar.v1 note planted (tensor bytes bit-exact); ship sidecars alongside and verify via verifySafetensorsSidecarMetadataNote. Host verify fails closed on strip/alter; Safetensors loaders ignore unknown __metadata__ keys unless a same-directory Python loader was auto-wired with the load-time hook.",
   };
   return {
     plan: boundPlan,
@@ -4684,8 +4684,9 @@ export function entangleSafetensorsEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  readonly allowEmptySidecars?: boolean;
 }): SidecarSafetensorsBindResult | null {
-  if (options.sidecars.length === 0) return null;
+  if (options.sidecars.length === 0 && options.allowEmptySidecars !== true) return null;
   return bindSafetensorsSidecarEntanglement({
     entryPath: options.entryPath,
     sidecarPaths: options.sidecars.map((s) => s.pathLabel),
@@ -4809,6 +4810,489 @@ export function verifySafetensorsSidecarMetadataNote(
     measuredU32: measured.u32,
     softFold: note.softFold,
   };
+}
+
+
+
+/**
+ * SHA-256 of a Safetensors container with the `bla.sidecar.v1`
+ * `__metadata__` key stripped (header rebuilt with the same 8-byte
+ * space-padded JSON layout `buildSafetensorsBuffer` uses). Files that
+ * do not carry the note hash as the rebuilt header plus original
+ * tensor bytes, so the identity is stable across planting for
+ * `buildSafetensorsBuffer` inputs.
+ *
+ * DEFENSIVE ONLY.
+ */
+export function computeSafetensorsSidecarCodeIdentity(bytes: Uint8Array): string {
+  let stripped: Buffer;
+  try {
+    stripped = stripSafetensorsSidecarMetadataNote(bytes);
+  } catch {
+    stripped = Buffer.from(bytes);
+  }
+  return createHash("sha256").update(stripped).digest("hex");
+}
+
+/** Idempotence marker inserted with the optional Safetensors load-time hook. */
+export const SAFETENSORS_SIDECAR_LOADER_MARKER =
+  "_installSafetensorsSidecarLoaderHook" as const;
+
+export interface SidecarSafetensorsLoaderInjectOptions {
+  /**
+   * SHA-256 hex (or list) of the protected Safetensors file with the
+   * sidecar `__metadata__` note stripped. Files whose identity matches
+   * MUST present a valid `bla.sidecar.v1` `__metadata__` entry; other
+   * Safetensors files pass through unchanged.
+   */
+  readonly codeIdentityHex: string | readonly string[];
+  /**
+   * Paths to the protected `.safetensors`, relative to the loader
+   * file's directory (`Path(__file__).resolve().parent`). Sidecar paths
+   * inside the note are resolved against the `.safetensors` file's own
+   * directory.
+   */
+  readonly safetensorsRelPaths: readonly string[];
+  readonly bindingName?: string;
+}
+
+export interface SidecarSafetensorsLoaderInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly codeIdentityHexes: readonly string[];
+  readonly safetensorsRelPaths: readonly string[];
+}
+
+function normalizeSafetensorsCodeIdentity(hex: string): string {
+  const value = hex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("codeIdentityHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  return value;
+}
+
+/**
+ * Emit a self-contained host Python snippet that, at import time of the
+ * loader it is inserted into, reads the sibling `.safetensors`, and when
+ * the stripped-body identity matches, verifies the `bla.sidecar.v1`
+ * `__metadata__` note and sibling sidecar digest. Strip or sibling
+ * delete fails closed. Unrelated Safetensors files (identity mismatch)
+ * and a missing file pass through so a later open can fail naturally.
+ *
+ * The hook does not rewrite the `.safetensors` (header JSON tensor
+ * descriptors, `data_offsets`, dtype, and tensor bytes stay untouched;
+ * the existing `__metadata__` host-verify note is the only Safetensors
+ * mutation, and it is planted separately). It is host-opt-in:
+ * `protectTarget` / `hardenProject` auto-wire it only into a known
+ * same-directory Python loader (`loader.py`, `__init__.py`,
+ * `__main__.py`) that already mentions the `.safetensors` basename —
+ * never a test / already-entangled / self-seal file. Only then is
+ * `safetensors-sidecar-entangle` recorded and
+ * `safetensors-sidecar-host-verify-only` cleared.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarSafetensorsLoaderSnippet(
+  options: SidecarSafetensorsLoaderInjectOptions,
+): SidecarSafetensorsLoaderInjectResult {
+  const raw = options.codeIdentityHex;
+  const list = (Array.isArray(raw) ? raw : [raw]).map((hex) =>
+    normalizeSafetensorsCodeIdentity(hex),
+  );
+  if (list.length === 0) {
+    throw new Error("codeIdentityHex must contain at least one digest");
+  }
+  const relPaths = (options.safetensorsRelPaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (relPaths.length === 0) {
+    throw new Error("safetensorsRelPaths must contain at least one path");
+  }
+  const tag = list[0]!.slice(0, 8);
+  const bindingName =
+    options.bindingName ?? `${SAFETENSORS_SIDECAR_LOADER_MARKER}_${tag}`;
+  const idsLiteral = JSON.stringify(list);
+  const pathsLiteral = JSON.stringify(relPaths);
+  const keyLiteral = JSON.stringify(SAFETENSORS_SIDECAR_METADATA_KEY);
+  const schemaLiteral = JSON.stringify(SIDECAR_ENTANGLE_SCHEMA);
+  const kindLiteral = JSON.stringify(SAFETENSORS_SIDECAR_METADATA_KIND);
+
+  const lines: string[] = [];
+  lines.push(`# ${SAFETENSORS_SIDECAR_LOADER_MARKER}`);
+  lines.push(`def ${bindingName}():`);
+  lines.push(`    import hashlib as _sc_hashlib_${tag}`);
+  lines.push(`    import json as _sc_json_${tag}`);
+  lines.push(`    import pathlib as _sc_pathlib_${tag}`);
+  lines.push(`    _sc_ids_${tag} = ${idsLiteral}`);
+  lines.push(`    _sc_idset_${tag} = set(_sc_ids_${tag})`);
+  lines.push(`    _sc_paths_${tag} = ${pathsLiteral}`);
+  lines.push(`    _sc_key_${tag} = ${keyLiteral}`);
+  lines.push(`    _sc_schema_${tag} = ${schemaLiteral}`);
+  lines.push(`    _sc_kind_${tag} = ${kindLiteral}`);
+  lines.push(`    _sc_base_${tag} = _sc_pathlib_${tag}.Path(__file__).resolve().parent`);
+  lines.push(`    def _sc_parse_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        if len(_sc_buf_${tag}) < 10:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_hlen_${tag} = int.from_bytes(_sc_buf_${tag}[0:8], "little")`);
+  lines.push(`        if _sc_hlen_${tag} < 2 or _sc_hlen_${tag} > 100000000 or 8 + _sc_hlen_${tag} > len(_sc_buf_${tag}):`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_end_${tag} = 8 + _sc_hlen_${tag}`);
+  lines.push(`        if _sc_buf_${tag}[8:9] != b"{":`);
+  lines.push(`            return None`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_header_${tag} = _sc_json_${tag}.loads(_sc_buf_${tag}[8:_sc_end_${tag}].decode("utf-8"))`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return None`);
+  lines.push(`        if not isinstance(_sc_header_${tag}, dict):`);
+  lines.push(`            return None`);
+  lines.push(`        return (_sc_header_${tag}, _sc_buf_${tag}[_sc_end_${tag}:])`);
+  lines.push(`    def _sc_build_${tag}(_sc_header_${tag}, _sc_data_${tag}):`);
+  lines.push(`        _sc_raw_${tag} = _sc_json_${tag}.dumps(_sc_header_${tag}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`);
+  lines.push(`        _sc_pad_${tag} = (8 - (len(_sc_raw_${tag}) % 8)) % 8`);
+  lines.push(`        _sc_jsonb_${tag} = _sc_raw_${tag} + (b" " * _sc_pad_${tag})`);
+  lines.push(`        return int(len(_sc_jsonb_${tag})).to_bytes(8, "little") + _sc_jsonb_${tag} + _sc_data_${tag}`);
+  lines.push(`    def _sc_strip_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_parsed_${tag} = _sc_parse_${tag}(_sc_buf_${tag})`);
+  lines.push(`        if _sc_parsed_${tag} is None:`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        _sc_header_${tag}, _sc_data_${tag} = _sc_parsed_${tag}`);
+  lines.push(`        _sc_meta_${tag} = _sc_header_${tag}.get("__metadata__")`);
+  lines.push(`        if not isinstance(_sc_meta_${tag}, dict) or _sc_key_${tag} not in _sc_meta_${tag}:`);
+  lines.push(`            return _sc_buf_${tag}`);
+  lines.push(`        _sc_next_${tag} = dict(_sc_header_${tag})`);
+  lines.push(`        _sc_nextmeta_${tag} = dict(_sc_meta_${tag})`);
+  lines.push(`        _sc_nextmeta_${tag}.pop(_sc_key_${tag}, None)`);
+  lines.push(`        if len(_sc_nextmeta_${tag}) == 0:`);
+  lines.push(`            _sc_next_${tag}.pop("__metadata__", None)`);
+  lines.push(`        else:`);
+  lines.push(`            _sc_next_${tag}["__metadata__"] = _sc_nextmeta_${tag}`);
+  lines.push(`        return _sc_build_${tag}(_sc_next_${tag}, _sc_data_${tag})`);
+  lines.push(`    def _sc_extract_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        _sc_parsed_${tag} = _sc_parse_${tag}(_sc_buf_${tag})`);
+  lines.push(`        if _sc_parsed_${tag} is None:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_meta_${tag} = _sc_parsed_${tag}[0].get("__metadata__")`);
+  lines.push(`        if not isinstance(_sc_meta_${tag}, dict):`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_rawnote_${tag} = _sc_meta_${tag}.get(_sc_key_${tag})`);
+  lines.push(`        if not isinstance(_sc_rawnote_${tag}, str) or len(_sc_rawnote_${tag}) == 0:`);
+  lines.push(`            return None`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_obj_${tag} = _sc_json_${tag}.loads(_sc_rawnote_${tag})`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return None`);
+  lines.push(`        if _sc_obj_${tag}.get("schema") != _sc_schema_${tag} or _sc_obj_${tag}.get("kind") != _sc_kind_${tag}:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_dig_${tag} = _sc_obj_${tag}.get("digest")`);
+  lines.push(`        if not isinstance(_sc_dig_${tag}, str) or len(_sc_dig_${tag}) != 64:`);
+  lines.push(`            return None`);
+  lines.push(`        return _sc_obj_${tag}`);
+  lines.push(`    def _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}):`);
+  lines.push(`        _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`        _sc_h_${tag}.update(_sc_entry_${tag}.encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        for _sc_sp_${tag}, _sc_data_${tag} in _sc_parts_${tag}:`);
+  lines.push(`            _sc_h_${tag}.update(_sc_sp_${tag}.encode("utf-8"))`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`            _sc_h_${tag}.update(_sc_data_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
+  lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
+  lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
+  lines.push(`        if not _sc_path_${tag}.is_absolute():`);
+  lines.push(`            _sc_path_${tag} = _sc_base_${tag} / _sc_rel_${tag}`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
+  lines.push(`        except Exception:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
+  lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_note_${tag} = _sc_extract_${tag}(_sc_raw_${tag})`);
+  lines.push(`        if _sc_note_${tag} is None:`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        _sc_parts_${tag} = []`);
+  lines.push(`        _sc_dir_${tag} = _sc_path_${tag}.parent`);
+  lines.push(`        _sc_sp_list_${tag} = _sc_note_${tag}.get("sidecarPaths") or []`);
+  lines.push(`        if not isinstance(_sc_sp_list_${tag}, list):`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        for _sc_sp_${tag} in _sc_sp_list_${tag}:`);
+  lines.push(`            if not isinstance(_sc_sp_${tag}, str) or len(_sc_sp_${tag}) == 0:`);
+  lines.push(`                continue`);
+  lines.push(`            _sc_sib_${tag} = _sc_pathlib_${tag}.Path(_sc_sp_${tag})`);
+  lines.push(`            if not _sc_sib_${tag}.is_absolute():`);
+  lines.push(`                _sc_sib_${tag} = _sc_dir_${tag} / _sc_sp_${tag}`);
+  lines.push(`            try:`);
+  lines.push(`                _sc_parts_${tag}.append((_sc_sp_${tag}, _sc_sib_${tag}.read_bytes()))`);
+  lines.push(`            except Exception:`);
+  lines.push(`                raise RuntimeError("integrity binding mismatch") from None`);
+  lines.push(`        _sc_seed_${tag} = _sc_note_${tag}.get("seedTag")`);
+  lines.push(`        if not isinstance(_sc_seed_${tag}, str) or len(_sc_seed_${tag}) == 0:`);
+  lines.push(`            _sc_seed_${tag} = "bla-sidecar-v1"`);
+  lines.push(`        _sc_entry_${tag} = _sc_note_${tag}.get("entryPath")`);
+  lines.push(`        if not isinstance(_sc_entry_${tag}, str):`);
+  lines.push(`            _sc_entry_${tag} = ""`);
+  lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        return`);
+  lines.push(`try:`);
+  lines.push(`    ${bindingName}()`);
+  lines.push(`finally:`);
+  lines.push(`    del ${bindingName}`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    codeIdentityHexes: list,
+    safetensorsRelPaths: relPaths,
+  };
+}
+
+/**
+ * Insert a Safetensors load-time hook after shebang / encoding / docstring /
+ * `from __future__`, idempotent when {@link SAFETENSORS_SIDECAR_LOADER_MARKER}
+ * is already present. Preserves surrounding newlines the same way
+ * `bindPythonSidecarEntanglement` does.
+ */
+export function prependSafetensorsSidecarLoaderHook(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(SAFETENSORS_SIDECAR_LOADER_MARKER)) return entrySource;
+  const eol = entrySource.includes("\r\n") ? "\r\n" : "\n";
+  const analysis = findPythonPrologueInsertionOffset(entrySource);
+  const headRaw = entrySource.slice(0, analysis.insertOffset);
+  const tailRaw = entrySource.slice(analysis.insertOffset);
+  const head = headRaw.replace(/(?:\r?\n)+$/, "");
+  const tail = tailRaw.replace(/^(?:\r?\n)+/, "");
+  const body = preamble.replace(/\r?\n/g, eol).replace(/(?:\r?\n)+$/, "");
+  const parts: string[] = [];
+  if (head.length > 0) parts.push(head);
+  parts.push(body);
+  if (tail.length > 0) parts.push(tail);
+  return (
+    parts.join(eol) +
+    (entrySource.endsWith("\n") || entrySource.endsWith("\r\n") ? eol : "")
+  );
+}
+
+/**
+ * Convenience: prepend a loader hook bound to this Safetensors file's
+ * stripped identity. Idempotent when the marker is already present.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function entangleSafetensorsLoaderWithSidecars(options: {
+  readonly loaderSource: string;
+  readonly safetensorsBytes: Uint8Array;
+  readonly safetensorsRelPath: string | readonly string[];
+}): { readonly code: string; readonly identity: string } {
+  const identity = computeSafetensorsSidecarCodeIdentity(options.safetensorsBytes);
+  const paths = (
+    Array.isArray(options.safetensorsRelPath)
+      ? options.safetensorsRelPath
+      : [options.safetensorsRelPath]
+  ).filter((p) => p.length > 0);
+  const inject = generateSidecarSafetensorsLoaderSnippet({
+    codeIdentityHex: identity,
+    safetensorsRelPaths: paths,
+  });
+  return {
+    code: prependSafetensorsSidecarLoaderHook(options.loaderSource, inject.preamble),
+    identity,
+  };
+}
+
+const MAX_SAFETENSORS_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
+const MAX_SAFETENSORS_LOADER_AUTOWIRE_CHARS = 64 * 1024;
+
+/**
+ * True when `source` mentions `safetensorsBasename` in a quoted string /
+ * template.
+ */
+export function sourceMentionsSafetensorsFile(
+  source: string,
+  safetensorsBasename: string,
+): boolean {
+  const name = (safetensorsBasename.replaceAll("\\", "/").split("/").pop() ?? "");
+  if (!name || !name.toLowerCase().endsWith(".safetensors")) return false;
+  const quoted = new RegExp(
+    `['"\`](?:[^'"\`\\\\]|\\\\.)*${escapeRegExpLiteral(name)}['"\`]`,
+  );
+  return quoted.test(source);
+}
+
+/**
+ * Conservative auto-wire predicate: a Python file with a known loader name
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * target `.safetensors` basename. Test, already-entangled, and oversized
+ * files return false.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function isSafePythonSafetensorsLoader(options: {
+  readonly source: string;
+  readonly filename: string;
+  readonly safetensorsBasename: string;
+}): boolean {
+  if (!isPythonPycLoaderFilename(options.filename)) return false;
+  if (options.source.length > MAX_SAFETENSORS_LOADER_AUTOWIRE_CHARS) return false;
+  if (ALREADY_ENTANGLED_PY_RE.test(options.source)) return false;
+  return sourceMentionsSafetensorsFile(options.source, options.safetensorsBasename);
+}
+
+function safetensorsLoaderPreference(loaderName: string): number {
+  const base = basename(loaderName);
+  if (/^loader\.py$/i.test(base)) return 0;
+  if (/^__init__\.py$/i.test(base)) return 1;
+  if (/^__main__\.py$/i.test(base)) return 2;
+  return 3;
+}
+
+export interface PythonSafetensorsLoaderCandidate {
+  readonly name: string;
+  readonly source: string;
+}
+
+/**
+ * Pick a single same-directory Python loader, or `null` when none qualify
+ * or several unranked files all qualify (do not guess). Preferred names:
+ * `loader.py`, then `__init__.py`, then `__main__.py`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function selectPythonSafetensorsLoader(
+  safetensorsBasename: string,
+  candidates: readonly PythonSafetensorsLoaderCandidate[],
+): string | null {
+  const qualifying = candidates.filter((c) =>
+    isSafePythonSafetensorsLoader({
+      source: c.source,
+      filename: c.name,
+      safetensorsBasename,
+    }),
+  );
+  if (qualifying.length === 0) return null;
+  const scored = qualifying.map((c) => ({
+    c,
+    score: safetensorsLoaderPreference(c.name),
+  }));
+  scored.sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name));
+  const best = scored[0]!;
+  if (best.score >= 3) return null;
+  const ties = scored.filter((s) => s.score === best.score);
+  if (ties.length > 1) return null;
+  return best.c.name;
+}
+
+export interface DiscoveredPythonSafetensorsLoader {
+  readonly absPath: string;
+  readonly name: string;
+  readonly source: string;
+}
+
+function readSafetensorsLoaderCandidateSource(absPath: string): string | null {
+  try {
+    const st = statSync(absPath);
+    if (st.isFile() === false || st.size <= 0 || st.size > MAX_SAFETENSORS_LOADER_CANDIDATE_BYTES) {
+      return null;
+    }
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Directories to search for a Python loader next to a `.safetensors`. */
+export function listSafetensorsLoaderSearchDirectories(safetensorsPath: string): string[] {
+  return [dirname(safetensorsPath)];
+}
+
+/**
+ * List same-directory `.py` candidates (no recursion). Unreadable or
+ * oversized files are skipped.
+ */
+export function listSameDirPythonSafetensorsLoaderCandidates(
+  directory: string,
+): DiscoveredPythonSafetensorsLoader[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const out: DiscoveredPythonSafetensorsLoader[] = [];
+  for (const name of names) {
+    if (!isPythonPycLoaderFilename(name)) continue;
+    const absPath = join(directory, name);
+    const source = readSafetensorsLoaderCandidateSource(absPath);
+    if (source === null) continue;
+    out.push({ absPath, name, source });
+  }
+  return out;
+}
+
+/**
+ * Discover the unique safe Python loader for `safetensorsBasename` in the
+ * first search directory that yields a selection. Later directories are
+ * not consulted once one directory produces a hit (output dir wins over
+ * source).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function discoverPythonSafetensorsLoader(options: {
+  readonly safetensorsBasename: string;
+  readonly searchDirectories: readonly string[];
+}): DiscoveredPythonSafetensorsLoader | null {
+  const seen = new Set<string>();
+  for (const directory of options.searchDirectories) {
+    if (typeof directory !== "string" || directory.length === 0) continue;
+    if (seen.has(directory)) continue;
+    seen.add(directory);
+    const candidates = listSameDirPythonSafetensorsLoaderCandidates(directory);
+    const selected = selectPythonSafetensorsLoader(
+      options.safetensorsBasename,
+      candidates,
+    );
+    if (!selected) continue;
+    const hit = candidates.find((c) => c.name === selected || c.absPath === selected);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * True when a same-directory Python file already carries the Safetensors
+ * load-time hook bound to this file's code identity (used by defenseScore
+ * honesty).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function isSafetensorsSidecarLoaderHookWired(options: {
+  readonly safetensorsBytes: Uint8Array;
+  readonly safetensorsPath: string;
+}): boolean {
+  const identity = computeSafetensorsSidecarCodeIdentity(options.safetensorsBytes);
+  const directories = listSafetensorsLoaderSearchDirectories(options.safetensorsPath);
+  return directories.some((directory) =>
+    listSameDirPythonSafetensorsLoaderCandidates(directory).some(
+      (c) =>
+        c.source.includes(SAFETENSORS_SIDECAR_LOADER_MARKER) &&
+        c.source.includes(identity),
+    ),
+  );
+}
+
+/** Relative path from a loader file's directory to the protected `.safetensors`. */
+export function relativeSafetensorsPathFromLoader(
+  loaderPath: string,
+  safetensorsPath: string,
+): string {
+  const rel = relative(dirname(loaderPath), safetensorsPath).split("\\").join("/");
+  return rel.length === 0 ? basename(safetensorsPath) : rel;
 }
 
 

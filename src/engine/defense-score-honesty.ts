@@ -74,6 +74,12 @@ export interface DefenseScoreHonestyInput {
    */
   readonly ggufSidecarLoaderHookApplied?: boolean;
   /**
+   * True when a same-directory Python loader was auto-wired with
+   * `entangleSafetensorsLoaderWithSidecars` (or the hook is already present
+   * next to the .safetensors). Clears `safetensors-sidecar-host-verify-only`.
+   */
+  readonly safetensorsSidecarLoaderHookApplied?: boolean;
+  /**
    * How a SQLite database's generated decoy columns are defined: `"eval"`
    * when they call the function no stock connection has (opt-in), otherwise
    * plain SQL. Unknown counts as plain SQL.
@@ -155,7 +161,7 @@ export function collectDefenseScoreGaps(
     gaps.push({
       id: "sidecar-entangle-not-enabled",
       summary:
-        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun companion, .pyc import-time hook, or GGUF load-time hook); a host-only .pyc marshal trailer or GGUF STRING KV does not count. Default remains OFF (issue #40 / DESIGN).",
+        "Opt-in sidecarEntangle strip⇒fail binding was not enabled (JS/Python preamble, WASM bla.sidecar.v1, Bun companion, .pyc import-time hook, or GGUF / Safetensors load-time hook); a host-only .pyc marshal trailer, GGUF STRING KV, or Safetensors __metadata__ note does not count. Default remains OFF (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }
@@ -192,12 +198,18 @@ export function collectDefenseScoreGaps(
     });
   }
 
-  // Safetensors __metadata__ KV is host-verify only (loaders ignore unknown __metadata__ keys).
-  if (input.detectedFormat === "model-safetensors" && input.sidecarEntangleEnabled === true) {
+  // Safetensors __metadata__ KV is host-verify only (loaders ignore unknown
+  // __metadata__ keys) until a same-directory Python load-time hook is
+  // actually auto-wired (or already present) beside the model.
+  if (
+    input.detectedFormat === "model-safetensors" &&
+    input.sidecarEntangleEnabled === true &&
+    input.safetensorsSidecarLoaderHookApplied !== true
+  ) {
     gaps.push({
       id: "safetensors-sidecar-host-verify-only",
       summary:
-        "sidecarEntangle planted a Safetensors __metadata__ bla.sidecar.v1 note verified only by host verifySafetensorsSidecarMetadataNote; Safetensors loaders still load tensors after strip or sibling delete (issue #40 / DESIGN).",
+        "sidecarEntangle planted a Safetensors __metadata__ bla.sidecar.v1 note verified by host verifySafetensorsSidecarMetadataNote; Safetensors loaders still load tensors after strip or sibling delete unless a same-directory Python loader (loader.py / __init__.py / __main__.py) was auto-wired with the load-time hook (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

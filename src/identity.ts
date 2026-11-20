@@ -41,6 +41,8 @@ export const BLA_IDENTITY = Object.freeze({
  *   (REA tip 05be423ac: DWARF units, ELF debug-link, ELF DT_NEEDED)
  * - `src/domain/java/mavenGradleMetadata.ts` + `src/domain/nuget/nupkg.ts`
  * - `src/domain/firmware/androidOtaPayload.ts` + `src/artifacts/AndroidBootImageFormat.ts`
+ * - `src/domain/uefi/uefiLimits.ts` + `src/domain/inesContainer.ts`
+ * - `src/domain/compression/zstandardFrameAllowance.ts`
  */
 export const REA_INTERNAL_LIMITS = Object.freeze({
   /** Maximum distinct alternatives retained in one normalized primitive value (`SEMANTIC_PRIMITIVE_CANDIDATE_LIMIT`). */
@@ -383,4 +385,43 @@ export const REA_INTERNAL_LIMITS = Object.freeze({
   BUNDLE_INFO_PLIST_INPUT_BYTES: 64 * 1024 * 1024,
   INFO_PLIST_DECODE_MIB: 16,
   MAX_WASM_SECTIONS: 65_536,
+  /**
+   * New REA ceilings on tip a2acbe393 (358 commits after c84fde05e; 139 test /
+   * 137 fix / 56 refactor / 15 docs / 4 feat / 3 perf / 2 ci / 2 chore).
+   * The feat commits add inspection capability (pure-TypeScript UEFI firmware
+   * tools #12342, NES 2.0 container headers #10674, ELFv2 PPC64 Power ISA 3.0
+   * lane #12517, unresolved managed definition coordinates #12462) — not
+   * plantable densify trip targets. Honesty catalog only:
+   *
+   * - `UEFI_FIRMWARE_INPUT_BYTES` (128 MiB), `UEFI_FIRMWARE_MAX_VOLUMES`
+   *   (1024), `UEFI_FIRMWARE_MAX_FILES` (100,000), `UEFI_FIRMWARE_MAX_DEPTH`
+   *   (5), `UEFI_FIRMWARE_LZMA_OUTPUT_BYTES` (64 MiB),
+   *   `UEFI_FIRMWARE_SCAN_RECORDS` (100,000), and
+   *   `UEFI_FIRMWARE_DECODED_BYTES` (128 MiB) are admission / coverage /
+   *   decompression caps for the new UEFI parser (`uefiLimits.ts`, #12342).
+   *   Planting a 128 MiB image or 100,000 FFS files would bloat or break a
+   *   real firmware volume; overflow turns coverage partial, it is not a
+   *   trip-able densify target.
+   * - NES 2.0 inspection (`inesContainer.ts`, #10674) admits declared PRG/CHR
+   *   region sizes; those are format-valid header fields, not plantable
+   *   densify counters.
+   * - `ZSTD_MAX_FRAMES` (4096) caps exact-frame Zstandard walks
+   *   (`zstandardFrameAllowance.ts`, #12416). Planting 4096 frames would
+   *   bloat or break the compressed payload.
+   * - Also noted, not catalogued as new trip targets: runtime-settable
+   *   inventory additions (`REA_BRIDGE_MAX_REQUEST_BYTES`,
+   *   `REA_BRIDGE_MAX_REPLY_BYTES`, `REA_CAPTURE_PACKET_JSON_EXPANSION_BYTES`,
+   *   `REA_DEBUGGER_MAX_COMMAND_OUTPUT_BYTES`, MCP startup / input / response
+   *   budgets, `REA_JADX_HEAP_MIB`, `REA_KUNA_CACHE_MAX_BYTES`,
+   *   `ghidra.value_flow_*` operation/edge caps) — process or tool budgets,
+   *   not artifact-plantable. Several were already noted on earlier tips.
+   */
+  UEFI_FIRMWARE_INPUT_BYTES: 128 * 1024 * 1024,
+  UEFI_FIRMWARE_MAX_VOLUMES: 1_024,
+  UEFI_FIRMWARE_MAX_FILES: 100_000,
+  UEFI_FIRMWARE_MAX_DEPTH: 5,
+  UEFI_FIRMWARE_LZMA_OUTPUT_BYTES: 64 * 1024 * 1024,
+  UEFI_FIRMWARE_SCAN_RECORDS: 100_000,
+  UEFI_FIRMWARE_DECODED_BYTES: 128 * 1024 * 1024,
+  ZSTD_MAX_FRAMES: 4_096,
 });

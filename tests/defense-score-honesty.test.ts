@@ -115,6 +115,31 @@ describe("Issue #40.6: defenseScore honesty", () => {
     expect(hooked.cappedScore).toBe(99);
   });
 
+  it("keeps a Safetensors host-only __metadata__ note from closing the strip⇒fail gap", () => {
+    const off = applyDefenseScoreHonesty(99, {
+      detectedFormat: "model-safetensors",
+      sidecarEntangleEnabled: false,
+    });
+    expect(off.gaps.map((g) => g.id)).toContain("sidecar-entangle-not-enabled");
+    expect(off.cappedScore).toBe(93);
+
+    const hostOnly = applyDefenseScoreHonesty(99, {
+      detectedFormat: "model-safetensors",
+      sidecarEntangleEnabled: true,
+    });
+    expect(hostOnly.gaps.map((g) => g.id)).toContain("safetensors-sidecar-host-verify-only");
+    expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
+    expect(hostOnly.cappedScore).toBe(93);
+
+    const hooked = applyDefenseScoreHonesty(99, {
+      detectedFormat: "model-safetensors",
+      sidecarEntangleEnabled: true,
+      safetensorsSidecarLoaderHookApplied: true,
+    });
+    expect(hooked.gaps.map((g) => g.id)).not.toContain("safetensors-sidecar-host-verify-only");
+    expect(hooked.cappedScore).toBe(99);
+  });
+
   it("keeps a SQLite host-only schema-comment note from closing the strip⇒fail gap", () => {
     const off = applyDefenseScoreHonesty(99, {
       detectedFormat: "sqlite",

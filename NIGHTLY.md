@@ -1,5 +1,74 @@
 # BLA nightly development log
 
+## 2026-11-20 ~America/Los_Angeles / ~2026-11-21 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `c84fde05e` → `a2acbe393` (**+358** commits). Dirty
+  `third_party/*` submodule checkouts were left untouched.
+- No new 1:1 trip-able densify constants. The delta is mostly test / fix /
+  refactor (139 test / 137 fix / 56 refactor / 15 docs / 4 feat / 3 perf /
+  2 ci / 2 chore). Feat commits add inspection capability, not plantable
+  densify targets: pure-TypeScript UEFI firmware tools (#12342), NES 2.0
+  container headers (#10674), ELFv2 PPC64 Power ISA 3.0 lane (#12517),
+  unresolved managed definition coordinates (#12462). New or newly
+  advertised ceilings are admission / coverage / decompression caps, not
+  plantable without breaking the artifact:
+  - `UEFI_FIRMWARE_INPUT_BYTES` = 128 MiB, `UEFI_FIRMWARE_MAX_VOLUMES` = 1024,
+    `UEFI_FIRMWARE_MAX_FILES` = 100,000, `UEFI_FIRMWARE_MAX_DEPTH` = 5,
+    `UEFI_FIRMWARE_LZMA_OUTPUT_BYTES` = 64 MiB, `UEFI_FIRMWARE_SCAN_RECORDS` =
+    100,000, `UEFI_FIRMWARE_DECODED_BYTES` = 128 MiB (`uefiLimits.ts`, #12342)
+    — admission / coverage / decompression caps for the new UEFI parser;
+    planting a 128 MiB image or 100,000 FFS files would bloat or break a
+    real firmware volume, and overflow turns coverage partial.
+  - `ZSTD_MAX_FRAMES` = 4096 (`zstandardFrameAllowance.ts`, #12416) — exact-
+    frame Zstandard walk cap; planting 4096 frames would bloat or break the
+    compressed payload.
+  - NES 2.0 inspection (`inesContainer.ts`, #10674) admits declared PRG/CHR
+    region sizes; those are format-valid header fields, not plantable
+    densify counters.
+  - Also noted, not catalogued as new trip targets: runtime-settable
+    inventory additions (`REA_BRIDGE_MAX_REQUEST_BYTES`,
+    `REA_BRIDGE_MAX_REPLY_BYTES`, `REA_CAPTURE_PACKET_JSON_EXPANSION_BYTES`,
+    `REA_DEBUGGER_MAX_COMMAND_OUTPUT_BYTES`, MCP startup / input / response
+    budgets, `REA_JADX_HEAP_MIB`, `REA_KUNA_CACHE_MAX_BYTES`,
+    `ghidra.value_flow_*` operation/edge caps) — process or tool budgets,
+    not artifact-plantable. Several were already noted on earlier tips.
+- Catalogued the new headline maxima in `REA_INTERNAL_LIMITS` (honesty only).
+
+### Done tonight
+- Landed the Safetensors load-time hook (`generateSidecarSafetensorsLoaderSnippet` /
+  `prependSafetensorsSidecarLoaderHook` / `entangleSafetensorsLoaderWithSidecars` /
+  `computeSafetensorsSidecarCodeIdentity`; marker `_installSafetensorsSidecarLoaderHook`;
+  `protectTarget` + `hardenProject` post-pass). Auto-wired only into a
+  same-directory Python loader named `loader.py`, `__init__.py`, or
+  `__main__.py` that already mentions the `.safetensors` basename
+  (`selectPythonSafetensorsLoader` / `discoverPythonSafetensorsLoader` /
+  `isSafePythonSafetensorsLoader` / `isSafetensorsSidecarLoaderHookWired` /
+  `sourceMentionsSafetensorsFile`). The hook does not rewrite the
+  `.safetensors` artifact (header JSON tensor descriptors, `data_offsets`,
+  dtype, and tensor bytes stay bit-exact; the existing `__metadata__`
+  `bla.sidecar.v1` host-verify note remains the only Safetensors mutation).
+  Test / already-entangled / self-seal / unknown helper files are never
+  hooked. Vector `safetensors-sidecar-entangle` is recorded and
+  `safetensors-sidecar-host-verify-only` is cleared only when that hook was
+  actually written. Default OFF via existing `sidecarEntangle`.
+- Live BLA tree was pulled `6507e0d` / `3.5.2` → `24b6161` / `3.5.3`
+  (daytime patch release already on main: binary Apple plist EOF trailer
+  preservation, multi-site soft-mode self-seal tamper parity, esbuild
+  `node_modules` path-segment filtering, CLI error control-character
+  sanitization, website verifier sibling-prefix containment; #255–#259).
+- Gates: build OK, tests **1315 passed / 5 skipped**, benchmark **14/14**
+  runtime-equivalent.
+
+### Next step (following night)
+1. DEX / SQLite load-time hooks (same honesty bar: only record the vector /
+   clear `*-host-verify-only` when a real load-time hook was written).
+2. Browser WASM loader auto-wire (the hook still needs Node `fs` /
+   `crypto`; a browser snippet would have to verify without those).
+3. ESM hook that runs before hoisted *user* imports; MCP one-click
+   polish; empirical JADX / Android red-team; ESP #8228; Dependabot majors.
+
+
 ## 2026-11-19 ~America/Los_Angeles / ~2026-11-20 02:00 Asia/Shanghai
 
 ### REA delta

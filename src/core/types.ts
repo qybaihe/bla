@@ -59,6 +59,7 @@ export type ReaAttackVectorId =
   | "wasm-sidecar-entangle"
   | "pyc-sidecar-entangle"
   | "gguf-sidecar-entangle"
+  | "safetensors-sidecar-entangle"
   | "dex-sidecar-entangle"
   | "sqlite-sidecar-entangle"
   | "erlang-beam-inspection"
@@ -291,6 +292,8 @@ export interface ProtectionResult {
   readonly pycSidecarLoaderHookApplied?: boolean;
   /** Present when a same-directory Python loader was auto-wired with the GGUF load-time hook. */
   readonly ggufSidecarLoaderHookApplied?: boolean;
+  /** Present when a same-directory Python loader was auto-wired with the Safetensors load-time hook. */
+  readonly safetensorsSidecarLoaderHookApplied?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
   /**

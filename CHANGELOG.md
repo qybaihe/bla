@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Optional Safetensors load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` `__metadata__` note or a sibling sidecar fails closed at import. Header JSON tensor descriptors, offsets, dtype, and tensor bytes stay bit-exact. Default remains OFF.
+- REA catalog hygiene on tip `a2acbe393` (honesty only; no new 1:1 densify counters): `UEFI_FIRMWARE_*` admission/coverage caps (#12342), `ZSTD_MAX_FRAMES` (#12416). NES 2.0 inspection (#10674) noted, not catalogued as a trip target.
+
 ## [3.5.3] — 2026-11-21
 
 Patch fixing binary Apple property list (`bplist00`) corruption at EOF, multi-site soft-mode `self-seal` tamper parity, esbuild `node_modules` path-segment filtering, CLI error control-character sanitization, and website verifier sibling-prefix containment (`#255`–`#259`).

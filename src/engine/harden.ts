@@ -102,6 +102,13 @@ import {
   extractGgufSidecarMetadataNote,
   relativeGgufPathFromLoader,
   GGUF_SIDECAR_LOADER_MARKER,
+  generateSidecarSafetensorsLoaderSnippet,
+  prependSafetensorsSidecarLoaderHook,
+  selectPythonSafetensorsLoader,
+  computeSafetensorsSidecarCodeIdentity,
+  extractSafetensorsSidecarMetadataNote,
+  relativeSafetensorsPathFromLoader,
+  SAFETENSORS_SIDECAR_LOADER_MARKER,
   verifyAsarSidecarArchiveNote,
 } from "../shields/runtime/sidecar-entangle.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../shields/formats/asar.js";
@@ -3217,6 +3224,114 @@ function hardenProjectCore(
         }
       }
 
+      const safetensorsPlantedAbs = new Set<string>();
+      const safetensorsLikeEarly = bindableSummaries.filter(
+        (s) =>
+          s.success &&
+          (s.format === "model-safetensors" ||
+            /\.safetensors$/i.test(s.relativePath.replaceAll("\\", "/"))),
+      );
+      for (const stSum of safetensorsLikeEarly) {
+        const stAbs = join(outputRoot, stSum.relativePath);
+        if (!existsSync(stAbs)) continue;
+        const stDir = dirname(stAbs);
+        const searchDirs = [stDir];
+        const loaderCandidates: {
+          name: string;
+          source: string;
+          absPath: string;
+        }[] = [];
+        for (const s of pyLike) {
+          const outAbs = join(outputRoot, s.relativePath);
+          if (!searchDirs.includes(dirname(outAbs))) continue;
+          if (!isPythonPycLoaderFilename(s.relativePath)) continue;
+          let predicateSource: string | null = null;
+          try {
+            if (s.inputPath && existsSync(s.inputPath)) {
+              predicateSource = readFileSync(s.inputPath, "utf8");
+            }
+          } catch {
+            predicateSource = null;
+          }
+          if (predicateSource === null && existsSync(outAbs)) {
+            try {
+              predicateSource = readFileSync(outAbs, "utf8");
+            } catch {
+              predicateSource = null;
+            }
+          }
+          if (predicateSource === null) continue;
+          loaderCandidates.push({
+            name: basename(outAbs),
+            source: predicateSource,
+            absPath: outAbs,
+          });
+        }
+        const selectedName = selectPythonSafetensorsLoader(
+          basename(stAbs),
+          loaderCandidates,
+        );
+        const found = selectedName
+          ? loaderCandidates.find((c) => c.name === selectedName)
+          : undefined;
+        if (!found) continue;
+        const alreadyNoted =
+          extractSafetensorsSidecarMetadataNote(readFileSync(stAbs)) !== null;
+        const otherPrimary =
+          (jsEntryAbs !== undefined && found.absPath !== jsEntryAbs) ||
+          (pyEntryAbs !== undefined && found.absPath !== pyEntryAbs);
+        // A foreign JS/Python entry may already bake a digest of this
+        // model. Hooking without a note would fail-closed at import;
+        // planting a new __metadata__ key would break that digest.
+        if (otherPrimary && !alreadyNoted) continue;
+
+        if (!otherPrimary) {
+          const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
+          for (const s of bindableSummaries) {
+            if (!s.success || s.relativePath === stSum.relativePath) continue;
+            const abs = join(outputRoot, s.relativePath);
+            if (jsEntryAbs && abs === jsEntryAbs) continue;
+            if (pyEntryAbs && abs === pyEntryAbs) continue;
+            if (abs === found.absPath) continue;
+            const rel = relative(stDir, abs).split(sep).join("/");
+            if (rel.length === 0 || rel.startsWith("..") || !existsSync(abs)) continue;
+            sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
+          }
+          const bound = entangleSafetensorsEntryWithSidecars({
+            entryPath: basename(stAbs),
+            entryBytes: readFileSync(stAbs),
+            sidecars,
+            seedTag: derivePublicSidecarSeedTag(String(options.seed ?? runId)),
+            allowEmptySidecars: true,
+          });
+          if (bound) {
+            writeFileAtomicSync(stAbs, bound.bytes, undefined, {
+              allowLinkWriteThrough: false,
+            });
+            safetensorsPlantedAbs.add(stAbs);
+          }
+        }
+
+        const identity = computeSafetensorsSidecarCodeIdentity(readFileSync(stAbs));
+        const existing = readFileSync(found.absPath, "utf8");
+        const already = existing.includes(SAFETENSORS_SIDECAR_LOADER_MARKER);
+        const stRel = relativeSafetensorsPathFromLoader(found.absPath, stAbs);
+        const inject = already
+          ? null
+          : generateSidecarSafetensorsLoaderSnippet({
+              codeIdentityHex: identity,
+              safetensorsRelPaths: [stRel],
+            });
+        const next = inject
+          ? prependSafetensorsSidecarLoaderHook(existing, inject.preamble)
+          : existing;
+        if (next !== existing) {
+          writeFileAtomicSync(found.absPath, next, "utf8", {
+            allowLinkWriteThrough: false,
+          });
+        }
+      }
+
       if (jsEntry) {
         const entryAbs = join(outputRoot, jsEntry.relativePath);
         if (existsSync(entryAbs)) {
@@ -3446,7 +3561,7 @@ function hardenProjectCore(
           : undefined;
       if (safetensorsEntry) {
         const entryAbs = join(outputRoot, safetensorsEntry.relativePath);
-        if (existsSync(entryAbs)) {
+        if (existsSync(entryAbs) && !safetensorsPlantedAbs.has(entryAbs)) {
           const entryDir = dirname(entryAbs);
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [];
           for (const s of bindableSummaries) {
