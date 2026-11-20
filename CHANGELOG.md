@@ -6,8 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Optional Safetensors load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` `__metadata__` note or a sibling sidecar fails closed at import. Header JSON tensor descriptors, offsets, dtype, and tensor bytes stay bit-exact. Default remains OFF.
-- REA catalog hygiene on tip `a2acbe393` (honesty only; no new 1:1 densify counters): `UEFI_FIRMWARE_*` admission/coverage caps (#12342), `ZSTD_MAX_FRAMES` (#12416). NES 2.0 inspection (#10674) noted, not catalogued as a trip target.
+## [3.5.4] — 2026-11-21
+
+Optional Safetensors load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` `__metadata__` note or a sibling sidecar fails closed at import. Header JSON tensor descriptors, offsets, dtype, and tensor bytes stay bit-exact. Default remains OFF.
+
+### Added
+- **Safetensors load-time hook (`generateSidecarSafetensorsLoaderSnippet` / `prependSafetensorsSidecarLoaderHook` / `entangleSafetensorsLoaderWithSidecars`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` post-pass auto-wire a self-contained Python snippet into a same-directory loader named `loader.py`, `__init__.py`, or `__main__.py` that already mentions the `.safetensors` basename (`selectPythonSafetensorsLoader` / `discoverPythonSafetensorsLoader` / `isSafePythonSafetensorsLoader` / `isSafetensorsSidecarLoaderHookWired`). The hook reads the sibling `.safetensors` at import time and, when the stripped-body identity matches, verifies the `bla.sidecar.v1` `__metadata__` note and sidecar digest — strip or sibling delete fails closed. The hook does not rewrite the `.safetensors` artifact (header JSON tensor descriptors, `data_offsets`, dtype, and tensor bytes stay bit-exact; the existing `__metadata__` host-verify note remains the only Safetensors mutation). Test files, already-entangled entries, and unknown helpers such as `helper.py` are never hooked. Vector `safetensors-sidecar-entangle` is recorded and defenseScore gap `safetensors-sidecar-host-verify-only` is cleared only when that hook was actually written. Default still OFF.
+- **REA catalog hygiene** on tip `a2acbe393` (honesty only; no new 1:1 densify counters): `UEFI_FIRMWARE_*` admission/coverage caps (#12342), `ZSTD_MAX_FRAMES` (#12416). NES 2.0 inspection (#10674) is noted, not catalogued as a trip target.
 
 ## [3.5.3] — 2026-11-21
 

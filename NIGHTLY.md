@@ -59,6 +59,7 @@
   sanitization, website verifier sibling-prefix containment; #255–#259).
 - Gates: build OK, tests **1315 passed / 5 skipped**, benchmark **14/14**
   runtime-equivalent.
+- Cut `bla-agents@3.5.4` (tag `bla-agents-3.5.4`).
 
 ### Next step (following night)
 1. DEX / SQLite load-time hooks (same honesty bar: only record the vector /
