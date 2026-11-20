@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.3] — 2026-11-21
+
+Patch fixing binary Apple property list (`bplist00`) corruption at EOF, multi-site soft-mode `self-seal` tamper parity, esbuild `node_modules` path-segment filtering, CLI error control-character sanitization, and website verifier sibling-prefix containment (`#255`–`#259`).
+
+### Fixed
+- **Binary Apple `.plist` EOF trailer preservation (`src/shields/formats/apple-plist.ts`, #255):** Inserts the depth-guard and canary decoy block immediately *before* the fixed 32-byte `bplist00`/`bplist01` trailer instead of appending past EOF, keeping the object table, offset table, and trailer parseable by `PropertyListSerialization` / `plistlib` and failing closed on inputs shorter than 40 bytes.
+- **Multi-site soft-mode `self-seal` tamper parity (`src/shields/runtime/self-seal.ts`, #259):** Collects soft-mode tamper signals from *every* interleaved measurement helper into a single shared flag folded once into the final digest (`^ (flag ? 1 : 0)`), eliminating single-site patch bypasses without introducing even-site XOR cancellation.
+- **esbuild `node_modules` path-segment matching (`src/bundler/index.ts`, #258):** Splits paths on `/[/\\]/` instead of substring `.includes("node_modules")`, preventing application folders whose names contain `node_modules` (e.g. `my-node_modules-backup/`) from silently shipping unshielded.
+- **CLI top-level error output terminal hygiene (`src/cli.ts`, #256):** Routes top-level `runCli` errors through `formatCliError` + `sanitizeTerminalText` so artifact-derived filenames with C0/C1/OSC/CSI control sequences cannot reach the operator's terminal.
+- **Website link verifier sibling-prefix containment (`scripts/verify-website.mjs`, #257):** Uses `path.relative()` instead of `startsWith()` so links escaping into same-prefix sibling directories (e.g. `../website-evil/`) are rejected cleanly.
+
 ## [3.5.2] — 2026-11-19
 
 Optional GGUF load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the model, stripping the `bla.sidecar.v1` metadata note or a sibling sidecar fails closed at import. Tensor bytes stay bit-exact. Default remains OFF.

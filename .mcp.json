@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "bla-agents@3.5.2",
+        "bla-agents@3.5.3",
         "mcp"
       ]
     }

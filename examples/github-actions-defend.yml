@@ -6,7 +6,7 @@ on:
 env:
   # Pinned to the BLA release you audited. Bump together with package.json.
   # Never use the mutable `latest` tag in a release pipeline.
-  BLA_VERSION: "3.5.2"
+  BLA_VERSION: "3.5.3"
 
 jobs:
   harden:
