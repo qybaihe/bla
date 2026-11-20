@@ -83,6 +83,27 @@ describe("website static verification", () => {
     );
   });
 
+  it("rejects a link that resolves into a same-prefix sibling directory", () => {
+    const parent = createTempDir();
+    const site = join(parent, "website");
+    const sibling = join(parent, "website-evil");
+    mkdirSync(join(site, "assets"), { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, "pwn.html"), "<!doctype html><html><body>x</body></html>", "utf8");
+    writeFileSync(
+      join(site, "index.html"),
+      '<!doctype html><html><head></head><body><a href="../website-evil/pwn.html">x</a></body></html>',
+      "utf8",
+    );
+
+    const res = verifyWebsiteDirectory(site);
+    expect(
+      res.errors.some(
+        (e) => e.includes("link escapes website root") && e.includes("../website-evil/pwn.html"),
+      ),
+    ).toBe(true);
+  });
+
   it("flags markup keys that have no English string", () => {
     const dir = createTempDir();
     mkdirSync(join(dir, "assets"), { recursive: true });
