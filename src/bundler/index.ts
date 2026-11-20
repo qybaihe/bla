@@ -348,7 +348,9 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
         });
       }
       build.onLoad({ filter: include }, async (args) => {
-        if (args.path.includes("node_modules")) return null;
+        // Match the dependency directory as a path segment: a project folder
+        // named "my-node_modules-backup" is application code, not a dependency.
+        if (args.path.split(/[/\\]/).includes("node_modules")) return null;
         const fs = await import("node:fs/promises");
         const source = await fs.readFile(args.path, "utf8");
         const loader = inferEsbuildLoader(args.path);
