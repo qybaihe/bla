@@ -23,7 +23,6 @@ import {
   hardenProject,
   restoreHardenedProject,
 } from "./engine/harden.js";
-import { sanitizeTerminalText } from "./core/terminal-text.js";
 import { registerBlaOutput } from "./core/output-registry.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
