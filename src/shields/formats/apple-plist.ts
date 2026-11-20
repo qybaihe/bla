@@ -133,14 +133,23 @@ export function protectApplePlistBuffer(
   readonly diagnosticsEmbedded: number;
   readonly exceedsBinaryPlistNestingDepth: boolean;
 } {
-  // If binary plist (`bplist00`), append a depth-claim trailer past REA_MAX_BINARY_PLIST_NESTING_DEPTH (128)
-  // plus canary/diagnostic UTF-8 records. Trailer is ignored by Apple's parser (stops at trailer offset).
+  // A binary plist keeps a fixed 32-byte trailer at EOF (offset-table position,
+  // top object, offset size). Appending decoys after it moves EOF, so every
+  // parser reads the decoy bytes as the trailer and the plist stops parsing.
+  // Insert the bait immediately before the trailer instead: the object table
+  // and offset table keep their absolute positions, and the original trailer
+  // stays byte-identical in the last 32 bytes.
   if (rawBuffer.length >= 8 && rawBuffer.subarray(0, 6).toString("latin1") === "bplist") {
+    if (rawBuffer.length < 40) {
+      throw new Error(
+        "Invalid binary Apple property list: expected at least 40 bytes (8-byte header + 32-byte trailer); refusing to append past a missing trailer.",
+      );
+    }
     const intensity = options.intensity ?? "balanced";
     const prng = new SeededPrng(options.seed ?? "bla-apple-plist-v1");
     const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
     const depth = REA_MAX_BINARY_PLIST_NESTING_DEPTH + 4;
-    const trailer = Buffer.from(
+    const decoy = Buffer.from(
       [
         "",
         `BLA_BPLIST_DEPTH_GUARD_${depth}:${prng.hex(6)}:com.apple.security.secure-enclave.ring0`,
@@ -149,8 +158,13 @@ export function protectApplePlistBuffer(
       ].join("\0"),
       "utf8",
     );
+    const trailerStart = rawBuffer.length - 32;
     return {
-      buffer: Buffer.concat([rawBuffer, trailer]),
+      buffer: Buffer.concat([
+        rawBuffer.subarray(0, trailerStart),
+        decoy,
+        rawBuffer.subarray(trailerStart),
+      ]),
       triggersBudgetAbort: true,
       decoyEnclaveEntitlementsAdded: 4 + deception.textRecords.length,
       canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
