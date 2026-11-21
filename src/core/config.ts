@@ -56,6 +56,13 @@ export interface BlaProjectConfig {
   readonly allowWasmSealXorKnownPlaintext?: boolean;
   /** Lab-only: allow leaked SOLUTION/dotenv/private-key/debug-symbol files in release tree. Default false. */
   readonly allowReleaseHygieneLeak?: boolean;
+  /**
+   * Make the three lint-only packaging gates (`plaintext-secret`,
+   * `integrity-coverage`, `bind-scope`) refuse `harden` at project level, the way
+   * `bla lint` already does. Default false. Parity with CLI `--require-lint-gates`
+   * / MCP `require_lint_gates`.
+   */
+  readonly requireLintGates?: boolean;
 }
 
 /**
@@ -110,6 +117,7 @@ const BOOLEAN_CONFIG_KEYS = [
   "allowWasmXorMaskSidecar",
   "allowWasmSealXorKnownPlaintext",
   "allowReleaseHygieneLeak",
+  "requireLintGates",
 ] as const;
 
 /**
