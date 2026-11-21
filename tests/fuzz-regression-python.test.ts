@@ -489,7 +489,13 @@ for statement in tree.body:
             node.id for node in ast.walk(statement)
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
         )
-print(sorted(name for name in bound if not re.search(r"(?:^|_)[0-9a-fA-F]{4}(?:_|$)", name)))
+print(sorted(
+    name for name in bound
+    if not (
+        re.search(r"(?:^|_)[0-9a-fA-F]{4}(?:_|$)", name)
+        or (name.count("_") >= 2 and re.search(r"(?:^|_)[g-zG-Z][0-9a-zA-Z]{3}(?:_|$)", name))
+    )
+))
 `,
 };
 

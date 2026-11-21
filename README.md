@@ -238,7 +238,7 @@ npx bla-agents benchmark
 
 > **Note:** Token and USD columns below are **internal estimates** derived from BLA's catalog of REA limits to illustrate relative amplification across formats — for actual process-level REA errors, see the [Empirical Results](#empirical-results-vs-real-rea) table above.
 
-**Aggregate Showcase Result:** **~1,068.7×** token amplification · **~503.5×** cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. This result is limited to the benchmark fixtures.
+**Aggregate Showcase Result (modeled):** **~1,195.9×** modeled token amplification · **~563.7×** modeled cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. Figures are internal estimator projections on the benchmark fixtures, not metered live agent billing.
 
 | Target Artifact | Unprotected Baseline (est.) | BLA Protected (est.) | Token Multiplier | Runtime Equivalence |
 | :--- | :--- | :--- | ---: | :---: |

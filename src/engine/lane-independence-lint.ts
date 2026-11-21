@@ -83,11 +83,15 @@ const SECRET_WORDS: ReadonlySet<string> = new Set([
   "password",
   "passcode",
   "passphrase",
-  "pin",
   "secret",
   "unlock",
   "activation",
   "voucher",
+]);
+/** `mapPin`, `pinTop`, `locationPin` … are UI/geo pins, not PIN codes. */
+const PIN_BENIGN_NEIGHBOR: ReadonlySet<string> = new Set([
+  "map", "geo", "location", "marker", "drop", "scroll", "sticky",
+  "top", "bottom", "left", "right", "pos", "position", "icon", "coords", "lat", "lng",
 ]);
 /** `keyCode`, `keyDown`, `keyFrames` … are not secrets. */
 const KEY_BENIGN_NEXT: ReadonlySet<string> = new Set([
@@ -95,11 +99,14 @@ const KEY_BENIGN_NEXT: ReadonlySet<string> = new Set([
   "name", "names", "path", "paths", "of", "by", "word", "words", "stroke", "strokes",
   "map", "binding", "bindings", "event", "events",
 ]);
-/** `cacheKey`, `sortKey`, `objectKey` … are lookup keys, not secrets. */
+/** `cacheKey`, `sortKey`, `zoneKey`, `tierKey` … are lookup keys, not secrets. */
 const KEY_BENIGN_PREV: ReadonlySet<string> = new Set([
   "hot", "cache", "map", "sort", "primary", "foreign", "storage", "object", "prop", "property",
   "row", "column", "group", "partition", "env", "config", "json", "query", "i18n", "locale",
-  "translation",
+  "translation", "zone", "tier", "rate", "shipping", "weight", "item", "product", "country",
+  "currency", "plan", "state", "route", "field", "option", "metric", "region", "bucket",
+  "service", "category", "order", "quote", "carrier", "postal", "theme", "tab", "page",
+  "view", "form", "filter", "label", "tag", "cell", "grid",
 ]);
 
 function identifierWords(identifier: string): string[] {
@@ -111,12 +118,19 @@ function identifierWords(identifier: string): string[] {
     .map((w) => w.toLowerCase());
 }
 
-/** `key`, `licenseKey`, `userSerial`, `guess` — but not `keys`, `keyCode`, `cacheKey`. */
+/** `key`, `licenseKey`, `userSerial`, `guess` — but not `keys`, `keyCode`, `cacheKey`, `zoneKey`, `mapPin`. */
 export function isSecretLikeIdentifier(identifier: string): boolean {
   const words = identifierWords(identifier);
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i]!;
     if (SECRET_WORDS.has(word)) return true;
+    if (
+      word === "pin" &&
+      !PIN_BENIGN_NEIGHBOR.has(words[i - 1] ?? "") &&
+      !PIN_BENIGN_NEIGHBOR.has(words[i + 1] ?? "")
+    ) {
+      return true;
+    }
     if (
       word === "key" &&
       !KEY_BENIGN_NEXT.has(words[i + 1] ?? "") &&
@@ -171,7 +185,16 @@ function findPerLaneCompareTable(text: string): string | undefined {
       if (seen >= MAX_TABLE_USES_EXAMINED) break;
       seen += 1;
       const at = use.index ?? 0;
-      const window = text.slice(Math.max(0, at - LANE_WINDOW), at + use[0].length + LANE_WINDOW);
+      const matched = use[0];
+      // Method calls (`.findIndex(`, `.reduce(`, `.map(`, `.every(`, …) must
+      // perform an equality or XOR comparison inside the callback window, just
+      // like INLINE_INT_TABLE — ordinary lookups such as `weights.findIndex(w => weight <= w)`
+      // or `weights.reduce((a, b) => a + b, 0)` are not per-lane byte compares.
+      if (matched.endsWith("(")) {
+        const cbWindow = text.slice(at + matched.length, at + matched.length + LANE_WINDOW);
+        if (!EQUALITY_OR_XOR.test(cbWindow)) continue;
+      }
+      const window = text.slice(Math.max(0, at - LANE_WINDOW), at + matched.length + LANE_WINDOW);
       // The table's own name does not count as naming the secret.
       if (looksLikePerLaneProbe(window.split(name).join(" "))) return literal;
     }

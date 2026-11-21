@@ -190,9 +190,39 @@ export interface RealisticIdentifierOptions {
   readonly hint?: string;
 }
 
+const BASE36_CHARS = "0123456789abcdefghjkmnpqrstuvwxyz";
+const NON_HEX_LETTERS = "ghjkmnpqrstuvwxyz";
+const DOMAIN_SUFFIXES = Object.freeze([
+  "Ctx",
+  "Ref",
+  "Ops",
+  "Mgr",
+  "Cfg",
+  "Impl",
+  "Spec",
+  "View",
+] as const);
+
+/**
+ * Draw an identifier entropy tail containing at least one non-hex base36
+ * character (`g`–`z`), avoiding the uniform `_[0-9a-f]{3,4}` tag shape that
+ * static deobfuscators fingerprint to separate injected globals from user code.
+ */
+function drawNaturalTag(prng: SeededPrng, entropy: number): string {
+  const len = Math.max(2, entropy);
+  const chars: string[] = [];
+  const lead = NON_HEX_LETTERS[prng.nextInt(0, NON_HEX_LETTERS.length - 1)]!;
+  chars.push(lead);
+  for (let i = 1; i < len; i++) {
+    chars.push(BASE36_CHARS[prng.nextInt(0, BASE36_CHARS.length - 1)]!);
+  }
+  return chars.join("");
+}
+
 /**
  * Draw a realistic identifier from a seeded distribution.
- * Guarantees: no `_bla`, `__bla`, `$00_AAA` substring; valid JS/TS/Python ident.
+ * Guarantees: no `_bla`, `__bla`, `$00_AAA` substring; valid JS/TS/Python ident;
+ * varies morphology across natural naming shapes with no uniform `_<hex>` tag.
  */
 export function realisticIdentifier(
   prng: SeededPrng,
@@ -200,7 +230,8 @@ export function realisticIdentifier(
 ): string {
   const style = options.style ?? "camel";
   const entropy = options.entropy ?? 3;
-  const tag = prng.hex(entropy);
+  const tag = drawNaturalTag(prng, entropy);
+  const capTag = tag.charAt(0).toUpperCase() + tag.slice(1);
   const verb = prng.pick(VERBS);
   const noun = prng.pick(NOUNS);
   const adj = prng.pick(ADJECTIVES);
@@ -228,31 +259,38 @@ export function realisticIdentifier(
     const head = hint
       ? hint.charAt(0).toUpperCase() + hint.slice(1)
       : adj;
-    return `${head}${noun}${tag.charAt(0).toUpperCase()}${tag.slice(1)}`;
+    return `${head}${noun}${capTag}`;
   }
 
   if (style === "privateCamel") {
     const body = hint
       ? hint.charAt(0).toLowerCase() + hint.slice(1)
       : verb;
-    return `_${body}${noun}_${tag}`;
+    const shape = prng.nextInt(0, 2);
+    if (shape === 0) return `_${body}${noun}${capTag}`;
+    if (shape === 1) return `_${body}${adj}${noun}${prng.nextInt(10, 999)}${tag.slice(0, 2)}`;
+    return `_${body}${noun}${prng.pick(DOMAIN_SUFFIXES)}${capTag}`;
   }
 
   if (style === "earlySort") {
     // `$` sorts before [A-Za-z_] in Unicode; vary the next chars so there is
     // NO shared greppable literal across the emitted set (unlike `$00_AAA`).
-    const rank = prng.hex(2);
+    const rank = drawNaturalTag(prng, 2);
     const body = hint
       ? hint.charAt(0).toUpperCase() + hint.slice(1)
       : `${adj}${noun}`;
-    return `$${rank}${body}_${tag}`;
+    return `$${rank}${body}${capTag}`;
   }
 
-  // camel (default)
+  // camel (default): rotate across natural camelCase shapes without `_<hex>` tails.
   const body = hint
     ? hint.charAt(0).toLowerCase() + hint.slice(1)
     : verb;
-  return `${body}${adj}${noun}_${tag}`;
+  const shape = prng.nextInt(0, 3);
+  if (shape === 0) return `${body}${adj}${noun}${capTag}`;
+  if (shape === 1) return `${body}${adj}${noun}${prng.pick(DOMAIN_SUFFIXES)}${prng.nextInt(10, 999)}${tag.slice(0, 2)}`;
+  if (shape === 2) return `${body}${noun}For${adj}${capTag}`;
+  return `${body}${adj}${noun}V${prng.nextInt(1, 9)}${tag}`;
 }
 
 /**

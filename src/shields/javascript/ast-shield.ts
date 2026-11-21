@@ -800,12 +800,19 @@ function maskPiece(text: string, unitOffset: number, width: 2 | 4, m: number, c:
  * text — Node's CommonJS export scanner is one — takes a value that starts
  * with a word for a name, and the literal this replaces started with a quote.
  */
+interface HeapLatchCoupling {
+  readonly heapObjectName: string;
+  readonly latchPropertyName: string;
+  readonly expectedLatchByte: number;
+}
+
 function buildMaskDecodeCall(
   pieces: t.Expression,
   width: 2 | 4,
   m: number,
   c: number,
   seedCoupling?: { readonly seedExpr: t.Expression; readonly expectedLowByte: number },
+  heapLatch?: HeapLatchCoupling,
 ): t.Expression {
   const id = (name: string): t.Identifier => t.identifier(name);
   // Letter `n` of the current unit as its four bits: s.charCodeAt(i + n) - 97
@@ -843,22 +850,52 @@ function buildMaskDecodeCall(
     t.variableDeclarator(id("i"), t.numericLiteral(0)),
   ];
   if (seedCoupling) {
-    // Mix the runtime seed's low 8 bits directly inside the decoder body so
-    // `args` remains `[pieces, NumericLiteral(m), NumericLiteral(c ^ expectedLowByte)]`
-    // while `const seed = 1` or tampered self-seal/cognitive-armor corrupts every
-    // masked string in the module.
-    varDecls.push(
-      t.variableDeclarator(
-        id("k"),
+    // Mix the runtime seed's low 8 bits (and, when available, the live rolling
+    // shadow-heap latch byte) directly inside the decoder body so `args` remains
+    // `[pieces, NumericLiteral(m), NumericLiteral(encodedC)]` while stripping the
+    // shadow heap, collapsing `runtimeSeed`, or tampering self-seal/cognitive-armor
+    // corrupts every masked string in the module.
+    let keyXorExpr: t.Expression = t.binaryExpression(
+      "^",
+      id("c"),
+      t.binaryExpression("&", seedCoupling.seedExpr, t.numericLiteral(255)),
+    );
+    if (heapLatch) {
+      const heapRef = (): t.Identifier => id(heapLatch.heapObjectName);
+      const latchArr = (): t.MemberExpression =>
+        t.memberExpression(heapRef(), id(heapLatch.latchPropertyName));
+      const latchLiveExpr = t.conditionalExpression(
+        t.logicalExpression(
+          "&&",
+          t.logicalExpression(
+            "&&",
+            t.binaryExpression(
+              "===",
+              t.unaryExpression("typeof", heapRef()),
+              t.stringLiteral("object"),
+            ),
+            heapRef(),
+          ),
+          latchArr(),
+        ),
         t.binaryExpression(
           "&",
           t.binaryExpression(
             "^",
-            id("c"),
-            t.binaryExpression("&", seedCoupling.seedExpr, t.numericLiteral(255)),
+            t.memberExpression(latchArr(), t.numericLiteral(0), true),
+            t.memberExpression(latchArr(), t.numericLiteral(1), true),
           ),
           t.numericLiteral(255),
         ),
+        t.numericLiteral(heapLatch.expectedLatchByte),
+      );
+      varDecls.push(t.variableDeclarator(id("l"), latchLiveExpr));
+      keyXorExpr = t.binaryExpression("^", keyXorExpr, id("l"));
+    }
+    varDecls.push(
+      t.variableDeclarator(
+        id("k"),
+        t.binaryExpression("&", keyXorExpr, t.numericLiteral(255)),
       ),
     );
   }
@@ -883,7 +920,12 @@ function buildMaskDecodeCall(
     ]),
   );
   MASK_DECODER_FUNCTIONS.add(decoder);
-  const encodedC = seedCoupling ? (c ^ seedCoupling.expectedLowByte) & 255 : c;
+  const encodedC = seedCoupling
+    ? (c ^
+        seedCoupling.expectedLowByte ^
+        (heapLatch ? heapLatch.expectedLatchByte : 0)) &
+      255
+    : c;
   return t.callExpression(t.parenthesizedExpression(decoder), [
     pieces,
     t.numericLiteral(m),
@@ -973,7 +1015,12 @@ function buildCombinatorialStringAst(
   value: string,
   prng: SeededPrng,
   seedIdentifierName: SeedSource,
-  options: { readonly fine?: boolean; readonly mask?: boolean; readonly seedLowByte?: number } = {},
+  options: {
+    readonly fine?: boolean;
+    readonly mask?: boolean;
+    readonly seedLowByte?: number;
+    readonly heapLatch?: HeapLatchCoupling;
+  } = {},
 ): t.Expression {
   const minChunks = 9;
   const chunks: string[] = [];
@@ -1116,6 +1163,7 @@ function buildCombinatorialStringAst(
         options.seedLowByte !== undefined
           ? { seedExpr: seedRead(seedIdentifierName), expectedLowByte: options.seedLowByte }
           : undefined,
+        options.heapLatch,
       )
     : pieces;
 }
@@ -2104,6 +2152,16 @@ export function transformJavaScriptWithBlaShield(
     (((((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xffffff00) >>> 0) || 0x1000) |
       (expectedSeedLowByte & 0xfe)) >>>
     0;
+  const heapLatchCoupling: HeapLatchCoupling = {
+    heapObjectName: memoryDiffShield.heapObjectName,
+    latchPropertyName: memoryDiffShield.latchPropertyName,
+    expectedLatchByte: memoryDiffShield.latchInvariantByte,
+  };
+  const corpusDigestVarName = prng.identifier({
+    style: "camel",
+    hint: "corpusDigest",
+    entropy: 4,
+  });
   // Every opaque predicate holds for any odd seed, and masked string decoders
   // also consume `seed & 0xff === expectedSeedLowByte`. Detached `fn.toString()`
   // re-evaluations (`new Function("return " + fn)()`) fall back to an odd constant
@@ -2671,6 +2729,7 @@ export function transformJavaScriptWithBlaShield(
             buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), {
               fine: true,
               seedLowByte: expectedSeedLowByte,
+              heapLatch: heapLatchCoupling,
             }),
           );
           path.skip();
@@ -2693,6 +2752,7 @@ export function transformJavaScriptWithBlaShield(
         fine: wantsFineSplit(val),
         ...(intensity === "bankrupt" ? { mask: true } : {}),
         seedLowByte: expectedSeedLowByte,
+        heapLatch: heapLatchCoupling,
       });
       // `<a title="…">`: an attribute holds a string or a `{…}` container,
       // never a bare expression. The parser has already decoded entities.
@@ -2779,6 +2839,7 @@ export function transformJavaScriptWithBlaShield(
               fine: wantsFineSplit(val),
               ...(intensity === "bankrupt" ? { mask: true } : {}),
               seedLowByte: expectedSeedLowByte,
+              heapLatch: heapLatchCoupling,
             }),
           );
           path.skip();
@@ -2845,6 +2906,7 @@ export function transformJavaScriptWithBlaShield(
       const source = buildCombinatorialStringAst(pattern, prng, resolveSeedForPath(path), {
         fine: true,
         seedLowByte: expectedSeedLowByte,
+        heapLatch: heapLatchCoupling,
       });
       path.replaceWith(
         t.newExpression(
@@ -2915,7 +2977,13 @@ export function transformJavaScriptWithBlaShield(
   // names onto the class scope with the SAME binding object; renaming there a second
   // time with a fresh PRNG name desyncs `class Foo` from `new Foo()` (issue #40).
   const exportedNameSet = new Set(exportedSymbolsBefore);
-  const generatedNames = new Set<string>([seedVarName]);
+  const generatedNames = new Set<string>([
+    seedVarName,
+    hoistedSeedName,
+    corpusDigestVarName,
+    memoryDiffShield.heapObjectName,
+    memoryDiffShield.stepperFunctionName,
+  ]);
   for (const info of fnLocalSeedByBody.values()) {
     generatedNames.add(info.localSeedName);
   }
@@ -3347,16 +3415,25 @@ export function transformJavaScriptWithBlaShield(
     selfSealEnabled = true;
     selfSealBindingName = seal.bindingName;
   }
+  // Initialize the rolling shadow heap ahead of `seedVarName` so `seedVarName`
+  // performs a genuine live read of the heap's rolling `Uint32Array` latch
+  // (preventing static private-state stripping and top-level known-bits folding).
+  mirageLines.push(memoryDiffShield.heapInitCode);
+  mirageLines.push(
+    `const ${corpusDigestVarName} = ${deceptionSuite.cognitiveArmor.digestFunctionName}(0);`,
+  );
+  const latchDeltaExpr = `(((${memoryDiffShield.heapObjectName}.${memoryDiffShield.latchPropertyName}[0] ^ ${memoryDiffShield.heapObjectName}.${memoryDiffShield.latchPropertyName}[1]) ^ ${memoryDiffShield.latchInvariantByte}) & 255)`;
+  const digestDeltaExpr = `((${corpusDigestVarName} ^ ${deceptionSuite.cognitiveArmor.expectedDigest}) & -2)`;
   if (selfSealEnabled && selfSealBindingName) {
     mirageLines.push(
-      `const ${seedVarName} = ((${opaqueSeedBase} ^ (${selfSealBindingName} >>> 0)) ^ ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+      `const ${seedVarName} = ((${opaqueSeedBase} ^ (${selfSealBindingName} >>> 0) ^ ${digestDeltaExpr} ^ ${latchDeltaExpr}) ^ (${corpusDigestVarName} === ${deceptionSuite.cognitiveArmor.expectedDigest} ? 1 : 0));`,
     );
   } else {
     mirageLines.push(
-      `const ${seedVarName} = (${opaqueSeedBase} | ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
+      `const ${seedVarName} = ((${opaqueSeedBase} ^ ${digestDeltaExpr} ^ ${latchDeltaExpr}) | (${corpusDigestVarName} === ${deceptionSuite.cognitiveArmor.expectedDigest} ? 1 : 0));`,
     );
   }
-  mirageLines.push(memoryDiffShield.code);
+  mirageLines.push(memoryDiffShield.stepperCode);
   const channelsToMirror =
     observedIpcChannels.size > 0
       ? [...observedIpcChannels]
@@ -3636,10 +3713,7 @@ export function transformJavaScriptWithBlaShield(
 
   const topEnd =
     seedInjectIndex >= 0
-      ? Math.min(
-          sanitizedInjectedStatements.length,
-          seedInjectIndex + 1 /* seed */ + 1 /* shadow heap usually follows */,
-        )
+      ? Math.min(sanitizedInjectedStatements.length, seedInjectIndex + 1)
       : Math.min(4, sanitizedInjectedStatements.length);
   const topDecls = sanitizedInjectedStatements.slice(0, topEnd);
   const restInjected = sanitizedInjectedStatements.slice(topEnd);

@@ -17,22 +17,23 @@ function deriveInlineAffineTuple(k: number): {
 }
 
 /**
- * Generates JavaScript/TypeScript number-theoretic & Mixed Boolean-Arithmetic (MBA)
+ * Generates JavaScript/TypeScript full-width Mixed Boolean-Arithmetic (MBA)
  * opaque predicate expressions that always evaluate to `false` or `true` at runtime
- * in O(1), while defeating both static AST folding and canonical MBA rule tables:
- * - Variant 0: Quadratic non-residue modulo 7 (`7 * x^2 - 1 !== y^2`)
- * - Variant 1: Parameterized affine MBA over Z_{2^32} (`mInv * (m*(x^k) + 2m*(x&k) + c) + d === x+k`)
- * - Variant 2: Unsigned-domain MBA inequality (`(u | (u - 1)) >= (u ^ (u - 1))` over uint32,
- *   exploiting signed-vs-unsigned bit-31 misjudgment in LLM static reasoning)
- * - Variant 3: Parameterized affine OR-XOR-AND MBA identity (`mInv * (m*(x|k) - m*(x&k) + c) + d === x^k`)
+ * in O(1), while defeating static AST folding, canonical regex tables, and low-bit
+ * known-bits enumeration (no small `& mask` reduction):
+ * - Variant 0: Parameterized affine OR+AND=ADD MBA over Z_{2^32}
+ * - Variant 1: Parameterized affine XOR+2*AND=ADD MBA over Z_{2^32}
+ * - Variant 2: Unsigned-domain MBA inequality (`(u | (u - 1)) >= (u ^ (u - 1))` over uint32)
+ * - Variant 3: Parameterized affine OR-AND=XOR MBA over Z_{2^32}
  */
 export function generateJsOpaqueFalseExpression(prng: SeededPrng, seedVar = "k"): string {
   const k = prng.nextInt(3, 97);
   const variant = prng.nextInt(0, 3);
   switch (variant) {
-    case 0:
-      // 7 * x^2 - 1 === y^2 has no integer solutions mod 7 (since -1 is not a quadratic residue mod 7)
-      return `(Math.imul(7, Math.imul(${seedVar} | ${k}, ${seedVar} | ${k})) - 1 === Math.imul(${seedVar} ^ ${k + 1}, ${seedVar} ^ ${k + 1}))`;
+    case 0: {
+      const { m, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x6d);
+      return `(((Math.imul(${mInv}, (Math.imul(${m}, (${seedVar} | ${k})) + Math.imul(${m}, (${seedVar} & ${k})) + ${c}) | 0) + ${d}) | 0) !== ((${seedVar} + ${k}) | 0))`;
+    }
     case 1: {
       const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k);
       return `(((Math.imul(${mInv}, (Math.imul(${m}, (${seedVar} ^ ${k})) + Math.imul(${m2}, (${seedVar} & ${k})) + ${c}) | 0) + ${d}) | 0) !== ((${seedVar} + ${k}) | 0))`;
@@ -51,7 +52,7 @@ export function generateJsOpaqueFalseExpression(prng: SeededPrng, seedVar = "k")
 
 export function generateJsOpaqueTrueExpression(prng: SeededPrng, seedVar = "k"): string {
   const k = prng.nextInt(5, 89);
-  const variant = prng.nextInt(0, 2);
+  const variant = prng.nextInt(0, 3);
   switch (variant) {
     case 0: {
       const u = `(((${seedVar} ^ ${k * 0x045d9f3b}) >>> 0))`;
@@ -61,6 +62,10 @@ export function generateJsOpaqueTrueExpression(prng: SeededPrng, seedVar = "k"):
     case 1: {
       const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k);
       return `(((Math.imul(${mInv}, (Math.imul(${m}, (${seedVar} ^ ${k})) + Math.imul(${m2}, (${seedVar} & ${k})) + ${c}) | 0) + ${d}) | 0) === ((${seedVar} + ${k}) | 0))`;
+    }
+    case 2: {
+      const { m, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x6d);
+      return `(((Math.imul(${mInv}, (Math.imul(${m}, (${seedVar} | ${k})) + Math.imul(${m}, (${seedVar} & ${k})) + ${c}) | 0) + ${d}) | 0) === ((${seedVar} + ${k}) | 0))`;
     }
     default: {
       const { m, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x33);
@@ -73,24 +78,21 @@ export function generatePythonOpaqueFalseExpression(prng: SeededPrng, seedVar = 
   const variant = prng.nextInt(0, 3);
   const k = prng.nextInt(3, 97);
   if (variant === 1) {
-    // Odd square mod 8 is always 1 across all Python integers (positive and negative).
-    const mask = prng.nextInt(0x101, 0x3fffffff) & ~1;
-    const odd = `(((${seedVar} ^ ${mask}) | 1))`;
-    return `(((${odd} * ${odd}) & 7) != 1)`;
+    // Full-32-bit affine XOR + 2*AND = ADD identity over Z_{2^32}.
+    const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k);
+    return `(((${mInv} * ((${m} * (${seedVar} ^ ${k})) + (${m2} * (${seedVar} & ${k})) + ${c}) + ${d}) & 0xFFFFFFFF) != ((${seedVar} + ${k}) & 0xFFFFFFFF))`;
   }
   if (variant === 2) {
-    // Odd fourth power mod 16 is always 1 across all Python integers.
-    const mask = prng.nextInt(0x101, 0x3fffffff) & ~1;
-    const odd = `(((${seedVar} ^ ${mask}) | 1))`;
-    return `((((${odd} * ${odd}) * (${odd} * ${odd})) & 15) != 1)`;
+    // Full-32-bit affine OR - AND = XOR identity over Z_{2^32}.
+    const { m, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x5a);
+    return `(((${mInv} * ((${m} * (${seedVar} | ${k})) - (${m} * (${seedVar} & ${k})) + ${c}) + ${d}) & 0xFFFFFFFF) != ((${seedVar} ^ ${k}) & 0xFFFFFFFF))`;
   }
   if (variant === 3) {
-    // Consecutive integer product is always even across all Python integers.
-    const mask = prng.nextInt(0x101, 0x3fffffff);
-    const y = `((${seedVar} ^ ${mask}))`;
-    return `(((${y} * (${y} + 1)) & 1) != 0)`;
+    // Full-32-bit affine OR + AND = ADD identity over Z_{2^32}.
+    const { m, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x6d);
+    return `(((${mInv} * ((${m} * (${seedVar} | ${k})) + (${m} * (${seedVar} & ${k})) + ${c}) + ${d}) & 0xFFFFFFFF) != ((${seedVar} + ${k}) & 0xFFFFFFFF))`;
   }
-  const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k);
+  const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k ^ 0x2b);
   const u = `(((${seedVar} ^ ${k * 0x119de1f3}) & 0xFFFFFFFF))`;
   return `(((${u} | ((${u} - 1) & 0xFFFFFFFF)) < (${u} ^ ((${u} - 1) & 0xFFFFFFFF))) or (((${mInv} * ((${m} * (${seedVar} ^ ${k})) + (${m2} * (${seedVar} & ${k})) + ${c}) + ${d}) & 0xFFFFFFFF) != ((${seedVar} + ${k}) & 0xFFFFFFFF)))`;
 }

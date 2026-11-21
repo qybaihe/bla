@@ -203,9 +203,10 @@ describe("v3.2.3 Counter-Critique Reinforcements & Issue #157 PE Hardening", () 
     expect(intact.computePrice(20, 1000)).toBe(19500);
 
     // Find an injected decoy function in the seed initializer array and strip its declaration:
-    const seedMatch = /const\s+\w+\s*=\s*\d+\s*\|\s*\(\[([A-Za-z0-9_$,\s]+)\]\.every/.exec(
-      res.code,
-    );
+    const seedMatch =
+      /const\s+\w+\s*=\s*\(?\d+[\s\S]{0,260}?\|\s*\(\[([A-Za-z0-9_$,\s]+)\]\.every/.exec(
+        res.code,
+      );
     expect(seedMatch).not.toBeNull();
     const entangledFns = seedMatch![1]!
       .split(",")

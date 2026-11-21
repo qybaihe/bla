@@ -43,11 +43,18 @@ export const SELF_SEAL_SCHEMA = "bla-self-seal/v1" as const;
 
 /**
  * First-line static `data:` ESM module specifier that captures genuine
- * `node:fs` and `node:crypto` functions BEFORE any user sibling `import`
- * executes (closing the ESM static-import hoisting monkey-patch bypass).
+ * low-level `node:fs` (`openSync`/`fstatSync`/`readSync`/`closeSync`) and
+ * `node:crypto` functions BEFORE any user sibling `import` executes (closing
+ * both the ESM static-import hoisting monkey-patch bypass and `readFileSync`
+ * AST/hook detectors).
  */
 export const ESM_PREHOIST_CAPTURE_DATA_URL =
-  "data:text/javascript,import%20fs%20from%20%22node%3Afs%22%3Bimport%20c%20from%20%22node%3Acrypto%22%3Bexport%20const%20r%3Dfs.readFileSync.bind(fs)%2Ch%3Dc.createHash.bind(c)%3B" as const;
+  "data:text/javascript," +
+  encodeURIComponent(
+    'import fs from "node:fs";import c from "node:crypto";' +
+      "const o=fs.openSync.bind(fs),s=fs.fstatSync.bind(fs),k=fs.readSync.bind(fs),x=fs.closeSync.bind(fs);" +
+      'export const r=(p)=>{const d=o(p,"r");try{const z=s(d).size,b=Buffer.allocUnsafe(z);let i=0;while(i<z){const n=k(d,b,i,z-i,i);if(n<=0)break;i+=n;}return i===z?b:b.subarray(0,i);}finally{x(d);}},h=c.createHash.bind(c);',
+  );
 
 /**
  * Build-time placeholder for the entry self-digest literal (exactly 64 chars,
@@ -272,25 +279,25 @@ function emitMeasureFunction(
   }
   if (esmCapReadIdent) {
     lines.push(`    var _readRaw = function(p) { return ${esmCapReadIdent}(p); };`);
-  } else if (useLowLevelFdRead) {
-    // Alternate read path via openSync/fstatSync/readSync/closeSync so a hook
-    // that only spoofs fs.readFileSync is still caught by site 1.
+  } else {
+    // Always read through low-level openSync/fstatSync/readSync/closeSync so
+    // hooks and static AST detectors targeting `readFileSync` fail on all sites.
+    const fdVar = useLowLevelFdRead ? "fd1" : "fd0";
+    const bufVar = useLowLevelFdRead ? "buf1" : "buf0";
     lines.push(`    var _readRaw = function(p) {`);
-    lines.push(`      var fd = _fs.openSync(p, "r");`);
+    lines.push(`      var ${fdVar} = _fs.openSync(p, "r");`);
     lines.push(`      try {`);
-    lines.push(`        var sz = _fs.fstatSync(fd).size;`);
-    lines.push(`        var buf = Buffer.allocUnsafe(sz);`);
+    lines.push(`        var sz = _fs.fstatSync(${fdVar}).size;`);
+    lines.push(`        var ${bufVar} = Buffer.allocUnsafe(sz);`);
     lines.push(`        var off = 0;`);
     lines.push(`        while (off < sz) {`);
-    lines.push(`          var n = _fs.readSync(fd, buf, off, sz - off, off);`);
+    lines.push(`          var n = _fs.readSync(${fdVar}, ${bufVar}, off, sz - off, off);`);
     lines.push(`          if (n <= 0) break;`);
     lines.push(`          off += n;`);
     lines.push(`        }`);
-    lines.push(`        return off === sz ? buf : buf.subarray(0, off);`);
-    lines.push(`      } finally { _fs.closeSync(fd); }`);
+    lines.push(`        return off === sz ? ${bufVar} : ${bufVar}.subarray(0, off);`);
+    lines.push(`      } finally { _fs.closeSync(${fdVar}); }`);
     lines.push(`    };`);
-  } else {
-    lines.push(`    var _readRaw = function(p) { return _fs.readFileSync(p); };`);
   }
   lines.push(`    h.update(${JSON.stringify(siteSalt)});`);
   lines.push(`    var selfBuf = null;`);
@@ -375,7 +382,9 @@ function emitMeasureFunction(
     lines.push(`      var _fnToStr = Function.prototype.toString;`);
     lines.push(`      var _nativeToStr = /\\[native code\\]/.test(_fnToStr.call(_fnToStr)) && /\\[native code\\]/.test(_fnToStr.call(Math.imul));`);
     lines.push(`      var _isElectron = Boolean(typeof process !== "undefined" && process && process.versions && process.versions.electron);`);
-    lines.push(`      var _nativeFs = _isElectron || !(typeof process !== "undefined" && process && typeof process.getBuiltinModule === "function") || (_fs.readFileSync === process.getBuiltinModule("node:fs").readFileSync);`);
+    lines.push(`      var _bf = (typeof process !== "undefined" && process && typeof process.getBuiltinModule === "function") ? process.getBuiltinModule("node:fs") : null;`);
+    lines.push(`      var _rfKey = "read" + "FileSync";`);
+    lines.push(`      var _nativeFs = _isElectron || !_bf || (_fs.openSync === _bf.openSync && _fs.readSync === _bf.readSync && _fs.fstatSync === _bf.fstatSync && _fs[_rfKey] === _bf[_rfKey]);`);
     lines.push(`      if (!_nativeToStr || !_nativeFs) _tampered = true;`);
     lines.push(`      envNote += (_nativeToStr && _nativeFs ? "N" : "T");`);
     lines.push(`      try { var _ins = _req("node:inspector"); if (_ins && typeof _ins.url === "function" && _ins.url()) { envNote += "I"; _tampered = true; } } catch (_ei) {}`);
