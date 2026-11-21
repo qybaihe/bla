@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import type {
   VerificationAgentAction,
   VerificationCheck,
@@ -13,15 +13,34 @@ import {
 } from "./defense-score-honesty.js";
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
+import { inspectWasmBinary, readWasmCustomSectionContent } from "../shields/formats/wasm.js";
 import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
 import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
-import { isWasmSidecarLoaderHookWired, isPycSidecarLoaderHookWired, isGgufSidecarLoaderHookWired, isSafetensorsSidecarLoaderHookWired } from "../shields/runtime/sidecar-entangle.js";
+import {
+  BUN_SIDECAR_COMPANION_SUFFIX,
+  WASM_SIDECAR_SECTION_NAME,
+  extractDexSidecarStringPoolNote,
+  extractGgufSidecarMetadataNote,
+  extractPycSidecarMarshalNote,
+  extractSafetensorsSidecarMetadataNote,
+  extractSqliteSidecarSchemaComment,
+  isGgufSidecarLoaderHookWired,
+  isPycSidecarLoaderHookWired,
+  isSafetensorsSidecarLoaderHookWired,
+  isWasmSidecarLoaderHookWired,
+} from "../shields/runtime/sidecar-entangle.js";
 
 export interface VerifyTargetOptions {
   readonly selfSealEnabled?: boolean;
   readonly sidecarEntangleEnabled?: boolean;
   readonly wasmExportRenameApplied?: boolean;
   readonly numericTemplateLeakKnown?: boolean;
+  /**
+   * When true (default for CLI `bla verify`), auto-detect verified on-disk
+   * self-seal, sidecar-entangle bindings, and WASM export renames without
+   * requiring caller metadata flags.
+   */
+  readonly autoDetectBindings?: boolean;
 }
 
 /**
@@ -119,30 +138,44 @@ export function verifyTarget(
     baselineSource,
   });
 
+  let targetBytes: Buffer | undefined;
+  try {
+    targetBytes = readFileSync(absTarget);
+  } catch {
+    targetBytes = undefined;
+  }
+
+  const autoDetect = options.autoDetectBindings === true;
+  // Self-seal detection & verification:
+  // - When `autoDetectBindings` is enabled (CLI `bla verify`), auto-detect
+  //   verified canonical self-digest markers on JS/TS & Python files.
+  // - Whenever `selfSealEnabled` is true (or `autoDetect` is true) and a
+  //   canonical self-digest marker is present on disk, verify it offline so a
+  //   tampered file can never claim self-seal.
   let effectiveSelfSealEnabled = options.selfSealEnabled === true;
   if (
-    effectiveSelfSealEnabled &&
+    targetBytes &&
+    (effectiveSelfSealEnabled || (autoDetect && options.selfSealEnabled !== false)) &&
     (afterAudit.detectedFormat === "javascript" ||
-      afterAudit.detectedFormat === "typescript")
+      afterAudit.detectedFormat === "typescript" ||
+      afterAudit.detectedFormat === "python-source")
   ) {
-    try {
-      const targetBytes = readFileSync(absTarget);
-      if (/\bselfExpected\s*=/.test(targetBytes.toString("latin1"))) {
-        const sealVerify = verifySelfSealSelfDigest(targetBytes);
-        if (!sealVerify.verified) {
-          effectiveSelfSealEnabled = false;
-          checks.push({
-            id: "self-seal-digest-integrity",
-            name: "Self-Seal Canonical Self-Digest Integrity",
-            targetReaComponent: "runtime/self-seal.ts",
-            passed: false,
-            details:
-              "Embedded selfExpected canonical SHA-256 digest failed offline verification (file tampered or unfinalized after self-seal)",
-          });
-        }
+    const latin1 = targetBytes.toString("latin1");
+    if (/(?:var\s+selfExpected|self_expected)\s*=/.test(latin1)) {
+      const sealVerify = verifySelfSealSelfDigest(targetBytes);
+      if (sealVerify.verified) {
+        effectiveSelfSealEnabled = true;
+      } else {
+        effectiveSelfSealEnabled = false;
+        checks.push({
+          id: "self-seal-digest-integrity",
+          name: "Self-Seal Canonical Self-Digest Integrity",
+          targetReaComponent: "runtime/self-seal.ts",
+          passed: false,
+          details:
+            "Embedded selfExpected canonical SHA-256 digest failed offline verification (file tampered or unfinalized after self-seal)",
+        });
       }
-    } catch {
-      /* ignore unreadable path */
     }
   }
 
@@ -163,7 +196,7 @@ export function verifyTarget(
   if (isNativeFormat) {
     try {
       nativeMappedSectionInjected = Boolean(
-        inspectNativeBinary(readFileSync(absTarget)).nativeMappedSectionInjected,
+        inspectNativeBinary(targetBytes ?? readFileSync(absTarget)).nativeMappedSectionInjected,
       );
     } catch {
       nativeMappedSectionInjected = false;
@@ -174,7 +207,7 @@ export function verifyTarget(
   if (afterAudit.detectedFormat === "wasm") {
     try {
       wasmSidecarLoaderHookApplied = isWasmSidecarLoaderHookWired({
-        wasmBytes: readFileSync(absTarget),
+        wasmBytes: targetBytes ?? readFileSync(absTarget),
         wasmPath: absTarget,
       });
     } catch {
@@ -186,7 +219,7 @@ export function verifyTarget(
   if (afterAudit.detectedFormat === "python-pyc") {
     try {
       pycSidecarLoaderHookApplied = isPycSidecarLoaderHookWired({
-        pycBytes: readFileSync(absTarget),
+        pycBytes: targetBytes ?? readFileSync(absTarget),
         pycPath: absTarget,
       });
     } catch {
@@ -198,7 +231,7 @@ export function verifyTarget(
   if (afterAudit.detectedFormat === "model-gguf") {
     try {
       ggufSidecarLoaderHookApplied = isGgufSidecarLoaderHookWired({
-        ggufBytes: readFileSync(absTarget),
+        ggufBytes: targetBytes ?? readFileSync(absTarget),
         ggufPath: absTarget,
       });
     } catch {
@@ -210,11 +243,132 @@ export function verifyTarget(
   if (afterAudit.detectedFormat === "model-safetensors") {
     try {
       safetensorsSidecarLoaderHookApplied = isSafetensorsSidecarLoaderHookWired({
-        safetensorsBytes: readFileSync(absTarget),
+        safetensorsBytes: targetBytes ?? readFileSync(absTarget),
         safetensorsPath: absTarget,
       });
     } catch {
       safetensorsSidecarLoaderHookApplied = false;
+    }
+  }
+
+  // Auto-detect on-disk sidecar entanglement when `autoDetectBindings` is set
+  // (CLI `bla verify <protected> <original>`) and caller did not override.
+  let effectiveSidecarEntangleEnabled = options.sidecarEntangleEnabled === true;
+  if (autoDetect && options.sidecarEntangleEnabled === undefined && targetBytes) {
+    try {
+      const fmt = afterAudit.detectedFormat;
+      if (fmt === "javascript" || fmt === "typescript") {
+        const text = targetBytes.toString("latin1");
+        if (
+          /_verifySiblingDigest_[0-9a-f]{8}/.test(text) &&
+          text.includes("integrity binding mismatch")
+        ) {
+          effectiveSidecarEntangleEnabled = true;
+        }
+      } else if (fmt === "python-source") {
+        const text = targetBytes.toString("latin1");
+        if (
+          /_verify_sibling_digest_[0-9a-f]{8}/.test(text) &&
+          text.includes("integrity binding mismatch")
+        ) {
+          effectiveSidecarEntangleEnabled = true;
+        }
+      } else if (fmt === "wasm") {
+        effectiveSidecarEntangleEnabled =
+          wasmSidecarLoaderHookApplied ||
+          readWasmCustomSectionContent(targetBytes, WASM_SIDECAR_SECTION_NAME) !== null;
+      } else if (fmt === "python-pyc") {
+        effectiveSidecarEntangleEnabled =
+          pycSidecarLoaderHookApplied || extractPycSidecarMarshalNote(targetBytes) !== null;
+      } else if (fmt === "model-gguf") {
+        effectiveSidecarEntangleEnabled =
+          ggufSidecarLoaderHookApplied || extractGgufSidecarMetadataNote(targetBytes) !== null;
+      } else if (fmt === "model-safetensors") {
+        effectiveSidecarEntangleEnabled =
+          safetensorsSidecarLoaderHookApplied ||
+          extractSafetensorsSidecarMetadataNote(targetBytes) !== null;
+      } else if (fmt === "android-dex") {
+        effectiveSidecarEntangleEnabled = extractDexSidecarStringPoolNote(targetBytes) !== null;
+      } else if (fmt === "sqlite") {
+        effectiveSidecarEntangleEnabled = extractSqliteSidecarSchemaComment(targetBytes) !== null;
+      } else if (fmt === "native-elf" || fmt === "native-macho" || fmt === "native-pe") {
+        effectiveSidecarEntangleEnabled = existsSync(`${absTarget}${BUN_SIDECAR_COMPANION_SUFFIX}`);
+      }
+      // Also check whether a sibling/parent `integrity-coverage.json` from
+      // `bla harden --self-seal --sidecar-entangle` pins this artifact's exact SHA-256.
+      if (!effectiveSidecarEntangleEnabled) {
+        let dir = dirname(absTarget);
+        for (let depth = 0; depth < 3; depth++) {
+          const covPath = join(dir, "integrity-coverage.json");
+          if (existsSync(covPath)) {
+            const cov = JSON.parse(readFileSync(covPath, "utf8")) as {
+              readonly expectedSha256?: Record<string, string>;
+              readonly checks?: readonly { readonly target?: string; readonly expectedSha256?: string }[];
+            };
+            const targetSha = afterAudit.sha256.toLowerCase();
+            const pinned =
+              Object.values(cov.expectedSha256 ?? {}).some(
+                (v) => typeof v === "string" && v.toLowerCase() === targetSha,
+              ) ||
+              (cov.checks ?? []).some(
+                (c) => typeof c.expectedSha256 === "string" && c.expectedSha256.toLowerCase() === targetSha,
+              );
+            if (pinned) effectiveSidecarEntangleEnabled = true;
+            break;
+          }
+          const parent = dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
+      }
+      // Also check whether a sibling Python entry in the same directory binds
+      // this artifact in its `_sc_sidecars_<8hex> = [...]` list.
+      if (!effectiveSidecarEntangleEnabled) {
+        const selfBase = basename(absTarget);
+        const selfDir = dirname(absTarget);
+        const pySiblings = readdirSync(selfDir)
+          .filter((n) => n.endsWith(".py") && n !== selfBase)
+          .slice(0, 16);
+        for (const pyName of pySiblings) {
+          const pyPath = join(selfDir, pyName);
+          try {
+            if (statSync(pyPath).size > 1024 * 1024) continue;
+            const pyText = readFileSync(pyPath, "latin1");
+            const sidecarMatch = pyText.match(/_sc_sidecars_[0-9a-f]{8}\s*=\s*(\[[^\n]+\])/);
+            if (!sidecarMatch || !pyText.includes("integrity binding mismatch")) continue;
+            const list = JSON.parse(sidecarMatch[1]!) as unknown;
+            if (Array.isArray(list) && list.includes(selfBase)) {
+              effectiveSidecarEntangleEnabled = true;
+              break;
+            }
+          } catch {
+            /* ignore unreadable sibling */
+          }
+        }
+      }
+    } catch {
+      /* ignore auto-detect read/parse error */
+    }
+  }
+
+  let effectiveWasmExportRenameApplied = options.wasmExportRenameApplied === true;
+  if (
+    autoDetect &&
+    options.wasmExportRenameApplied === undefined &&
+    afterAudit.detectedFormat === "wasm" &&
+    targetBytes &&
+    originalPath
+  ) {
+    try {
+      const origExports = new Set(inspectWasmBinary(readFileSync(resolve(originalPath))).exportNames);
+      const targetExports = inspectWasmBinary(targetBytes).exportNames.filter(
+        (n) => !n.startsWith("enclave_export_"),
+      );
+      if (targetExports.some((n) => !origExports.has(n))) {
+        effectiveWasmExportRenameApplied = true;
+      }
+    } catch {
+      /* ignore */
     }
   }
 
@@ -225,7 +379,7 @@ export function verifyTarget(
   ) {
     try {
       esmImportHoistBeforeHooks = jsModuleHasHoistedDependencyGraph(
-        readFileSync(absTarget, "utf8"),
+        targetBytes ? targetBytes.toString("utf8") : readFileSync(absTarget, "utf8"),
         absTarget,
       );
     } catch {
@@ -236,7 +390,7 @@ export function verifyTarget(
   let sqliteTrapMode: "none" | "stock" | "eval" | undefined;
   if (afterAudit.detectedFormat === "sqlite") {
     try {
-      sqliteTrapMode = inspectSqliteBuffer(readFileSync(absTarget)).trapMode;
+      sqliteTrapMode = inspectSqliteBuffer(targetBytes ?? readFileSync(absTarget)).trapMode;
     } catch {
       sqliteTrapMode = undefined;
     }
@@ -246,8 +400,8 @@ export function verifyTarget(
     detectedFormat: afterAudit.detectedFormat,
     ...(sqliteTrapMode !== undefined ? { sqliteTrapMode } : {}),
     selfSealEnabled: effectiveSelfSealEnabled,
-    sidecarEntangleEnabled: options.sidecarEntangleEnabled === true,
-    wasmExportRenameApplied: options.wasmExportRenameApplied === true,
+    sidecarEntangleEnabled: effectiveSidecarEntangleEnabled,
+    wasmExportRenameApplied: effectiveWasmExportRenameApplied,
     numericTemplateLeakKnown: options.numericTemplateLeakKnown === true,
     ...(nativeMappedSectionInjected !== undefined
       ? { nativeMappedSectionInjected }
@@ -260,6 +414,24 @@ export function verifyTarget(
   });
 
   const agentActions: VerificationAgentAction[] = [];
+  if (
+    beforeAudit &&
+    beforeAudit.protectionStatus === "BLA_PROTECTED" &&
+    afterAudit.protectionStatus !== "BLA_PROTECTED"
+  ) {
+    agentActions.push({
+      id: "reversed-verify-arguments",
+      priority: "high",
+      reason:
+        "Arguments appear reversed: targetPath is unprotected while originalPath is already BLA_PROTECTED.",
+      instruction: `Swap the two paths — usage is \`bla verify <protected-target> <original>\` (try \`bla verify ${resolve(originalPath!)} ${absTarget}\`).`,
+      recommendedMcpTool: "bla_verify",
+      recommendedArgs: {
+        target_path: resolve(originalPath!),
+        original_path: absTarget,
+      },
+    });
+  }
   for (const check of checks) {
     if (!check.passed) {
       agentActions.push({

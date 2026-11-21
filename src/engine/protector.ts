@@ -26,7 +26,10 @@ import type {
   ReaAttackVectorId,
 } from "../core/types.js";
 import { generateChaffPayloads } from "../shields/chaff/chaff-generator.js";
-import { transformJavaScriptWithBlaShield } from "../shields/javascript/ast-shield.js";
+import {
+  detectJsCarrierForSource,
+  transformJavaScriptWithBlaShield,
+} from "../shields/javascript/ast-shield.js";
 import { refineJsCarrierForRuntimePaths } from "../shields/javascript/node-runtime-carrier.js";
 import { generateHoneySourceMap } from "../shields/formats/sourcemap.js";
 import { packAsarBuffer, unpackAsarBuffer, validateAsarProtectionInput, type VirtualAsarFile } from "../shields/formats/asar.js";
@@ -912,6 +915,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let wasmExportDecoysInjected = 0;
   /** Inline `<script>` bodies whose AST shield threw and were shipped unchanged. */
   let inlineScriptsFailed = 0;
+  let selfSealApplied = false;
   let sidecarEntangleApplied = false;
   let wasmSidecarLoaderHookApplied = false;
   let pycSidecarLoaderHookApplied = false;
@@ -972,12 +976,22 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     }
     const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
     const selfSealOpt = selfSealTransformOption(options, absOutput);
+    // Refine JS carrier against nearest package.json ("type": "module") BEFORE
+    // running the AST shield so `.js` files inside ESM packages without static
+    // import/export still get ESM `createRequire(import.meta.url)` self-seal
+    // instead of CJS `require` (which silently fails open under ESM).
+    const preRefinedCarrier = refineJsCarrierForRuntimePaths(
+      detectJsCarrierForSource(panelSafe, basename(absInput)),
+      [absOutput, absInput],
+    );
     const transformed = transformJavaScriptWithBlaShield(panelSafe, {
       intensity,
       seed,
       filename: basename(absInput),
+      ...(preRefinedCarrier === "module" ? { sourceType: "module" } : {}),
       ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
     });
+    if (transformed.selfSealEnabled) selfSealApplied = true;
     let finalCode = transformed.code;
 
     if (options.honeySourceMaps !== false) {
@@ -1367,7 +1381,9 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       intensity,
       seed,
       weaveDecoys: options.weaveDecoys === true,
+      selfSeal: options.selfSeal === true,
     });
+    if (options.selfSeal === true) selfSealApplied = true;
     let finalPy = res.code;
     {
       const entangled = applySidecarEntangleToPython(finalPy, options, absOutput, seed);
@@ -1850,7 +1866,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     detectedFormat: format,
     intensity,
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
-    ...(options.selfSeal === true ? { selfSeal: true as const } : {}),
+    ...(selfSealApplied ? { selfSeal: true as const } : {}),
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),

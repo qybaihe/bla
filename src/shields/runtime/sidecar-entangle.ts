@@ -84,6 +84,98 @@ import {
   plantSqliteSidecarSchemaComment,
   stripSqliteSidecarSchemaComment as dropSqliteSidecarSchemaView,
 } from "../formats/sqlite.js";
+import { ESM_PREHOIST_CAPTURE_DATA_URL } from "./self-seal.js";
+
+/**
+ * Split a JavaScript source string into its leading prologue (optional shebang,
+ * leading comments/whitespace, and any leading directive literals such as
+ * `"use strict"`, `"use client"`, `"use server"` — with or without a trailing
+ * newline) and the remaining body. Ensures prepended integrity preambles never
+ * break strict mode, React Server Component directives, or preserved license
+ * banners in either CJS or ESM.
+ */
+function splitJsLeadingPrologue(source: string): {
+  readonly prologue: string;
+  readonly body: string;
+} {
+  let pos = 0;
+  const len = source.length;
+  if (source.startsWith("#!")) {
+    const nl = source.indexOf("\n");
+    pos = nl === -1 ? len : nl + 1;
+  }
+  const skipWsAndComments = (start: number): number => {
+    let i = start;
+    while (i < len) {
+      const ch = source[i]!;
+      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "\f" || ch === "\v" || ch === "\ufeff") {
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && source[i + 1] === "/") {
+        const nl = source.indexOf("\n", i + 2);
+        i = nl === -1 ? len : nl + 1;
+        continue;
+      }
+      if (ch === "/" && source[i + 1] === "*") {
+        const end = source.indexOf("*/", i + 2);
+        if (end === -1) return len;
+        i = end + 2;
+        continue;
+      }
+      break;
+    }
+    return i;
+  };
+  let directiveEnd = pos;
+  let scan = skipWsAndComments(pos);
+  while (scan < len) {
+    const quote = source[scan];
+    if (quote !== '"' && quote !== "'") break;
+    let end = scan + 1;
+    let escaped = false;
+    while (end < len) {
+      const c = source[end]!;
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === "\n" || c === "\r") {
+        end = len + 1;
+        break;
+      } else if (c === quote) {
+        break;
+      }
+      end += 1;
+    }
+    if (end >= len || source[end] !== quote) break;
+    const literalValue = source.slice(scan + 1, end);
+    if (!/^use\s+[a-z0-9_-]+$/i.test(literalValue)) break;
+    let after = end + 1;
+    while (after < len && (source[after] === " " || source[after] === "\t")) after += 1;
+    if (source[after] === ";") {
+      after += 1;
+      while (after < len && (source[after] === " " || source[after] === "\t")) after += 1;
+      if (source[after] === "\r" && source[after + 1] === "\n") after += 2;
+      else if (source[after] === "\n" || source[after] === "\r") after += 1;
+    } else if (source[after] === "\r" && source[after + 1] === "\n") {
+      after += 2;
+    } else if (source[after] === "\n" || source[after] === "\r") {
+      after += 1;
+    } else if (after < len) {
+      // Not a standalone directive statement (e.g. `"use strict" + x`).
+      break;
+    }
+    directiveEnd = after;
+    scan = skipWsAndComments(after);
+  }
+  let prologue = source.slice(0, directiveEnd);
+  const body = source.slice(directiveEnd);
+  if (prologue.length > 0 && !prologue.endsWith("\n") && !prologue.endsWith("\r")) {
+    prologue += "\n";
+  }
+  return { prologue, body };
+}
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
 
@@ -483,9 +575,17 @@ export function generateSidecarJsPreamble(
   const seedLiteral = JSON.stringify(seedTag);
   const isEsm = options.carrier === "module";
   const reqHelperAlias = `_resolveModuleRequire_${tag}`;
+  const capReadAlias = `_capRead_${tag}`;
+  const capHashAlias = `_capHash_${tag}`;
 
   const lines: string[] = [];
   if (isEsm) {
+    // Evaluate BEFORE any user sibling `import` (e.g. `./quota.mjs`), capturing
+    // unpatched `node:fs` and `node:crypto` references so a tampered hoisted
+    // sibling cannot spoof `fs.readFileSync` / `crypto.createHash`.
+    lines.push(
+      `import { r as ${capReadAlias}, h as ${capHashAlias} } from ${JSON.stringify(ESM_PREHOIST_CAPTURE_DATA_URL)};`,
+    );
     lines.push(`import { createRequire as ${reqHelperAlias} } from "node:module";`);
   }
   lines.push(`(function(){`);
@@ -494,12 +594,11 @@ export function generateSidecarJsPreamble(
   lines.push(`  try {`);
   if (isEsm) {
     lines.push(`    var _req = ${reqHelperAlias}(import.meta.url);`);
-    lines.push(`    var _c = _req("node:crypto");`);
-    lines.push(`    var _fs = _req("node:fs");`);
     lines.push(`    var _path = _req("node:path");`);
     lines.push(
       `    var _baseDir = _path.dirname(_req("node:url").fileURLToPath(import.meta.url));`,
     );
+    lines.push(`    var h = ${capHashAlias}("sha256");`);
   } else {
     lines.push(`    var _c = require("node:crypto");`);
     lines.push(`    var _fs = require("node:fs");`);
@@ -507,8 +606,8 @@ export function generateSidecarJsPreamble(
     lines.push(
       `    var _baseDir = (typeof __dirname === "string" ? __dirname : null);`,
     );
+    lines.push(`    var h = _c.createHash("sha256");`);
   }
-  lines.push(`    var h = _c.createHash("sha256");`);
   lines.push(`    var entryLabel = ${entryLiteral};`);
   lines.push(`    h.update(entryLabel);`);
   lines.push(`    h.update(String.fromCharCode(0));`);
@@ -522,7 +621,9 @@ export function generateSidecarJsPreamble(
   lines.push(`      h.update(sp);`);
   lines.push(`      h.update(String.fromCharCode(0));`);
   lines.push(
-    `      try { h.update(_fs.readFileSync(spAbs)); } catch (_e1) { h.update("missing:" + String(sp)); }`,
+    isEsm
+      ? `      try { h.update(${capReadAlias}(spAbs)); } catch (_e1) { h.update("missing:" + String(sp)); }`
+      : `      try { h.update(_fs.readFileSync(spAbs)); } catch (_e1) { h.update("missing:" + String(sp)); }`,
   );
   lines.push(`      h.update(String.fromCharCode(0));`);
   lines.push(`    }`);
@@ -608,13 +709,7 @@ export function bindSidecarEntanglement(
   });
   const entrySource =
     options.entrySource ?? new TextDecoder().decode(options.entryBytes);
-  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
-  const shebang = shebangMatch ? shebangMatch[0] : "";
-  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
-  const isEsm = options.carrier === "module";
-  const strictMatch = !isEsm ? afterShebang.match(/^["']use strict["'];?\r?\n/) : null;
-  const strict = strictMatch ? strictMatch[0] : "";
-  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
+  const { prologue, body } = splitJsLeadingPrologue(entrySource);
   const boundPlan: SidecarEntanglePlan = {
     ...plan,
     status: "bound",
@@ -624,7 +719,7 @@ export function bindSidecarEntanglement(
     plan: boundPlan,
     digest,
     inject,
-    code: `${shebang}${strict}${inject.preamble}\n${body}`,
+    code: `${prologue}${inject.preamble}\n${body}`,
   };
 }
 
@@ -709,21 +804,39 @@ export function generateSidecarPythonPreamble(
   const seedLiteral = JSON.stringify(seedTag);
   const expectedLiteral = JSON.stringify(expectedHex);
 
+  const allPySidecars = sidecars.length > 0 && sidecars.every((p) => /\.py$/i.test(p));
   const lines: string[] = [];
+  lines.push(`import builtins as _sc_bi_${tag}`);
   lines.push(`import hashlib as _sc_hashlib_${tag}`);
   lines.push(`import pathlib as _sc_pathlib_${tag}`);
   lines.push(`${bindingName} = 0`);
   lines.push(`try:`);
   lines.push(`    _sc_expected_${tag} = ${expectedLiteral}`);
+  // Prefer C-builtin/extension SHA-256 (`_hashlib` / `_sha256`) so dropping a
+  // spoofed `hashlib.py` into PYTHONPATH or CWD cannot forge the digest.
+  lines.push(`    _sc_sha256_${tag} = None`);
+  lines.push(`    try:`);
+  lines.push(`        _sc_sha256_${tag} = _sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("_hashlib"), "openssl_sha256", None)`);
+  lines.push(`    except _sc_bi_${tag}.Exception:`);
+  lines.push(`        _sc_sha256_${tag} = None`);
+  lines.push(`    if _sc_sha256_${tag} is None:`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_sha256_${tag} = _sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("_sha256"), "sha256", None)`);
+  lines.push(`        except _sc_bi_${tag}.Exception:`);
+  lines.push(`            _sc_sha256_${tag} = None`);
+  lines.push(`    if _sc_sha256_${tag} is None:`);
+  lines.push(`        _sc_sha256_${tag} = _sc_hashlib_${tag}.sha256`);
   // A bytecode-only tree (`python main.pyc`), a PyInstaller / cx_Freeze bundle
-  // (`sys.frozen`) or a Nuitka build (`__compiled__`) ships no sibling
-  // sources at all. There is nothing to hash there, and refusing to start an
-  // untouched program is a false alarm — so that one case is let through.
+  // (`sys.frozen`) or a Nuitka build (`__compiled__`) ships no sibling `.py`
+  // sources. Only waive when all missing sidecars are `.py` source files (never
+  // waive missing binary/model sidecars on a bare `.pyc` invocation).
   lines.push(
-    `    _sc_packaged_${tag} = bool(getattr(__import__("sys"), "frozen", False)) or ("__compiled__" in globals()) or str(globals().get("__file__", "")).endswith((".pyc", ".pyo"))`,
+    allPySidecars
+      ? `    _sc_packaged_${tag} = _sc_bi_${tag}.bool(_sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("sys"), "frozen", False)) or ("__compiled__" in _sc_bi_${tag}.globals()) or _sc_bi_${tag}.str(_sc_bi_${tag}.globals().get("__file__", "")).endswith((".pyc", ".pyo"))`
+      : `    _sc_packaged_${tag} = _sc_bi_${tag}.bool(_sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("sys"), "frozen", False)) or ("__compiled__" in _sc_bi_${tag}.globals())`,
   );
   lines.push(`    _sc_missing_${tag} = 0`);
-  lines.push(`    _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`    _sc_h_${tag} = _sc_sha256_${tag}()`);
   lines.push(`    _sc_entry_label_${tag} = ${entryLiteral}`);
   lines.push(`    _sc_h_${tag}.update(_sc_entry_label_${tag}.encode("utf-8"))`);
   lines.push(`    _sc_h_${tag}.update(b"\\x00")`);
@@ -737,42 +850,42 @@ export function generateSidecarPythonPreamble(
   lines.push(`            _sc_sp_path_${tag} = _sc_base_${tag} / _sc_sp_${tag}`);
   lines.push(`        try:`);
   lines.push(`            _sc_h_${tag}.update(_sc_sp_path_${tag}.read_bytes())`);
-  lines.push(`        except Exception:`);
+  lines.push(`        except _sc_bi_${tag}.Exception:`);
   // Inside a zipapp (.pyz) the siblings are archive members, not files: ask
   // the module's own loader for the same bytes before calling them missing.
   lines.push(`            try:`);
   lines.push(
-    `                _sc_h_${tag}.update(__loader__.get_data(__import__("os").path.join(__import__("os").path.dirname(__file__), _sc_sp_${tag})))`,
+    `                _sc_h_${tag}.update(__loader__.get_data(_sc_bi_${tag}.__import__("os").path.join(_sc_bi_${tag}.__import__("os").path.dirname(__file__), _sc_sp_${tag})))`,
   );
-  lines.push(`            except Exception:`);
+  lines.push(`            except _sc_bi_${tag}.Exception:`);
   lines.push(`                _sc_missing_${tag} += 1`);
-  lines.push(`                _sc_h_${tag}.update(("missing:" + str(_sc_sp_${tag})).encode("utf-8"))`);
+  lines.push(`                _sc_h_${tag}.update(("missing:" + _sc_bi_${tag}.str(_sc_sp_${tag})).encode("utf-8"))`);
   lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`    _sc_h_${tag}.update(${seedLiteral}.encode("utf-8"))`);
   lines.push(`    _sc_hex_${tag} = _sc_h_${tag}.hexdigest()`);
-  lines.push(`    ${bindingName} = int(_sc_hex_${tag}[:8], 16) & 0xffffffff`);
+  lines.push(`    ${bindingName} = _sc_bi_${tag}.int(_sc_hex_${tag}[:8], 16) & 0xffffffff`);
   lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
   lines.push(
-    `        if _sc_packaged_${tag} and _sc_missing_${tag} == len(_sc_sidecars_${tag}):`,
+    `        if _sc_packaged_${tag} and _sc_missing_${tag} == _sc_bi_${tag}.len(_sc_sidecars_${tag}):`,
   );
   lines.push(
-    `            ${bindingName} = int(_sc_expected_${tag}[:8], 16) & 0xffffffff`,
+    `            ${bindingName} = _sc_bi_${tag}.int(_sc_expected_${tag}[:8], 16) & 0xffffffff`,
   );
   lines.push(`        else:`);
   if (softFold) {
     lines.push(`            ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
   } else {
-    lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+    lines.push(`            raise _sc_bi_${tag}.RuntimeError("integrity binding mismatch")`);
   }
-  lines.push(`except Exception as _sc_err_${tag}:`);
+  lines.push(`except _sc_bi_${tag}.Exception as _sc_err_${tag}:`);
   if (softFold) {
     lines.push(`    ${bindingName} = 0`);
   } else {
     lines.push(
-      `    if isinstance(_sc_err_${tag}, RuntimeError) and str(_sc_err_${tag}) == "integrity binding mismatch":`,
+      `    if _sc_bi_${tag}.isinstance(_sc_err_${tag}, _sc_bi_${tag}.RuntimeError) and _sc_bi_${tag}.str(_sc_err_${tag}) == "integrity binding mismatch":`,
     );
     lines.push(`        raise`);
-    lines.push(`    raise RuntimeError("integrity binding mismatch") from None`);
+    lines.push(`    raise _sc_bi_${tag}.RuntimeError("integrity binding mismatch") from None`);
   }
 
   return {
@@ -1224,6 +1337,12 @@ export interface SidecarWasmLoaderInjectOptions {
    * (`__dirname` / `import.meta.url`).
    */
   readonly baseDir?: string;
+  /**
+   * Optional non-ABI export names belonging to the protected WASM module so
+   * stripping `bla.sidecar.v1` AND patching a code byte simultaneously still
+   * fails closed instead of falling through as an unrelated module.
+   */
+  readonly protectedExportNames?: readonly string[];
 }
 
 export interface SidecarWasmLoaderInjectResult {
@@ -1287,6 +1406,10 @@ export function generateSidecarWasmLoaderSnippet(
     typeof options.baseDir === "string" && options.baseDir.length > 0
       ? JSON.stringify(options.baseDir)
       : "null";
+  const exportSigList = (options.protectedExportNames ?? []).filter(
+    (n) => typeof n === "string" && n.length > 0 && !n.startsWith("enclave_export_"),
+  );
+  const exportSigLiteral = JSON.stringify(exportSigList);
 
   const lines: string[] = [];
   if (isEsm) {
@@ -1298,6 +1421,9 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`  var __ids = ${idsLiteral};`);
   lines.push(`  var __idSet = Object.create(null);`);
   lines.push(`  for (var __i = 0; __i < __ids.length; __i++) __idSet[__ids[__i]] = true;`);
+  lines.push(`  var __expSigs = ${exportSigLiteral};`);
+  lines.push(`  var __expSigSet = Object.create(null);`);
+  lines.push(`  for (var __j = 0; __j < __expSigs.length; __j++) __expSigSet[__expSigs[__j]] = true;`);
   lines.push(`  var __section = ${sectionLiteral};`);
   lines.push(`  var __schema = ${schemaLiteral};`);
   lines.push(`  var __marker = ${markerLiteral};`);
@@ -1436,20 +1562,68 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`    if (hex === digest) return { ok: true, softFold: softFold };`);
   lines.push(`    return { ok: false, reason: softFold ? "integrity binding mismatch (soft-fold)" : "integrity binding mismatch", softFold: softFold };`);
   lines.push(`  }`);
+  lines.push(`  function __matchesProtectedExports(bytes) {`);
+  lines.push(`    if (__expSigs.length === 0) return false;`);
+  lines.push(`    if (bytes.length < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return false;`);
+  lines.push(`    var offset = 8;`);
+  lines.push(`    while (offset < bytes.length) {`);
+  lines.push(`      var sectionId = bytes[offset++];`);
+  lines.push(`      var header = __uleb(bytes, offset);`);
+  lines.push(`      if (!header) break;`);
+  lines.push(`      var sectionEnd = header.next + header.value;`);
+  lines.push(`      if (sectionEnd > bytes.length) break;`);
+  lines.push(`      if (sectionId === 7) {`);
+  lines.push(`        var payload = bytes.subarray(header.next, sectionEnd);`);
+  lines.push(`        var cnt = __uleb(payload, 0);`);
+  lines.push(`        if (!cnt) break;`);
+  lines.push(`        var p = cnt.next;`);
+  lines.push(`        for (var e = 0; e < cnt.value && p < payload.length; e++) {`);
+  lines.push(`          var nl = __uleb(payload, p);`);
+  lines.push(`          if (!nl || nl.next + nl.value >= payload.length) break;`);
+  lines.push(`          var name = new TextDecoder("utf-8").decode(payload.subarray(nl.next, nl.next + nl.value));`);
+  lines.push(`          if (__expSigSet[name]) return true;`);
+  lines.push(`          p = nl.next + nl.value + 1;`);
+  lines.push(`          var idx = __uleb(payload, p);`);
+  lines.push(`          if (!idx) break;`);
+  lines.push(`          p = idx.next;`);
+  lines.push(`        }`);
+  lines.push(`      }`);
+  lines.push(`      offset = sectionEnd;`);
+  lines.push(`    }`);
+  lines.push(`    return false;`);
+  lines.push(`  }`);
   lines.push(`  function __enforce(src) {`);
   lines.push(`    var bytes = __asU8(src);`);
   lines.push(`    if (!bytes) return;`);
   lines.push(`    var id = __identity(bytes);`);
-  lines.push(`    if (!__idSet[id]) return;`);
+  lines.push(`    if (!__idSet[id]) {`);
+  lines.push(`      if (__readNote(bytes) !== null || __matchesProtectedExports(bytes)) {`);
+  lines.push(`        ${bindingName} = { ok: false, reason: "integrity binding mismatch" };`);
+  lines.push(`        throw new Error("integrity binding mismatch");`);
+  lines.push(`      }`);
+  lines.push(`      return;`);
+  lines.push(`    }`);
   lines.push(`    var result = __verify(bytes);`);
   lines.push(`    ${bindingName} = result;`);
   lines.push(`    if (result.ok) return;`);
   lines.push(`    if (result.softFold) return;`);
   lines.push(`    throw new Error(result.reason || "integrity binding mismatch");`);
   lines.push(`  }`);
+  lines.push(`  var _OrigModule = WebAssembly.Module;`);
+  lines.push(`  if (typeof _OrigModule === "function") {`);
+  lines.push(`    var _WrappedModule = function Module(bytes) {`);
+  lines.push(`      __enforce(bytes);`);
+  lines.push(`      return new _OrigModule(bytes);`);
+  lines.push(`    };`);
+  lines.push(`    _WrappedModule.prototype = _OrigModule.prototype;`);
+  lines.push(`    if (typeof _OrigModule.customSections === "function") _WrappedModule.customSections = _OrigModule.customSections.bind(_OrigModule);`);
+  lines.push(`    if (typeof _OrigModule.exports === "function") _WrappedModule.exports = _OrigModule.exports.bind(_OrigModule);`);
+  lines.push(`    if (typeof _OrigModule.imports === "function") _WrappedModule.imports = _OrigModule.imports.bind(_OrigModule);`);
+  lines.push(`    try { WebAssembly.Module = _WrappedModule; } catch (_eMod) {}`);
+  lines.push(`  }`);
   lines.push(`  var _instantiate = WebAssembly.instantiate;`);
   lines.push(`  WebAssembly.instantiate = function(first, imports) {`);
-  lines.push(`    if (first instanceof WebAssembly.Module) return _instantiate(first, imports);`);
+  lines.push(`    if (first instanceof _OrigModule) return _instantiate(first, imports);`);
   lines.push(`    var bytes = __asU8(first);`);
   lines.push(`    return Promise.resolve().then(function(){`);
   lines.push(`      if (bytes) __enforce(bytes);`);
@@ -1513,16 +1687,8 @@ export function prependWasmSidecarLoaderHook(
   preamble: string,
 ): string {
   if (entrySource.includes(WASM_SIDECAR_LOADER_MARKER)) return entrySource;
-  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
-  const shebang = shebangMatch ? shebangMatch[0] : "";
-  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
-  const isEsmPreamble = /^\s*import\s/.test(preamble);
-  const strictMatch = !isEsmPreamble
-    ? afterShebang.match(/^["']use strict["'];?\r?\n/)
-    : null;
-  const strict = strictMatch ? strictMatch[0] : "";
-  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
-  return `${shebang}${strict}${preamble}\n${body}`;
+  const { prologue, body } = splitJsLeadingPrologue(entrySource);
+  return `${prologue}${preamble}\n${body}`;
 }
 
 /**
@@ -1541,10 +1707,14 @@ export function entangleWasmLoaderWithSidecars(options: {
   readonly codeIdentityHex: string;
 } {
   const codeIdentityHex = computeWasmSidecarCodeIdentity(options.wasmBytes);
+  const wasmExports = inspectWasmBinary(Buffer.from(options.wasmBytes)).exportNames.filter(
+    (name) => !name.startsWith("enclave_export_") && name !== "memory" && name !== "_start",
+  );
   const inject = generateSidecarWasmLoaderSnippet({
     codeIdentityHex,
     carrier: options.carrier,
     baseDir: options.baseDir,
+    ...(wasmExports.length > 0 ? { protectedExportNames: wasmExports } : {}),
   });
   return {
     code: prependWasmSidecarLoaderHook(options.loaderSource, inject.preamble),
@@ -2723,13 +2893,8 @@ export function prependAsarMainJsPreamble(
   preamble: string,
 ): string {
   if (entrySource.includes(ASAR_SIDECAR_MAIN_JS_MARKER)) return entrySource;
-  const shebangMatch = entrySource.match(/^#![^\n]*\r?\n/);
-  const shebang = shebangMatch ? shebangMatch[0] : "";
-  const afterShebang = shebang ? entrySource.slice(shebang.length) : entrySource;
-  const strictMatch = afterShebang.match(/^["']use strict["'];?\r?\n/);
-  const strict = strictMatch ? strictMatch[0] : "";
-  const body = strict ? afterShebang.slice(strict.length) : afterShebang;
-  return `${shebang}${strict}${preamble}\n${body}`;
+  const { prologue, body } = splitJsLeadingPrologue(entrySource);
+  return `${prologue}${preamble}\n${body}`;
 }
 
 /**
@@ -3304,6 +3469,7 @@ export function generateSidecarPycLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -3312,6 +3478,7 @@ export function generateSidecarPycLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
+  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(
     `        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`,
   );
@@ -3348,6 +3515,8 @@ export function generateSidecarPycLoaderSnippet(
   );
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
+  lines.push(`    if _sc_seen_${tag}:`);
+  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);
@@ -4237,6 +4406,7 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -4245,6 +4415,7 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
+  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
   lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
   lines.push(`            continue`);
@@ -4275,6 +4446,8 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
+  lines.push(`    if _sc_seen_${tag}:`);
+  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);
@@ -4999,6 +5172,7 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -5007,6 +5181,7 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
+  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
   lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
   lines.push(`            continue`);
@@ -5037,6 +5212,8 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
+  lines.push(`    if _sc_seen_${tag}:`);
+  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);

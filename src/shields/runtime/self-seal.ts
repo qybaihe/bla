@@ -42,6 +42,14 @@ import {
 export const SELF_SEAL_SCHEMA = "bla-self-seal/v1" as const;
 
 /**
+ * First-line static `data:` ESM module specifier that captures genuine
+ * `node:fs` and `node:crypto` functions BEFORE any user sibling `import`
+ * executes (closing the ESM static-import hoisting monkey-patch bypass).
+ */
+export const ESM_PREHOIST_CAPTURE_DATA_URL =
+  "data:text/javascript,import%20fs%20from%20%22node%3Afs%22%3Bimport%20c%20from%20%22node%3Acrypto%22%3Bexport%20const%20r%3Dfs.readFileSync.bind(fs)%2Ch%3Dc.createHash.bind(c)%3B" as const;
+
+/**
  * Build-time placeholder for the entry self-digest literal (exactly 64 chars,
  * deliberately non-hex so runtime soft-skips if a write path never finalized).
  * Never ships: {@link finalizeSelfSealSelfDigest} replaces every occurrence.
@@ -103,7 +111,9 @@ export function finalizeSelfSealSelfDigest<T extends string | Buffer>(
     // Support re-finalizing an already-finalized self-seal buffer after a post-pass
     // (such as sidecarEntangle prepending a preamble in hardenProject).
     const text = asBuf.toString("latin1");
-    const existingMatch = text.match(/var\s+selfExpected\s*=\s*["']([0-9a-f]{64})["']/);
+    const existingMatch = text.match(
+      /(?:var\s+selfExpected|self_expected)\s*=\s*["']([0-9a-f]{64})["']/,
+    );
     if (existingMatch && existingMatch[1]) {
       const oldHexBuf = Buffer.from(existingMatch[1], "latin1");
       asBuf = replaceAllBytes(asBuf, oldHexBuf, needle);
@@ -180,6 +190,12 @@ export interface SelfSealOptions {
    */
   readonly esmRequireHelperIdent?: string;
   readonly esmMetaUrlIdent?: string;
+  /**
+   * Optional pre-hoist ESM builtin captures imported from a first-line `data:` module
+   * before any user `import` statements execute, defeating monkey-patched sibling imports.
+   */
+  readonly esmCapReadIdent?: string;
+  readonly esmCapHashIdent?: string;
 }
 
 export interface SelfSealSnippet {
@@ -213,8 +229,11 @@ function emitMeasureFunction(
   softTamperFlag: string | null,
   esmRequireHelperIdent?: string,
   esmMetaUrlIdent?: string,
+  esmCapReadIdent?: string,
+  esmCapHashIdent?: string,
 ): string[] {
   const lines: string[] = [];
+  const useLowLevelFdRead = siteIndex % 2 === 1 && !esmCapReadIdent;
   lines.push(`function ${helperName}() {`);
   lines.push(`  var digest = 0;`);
   lines.push(`  var _tampered = false;`);
@@ -224,7 +243,12 @@ function emitMeasureFunction(
     lines.push(`    var _c = _req("node:crypto");`);
     lines.push(`    var _fs = _req("node:fs");`);
     lines.push(`    var _path = _req("node:path");`);
-    lines.push(`    var h = _c.createHash("sha256");`);
+    lines.push(
+      esmCapHashIdent
+        ? `    var _mkHash = function() { return ${esmCapHashIdent}("sha256"); };`
+        : `    var _mkHash = function() { return _c.createHash("sha256"); };`,
+    );
+    lines.push(`    var h = _mkHash();`);
     lines.push(
       `    var selfPath = _req("node:url").fileURLToPath(${esmMetaUrlIdent});`,
     );
@@ -234,7 +258,8 @@ function emitMeasureFunction(
     lines.push(`    var _c = _req("node:crypto");`);
     lines.push(`    var _fs = _req("node:fs");`);
     lines.push(`    var _path = _req("node:path");`);
-    lines.push(`    var h = _c.createHash("sha256");`);
+    lines.push(`    var _mkHash = function() { return _c.createHash("sha256"); };`);
+    lines.push(`    var h = _mkHash();`);
     lines.push(
       `    var selfPath = (typeof __filename === "string" ? __filename : null);`,
     );
@@ -245,28 +270,60 @@ function emitMeasureFunction(
       `    var baseDir = (typeof __dirname === "string" ? __dirname : null);`,
     );
   }
+  if (esmCapReadIdent) {
+    lines.push(`    var _readRaw = function(p) { return ${esmCapReadIdent}(p); };`);
+  } else if (useLowLevelFdRead) {
+    // Alternate read path via openSync/fstatSync/readSync/closeSync so a hook
+    // that only spoofs fs.readFileSync is still caught by site 1.
+    lines.push(`    var _readRaw = function(p) {`);
+    lines.push(`      var fd = _fs.openSync(p, "r");`);
+    lines.push(`      try {`);
+    lines.push(`        var sz = _fs.fstatSync(fd).size;`);
+    lines.push(`        var buf = Buffer.allocUnsafe(sz);`);
+    lines.push(`        var off = 0;`);
+    lines.push(`        while (off < sz) {`);
+    lines.push(`          var n = _fs.readSync(fd, buf, off, sz - off, off);`);
+    lines.push(`          if (n <= 0) break;`);
+    lines.push(`          off += n;`);
+    lines.push(`        }`);
+    lines.push(`        return off === sz ? buf : buf.subarray(0, off);`);
+    lines.push(`      } finally { _fs.closeSync(fd); }`);
+    lines.push(`    };`);
+  } else {
+    lines.push(`    var _readRaw = function(p) { return _fs.readFileSync(p); };`);
+  }
   lines.push(`    h.update(${JSON.stringify(siteSalt)});`);
   lines.push(`    var selfBuf = null;`);
   lines.push(
-    `    if (selfPath) { try { selfBuf = _fs.readFileSync(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
+    `    if (selfPath) { try { selfBuf = _readRaw(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
   );
   if (selfDigestCheck) {
     // Canonical self-digest: zero every occurrence of the embedded literal, hash,
-    // compare. Literal is finalized at write time; non-hex → soft-skip.
+    // compare. Only the exact build-time unfinalized placeholder soft-skips;
+    // mutating even 1 char of a finalized hex literal or blocking self-read fails closed.
     lines.push(`    var selfExpected = ${JSON.stringify(SELF_DIGEST_PLACEHOLDER)};`);
-    lines.push(`    if (selfBuf && /^[0-9a-f]{64}$/.test(selfExpected)) {`);
-    lines.push(`      var _lit = Buffer.from(selfExpected, "latin1");`);
-    lines.push(`      var _zero = Buffer.alloc(64, 0x30);`);
-    lines.push(`      var _canon = Buffer.from(selfBuf);`);
-    lines.push(`      for (var _at = _canon.indexOf(_lit); _at !== -1; _at = _canon.indexOf(_lit, _at + 64)) _zero.copy(_canon, _at);`);
-    lines.push(
-      `      if (_c.createHash("sha256").update(_canon).digest("hex") !== selfExpected) {`,
-    );
+    lines.push(`    var _ph = "~self-digest-" + "pending-finalize" + "~".repeat(35);`);
+    lines.push(`    if (selfExpected !== _ph) {`);
+    lines.push(`      if (!/^[0-9a-f]{64}$/.test(selfExpected) || (selfPath && !selfBuf)) {`);
     if (hardFailOnSiblingMismatch) {
       lines.push(`        throw new Error("integrity check failed");`);
     } else {
       lines.push(`        _tampered = true;`);
     }
+    lines.push(`      } else if (selfBuf) {`);
+    lines.push(`        var _lit = Buffer.from(selfExpected, "latin1");`);
+    lines.push(`        var _zero = Buffer.alloc(64, 0x30);`);
+    lines.push(`        var _canon = Buffer.from(selfBuf);`);
+    lines.push(`        for (var _at = _canon.indexOf(_lit); _at !== -1; _at = _canon.indexOf(_lit, _at + 64)) _zero.copy(_canon, _at);`);
+    lines.push(
+      `        if (_mkHash().update(_canon).digest("hex") !== selfExpected) {`,
+    );
+    if (hardFailOnSiblingMismatch) {
+      lines.push(`          throw new Error("integrity check failed");`);
+    } else {
+      lines.push(`          _tampered = true;`);
+    }
+    lines.push(`        }`);
     lines.push(`      }`);
     lines.push(`    }`);
   }
@@ -279,9 +336,9 @@ function emitMeasureFunction(
   lines.push(
     `        if (!_path.isAbsolute(sp) && typeof baseDir === "string") sp = _path.join(baseDir, sp);`,
   );
-  lines.push(`        var sibBuf = _fs.readFileSync(sp);`);
+  lines.push(`        var sibBuf = _readRaw(sp);`);
   lines.push(
-    `        var sibHex = _c.createHash("sha256").update(sibBuf).digest("hex");`,
+    `        var sibHex = _mkHash().update(sibBuf).digest("hex");`,
   );
   lines.push(`        if (expected[spKey] && expected[spKey] !== sibHex) {`);
   if (hardFailOnSiblingMismatch) {
@@ -325,10 +382,18 @@ function emitMeasureFunction(
     lines.push(`    } catch (_e3) { envNote += "E"; }`);
     lines.push(`    h.update(envNote);`);
   }
+  if (hardFailOnSiblingMismatch) {
+    // Hard-fail mode previously left `_tampered` unread (dead store) when
+    // --inspect / node:inspector / patched toString tripped; enforce fail-closed!
+    lines.push(`    if (_tampered) throw new Error("integrity check failed");`);
+  }
   lines.push(`    var hex = h.digest("hex");`);
-  lines.push(`    digest = (parseInt(hex.slice(0, 8), 16) & 0xfffffffe) >>> 0;`);
+  // Keep 24 bits of real SHA-256 digest entropy in bits 8..31 while reserving
+  // low 8 bits = 0x00 on intact runs so ast-shield can couple a build-time
+  // 8-bit key byte into string decoding (defeating `const seed = 1` collapse).
+  lines.push(`    digest = (parseInt(hex.slice(0, 8), 16) & 0xffffff00) >>> 0;`);
   if (siteIndex === 0) {
-    lines.push(`    if (digest === 0) digest = 0x40000002;`);
+    lines.push(`    if (digest === 0) digest = 0x40000100;`);
   }
   if (softTamperFlag !== null) {
     // One shared flag, applied once to the folded digest. Flipping a bit inside
@@ -426,6 +491,8 @@ export function generateSelfSealSnippet(
         softTamperFlag,
         options.esmRequireHelperIdent,
         options.esmMetaUrlIdent,
+        options.esmCapReadIdent,
+        options.esmCapHashIdent,
       ),
     );
   }

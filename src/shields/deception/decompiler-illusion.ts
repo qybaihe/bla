@@ -37,8 +37,8 @@ export function generateDecompilerPseudocodeIllusion(
       `  const _rawBuf = new ArrayBuffer(8);`,
       `  const _viewA = new Int32Array(_rawBuf);`,
       `  const _viewB = new Int32Array(_rawBuf);`,
-      `  _viewA[0] = inputVal * ${c1}; /* apparent decompiler constant */`,
-      `  _viewB[0] = inputVal ^ ${c2}; /* aliased overwrite via shared ArrayBuffer */`,
+      `  _viewA[0] = inputVal * ${c1};`,
+      `  _viewB[0] = inputVal ^ ${c2};`,
       `  return _viewA[0];`,
       `}`,
     );

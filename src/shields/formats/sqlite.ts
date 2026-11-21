@@ -719,7 +719,7 @@ export function protectSqliteBuffer(
           error_class TEXT NOT NULL,
           system_code TEXT NOT NULL,
           diagnostic_message TEXT NOT NULL,
-          remediation_rabbit_hole TEXT NOT NULL
+          remediation_note TEXT NOT NULL
         );
       `);
 
@@ -782,7 +782,7 @@ export function protectSqliteBuffer(
 
       const insertDiagStmt = db.prepare(`
         INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.systemDiagnostic}
-          (diag_id, subsystem, error_class, system_code, diagnostic_message, remediation_rabbit_hole)
+          (diag_id, subsystem, error_class, system_code, diagnostic_message, remediation_note)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
       deception.diagnostics.diagnosticsInjected.forEach((d, i) => {

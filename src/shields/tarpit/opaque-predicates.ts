@@ -70,7 +70,26 @@ export function generateJsOpaqueTrueExpression(prng: SeededPrng, seedVar = "k"):
 }
 
 export function generatePythonOpaqueFalseExpression(prng: SeededPrng, seedVar = "k"): string {
+  const variant = prng.nextInt(0, 3);
   const k = prng.nextInt(3, 97);
+  if (variant === 1) {
+    // Odd square mod 8 is always 1 across all Python integers (positive and negative).
+    const mask = prng.nextInt(0x101, 0x3fffffff) & ~1;
+    const odd = `(((${seedVar} ^ ${mask}) | 1))`;
+    return `(((${odd} * ${odd}) & 7) != 1)`;
+  }
+  if (variant === 2) {
+    // Odd fourth power mod 16 is always 1 across all Python integers.
+    const mask = prng.nextInt(0x101, 0x3fffffff) & ~1;
+    const odd = `(((${seedVar} ^ ${mask}) | 1))`;
+    return `((((${odd} * ${odd}) * (${odd} * ${odd})) & 15) != 1)`;
+  }
+  if (variant === 3) {
+    // Consecutive integer product is always even across all Python integers.
+    const mask = prng.nextInt(0x101, 0x3fffffff);
+    const y = `((${seedVar} ^ ${mask}))`;
+    return `(((${y} * (${y} + 1)) & 1) != 0)`;
+  }
   const { m, m2, mInv, c, d } = deriveInlineAffineTuple(k);
   const u = `(((${seedVar} ^ ${k * 0x119de1f3}) & 0xFFFFFFFF))`;
   return `(((${u} | ((${u} - 1) & 0xFFFFFFFF)) < (${u} ^ ((${u} - 1) & 0xFFFFFFFF))) or (((${mInv} * ((${m} * (${seedVar} ^ ${k})) + (${m2} * (${seedVar} & ${k})) + ${c}) + ${d}) & 0xFFFFFFFF) != ((${seedVar} + ${k}) & 0xFFFFFFFF)))`;

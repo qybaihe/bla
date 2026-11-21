@@ -431,8 +431,23 @@ function planWasmExportNameDecoys(
   const indices =
     funcIndices.length > 0 ? prng.shuffle([...new Set(funcIndices)]) : [0];
   const out: { name: string; funcIndex: number }[] = [];
+  const segVocab = [
+    "frame", "codec", "route", "state", "delta", "cache", "graph", "entry",
+    "token", "scope", "chunk", "slice", "batch", "queue", "index", "stage",
+  ];
   for (let i = 0; i < count; i++) {
-    const pad = "e".repeat(namePad);
+    // Build varied deterministic pseudo-identifier padding instead of `"e".repeat(...)`
+    // so trivial repeated-char filters cannot strip export decoys while preserving
+    // the exact byte-size budget required to trigger Wabt interface limits.
+    let seedChunk = "";
+    while (seedChunk.length < Math.min(namePad, 192)) {
+      const w = segVocab[(i + prng.nextInt(0, segVocab.length - 1)) % segVocab.length]!;
+      seedChunk += `${w}_${prng.hex(2)}_`;
+    }
+    const pad =
+      namePad <= seedChunk.length
+        ? seedChunk.slice(0, namePad)
+        : seedChunk.repeat(Math.ceil(namePad / seedChunk.length)).slice(0, namePad);
     out.push({
       name: `enclave_export_${tag}_${i}_${pad}`,
       funcIndex: indices[i % indices.length]!,
@@ -756,29 +771,48 @@ function wasmLocalGet(index: number): Buffer {
 }
 
 /**
- * Builds a stack-neutral (`[] -> []`) WebAssembly 1.0 MVP opaque-false flower
- * block (`if (void) <ARX + select + nested block + br_if> end`).
+ * Builds a stack-neutral (`[] -> []`) polymorphic WebAssembly 1.0 MVP opaque-false
+ * flower block (`if (void) <varied control-flow + ARX/bit-op dead body> end`).
  *
- * When the enclosing function takes an `i32` or `i64` parameter, the guard couples
- * directly to that real parameter via exact mod-2/mod-8/mod-16 algebraic zero
- * identities over Z/2^32Z (or Z/2^64Z), defeating trivial constant folding while
- * guaranteeing zero execution of the dead block across all 2^32 / 2^64 inputs.
+ * Couples randomly to any `i32` or `i64` parameter across 5 distinct algebraic /
+ * MBA / unsigned-bit zero identities and 4 distinct dead-branch architectures
+ * (`block+select+br_if`, nested `if/else`, dead `loop+br_if`, `br_table`),
+ * defeating both constant folding and fixed-skeleton binary peelers.
  */
 function buildWasmOpaqueFlowerBlock(
   prng: SeededPrng,
   paramTypes: readonly number[],
   variant: number,
 ): Buffer {
-  const i32ParamIdx = paramTypes.indexOf(0x7f);
-  const i64ParamIdx = paramTypes.indexOf(0x7e);
+  const i32ParamIndices: number[] = [];
+  const i64ParamIndices: number[] = [];
+  for (let p = 0; p < paramTypes.length; p++) {
+    if (paramTypes[p] === 0x7f) i32ParamIndices.push(p);
+    else if (paramTypes[p] === 0x7e) i64ParamIndices.push(p);
+  }
+  const i32ParamIdx =
+    i32ParamIndices.length > 0
+      ? i32ParamIndices[prng.nextInt(0, i32ParamIndices.length - 1)]!
+      : -1;
+  const i64ParamIdx =
+    i64ParamIndices.length > 0
+      ? i64ParamIndices[prng.nextInt(0, i64ParamIndices.length - 1)]!
+      : -1;
 
   let guard: Buffer;
   if (i32ParamIdx >= 0) {
-    const mode = variant % 3;
+    const mode = (variant + prng.nextInt(0, 4)) % 5;
     const pGet = wasmLocalGet(i32ParamIdx);
     if (mode === 0) {
-      // (((x | 1) * (x | 1)) & 7) ^ 1 === 0 for every i32 x (odd^2 === 1 mod 8)
-      const oddX = Buffer.concat([pGet, wasmI32Const(1), Buffer.from([0x72])]);
+      // (((x ^ mask) | 1)^2 & 7) ^ 1 === 0 for every i32 x (odd^2 === 1 mod 8)
+      const mask = prng.nextInt(0x101, 0x3fffffff) & ~1;
+      const oddX = Buffer.concat([
+        pGet,
+        wasmI32Const(mask),
+        Buffer.from([0x73]), // i32.xor
+        wasmI32Const(1),
+        Buffer.from([0x72]), // i32.or
+      ]);
       guard = Buffer.concat([
         oddX,
         oddX,
@@ -801,7 +835,7 @@ function buildWasmOpaqueFlowerBlock(
         wasmI32Const(1),
         Buffer.from([0x71]), // i32.and
       ]);
-    } else {
+    } else if (mode === 2) {
       // (((z^2 * z^2) & 15) ^ 1) === 0 for odd z = (x ^ mask) | 1 (odd^4 === 1 mod 16)
       const mask = prng.nextInt(0x101, 0x3fffffff);
       const z = Buffer.concat([
@@ -821,11 +855,49 @@ function buildWasmOpaqueFlowerBlock(
         wasmI32Const(1),
         Buffer.from([0x73]), // i32.xor
       ]);
+    } else if (mode === 3) {
+      // ((u | (u - 1)) <u (u ^ (u - 1))) === 0 for every u32 u = x ^ mask
+      const mask = prng.nextInt(0x101, 0x3fffffff);
+      const u = Buffer.concat([pGet, wasmI32Const(mask), Buffer.from([0x73])]);
+      const uMinus1 = Buffer.concat([u, wasmI32Const(1), Buffer.from([0x6b])]); // i32.sub
+      guard = Buffer.concat([
+        u,
+        uMinus1,
+        Buffer.from([0x72]), // i32.or
+        u,
+        uMinus1,
+        Buffer.from([0x73]), // i32.xor
+        Buffer.from([0x49]), // i32.lt_u (always 0)
+      ]);
+    } else {
+      // Affine carry-identity MBA over Z/2^32Z: ((x ^ k) + ((x & k) << 1)) - (x + k) === 0
+      const k = prng.nextInt(0x101, 0x3fffffff);
+      guard = Buffer.concat([
+        pGet,
+        wasmI32Const(k),
+        Buffer.from([0x73]), // x ^ k
+        pGet,
+        wasmI32Const(k),
+        Buffer.from([0x71]), // x & k
+        wasmI32Const(1),
+        Buffer.from([0x74]), // << 1
+        Buffer.from([0x6a]), // add
+        pGet,
+        wasmI32Const(k),
+        Buffer.from([0x6a]), // x + k
+        Buffer.from([0x6b]), // sub -> always 0
+      ]);
     }
   } else if (i64ParamIdx >= 0) {
-    // (((x | 1) * (x | 1)) & 7) ^ 1 === 0n for every i64 x -> i64.eqz (1) -> i32.eqz (0)
+    // (((x ^ mask) | 1)^2 & 7) ^ 1 === 0n for every i64 x -> i64.eqz (1) -> i32.eqz (0)
     const pGet64 = wasmLocalGet(i64ParamIdx);
-    const oddX64 = Buffer.concat([pGet64, Buffer.from([0x42, 0x01, 0x84])]);
+    const mask64 = prng.nextInt(0x101, 0x3fffffff) & ~1;
+    const oddX64 = Buffer.concat([
+      pGet64,
+      Buffer.from([0x42]),
+      encodeSignedLeb128(mask64),
+      Buffer.from([0x85, 0x42, 0x01, 0x84]), // i64.xor; i64.const 1; i64.or
+    ]);
     guard = Buffer.concat([
       oddX64,
       oddX64,
@@ -845,60 +917,114 @@ function buildWasmOpaqueFlowerBlock(
     ]);
   }
 
-  // Dense, plausible ARX + nested block + select + br_if dead flower body (stack: [] -> [])
-  const initVal =
-    i32ParamIdx >= 0
-      ? wasmLocalGet(i32ParamIdx)
-      : wasmI32Const(prng.nextInt(0x10000, 0x7fffffff));
-  const rounds: Buffer[] = [initVal];
-  for (let r = 0; r < 3; r++) {
-    const kXor = prng.nextInt(0x1000, 0x7fffffff);
-    const rot = prng.nextInt(3, 29);
-    const kMul = prng.nextInt(0x1001, 0x7fffffff) | 1;
-    const kAdd = prng.nextInt(0x100, 0x7fffffff);
-    rounds.push(
-      wasmI32Const(kXor),
-      Buffer.from([0x73]), // i32.xor
-      wasmI32Const(rot),
-      Buffer.from([0x77]), // i32.rotl
-      wasmI32Const(kMul),
-      Buffer.from([0x6c]), // i32.mul
-      wasmI32Const(kAdd),
-      Buffer.from([0x6a]), // i32.add
-    );
+  const buildAluRounds = (roundCount: number): Buffer => {
+    const initVal =
+      i32ParamIdx >= 0
+        ? wasmLocalGet(i32ParamIdx)
+        : wasmI32Const(prng.nextInt(0x10000, 0x7fffffff));
+    const parts: Buffer[] = [initVal];
+    const unaryOps = [0x67, 0x68, 0x69] as const; // clz, ctz, popcnt
+    const rotOps = [0x77, 0x78] as const; // rotl, rotr
+    const addSubOps = [0x6a, 0x6b] as const; // add, sub
+    for (let r = 0; r < roundCount; r++) {
+      const kXor = prng.nextInt(0x1000, 0x7fffffff);
+      const rot = prng.nextInt(3, 29);
+      const kMul = prng.nextInt(0x1001, 0x7fffffff) | 1;
+      const kAdd = prng.nextInt(0x100, 0x7fffffff);
+      const rotOp = rotOps[prng.nextInt(0, 1)]!;
+      const addOp = addSubOps[prng.nextInt(0, 1)]!;
+      parts.push(
+        wasmI32Const(kXor),
+        Buffer.from([0x73]),
+        wasmI32Const(rot),
+        Buffer.from([rotOp]),
+        wasmI32Const(kMul),
+        Buffer.from([0x6c]),
+        wasmI32Const(kAdd),
+        Buffer.from([addOp]),
+      );
+      if (prng.nextInt(0, 2) === 0) {
+        parts.push(Buffer.from([unaryOps[prng.nextInt(0, 2)]!]));
+      }
+    }
+    return Buffer.concat(parts);
+  };
+
+  const bodyArch = prng.nextInt(0, 3);
+  const roundCount = prng.nextInt(2, 4);
+  let deadBody: Buffer;
+
+  if (bodyArch === 0) {
+    // Arch 0: nested block + select + br_if + tail ALU
+    const altVal = wasmI32Const(prng.nextInt(0x1000, 0x7fffffff));
+    const selCond = Buffer.concat([
+      i32ParamIdx >= 0
+        ? wasmLocalGet(i32ParamIdx)
+        : wasmI32Const(prng.nextInt(0x100, 0xffff)),
+      wasmI32Const(0x1f),
+      Buffer.from([0x71]),
+    ]);
+    const cmpConst = wasmI32Const(prng.nextInt(0x100, 0x7fffffff));
+    const tailArx = Buffer.concat([buildAluRounds(1), Buffer.from([0x1a])]);
+    deadBody = Buffer.concat([
+      Buffer.from([0x02, 0x40]), // block (void)
+      buildAluRounds(roundCount),
+      altVal,
+      selCond,
+      Buffer.from([0x1b]), // select
+      cmpConst,
+      Buffer.from([0x46, 0x0d, 0x00]), // i32.eq; br_if 0
+      tailArx,
+      Buffer.from([0x0b]), // end block
+    ]);
+  } else if (bodyArch === 1) {
+    // Arch 1: nested if / else branches with distinct ALU chains
+    const branchCond = Buffer.concat([
+      i32ParamIdx >= 0
+        ? wasmLocalGet(i32ParamIdx)
+        : wasmI32Const(prng.nextInt(0x100, 0xffff)),
+      wasmI32Const(1),
+      Buffer.from([0x71]),
+    ]);
+    deadBody = Buffer.concat([
+      branchCond,
+      Buffer.from([0x04, 0x40]), // if (void)
+      buildAluRounds(roundCount),
+      Buffer.from([0x1a]), // drop
+      Buffer.from([0x05]), // else
+      buildAluRounds(Math.max(1, roundCount - 1)),
+      Buffer.from([0x1a]), // drop
+      Buffer.from([0x0b]), // end if
+    ]);
+  } else if (bodyArch === 2) {
+    // Arch 2: dead loop + eqz + br_if 0
+    deadBody = Buffer.concat([
+      Buffer.from([0x03, 0x40]), // loop (void)
+      buildAluRounds(roundCount),
+      Buffer.from([0x45, 0x0d, 0x00]), // i32.eqz; br_if 0
+      Buffer.from([0x0b]), // end loop
+    ]);
+  } else {
+    // Arch 3: nested blocks + br_table dispatch
+    deadBody = Buffer.concat([
+      Buffer.from([0x02, 0x40]), // outer block (void)
+      Buffer.from([0x02, 0x40]), // inner block (void)
+      buildAluRounds(roundCount),
+      wasmI32Const(1),
+      Buffer.from([0x71]), // i32.and
+      Buffer.from([0x0e, 0x01, 0x00, 0x01]), // br_table [0] default 1
+      Buffer.from([0x0b]), // end inner block
+      buildAluRounds(1),
+      Buffer.from([0x1a]), // drop
+      Buffer.from([0x0b]), // end outer block
+    ]);
   }
-  const altVal = wasmI32Const(prng.nextInt(0x1000, 0x7fffffff));
-  const selCond = Buffer.concat([
-    i32ParamIdx >= 0
-      ? wasmLocalGet(i32ParamIdx)
-      : wasmI32Const(prng.nextInt(0x100, 0xffff)),
-    wasmI32Const(0x1f),
-    Buffer.from([0x71]), // i32.and
-  ]);
-  const cmpConst = wasmI32Const(prng.nextInt(0x100, 0x7fffffff));
-  const tailArx = Buffer.concat([
-    wasmI32Const(prng.nextInt(0x10000, 0x7fffffff)),
-    wasmI32Const(prng.nextInt(0x1000, 0x7fffffff)),
-    Buffer.from([0x73]), // i32.xor
-    wasmI32Const(prng.nextInt(5, 27)),
-    Buffer.from([0x78]), // i32.rotr
-    wasmI32Const(prng.nextInt(0x1001, 0x7fffffff) | 1),
-    Buffer.from([0x6c]), // i32.mul
-    Buffer.from([0x1a]), // drop
-  ]);
 
   return Buffer.concat([
     guard,
     Buffer.from([0x04, 0x40]), // if (void)
-    Buffer.from([0x02, 0x40]), // block (void)
-    ...rounds,
-    altVal,
-    selCond,
-    Buffer.from([0x1b]), // select
-    cmpConst,
-    Buffer.from([0x46, 0x0d, 0x00]), // i32.eq; br_if 0
-    tailArx,
-    Buffer.from([0x0b, 0x0b]), // end block; end if
+    deadBody,
+    Buffer.from([0x0b]), // end if
   ]);
 }
 
@@ -1040,20 +1166,32 @@ export function injectWasmBytecodeFlowerInstructions(
       continue;
     }
 
-    const flowerChunks: Buffer[] = [];
-    for (let b = 0; b < blocksPerFn; b++) {
-      flowerChunks.push(buildWasmOpaqueFlowerBlock(prng, paramTypes, i + b));
+    // Sandwich the real function instructions between polymorphic prologue AND
+    // epilogue stack-neutral (`[] -> []`) flower blocks so original bytecode no
+    // longer sits bare at the tail of every function body.
+    const prologueCount = blocksPerFn >= 2 ? Math.ceil(blocksPerFn / 2) : blocksPerFn;
+    const epilogueCount = blocksPerFn - prologueCount;
+    const prologueChunks: Buffer[] = [];
+    for (let b = 0; b < prologueCount; b++) {
+      prologueChunks.push(buildWasmOpaqueFlowerBlock(prng, paramTypes, i + b));
     }
-    const flowerPayload = Buffer.concat(flowerChunks);
+    const epilogueChunks: Buffer[] = [];
+    for (let b = 0; b < epilogueCount; b++) {
+      epilogueChunks.push(buildWasmOpaqueFlowerBlock(prng, paramTypes, i + prologueCount + b));
+    }
+    const prologuePayload = Buffer.concat(prologueChunks);
+    const epiloguePayload = Buffer.concat(epilogueChunks);
     const newBody = Buffer.concat([
       body.subarray(0, codeStart),
-      flowerPayload,
-      body.subarray(codeStart),
+      prologuePayload,
+      body.subarray(codeStart, body.length - 1),
+      epiloguePayload,
+      body.subarray(body.length - 1), // final 0x0b end
     ]);
     rewrittenBodies.push(encodeUnsignedLeb128(newBody.length), newBody);
     functionsHardened += 1;
     flowerBlocksInjected += blocksPerFn;
-    addedCodeBytes += flowerPayload.length;
+    addedCodeBytes += prologuePayload.length + epiloguePayload.length;
   }
 
   if (cursor !== codePayload.length || functionsHardened === 0) {
@@ -1277,7 +1415,7 @@ export function protectWasmBinary(
   // Canary honeypot: custom section name + body trip REA string extractors /
   // WABT custom-section dumps without touching the export surface.
   const canaryJson = JSON.stringify({
-    classification: "SYNTHETIC_CANARY_CREDENTIAL_HONEYPOT",
+    classification: "TELEMETRY_ATTESTATION_LEASE_METADATA",
     canaryTokens: deception.canary.syntheticCanaryTokens,
     ambiguousTransportEndpoints: deception.canary.ambiguousCredentialUrls,
     conflictingQueryEndpoints: deception.canary.conflictingQueryUrls,
@@ -1288,7 +1426,7 @@ export function protectWasmBinary(
 
   // System-diagnostic rabbit holes + Cognitive-Armor triggers as a dedicated custom section.
   const diagJson = JSON.stringify({
-    classification: "SYSTEM_DIAGNOSTIC_AND_COGNITIVE_ARMOR_DECOY",
+    classification: "RUNTIME_DIAGNOSTIC_TELEMETRY_MANIFEST",
     canaryGuid: deception.cognitiveArmor.canaryGuid,
     diagnostics: deception.diagnostics.diagnosticsInjected,
     cognitiveArmorInterlocks: deception.cognitiveArmor.triggersInjected,

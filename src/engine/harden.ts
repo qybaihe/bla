@@ -1338,15 +1338,29 @@ function outermostPythonPackageInit<T extends { readonly relativePath: string }>
   return found;
 }
 
+/** Whether a Python source file declares a script entrypoint `if __name__ == "__main__":`. */
+function pythonSourceHasMainGuard(path: string): boolean {
+  try {
+    if (statSync(path).size > 512 * 1024) return false;
+    const text = readFileSync(path, "latin1");
+    return /^[ \t]*if[ \t]+\(?[ \t]*__name__[ \t]*==[ \t]*["']__main__["'][ \t]*\)?[ \t]*:/m.test(text);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The Python module that carries the load-time sibling check. It only runs
  * when that module is imported, so prefer one that always is: the conventional
  * `policy.py`; then, when the project declares console scripts, the package
  * those scripts import (an installed script never touches a `run.py` beside
- * the package); then a program entry point, the shallowest package
- * `__init__.py`, and only then the first file by name.
+ * the package); then a program entry point (`__main__.py`, `main`/`app`/`cli`/
+ * `loader`/…, or a file with `if __name__ == "__main__":`), the shallowest
+ * package `__init__.py`, and only then the first file by name.
  */
-function pickPythonEntry<T extends { readonly relativePath: string }>(
+function pickPythonEntry<
+  T extends { readonly relativePath: string; readonly inputPath?: string },
+>(
   candidates: readonly T[],
   declaredEntryFiles: readonly T[] = [],
 ): T | undefined {
@@ -1355,6 +1369,10 @@ function pickPythonEntry<T extends { readonly relativePath: string }>(
     candidates
       .filter((c) => re.test(norm(c).split("/").pop() ?? ""))
       .sort((a, b) => norm(a).split("/").length - norm(b).split("/").length)[0];
+  const byMainGuard = (): T | undefined =>
+    candidates
+      .filter((c) => typeof c.inputPath === "string" && pythonSourceHasMainGuard(c.inputPath))
+      .sort((a, b) => norm(a).split("/").length - norm(b).split("/").length)[0];
   const declared = declaredEntryFiles[0];
   return (
     byBasename(/^policy\.py$/i) ??
@@ -1362,7 +1380,8 @@ function pickPythonEntry<T extends { readonly relativePath: string }>(
       ? (outermostPythonPackageInit(declared, candidates) ?? declared)
       : undefined) ??
     byBasename(/^__main__\.py$/) ??
-    byBasename(/^(?:main|app|cli|manage|run|server|wsgi|asgi)\.py$/i) ??
+    byBasename(/^(?:main|app|cli|loader|manage|run|server|wsgi|asgi)\.py$/i) ??
+    byMainGuard() ??
     byBasename(/^__init__\.py$/) ??
     candidates[0]
   );
@@ -1504,6 +1523,43 @@ export function hardenProject(
       .map((a) => a.relativePath.split(sep).join("/"))
       .filter((rel) => !isInsideBuildOutput(rel, absDir, BLA_BUILD_OUTPUT_DIR_NAMES));
     if (promotable.artifacts.length === 0) {
+      if (dryRun) {
+        const previouslyApplied = listAppliedFiles(absDir, stateDirectory);
+        if (previouslyApplied.length > 0) {
+          const preview = hardenProjectCore({ ...coreOptions, dryRun: true }, { buildOutputOnly: true });
+          const plannedArtifacts: HardenArtifactSummary[] = previouslyApplied.map((rel) => {
+            const abs = join(absDir, rel);
+            return {
+              inputPath: abs,
+              relativePath: rel,
+              format: detectArtifactFormat(abs),
+              outputPath: abs,
+              success: false,
+              defenseScore: 0,
+              tokenAmplificationFactor: 0,
+              costAmplificationFactor: 0,
+              outputExisted: true,
+            };
+          });
+          return withNextSteps(
+            {
+              ...preview,
+              discoveredCount: plannedArtifacts.length,
+              overallSuccess: false,
+              hardenedCount: 0,
+              failedCount: 0,
+              artifacts: plannedArtifacts,
+              wouldOverwrite: plannedArtifacts.map((a) => a.inputPath),
+              apply: {
+                status: "planned",
+                applied: previouslyApplied,
+              },
+            },
+            rawOptions,
+            absDir,
+          );
+        }
+      }
       return refuse(
         `No protectable build output found under ${absDir}. Build the project first (for example npm run build), then re-run with apply.`,
       );
@@ -1857,6 +1913,37 @@ function withNextSteps(
           ? ` ${uncovered.slice(0, 3).join(", ")}${uncovered.length > 3 ? ", …" : ""} ${one ? "is" : "are"} declared as ${one ? "a console script" : "console scripts"} but never import${one ? "s" : ""} ${report.pythonSidecarEntry}, so started that way nothing is verified — import it from ${one ? "that module" : "those modules"} and harden again.`
           : ""),
     );
+  }
+  const pyHardened = report.artifacts.filter(
+    (a) => a.success && a.format === "python-source",
+  );
+  if (pyHardened.length > 0 && report.dryRun !== true) {
+    const stalePycacheDirs: string[] = [];
+    const seenPyDirs = new Set<string>();
+    for (const a of pyHardened) {
+      const pyDir = dirname(a.inputPath);
+      if (seenPyDirs.has(pyDir)) continue;
+      seenPyDirs.add(pyDir);
+      const cacheDir = join(pyDir, "__pycache__");
+      try {
+        if (
+          existsSync(cacheDir) &&
+          statSync(cacheDir).isDirectory() &&
+          readdirSync(cacheDir).some((n) => /\.(?:pyc|pyo)$/i.test(n))
+        ) {
+          stalePycacheDirs.push(
+            (relative(absDir, cacheDir) || "__pycache__").split(sep).join("/"),
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (stalePycacheDirs.length > 0) {
+      steps.push(
+        `Unhardened Python bytecode remains in ${stalePycacheDirs.slice(0, 3).join(", ")}${stalePycacheDirs.length > 3 ? ", …" : ""} (__pycache__ is skipped during discovery). Delete those __pycache__ directories before packaging so unhardened .pyc files do not ship beside your hardened .py sources.`,
+      );
+    }
   }
   if (
     report.discoveredCount > 0 &&
@@ -2698,7 +2785,11 @@ function hardenProjectCore(
           if (designatedEntryOutput !== undefined && outputPath !== designatedEntryOutput) {
             return {};
           }
-          const siblings = plannedOutputs
+          // Include all non-mutable siblings in the mirror tree (same-dir first,
+          // then upward-relative siblings like `../lib/core.cjs`) so multi-directory
+          // builds like `dist/bin/cli.cjs` + `dist/lib/core.cjs` do not silently drop
+          // cross-directory siblings when at least one same-dir sibling exists.
+          const sameDir = plannedOutputs
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
@@ -2707,9 +2798,7 @@ function hardenProjectCore(
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
             .filter((rel) => rel.length > 0 && !rel.startsWith(".."));
-          // Prefer same-directory / nested siblings; still pass upward-relative
-          // paths when the mirror tree places artifacts beside each other.
-          const loose = plannedOutputs
+          const crossDir = plannedOutputs
             .filter(
               (p) =>
                 p.outputPath !== outputPath &&
@@ -2717,8 +2806,8 @@ function hardenProjectCore(
                 !MUTABLE_DATA_FORMATS.has(p.artifact.format),
             )
             .map((p) => relative(dirname(outputPath), p.outputPath).split(sep).join("/"))
-            .filter((rel) => rel.length > 0);
-          const list = siblings.length > 0 ? siblings : loose;
+            .filter((rel) => rel.length > 0 && rel.startsWith(".."));
+          const list = [...sameDir, ...crossDir];
           return list.length > 0 ? { selfSealSiblingPaths: list } : {};
         })()),
         emitManifest,
@@ -2932,7 +3021,11 @@ function hardenProjectCore(
             continue;
           }
           wasmPlantTargets.push(wasmSum);
-          const identity = computeWasmSidecarCodeIdentity(readFileSync(wasmAbs));
+          const wasmBytesForHook = readFileSync(wasmAbs);
+          const identity = computeWasmSidecarCodeIdentity(wasmBytesForHook);
+          const wasmExportsForHook = inspectWasmBinary(wasmBytesForHook).exportNames.filter(
+            (name) => !name.startsWith("enclave_export_") && name !== "memory" && name !== "_start",
+          );
           const existing = readFileSync(found.absPath, "utf8");
           const already = existing.includes(WASM_SIDECAR_LOADER_MARKER);
           const inject = already
@@ -2940,6 +3033,9 @@ function hardenProjectCore(
             : generateSidecarWasmLoaderSnippet({
                 codeIdentityHex: identity,
                 carrier,
+                ...(wasmExportsForHook.length > 0
+                  ? { protectedExportNames: wasmExportsForHook }
+                  : {}),
               });
           const next = inject
             ? prependWasmSidecarLoaderHook(existing, inject.preamble)
@@ -3857,12 +3953,28 @@ function hardenProjectCore(
           const fresh = Buffer.from(current, "latin1");
           let at = entryBytes.indexOf(stale);
           if (at === -1) continue;
-          entryBytes = Buffer.from(entryBytes);
+          let replacedHere = false;
           while (at !== -1) {
-            fresh.copy(entryBytes, at);
+            // Only repin self-seal `expected = { "<rel>": "<sha256>" }` property
+            // values (preceded by `:` + optional spaces + quote). Never clobber
+            // WASM/PYC/GGUF loader hook code-identity arrays (`var __ids = ["<id>"]`),
+            // which deliberately store the pre-custom-section code identity.
+            let look = at - 1;
+            const quote = look >= 0 ? entryBytes[look] : 0;
+            if (quote === 0x22 || quote === 0x27) {
+              look -= 1;
+              while (look >= 0 && (entryBytes[look] === 0x20 || entryBytes[look] === 0x09)) {
+                look -= 1;
+              }
+              if (look >= 0 && entryBytes[look] === 0x3a /* ':' */) {
+                if (!replacedHere) entryBytes = Buffer.from(entryBytes);
+                fresh.copy(entryBytes, at);
+                replacedHere = true;
+              }
+            }
             at = entryBytes.indexOf(stale, at + stale.length);
           }
-          repinned = true;
+          if (replacedHere) repinned = true;
         }
         if (repinned) {
           const refinalized = finalizeSelfSealSelfDigest(entryBytes);

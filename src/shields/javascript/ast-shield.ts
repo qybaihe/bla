@@ -20,6 +20,7 @@ import {
   type ShadowHeapChurnShieldResult,
 } from "../runtime/memory-diff-shield.js";
 import {
+  ESM_PREHOIST_CAPTURE_DATA_URL,
   generateSelfSealSnippet,
   type SelfSealOptions,
 } from "../runtime/self-seal.js";
@@ -799,7 +800,13 @@ function maskPiece(text: string, unitOffset: number, width: 2 | 4, m: number, c:
  * text — Node's CommonJS export scanner is one — takes a value that starts
  * with a word for a name, and the literal this replaces started with a quote.
  */
-function buildMaskDecodeCall(pieces: t.Expression, width: 2 | 4, m: number, c: number): t.Expression {
+function buildMaskDecodeCall(
+  pieces: t.Expression,
+  width: 2 | 4,
+  m: number,
+  c: number,
+  seedCoupling?: { readonly seedExpr: t.Expression; readonly expectedLowByte: number },
+): t.Expression {
   const id = (name: string): t.Identifier => t.identifier(name);
   // Letter `n` of the current unit as its four bits: s.charCodeAt(i + n) - 97
   const nibble = (n: number): t.Expression =>
@@ -820,21 +827,46 @@ function buildMaskDecodeCall(pieces: t.Expression, width: 2 | 4, m: number, c: n
   }
   const key = t.binaryExpression(
     "&",
-    t.binaryExpression("+", t.binaryExpression("*", id("i"), id("m")), id("c")),
+    t.binaryExpression(
+      "+",
+      t.binaryExpression("*", id("i"), id("m")),
+      seedCoupling ? id("k") : id("c"),
+    ),
     t.numericLiteral(255),
   );
+  const varDecls: t.VariableDeclarator[] = [
+    t.variableDeclarator(id("r"), t.stringLiteral("")),
+    t.variableDeclarator(
+      id("f"),
+      t.memberExpression(t.memberExpression(id("r"), id("constructor")), id("fromCharCode")),
+    ),
+    t.variableDeclarator(id("i"), t.numericLiteral(0)),
+  ];
+  if (seedCoupling) {
+    // Mix the runtime seed's low 8 bits directly inside the decoder body so
+    // `args` remains `[pieces, NumericLiteral(m), NumericLiteral(c ^ expectedLowByte)]`
+    // while `const seed = 1` or tampered self-seal/cognitive-armor corrupts every
+    // masked string in the module.
+    varDecls.push(
+      t.variableDeclarator(
+        id("k"),
+        t.binaryExpression(
+          "&",
+          t.binaryExpression(
+            "^",
+            id("c"),
+            t.binaryExpression("&", seedCoupling.seedExpr, t.numericLiteral(255)),
+          ),
+          t.numericLiteral(255),
+        ),
+      ),
+    );
+  }
   const decoder = t.functionExpression(
     null,
     [id("s"), id("m"), id("c")],
     t.blockStatement([
-      t.variableDeclaration("var", [
-        t.variableDeclarator(id("r"), t.stringLiteral("")),
-        t.variableDeclarator(
-          id("f"),
-          t.memberExpression(t.memberExpression(id("r"), id("constructor")), id("fromCharCode")),
-        ),
-        t.variableDeclarator(id("i"), t.numericLiteral(0)),
-      ]),
+      t.variableDeclaration("var", varDecls),
       t.forStatement(
         null,
         t.binaryExpression("<", id("i"), t.memberExpression(id("s"), id("length"))),
@@ -851,10 +883,11 @@ function buildMaskDecodeCall(pieces: t.Expression, width: 2 | 4, m: number, c: n
     ]),
   );
   MASK_DECODER_FUNCTIONS.add(decoder);
+  const encodedC = seedCoupling ? (c ^ seedCoupling.expectedLowByte) & 255 : c;
   return t.callExpression(t.parenthesizedExpression(decoder), [
     pieces,
     t.numericLiteral(m),
-    t.numericLiteral(c),
+    t.numericLiteral(encodedC),
   ]);
 }
 /**
@@ -940,7 +973,7 @@ function buildCombinatorialStringAst(
   value: string,
   prng: SeededPrng,
   seedIdentifierName: SeedSource,
-  options: { readonly fine?: boolean; readonly mask?: boolean } = {},
+  options: { readonly fine?: boolean; readonly mask?: boolean; readonly seedLowByte?: number } = {},
 ): t.Expression {
   const minChunks = 9;
   const chunks: string[] = [];
@@ -1074,7 +1107,17 @@ function buildCombinatorialStringAst(
     return t.binaryExpression("+", join(from, middle), join(middle, to));
   };
   const pieces = join(0, terms.length);
-  return mask ? buildMaskDecodeCall(pieces, width, keyM, keyC) : pieces;
+  return mask
+    ? buildMaskDecodeCall(
+        pieces,
+        width,
+        keyM,
+        keyC,
+        options.seedLowByte !== undefined
+          ? { seedExpr: seedRead(seedIdentifierName), expectedLowByte: options.seedLowByte }
+          : undefined,
+      )
+    : pieces;
 }
 
 function buildOpaqueFalseAst(
@@ -1462,22 +1505,34 @@ function collectRenameSites(ast: t.File): RenameSiteIndex {
     }
     return sites;
   };
-  const collectDeclaredOrAssigned = (
-    path: NodePath<t.AssignmentExpression | t.Declaration | t.VariableDeclarator>,
+  const collectLValIdentifiers = (
+    lval: t.Node,
+    scope: Scope,
+    skipOwnScope: boolean,
   ): void => {
-    if (path.isVariableDeclaration()) return;
-    const ids: Record<string, t.Identifier> = path.isAssignmentExpression()
-      ? t.getAssignmentIdentifiers(path.node)
-      : path.getOuterBindingIdentifiers();
-    for (const name of Object.keys(ids)) {
-      const binding = path.scope.getBinding(name);
+    const idGroups = t.getBindingIdentifiers(lval, true) as Record<string, t.Identifier[]>;
+    for (const name of Object.keys(idGroups)) {
+      const binding = scope.getBinding(name);
       if (binding === undefined) continue;
       // `function f(f) {}`: from inside its own scope the declaration's name
       // resolves to the parameter. The renamer never reaches the declaration
       // for that binding (it is the block being walked, not a node in it).
-      if (binding.scope === path.scope && path.isScope()) continue;
-      sitesOf(binding).identifiers.push(ids[name]!);
+      if (skipOwnScope && binding.scope === scope) continue;
+      const list = idGroups[name];
+      if (!list) continue;
+      const target = sitesOf(binding).identifiers;
+      for (const id of list) target.push(id);
     }
+  };
+  const collectDeclaredOrAssigned = (
+    path: NodePath<t.AssignmentExpression | t.Declaration | t.VariableDeclarator>,
+  ): void => {
+    if (path.isVariableDeclaration()) return;
+    if (path.isAssignmentExpression()) {
+      collectLValIdentifiers(path.node.left, path.scope, false);
+      return;
+    }
+    collectLValIdentifiers(path.node, path.scope, path.isScope());
   };
   traverse(ast, {
     ReferencedIdentifier(path) {
@@ -1497,6 +1552,14 @@ function collectRenameSites(ast: t.File): RenameSiteIndex {
       if (!node.shorthand || !t.isIdentifier(node.key)) return;
       const binding = path.scope.getBinding(node.key.name);
       if (binding !== undefined) sitesOf(binding).shorthandProperties.push(node);
+    },
+    ForXStatement(path) {
+      // `for ([k, v] of pairs)` / `for ({ a, b } of items)` / `for ([k] in obj)`
+      // assign to existing bindings via an LVal pattern that ReferencedIdentifier
+      // does not visit.
+      if (!t.isVariableDeclaration(path.node.left) && t.isLVal(path.node.left)) {
+        collectLValIdentifiers(path.node.left, path.scope, false);
+      }
     },
     AssignmentExpression: collectDeclaredOrAssigned,
     Declaration: collectDeclaredOrAssigned,
@@ -2029,11 +2092,25 @@ export function transformJavaScriptWithBlaShield(
     effectiveCarrier === "script"
       ? seedVarName
       : prng.identifier({ style: "camel", hint: "runtimeEpoch", entropy: 4 });
-  // Every opaque predicate holds for any odd seed (odd ⇒ the real arm), so an
-  // odd constant is a faithful stand-in when the seed is absent. A present-but-
-  // even seed (stripped corpus, failed self-seal) is still read as is and still
-  // flips the predicates.
-  const drawSeedFallback = (): number => (prng.nextUint32() | 1) >>> 0;
+  // Deterministic opaque-predicate seed + 8-bit data-flow mask key:
+  // Draw ~24 bits of PRNG entropy in bits 8..31, reserve bits 1..7 for a non-zero
+  // build-time key byte (`expectedSeedLowByte`, odd and != 1), and reserve bit 0
+  // for cognitive-armor + self-seal parity entanglement. Setting `seed = 1` now
+  // corrupts every masked string in the module instead of passing silently.
+  const opaqueSeedHi = prng.nextUint32() >>> 0;
+  const opaqueSeedLo = prng.nextUint32() >>> 0;
+  const expectedSeedLowByte = ((prng.nextInt(1, 127) << 1) | 1) >>> 0;
+  const opaqueSeedBase =
+    (((((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xffffff00) >>> 0) || 0x1000) |
+      (expectedSeedLowByte & 0xfe)) >>>
+    0;
+  // Every opaque predicate holds for any odd seed, and masked string decoders
+  // also consume `seed & 0xff === expectedSeedLowByte`. Detached `fn.toString()`
+  // re-evaluations (`new Function("return " + fn)()`) fall back to an odd constant
+  // carrying `expectedSeedLowByte`; a present-but-tampered seed still flips
+  // predicates AND corrupts string decoding.
+  const drawSeedFallback = (): number =>
+    (((prng.nextUint32() & 0xffffff00) >>> 0) | expectedSeedLowByte) >>> 0;
   const buildGuardedSeedRead = (fallback: number = drawSeedFallback()): t.Expression =>
     t.conditionalExpression(
       t.binaryExpression(
@@ -2541,10 +2618,11 @@ export function transformJavaScriptWithBlaShield(
         return;
       }
       const val = path.node.value;
-      // Ordinary strings are split up to 256 characters. What reads as a
-      // secret is split wherever it sits and up to a few kilobytes: an
-      // embedded PEM block or JWT is exactly the string worth the bytes.
-      if (val.length < 3 || (val.length > 256 && !isSplittableSecret(val))) {
+      // Ordinary strings are split up to 256 characters (down to 2 chars at
+      // bankrupt so short region/tier codes like "US"/"EU"/"pro" are masked too).
+      // What reads as a secret is split wherever it sits and up to a few kilobytes.
+      const minLen = intensity === "bankrupt" ? 2 : 3;
+      if (val.length < minLen || (val.length > 256 && !isSplittableSecret(val))) {
         return;
       }
       const parent = path.parent;
@@ -2590,7 +2668,10 @@ export function transformJavaScriptWithBlaShield(
         ) {
           parent.computed = true;
           path.replaceWith(
-            buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), { fine: true }),
+            buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), {
+              fine: true,
+              seedLowByte: expectedSeedLowByte,
+            }),
           );
           path.skip();
           primitiveCandidateBranchesCreated += 256;
@@ -2610,6 +2691,8 @@ export function transformJavaScriptWithBlaShield(
       }
       const encoded = buildCombinatorialStringAst(val, prng, resolveSeedForPath(path), {
         fine: wantsFineSplit(val),
+        ...(intensity === "bankrupt" ? { mask: true } : {}),
+        seedLowByte: expectedSeedLowByte,
       });
       // `<a title="…">`: an attribute holds a string or a `{…}` container,
       // never a bare expression. The parser has already decoded entities.
@@ -2692,7 +2775,11 @@ export function transformJavaScriptWithBlaShield(
         if (exprs.length === 0) {
           const val = quasis[0]?.value.cooked ?? "";
           path.replaceWith(
-            buildCombinatorialStringAst(val, prng, activeSeedName, { fine: wantsFineSplit(val) }),
+            buildCombinatorialStringAst(val, prng, activeSeedName, {
+              fine: wantsFineSplit(val),
+              ...(intensity === "bankrupt" ? { mask: true } : {}),
+              seedLowByte: expectedSeedLowByte,
+            }),
           );
           path.skip();
           primitiveCandidateBranchesCreated += 256;
@@ -2757,6 +2844,7 @@ export function transformJavaScriptWithBlaShield(
       if (path.scope.getBinding("RegExp") !== undefined) return;
       const source = buildCombinatorialStringAst(pattern, prng, resolveSeedForPath(path), {
         fine: true,
+        seedLowByte: expectedSeedLowByte,
       });
       path.replaceWith(
         t.newExpression(
@@ -3217,6 +3305,8 @@ export function transformJavaScriptWithBlaShield(
   const selfSealOpt = options.selfSeal;
   let esmSelfSealReqIdent: string | undefined;
   let esmSelfSealMetaUrlIdent: string | undefined;
+  let esmSelfSealCapReadIdent: string | undefined;
+  let esmSelfSealCapHashIdent: string | undefined;
   if (selfSealOpt) {
     if (effectiveCarrier === "module") {
       esmSelfSealReqIdent = prng.identifier({
@@ -3229,6 +3319,16 @@ export function transformJavaScriptWithBlaShield(
         hint: "moduleEntryUrl",
         entropy: 4,
       });
+      esmSelfSealCapReadIdent = prng.identifier({
+        style: "camel",
+        hint: "loadStreamBytes",
+        entropy: 4,
+      });
+      esmSelfSealCapHashIdent = prng.identifier({
+        style: "camel",
+        hint: "openDigestState",
+        entropy: 4,
+      });
     }
     const baseSealOpts: SelfSealOptions =
       selfSealOpt === true ? {} : selfSealOpt;
@@ -3238,6 +3338,8 @@ export function transformJavaScriptWithBlaShield(
             ...baseSealOpts,
             esmRequireHelperIdent: esmSelfSealReqIdent,
             esmMetaUrlIdent: esmSelfSealMetaUrlIdent,
+            ...(esmSelfSealCapReadIdent ? { esmCapReadIdent: esmSelfSealCapReadIdent } : {}),
+            ...(esmSelfSealCapHashIdent ? { esmCapHashIdent: esmSelfSealCapHashIdent } : {}),
           }
         : baseSealOpts;
     const seal = generateSelfSealSnippet(prng, sealOpts);
@@ -3245,13 +3347,6 @@ export function transformJavaScriptWithBlaShield(
     selfSealEnabled = true;
     selfSealBindingName = seal.bindingName;
   }
-  // Deterministic opaque-predicate seed (issue #40.4): never hrtime/Date.now/bit0-only.
-  // Draw ~28 bits of PRNG material (two draws xor'd) so weak hrtime/bit0 patterns
-  // cannot be guessed; keep low bit free for cognitive-armor + self-seal parity entanglement.
-  const opaqueSeedHi = prng.nextUint32() >>> 0;
-  const opaqueSeedLo = prng.nextUint32() >>> 0;
-  const opaqueSeedBase =
-    (((opaqueSeedHi ^ (opaqueSeedLo << 1)) & 0xfffffffc) >>> 0) || 4096;
   if (selfSealEnabled && selfSealBindingName) {
     mirageLines.push(
       `const ${seedVarName} = ((${opaqueSeedBase} ^ (${selfSealBindingName} >>> 0)) ^ ((${deceptionSuite.cognitiveArmor.digestFunctionName}(0) === ${deceptionSuite.cognitiveArmor.expectedDigest}) ? 1 : 0));`,
@@ -3273,7 +3368,6 @@ export function transformJavaScriptWithBlaShield(
 
   const decoyIpcFnName = prng.identifier({ style: "camel", hint: "bindChannelRoutes", entropy: 4 });
   mirageLines.push(
-    `/* Channel bindings kept for legacy renderer handshake compatibility; do not drop unused handlers */`,
     `function ${decoyIpcFnName}(_ipcMain, _ipcRenderer, _router) {`,
   );
   mirageLines.push(
@@ -3408,7 +3502,7 @@ export function transformJavaScriptWithBlaShield(
   // Scrub static generator prefixes in combinedInjectedAst so hardened output has
   // zero greppable template stems while preserving _[0-9a-f]{4} auditor entropy tags.
   const INJECTED_RAW_PREFIX_RE =
-    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault)_[A-Za-z0-9_]+$/i;
+    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault|readSplitShare|verifyShamirEd25519LicenseQuorum|computeEnterpriseSettlementLedger|decodeRatchetWireFrame|validateTpm2Pcr0Quote|verifyEnterpriseMasterLicense)_[A-Za-z0-9_]+$/i;
   const injectedRenameSites = collectRenameSites(combinedInjectedAst);
   traverse(combinedInjectedAst, {
     Program(progPath) {
@@ -3554,9 +3648,14 @@ export function transformJavaScriptWithBlaShield(
   // every decoy/tarpit/exhaustion function belongs to a single live SCC without
   // any self-snitching `void [...]` or `[...].every(...)` array manifest.
   const meshFns: t.FunctionDeclaration[] = [];
+  const meshTables: string[] = [];
   for (const stmt of restInjected) {
     if (t.isFunctionDeclaration(stmt) && stmt.id && t.isBlockStatement(stmt.body)) {
       meshFns.push(stmt);
+    } else if (t.isVariableDeclaration(stmt)) {
+      for (const d of stmt.declarations) {
+        if (t.isIdentifier(d.id)) meshTables.push(d.id.name);
+      }
     }
   }
   if (meshFns.length >= 2) {
@@ -3571,7 +3670,36 @@ export function transformJavaScriptWithBlaShield(
         t.binaryExpression("&", t.identifier(hoistedSeedName), t.numericLiteral(1)),
         t.numericLiteral(0),
       );
-      const linkExpr = t.memberExpression(t.identifier(nextA), t.identifier("length"));
+      // Also wire orphaned deception tables (`evidenceLedger`, `grpcServiceMirage`,
+      // `regexSearchMagnet`, `localeCollation`) into the live cyclic SCC so pure
+      // DCE cannot drop them, guarded behind `typeof hoistedSeed === "number"`
+      // so ESM import-cycle calls before module init never hit `const` TDZ.
+      const tableName = i < meshTables.length ? meshTables[i] : undefined;
+      const baseLinkExpr = t.memberExpression(t.identifier(nextA), t.identifier("length"));
+      const linkExpr =
+        tableName !== undefined
+          ? t.conditionalExpression(
+              t.binaryExpression(
+                "===",
+                t.unaryExpression("typeof", t.identifier(hoistedSeedName)),
+                t.stringLiteral("number"),
+              ),
+              t.binaryExpression(
+                "+",
+                baseLinkExpr,
+                t.conditionalExpression(
+                  t.binaryExpression(
+                    "!==",
+                    t.unaryExpression("typeof", t.identifier(tableName)),
+                    t.stringLiteral("undefined"),
+                  ),
+                  t.numericLiteral(1),
+                  t.numericLiteral(0),
+                ),
+              ),
+              t.cloneNode(baseLinkExpr, true),
+            )
+          : baseLinkExpr;
       if (stmts.length === 1 && t.isReturnStatement(stmts[0]) && stmts[0].argument) {
         stmts[0] = t.returnStatement(
           t.conditionalExpression(parityZeroCond, linkExpr, stmts[0].argument),
@@ -3640,7 +3768,7 @@ export function transformJavaScriptWithBlaShield(
                     ),
                     t.numericLiteral(1023),
                   ),
-                  t.numericLiteral(2),
+                  t.numericLiteral(8),
                 ),
                 t.conditionalExpression(
                   t.binaryExpression(
@@ -3655,7 +3783,7 @@ export function transformJavaScriptWithBlaShield(
                       t.identifier(paramName),
                       t.numericLiteral(255),
                     ),
-                    t.numericLiteral(2),
+                    t.numericLiteral(8),
                   ),
                   t.numericLiteral(0),
                 ),
@@ -3775,6 +3903,20 @@ export function transformJavaScriptWithBlaShield(
     ]);
     ast.program.body.unshift(reqImportDecl);
     insertIndex += 1;
+    if (esmSelfSealCapReadIdent && esmSelfSealCapHashIdent) {
+      // Must be the very first static import so it evaluates BEFORE any user
+      // sibling `import` (e.g. `./quota.mjs`), capturing unpatched `node:fs`
+      // and `node:crypto` references before a tampered sibling can hook them.
+      const capImportDecl = t.importDeclaration(
+        [
+          t.importSpecifier(t.identifier(esmSelfSealCapReadIdent), t.identifier("r")),
+          t.importSpecifier(t.identifier(esmSelfSealCapHashIdent), t.identifier("h")),
+        ],
+        t.stringLiteral(ESM_PREHOIST_CAPTURE_DATA_URL),
+      );
+      ast.program.body.unshift(capImportDecl);
+      insertIndex += 1;
+    }
     topDecls.unshift(metaUrlDecl);
   }
   if (effectiveCarrier === "script") {
@@ -3812,7 +3954,46 @@ export function transformJavaScriptWithBlaShield(
   if (topDecls.length > 0) {
     ast.program.body.splice(insertIndex, 0, ...topDecls);
   }
-  ast.program.body.push(...restInjected);
+  // Break the "contiguous real-code island" tell by interleaving pure hoisted
+  // decoy FunctionDeclarations across customer top-level statements in module/CJS
+  // files (JS hoists FunctionDeclarations regardless of lexical position, so
+  // runtime execution order & TDZ stay 100% identical).
+  const customerStart = insertIndex + topDecls.length;
+  const customerCount = ast.program.body.length - customerStart;
+  if (effectiveCarrier !== "script" && customerCount >= 2 && restInjected.length > 0) {
+    const hoistedDecoys: t.Statement[] = [];
+    for (const stmt of restInjected) {
+      if (t.isFunctionDeclaration(stmt)) {
+        hoistedDecoys.push(stmt);
+      }
+    }
+    const interleaveCount = Math.min(
+      Math.floor(hoistedDecoys.length * 0.45),
+      Math.max(2, customerCount * 3),
+    );
+    if (interleaveCount > 0) {
+      const toWeave = hoistedDecoys.slice(0, interleaveCount);
+      const customerBody = ast.program.body.slice(customerStart);
+      const merged: t.Statement[] = [];
+      const perGap = Math.max(1, Math.ceil(toWeave.length / customerBody.length));
+      let wIdx = 0;
+      for (let ci = 0; ci < customerBody.length; ci++) {
+        merged.push(customerBody[ci]!);
+        if (ci + 1 < customerBody.length && wIdx < toWeave.length) {
+          const end = Math.min(wIdx + perGap, toWeave.length);
+          for (; wIdx < end; wIdx++) merged.push(toWeave[wIdx]!);
+        }
+      }
+      while (wIdx < toWeave.length) merged.push(toWeave[wIdx++]!);
+      const wovenSet = new Set<t.Statement>(toWeave);
+      const restPreserved = restInjected.filter((stmt) => !wovenSet.has(stmt));
+      ast.program.body.splice(customerStart, customerCount, ...merged, ...restPreserved);
+    } else {
+      ast.program.body.push(...restInjected);
+    }
+  } else {
+    ast.program.body.push(...restInjected);
+  }
 
   const exportedSymbolsAfter = collectEsmExportedSymbols(ast.program);
   if (

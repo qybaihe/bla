@@ -38,7 +38,7 @@ const RELATIVE_IMPORT_RE =
   /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*|\bimportScripts\s*\(\s*|new\s+URL\s*\(\s*)["'`](\.{1,2}\/[^"'`\n]+?)["'`]/g;
 
 const BROWSER_GLOBAL_RE =
-  /\b(?:document\s*\.\s*(?:getElementById|querySelector|querySelectorAll|createElement|addEventListener|body|head|cookie|documentElement)|window\s*\.\s*(?:addEventListener|location|document|localStorage|sessionStorage|history|matchMedia|requestAnimationFrame|innerWidth|innerHeight)|customElements\s*\.\s*define|localStorage\s*\.\s*(?:getItem|setItem)|sessionStorage\s*\.\s*(?:getItem|setItem)|navigator\s*\.\s*(?:userAgent|serviceWorker|clipboard|language)|requestAnimationFrame\s*\(|\bHTMLElement\b)/;
+  /(?:\btypeof\s+(?:window|document|navigator)\s*[!=]==?\s*["']undefined["']|(?<![.\w$])(?:document|window)\s*\.\s*[$A-Za-z_][\w$]*|\bcustomElements\s*\.\s*define|\b(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem)|\bnavigator\s*\.\s*(?:userAgent|serviceWorker|clipboard|language)|\brequestAnimationFrame\s*\(|\b(?:HTMLElement|ShadowRoot|MutationObserver|IntersectionObserver|ResizeObserver|DOMParser|XMLHttpRequest|indexedDB)\b|\bimportScripts\s*\(|(?<![.\w$])self\s*\.\s*(?:postMessage|onmessage|addEventListener)|\.(?:textContent|innerHTML|appendChild|classList|shadowRoot)\b)/;
 
 const NODE_MARKER_RE =
   /\brequire\s*\(\s*["'`]|\bmodule\s*\.\s*exports\b|\b__dirname\b|\b__filename\b|\bprocess\s*\.\s*(?:env|argv|cwd|exit|platform|versions|stdout|stderr|stdin|on|nextTick|binding)\b|["'`]node:[a-z_/]+["'`]|\bfrom\s*["'`](?:fs|path|os|crypto|child_process|http|https|net|url|util|stream|worker_threads|electron)["'`]|\bimport\s*\.\s*meta\s*\.\s*(?:dirname|filename)\b|^#!.*\bnode\b/m;

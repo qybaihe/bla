@@ -17,6 +17,7 @@ import {
   type PythonToken,
 } from "./python-ast-weave.js";
 import { weavePythonPycBuffer } from "./python-pyc-weave.js";
+import { SELF_DIGEST_PLACEHOLDER } from "../runtime/self-seal.js";
 
 export { InvalidPythonSourceError };
 
@@ -792,6 +793,12 @@ export function protectPythonSource(
      * (shared-slot touch + opaque-false calls). When false, preserve warm-init-only.
      */
     readonly weaveDecoys?: boolean;
+    /**
+     * When true, embed a canonical SHA-256 self-digest verification block that
+     * fails closed (`RuntimeError("integrity check failed")`) if the module's
+     * own bytes on disk are altered after hardening.
+     */
+    readonly selfSeal?: boolean;
   } = {},
 ): {
   readonly code: string;
@@ -811,7 +818,12 @@ export function protectPythonSource(
   const text = loaded.text;
   const { tokens: customerTokens, prologue } = scanPrologueOf(text);
 
-  const prng = new SeededPrng(options.seed ?? "bla-python-shield-v1");
+  // Derive a per-file PRNG seed from `(options.seed, sha256(text))` — mirrors
+  // JS `ast-shield.ts` so sibling `.py` modules never share identical decoy
+  // preambles that can be stripped with a 2-file `diff`, while staying 100%
+  // deterministic for the same file and seed.
+  const contentHash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const prng = new SeededPrng(`${options.seed ?? "bla-python-shield-v1"}:${contentHash}`);
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const tarpit = generatePythonTarpit(prng, intensity, chaffPayloads);
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
@@ -847,12 +859,50 @@ export function protectPythonSource(
   const cognitiveArmorStrings = deception.cognitiveArmor.triggersInjected.map(
     (t) => `${t.coupledAnchorSymbol}::${t.triggerPayload.replace(/\r?\n/g, " ")}`,
   );
+  const selfSealFnName = options.selfSeal === true
+    ? drawPrivatePythonName(naming, taken, { hint: "verify_module_digest" })
+    : undefined;
+  const selfSealBlock =
+    selfSealFnName !== undefined
+      ? [
+          `def ${selfSealFnName}():`,
+          `    self_expected = ${JSON.stringify(SELF_DIGEST_PLACEHOLDER)}`,
+          `    _ph = "~self-digest-" + "pending-finalize" + ("~" * 35)`,
+          `    if self_expected == _ph:`,
+          `        return`,
+          `    if len(self_expected) != 64 or any(c not in "0123456789abcdef" for c in self_expected):`,
+          `        raise RuntimeError("integrity check failed")`,
+          `    _fp = globals().get("__file__")`,
+          `    if type(_fp) is not type("") or not _fp or _fp.endswith((".pyc", ".pyo")):`,
+          `        return`,
+          `    _sha256 = None`,
+          `    try:`,
+          `        _sha256 = getattr(__import__("_hashlib"), "openssl_sha256", None)`,
+          `    except Exception:`,
+          `        _sha256 = None`,
+          `    if _sha256 is None:`,
+          `        try:`,
+          `            _sha256 = getattr(__import__("_sha256"), "sha256", None)`,
+          `        except Exception:`,
+          `            _sha256 = None`,
+          `    if _sha256 is None:`,
+          `        _sha256 = __import__("hashlib").sha256`,
+          `    try:`,
+          `        with open(_fp, "rb") as _fh:`,
+          `            _raw = _fh.read()`,
+          `    except Exception:`,
+          `        raise RuntimeError("integrity check failed") from None`,
+          `    _canon = _raw.replace(self_expected.encode("latin-1"), b"0" * 64)`,
+          `    if _sha256(_canon).hexdigest() != self_expected:`,
+          `        raise RuntimeError("integrity check failed")`,
+          `${selfSealFnName}()`,
+        ].join("\n")
+      : "";
+
   const deceptionBlock = [
-    "# --- canary credential / transport-redaction honeypot (inert) ---",
     `${canaryTokensName} = ${pythonStringTuple(deception.canary.syntheticCanaryTokens)}`,
     `${ambiguousTransportName} = ${pythonStringTuple(deception.canary.ambiguousCredentialUrls)}`,
     `${conflictingQueryName} = ${pythonStringTuple(deception.canary.conflictingQueryUrls)}`,
-    "# --- system-diagnostic rabbit holes & cognitive-armor interlocks (inert) ---",
     `${systemDiagnosticsName} = ${pythonDiagnosticTuple(deception.diagnostics.diagnosticsInjected)}`,
     `${canaryGuidName} = ${pythonReprString(deception.cognitiveArmor.canaryGuid)}`,
     `${armorCorpusName} = ${pythonStringTuple(cognitiveArmorStrings)}`,
@@ -866,7 +916,11 @@ export function protectPythonSource(
   const preamble = [
     `import builtins as ${builtinsAlias}`,
     isolateInjectedPythonCode(
-      `${tarpit.code.replace(/\n+$/, "")}\n\n${deceptionBlock}`,
+      [
+        ...(selfSealBlock ? [selfSealBlock] : []),
+        tarpit.code.replace(/\n+$/, ""),
+        deceptionBlock,
+      ].join("\n\n"),
       builtinsAlias,
     ),
   ]

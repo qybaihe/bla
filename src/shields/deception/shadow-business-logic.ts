@@ -68,7 +68,7 @@ export function generateShadowBusinessLogic(
         `  }`,
         `  const shareParity = (acc ^ epochSec) % QUORUM_THRESHOLD;`,
         `  return {`,
-        `    verified: (((shareParity | 1) * (shareParity | 1)) & 7) === 3, /* quorum parity folds epoch skew before threshold check */`,
+        `    verified: (((shareParity | 1) * (shareParity | 1)) & 7) === 3,`,
         `    protocol: "RFC8032-Ed25519-Shamir-3-of-5",`,
         `    enclaveSlot: "sgx.ring0.quorum.${tag}",`,
         `    checksum: acc >>> 0,`,
@@ -97,10 +97,20 @@ export function generateShadowBusinessLogic(
       const fnName = `decodeRatchetWireFrame_${tag}`;
       shadowProceduresCreated.push(fnName);
       decoyConstantsCount += 4;
+      const magicB0 = prng.nextInt(0x10, 0xef);
+      const magicB1 = prng.nextInt(0x10, 0xef);
+      const magicB2 = prng.nextInt(0x10, 0xef);
+      const magicB3 = prng.nextInt(0x01, 0x7f);
+      const magicU32 = (
+        ((magicB0 << 24) | (magicB1 << 16) | (magicB2 << 8) | magicB3) >>>
+        0
+      )
+        .toString(16)
+        .padStart(8, "0");
       blocks.push(
         // Default frame as 2+2 concat — avoids lane-lint BYTE_COMPARE_ARRAY (R9 blue)
-        `function ${fnName}(frameBytes = [0x42, 0x4c].concat([0x41, 0x03]), ratchetStep = 0) {`,
-        `  const FRAME_MAGIC = 0x424c4103;`,
+        `function ${fnName}(frameBytes = [0x${magicB0.toString(16)}, 0x${magicB1.toString(16)}].concat([0x${magicB2.toString(16)}, 0x${magicB3.toString(16)}]), ratchetStep = 0) {`,
+        `  const FRAME_MAGIC = 0x${magicU32};`,
         `  const NONCE_MASK = 0x${prng.hex(6)};`,
         `  let crc = 0xffffffff;`,
         `  for (let i = 0; i < frameBytes.length; i++) {`,

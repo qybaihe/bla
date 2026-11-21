@@ -1287,7 +1287,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           console.error("Error: Missing <target> path for `bla verify <target> [original]`.");
           return 1;
         }
-        const report = verifyTarget(target, parsed.positionals[1]);
+        const report = verifyTarget(target, parsed.positionals[1], {
+          autoDetectBindings: true,
+          ...(parsed.selfSeal ? { selfSealEnabled: true } : {}),
+          ...(parsed.sidecarEntangle ? { sidecarEntangleEnabled: true } : {}),
+        });
         if (parsed.json) console.log(JSON.stringify(report, null, 2));
         else console.log(formatVerificationReport(report));
         if (parsed.failUnder !== undefined && report.defenseScore < parsed.failUnder) {

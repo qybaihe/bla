@@ -78,10 +78,15 @@ export function generateShadowHeapChurnShield(
     );
   }
 
+  const frontierStem = prng.identifier({
+    style: "snake",
+    hint: "slot_frame",
+    entropy: 2,
+  });
   const overflowFieldsInit: string[] = [];
   for (let f = 0; f < diffOverflowFieldsCount; f++) {
     overflowFieldsInit.push(
-      `    state_diff_frontier_${f}: ${prng.nextInt(100000, 999999)}`,
+      `    ${frontierStem}_${f}: ${prng.nextInt(100000, 999999)}`,
     );
   }
 
@@ -147,7 +152,7 @@ export function generateShadowHeapChurnShield(
     ...Array.from(
       { length: diffOverflowFieldsCount },
       (_, f) =>
-        `  _env.state_diff_frontier_${f} = (_env.state_diff_frontier_${f} ^ (_mask + ${f * 37})) & 0x7fffffff;`,
+        `  _env.${frontierStem}_${f} = (_env.${frontierStem}_${f} ^ (_mask + ${f * 37})) & 0x7fffffff;`,
     ),
     `  return ${heapObjectName}.rollingMask;`,
     `}`,
