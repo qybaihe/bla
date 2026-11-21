@@ -54,6 +54,17 @@ jobs:
       - name: Build dist & CLI
         run: npm run build
 
+      # `files` is an allowlist, so a root `.npmignore` cannot filter inside an
+      # included directory — the negation in `package.json` is the only thing
+      # keeping BLA's own source maps (`tsconfig.json` sets `sourceMap` and
+      # `declarationMap`) out of the published tarball. Guard it, so a future edit
+      # that starts shipping them fails CI instead of the release.
+      - name: Assert the npm tarball ships no source maps
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        shell: bash
+        run: |
+          npm pack --dry-run --json | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{const files=JSON.parse(s)[0].files.map((f)=>f.path);const leaked=files.filter((p)=>p.endsWith(".map")||p.endsWith(".tsbuildinfo")||p.includes(".test."));if(leaked.length>0){console.error("Unexpected files in the published package:",leaked);process.exit(1);}console.log("packed files:",files.length);});'
+
       - name: Run unit & multi-format shield tests
         if: matrix.os != 'ubuntu-latest' || matrix.node != 24
         run: npm test
