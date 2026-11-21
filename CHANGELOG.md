@@ -6,8 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.7] — 2026-11-21
+
+Optional SQLite load-time hook: when `sidecarEntangle` is on and a known safe Python loader sits beside the database, stripping the `bla.sidecar.v1` schema-comment view or a sibling sidecar fails closed at import. User tables, rows, query results, WAL/FK, and `application_id` / `user_version` stay unchanged. Default remains OFF.
+
 ### Added
 - **SQLite load-time hook (`generateSidecarSqliteLoaderSnippet` / `prependSqliteSidecarLoaderHook` / `entangleSqliteLoaderWithSidecars`):** When `sidecarEntangle` is on, `protectTarget` and the `hardenProject` post-pass auto-wire a self-contained Python snippet into a same-directory loader named `loader.py`, `__init__.py`, or `__main__.py` that already mentions the `.sqlite` / `.sqlite3` / `.db` basename (`selectPythonSqliteLoader` / `discoverPythonSqliteLoader` / `isSafePythonSqliteLoader` / `isSqliteSidecarLoaderHookWired`). The hook opens the sibling database read-only at import time and, when the logical identity (`computeSqliteSidecarCodeIdentity`) matches, verifies the `bla.sidecar.v1` schema-comment view and sidecar digest — strip or sibling delete fails closed. The hook does not rewrite the database (user tables, rows, query results, WAL/FK, and `application_id` / `user_version` stay unchanged; `PRAGMA integrity_check` still holds; the existing unused `bla_sidecar_v1` WHERE 0 view remains the only SQLite mutation). Identity is a logical hash of header pragmas plus schema and stored-column values excluding the reserved view, because `DROP VIEW` is not bit-exact. Test files, already-entangled entries, and unknown helpers such as `helper.py` are never hooked. Vector `sqlite-sidecar-entangle` is recorded and defenseScore gap `sqlite-sidecar-host-verify-only` is cleared only when that hook was actually written (SQLite business-data honesty caps still apply). Default still OFF.
+- **REA catalog hygiene** on tip `f8192bd39` (honesty only; no new 1:1 densify counters): REA `a2acbe393`→`f8192bd39` (+250; 213 test / 20 fix / 10 docs / 4 perf / 3 feat) added no plantable densify/budget/evidence/redaction counters and no new catalogued non-plantable limits (IDA MCP limitation strings and website/test consolidations only).
 
 ## [3.5.6] — 2026-11-21
 

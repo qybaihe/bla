@@ -1,5 +1,58 @@
 # BLA nightly development log
 
+## 2026-11-21 ~America/Los_Angeles / ~2026-11-22 02:00 Asia/Shanghai
+
+### REA delta
+- Pulled `morluto/rea`: `a2acbe393` → `f8192bd39` (**+250** commits). Dirty
+  `third_party/*` submodule checkouts were left untouched.
+- No new 1:1 trip-able densify constants and no new catalogued non-plantable
+  limits. The delta is mostly test consolidations (213 test / 20 fix / 10
+  docs / 4 perf / 3 feat). Feat commits are website previews/contributors
+  and official Hex-Rays IDA MCP headless support (#4813), not plantable
+  densify targets. Added production constants were documentation/limitation
+  strings (`IDA_DATABASE_TARGET_LIMITATION`, `IDA_NATIVE_STRING_LIMITATION`,
+  `SCENARIO_NETWORK_COVERAGE_GUIDANCE`), not artifact-plantable counters.
+  No existing catalogued limit values changed.
+
+### Done tonight
+- Live BLA tree was pulled `1a84a34` / `3.5.4` → `fcd8885` / `3.5.6`
+  (daytime security releases already on main: red-blue reinforcements
+  across JS/ESM/WASM/Python/CLI, then GitTested false-positive / atomic
+  lane refusal and static de-blinding hardening; #263).
+- Landed the SQLite load-time hook (`generateSidecarSqliteLoaderSnippet` /
+  `prependSqliteSidecarLoaderHook` / `entangleSqliteLoaderWithSidecars` /
+  `computeSqliteSidecarCodeIdentity`; marker `_installSqliteSidecarLoaderHook`;
+  `protectTarget` + `hardenProject` post-pass). Auto-wired only into a
+  same-directory Python loader named `loader.py`, `__init__.py`, or
+  `__main__.py` that already mentions the `.sqlite` / `.sqlite3` / `.db`
+  basename (`selectPythonSqliteLoader` / `discoverPythonSqliteLoader` /
+  `isSafePythonSqliteLoader` / `isSqliteSidecarLoaderHookWired` /
+  `sourceMentionsSqliteFile`). The hook does not rewrite the database
+  (user tables, rows, query results, WAL/FK, and `application_id` /
+  `user_version` stay unchanged; `PRAGMA integrity_check` still holds;
+  the existing unused `bla_sidecar_v1` WHERE 0 view remains the only
+  SQLite mutation). Identity is a logical hash because `DROP VIEW` is
+  not bit-exact. Test / already-entangled / self-seal / unknown helper
+  files are never hooked. Vector `sqlite-sidecar-entangle` is recorded
+  and `sqlite-sidecar-host-verify-only` is cleared only when that hook
+  was actually written. Default OFF via existing `sidecarEntangle`.
+- Gates: build OK, tests **1340 passed / 5 skipped**, benchmark **14/14**
+  runtime-equivalent.
+- Cut `bla-agents@3.5.7` (tag `bla-agents-3.5.7`).
+
+### Next step (following night)
+1. DEX load-time hook (same honesty bar: only record the vector / clear
+   `dex-sidecar-host-verify-only` when a real load-time hook was written).
+   Prefer a design that does not break ART/Dalvik load, existing string
+   indices, instruction bytes, or checksums.
+2. Browser WASM loader auto-wire (the hook still needs Node `fs` /
+   `crypto`; a browser snippet would have to verify without those).
+3. ESM hook that runs before hoisted *user* imports; MCP one-click
+   polish; other artifact-format shields; sidecarEntangle-off
+   defenseScore gaps.
+
+
+
 ## 2026-11-20 ~America/Los_Angeles / ~2026-11-21 02:00 Asia/Shanghai
 
 ### REA delta

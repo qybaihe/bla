@@ -1,6 +1,6 @@
 {
   "name": "bla",
-  "version": "3.5.6",
+  "version": "3.5.7",
   "description": "Counter-REA Blue Defense plugin: teaches coding agents the BLA Agent-Driven Hardening playbook and registers the 31-tool BLA MCP server.",
   "author": {
     "name": "BLA Contributors",
@@ -17,7 +17,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "bla-agents@3.5.6",
+        "bla-agents@3.5.7",
         "mcp"
       ]
     }
