@@ -1,19 +1,25 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hardenProject, restoreHardenedProject } from "../src/engine/harden.js";
-import { listAppliedFiles, resolveApplyStateDirectory } from "../src/engine/harden-apply.js";
+import {
+  applyHardenedOutputs,
+  listAppliedFiles,
+  resolveApplyStateDirectory,
+} from "../src/engine/harden-apply.js";
 import { handleMcpRequest } from "../src/mcp/server.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +75,18 @@ function listFilesRecursive(root: string): string[] {
   walk(root, "");
   return out.sort();
 }
+
+/** Windows needs Developer Mode or elevation to create symlinks; probe instead of assuming. */
+const canCreateSymlinks = (() => {
+  try {
+    const probe = tempDir("bla-symlink-probe-");
+    writeFileSync(join(probe, "target"), "x", "utf8");
+    symlinkSync(join(probe, "target"), join(probe, "link"));
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 describe("harden apply / restore", () => {
   it("promotes hardened build output in place and restores the exact originals", () => {
@@ -288,4 +306,65 @@ describe("harden apply / restore", () => {
     expect(nothing.structuredContent.overallSuccess).toBe(false);
     expect(nothing.structuredContent.nextSteps[0]).toMatch(/Nothing protectable was found/);
   }, 90000);
+
+  it("refuses to promote a hardened artifact over a hardlinked destination", () => {
+    const dir = makeBuiltProject();
+    const hardenedMirror = tempDir("bla-apply-mirror-");
+    const hardened = join(hardenedMirror, "main.cjs");
+    writeFileSync(hardened, "/* hardened */\n", "utf8");
+
+    const outside = tempDir("bla-apply-outside-");
+    const victim = join(outside, "victim.txt");
+    writeFileSync(victim, "untouched\n", "utf8");
+
+    const destination = join(dir, "dist", "main.cjs");
+    rmSync(destination, { force: true });
+    linkSync(victim, destination);
+    expect(statSync(destination).nlink).toBeGreaterThan(1);
+
+    const report = applyHardenedOutputs({
+      projectDirectory: dir,
+      stateDirectory: tempDir("bla-apply-state-"),
+      runId: "link-refusal",
+      candidates: [{ outputPath: hardened, destinationPath: destination }],
+      buildDirNames: ["dist"],
+    });
+
+    // The promotion must fail closed instead of writing through the alias.
+    expect(report.status).toBe("failed");
+    expect(report.reason).toMatch(/symlink or hardlinked output/);
+    expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+    expect(readdirSync(join(dir, "dist")).some((n) => n.includes(".bla-tmp"))).toBe(false);
+  }, 30000);
+
+  it.skipIf(!canCreateSymlinks)(
+    "refuses to promote a hardened artifact over a symlinked destination",
+    () => {
+      const dir = makeBuiltProject();
+      const hardenedMirror = tempDir("bla-apply-mirror-");
+      const hardened = join(hardenedMirror, "main.cjs");
+      writeFileSync(hardened, "/* hardened */\n", "utf8");
+
+      const outside = tempDir("bla-apply-outside-");
+      const victim = join(outside, "victim.txt");
+      writeFileSync(victim, "untouched\n", "utf8");
+
+      const destination = join(dir, "dist", "main.cjs");
+      rmSync(destination, { force: true });
+      symlinkSync(victim, destination);
+
+      const report = applyHardenedOutputs({
+        projectDirectory: dir,
+        stateDirectory: tempDir("bla-apply-state-"),
+        runId: "symlink-refusal",
+        candidates: [{ outputPath: hardened, destinationPath: destination }],
+        buildDirNames: ["dist"],
+      });
+
+      expect(report.status).toBe("failed");
+      expect(report.reason).toMatch(/symlink or hardlinked output/);
+      expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+    },
+    30000,
+  );
 });

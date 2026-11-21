@@ -24,20 +24,20 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { physicalPath } from "../core/output-path.js";
 import { resolveBlaStateRoot } from "../core/output-registry.js";
+import { writeFileAtomicSync } from "./protector.js";
 
 export const HARDEN_APPLY_STATE_SCHEMA = "bla-apply-state/v1" as const;
 const STATE_FILE_NAME = "apply-state.json";
@@ -155,27 +155,33 @@ export function loadApplyState(stateDirectory: string): HardenApplyState | undef
 
 function writeApplyState(stateDirectory: string, state: HardenApplyState): void {
   mkdirSync(stateDirectory, { recursive: true });
-  const target = join(stateDirectory, STATE_FILE_NAME);
-  const temp = `${target}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-  renameSync(temp, target);
+  writeFileAtomicSync(
+    join(stateDirectory, STATE_FILE_NAME),
+    `${JSON.stringify(state, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function clearApplyState(stateDirectory: string): void {
   rmSync(stateDirectory, { recursive: true, force: true });
 }
 
-/** Replace `destination` with a copy of `source` without a torn intermediate file. */
+/**
+ * Replace `destination` with a copy of `source` without a torn intermediate file.
+ *
+ * Goes through the shared `writeFileAtomicSync` rather than its own
+ * `${destination}.${process.pid}.bla-tmp` copy: the shared writer refuses to write
+ * through a symlink or hardlink planted at the destination and creates its temp
+ * with `flag: "wx"` plus a random suffix, so a pre-planted temp path cannot be
+ * followed. Promotion must keep the artifact runnable, and the writer takes the
+ * permission bits of an existing destination, so the promoted file's mode is
+ * carried over explicitly.
+ */
 function replaceFile(source: string, destination: string): void {
-  mkdirSync(dirname(destination), { recursive: true });
-  const temp = `${destination}.${process.pid}.bla-tmp`;
-  copyFileSync(source, temp);
-  try {
-    renameSync(temp, destination);
-  } catch (err) {
-    rmSync(temp, { force: true });
-    throw err;
-  }
+  const content = readFileSync(source);
+  const sourceMode = statSync(source).mode & 0o7777;
+  writeFileAtomicSync(destination, content);
+  chmodSync(destination, sourceMode);
 }
 
 /**
