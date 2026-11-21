@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.6] — 2026-11-21
+
+Production safety & static de-blinding hardening release (#263): eliminates `lane-independence-lint` false positives on ordinary business lookup tables and makes lane-gate refusal atomic (zero partial `.bla-hardened` output), adds CLI flag typo hints & `--self-seal` post-harden immutability guidance, and hardens JS/Python/self-seal shields against pure static AST de-blinding engines.
+
+### Security
+- **Non-pure-eval interlock digest & full-byte coupling (`src/shields/deception/cognitive-armor-trigger.ts`, `src/shields/javascript/ast-shield.ts`):** Accumulates `_deriveContainmentCorpusDigest_*` inside `new Uint32Array(2)` (outside closed pure-int32 static AST evaluators) with bit-identical digest output, and mixes `((_dv ^ expectedDigest) & -2)` directly into `runtimeSeed`.
+- **Live shadow-heap rolling `Uint32Array` latch (`src/shields/runtime/memory-diff-shield.ts`, `src/shields/javascript/ast-shield.ts`):** Adds a 2-word rolling `Uint32Array` latch mutated on every stepper step while preserving `(w[0] ^ w[1]) & 0xff === latchInvariantByte`, read directly by top-level `runtimeSeed` (unguarded — stripping the heap throws `ReferenceError`) and `buildMaskDecodeCall` decoders (with detached `fn.toString()` fallback), defeating private-state sink elimination and top-level known-bits constant folding.
+- **Full-32-bit parameterized affine MBA opaque predicates (`src/shields/tarpit/opaque-predicates.ts`):** Replaces JS Variant 0 (`7x² - 1 === y²`) and Python Variants 1–3 (`& 7`, `& 15`, `& 1`) with full-32-bit affine MBA identities over Z_{2^32}, eliminating canonical regex matches and low-bit output mask reductions.
+- **Diversified identifier morphology (`src/core/identifiers.ts`, `src/engine/auditor.ts`, `src/shields/weave/weave-decoy.ts`):** Replaces the uniform `_[0-9a-f]{3,4}` suffix across generated JS/Python identifiers with multi-shape non-hex base36 morphologies while adding structural SCC parity-guard recognition to `auditor.ts`.
+- **Low-level fd `self-seal` reads across all sites (`src/shields/runtime/self-seal.ts`):** Switches both CJS self-seal sites and `ESM_PREHOIST_CAPTURE_DATA_URL` to `openSync`/`fstatSync`/`readSync`/`closeSync` (zero static `readFileSync` calls) and verifies `openSync`/`readSync`/`fstatSync` plus computed `readFileSync` identity against `process.getBuiltinModule("node:fs")`.
+
+### Fixed
+- **Lane-independence lint precision (`src/engine/lane-independence-lint.ts`):** Requires equality/XOR comparisons inside `NAMED_INT_TABLE` method-call callback windows (`.findIndex`, `.reduce`, `.map`, `.every`, `.some`, `.forEach`), expands `KEY_BENIGN_PREV` for ordinary lookup keys (`zoneKey`, `tierKey`, `rateKey`, `shippingKey`, `itemKey`, `countryKey`, `currencyKey`, etc.), and guards `"pin"` against benign UI/geo neighbors (`mapPin`, `pinTop`, `locationPin`).
+- **Atomic pre-flight lane refusal & `--self-seal` pipeline guidance (`src/engine/harden.ts`):** Lifts `lintLaneIndependence` into `hardenProject()`'s upfront pre-flight gate so a refused JS/TS file blocks the entire run before writing any sibling HTML/assets into `.bla-hardened`; emits a `nextSteps` warning when `--self-seal` is active reminding operators to finish bundling/minification before hardening and leave output unmodified afterwards.
+- **CLI flag typo hints & modeled benchmark labeling (`src/cli.ts`, `README.md`, `STATE.md`, `docs/readme/README_zh.md`):** Adds helpful suggestions on common unknown CLI flags (`--mode` → `--intensity`, `--seal` → `--self-seal`, `--entangle` → `--sidecar-entangle`, etc.), syncs the modeled showcase aggregate (`~1,195.9×` token / `~563.7×` cost), and labels README aggregate figures explicitly as internal estimator projections.
+
 ## [3.5.5] — 2026-11-21
 
 Adversarial red-blue security & equivalence release closing ESM static-import hoisting bypasses, `self-seal` / loader-hook fail-open flaws (WASM, `.pyc`, GGUF, Safetensors), JS AST `for-of`/`for-in` destructuring renames, Python entry/self-seal/per-file-seeding gaps, WASM flower uniformity, and CLI `bla verify` / `--apply --dry-run` UX bugs.
