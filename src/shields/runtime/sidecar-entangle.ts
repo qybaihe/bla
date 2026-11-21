@@ -32,7 +32,14 @@
  * string literal / schema comment carries `bla.sidecar.v1` JSON, verified
  * by `verifySqliteSidecarSchemaComment` (SQLite ignores the unused view —
  * user tables, rows, query results, WAL/FK, and application_id/user_version
- * stay unchanged; see `docs/design/sidecar-entry-entanglement.md`).
+ * stay unchanged) and an optional same-directory Python load-time hook
+ * (`generateSidecarSqliteLoaderSnippet` / `prependSqliteSidecarLoaderHook` /
+ * `entangleSqliteLoaderWithSidecars`) auto-wired into a known safe loader
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * database basename so strip / sibling delete fail closed when that loader
+ * runs; only then is `sqlite-sidecar-entangle` recorded and
+ * `sqlite-sidecar-host-verify-only` cleared (see
+ * `docs/design/sidecar-entry-entanglement.md`).
  *
  * DEFENSIVE ONLY. Hash-only — no guessing.
  */
@@ -80,6 +87,7 @@ import {
   SQLITE_SIDECAR_NOTE_COLUMN,
   SQLITE_SIDECAR_VIEW_NAME,
   canRewriteSqliteSidecar,
+  computeSqliteSidecarCodeIdentity,
   extractSqliteSidecarSchemaCommentJson,
   plantSqliteSidecarSchemaComment,
   stripSqliteSidecarSchemaComment as dropSqliteSidecarSchemaView,
@@ -3588,7 +3596,7 @@ const MAX_PYC_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
 const MAX_PYC_LOADER_AUTOWIRE_CHARS = 64 * 1024;
 const PYC_LOADER_EXTENSIONS = [".py"] as const;
 const ALREADY_ENTANGLED_PY_RE =
-  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook|_installGgufSidecarLoaderHook|_installSafetensorsSidecarLoaderHook/;
+  /bla-self-seal\/v1|_verify_sibling_digest_|integrity binding mismatch|_installPycSidecarLoaderHook|_installWasmSidecarLoaderHook|_installGgufSidecarLoaderHook|_installSafetensorsSidecarLoaderHook|_installSqliteSidecarLoaderHook/;
 
 /** Module stem of a CPython cache filename (`sample.cpython-312.opt-1.pyc` → `sample`). */
 export function pycModuleStemFromBasename(filename: string): string {
@@ -5788,7 +5796,7 @@ export function verifyDexSidecarStringPoolNote(
 
 export const SQLITE_SIDECAR_METADATA_KEY = SQLITE_SIDECAR_NOTE_COLUMN;
 export const SQLITE_SIDECAR_METADATA_KIND = "sqlite-schema-comment" as const;
-export { SQLITE_SIDECAR_VIEW_NAME };
+export { SQLITE_SIDECAR_VIEW_NAME, computeSqliteSidecarCodeIdentity };
 
 export interface SqliteSidecarMetadataNote {
   readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
@@ -5916,7 +5924,7 @@ export function bindSqliteSidecarEntanglement(
     ...plan,
     entryHookKind: "sqlite-schema-comment",
     status: "bound",
-    note: "Bound — SQLite bla.sidecar.v1 schema-comment view planted; ship sidecars alongside and verify via verifySqliteSidecarSchemaComment. Host verify fails closed on strip/alter; SQLite ignores the unused WHERE 0 view (no process-start fail until a load-time hook lands). User tables, rows, query results, WAL/FK, and application_id/user_version stay unchanged.",
+    note: "Bound — SQLite bla.sidecar.v1 schema-comment view planted; ship sidecars alongside and verify via verifySqliteSidecarSchemaComment. Host verify fails closed on strip/alter; SQLite ignores the unused WHERE 0 view unless a same-directory Python load-time hook is auto-wired. User tables, rows, query results, WAL/FK, and application_id/user_version stay unchanged.",
   };
   return {
     plan: boundPlan,
@@ -5937,8 +5945,9 @@ export function entangleSqliteEntryWithSidecars(options: {
   readonly sidecars: readonly SidecarBindingPart[];
   readonly seedTag?: string;
   readonly softFold?: boolean;
+  readonly allowEmptySidecars?: boolean;
 }): SidecarSqliteBindResult | null {
-  if (options.sidecars.length === 0) return null;
+  if (options.sidecars.length === 0 && options.allowEmptySidecars !== true) return null;
   if (!canRewriteSqliteSidecar(options.entryBytes)) {
     return null;
   }
@@ -6027,8 +6036,8 @@ export function stripSqliteSidecarSchemaComment(entryBytes: Uint8Array): Buffer 
  * digest. Missing note / missing sibling / altered sibling ⇒ ok:false.
  *
  * DEFENSIVE ONLY. SQLite ignores the unused WHERE 0 view, so strip does not
- * break load until a load-time hook lands (same honesty bar as DEX / GGUF /
- * Safetensors / .pyc host-verify notes).
+ * break load unless a same-directory Python load-time hook is auto-wired (same
+ * honesty bar as DEX / GGUF / Safetensors / .pyc host-verify notes).
  */
 export function verifySqliteSidecarSchemaComment(
   options: SqliteSidecarVerifyOptions,
@@ -6078,4 +6087,607 @@ export function verifySqliteSidecarSchemaComment(
     measuredU32: measured.u32,
     softFold: note.softFold,
   };
+}
+
+/**
+ * Idempotence marker inserted with the optional SQLite load-time hook.
+ */
+export const SQLITE_SIDECAR_LOADER_MARKER =
+  "_installSqliteSidecarLoaderHook" as const;
+
+export interface SidecarSqliteLoaderInjectOptions {
+  /**
+   * SHA-256 hex (or list) of the protected SQLite database's logical
+   * identity (`computeSqliteSidecarCodeIdentity`). Databases whose
+   * identity matches MUST present a valid `bla.sidecar.v1` schema-comment
+   * view; other SQLite files pass through to later path attempts.
+   */
+  readonly codeIdentityHex: string | readonly string[];
+  /**
+   * Paths to the protected `.sqlite` / `.sqlite3` / `.db`, relative to
+   * the loader file's directory (`Path(__file__).resolve().parent`).
+   * Sidecar paths inside the note are resolved against the database
+   * file's own directory.
+   */
+  readonly sqliteRelPaths: readonly string[];
+  readonly bindingName?: string;
+}
+
+export interface SidecarSqliteLoaderInjectResult {
+  readonly schema: typeof SIDECAR_ENTANGLE_SCHEMA;
+  readonly preamble: string;
+  readonly bindingName: string;
+  readonly codeIdentityHexes: readonly string[];
+  readonly sqliteRelPaths: readonly string[];
+}
+
+function normalizeSqliteCodeIdentity(hex: string): string {
+  const value = hex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("codeIdentityHex must be a 64-char lowercase hex SHA-256 digest");
+  }
+  return value;
+}
+
+/**
+ * Emit a self-contained host Python snippet that, at import time of the
+ * loader it is inserted into, opens the sibling SQLite database read-only
+ * and, when the logical identity matches, verifies the `bla.sidecar.v1`
+ * schema-comment view and sibling sidecar digest. Strip or sibling delete
+ * fails closed. A missing file passes through so a later open can fail
+ * naturally.
+ *
+ * The hook does not rewrite the database (user tables, rows, query
+ * results, WAL/FK, and application_id / user_version stay unchanged; the
+ * existing unused `bla_sidecar_v1` WHERE 0 view is the only SQLite
+ * mutation, and it is planted separately). It is host-opt-in:
+ * `protectTarget` / `hardenProject` auto-wire it only into a known
+ * same-directory Python loader (`loader.py`, `__init__.py`,
+ * `__main__.py`) that already mentions the database basename — never a
+ * test / already-entangled / self-seal file. Only then is
+ * `sqlite-sidecar-entangle` recorded and
+ * `sqlite-sidecar-host-verify-only` cleared.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function generateSidecarSqliteLoaderSnippet(
+  options: SidecarSqliteLoaderInjectOptions,
+): SidecarSqliteLoaderInjectResult {
+  const raw = options.codeIdentityHex;
+  const list = (Array.isArray(raw) ? raw : [raw]).map((hex) =>
+    normalizeSqliteCodeIdentity(hex),
+  );
+  if (list.length === 0) {
+    throw new Error("codeIdentityHex must contain at least one digest");
+  }
+  const relPaths = (options.sqliteRelPaths ?? []).filter(
+    (p) => typeof p === "string" && p.length > 0,
+  );
+  if (relPaths.length === 0) {
+    throw new Error("sqliteRelPaths must contain at least one path");
+  }
+  const tag = list[0]!.slice(0, 8);
+  const bindingName =
+    options.bindingName ?? `${SQLITE_SIDECAR_LOADER_MARKER}_${tag}`;
+  const idsLiteral = JSON.stringify(list);
+  const pathsLiteral = JSON.stringify(relPaths);
+  const keyLiteral = JSON.stringify(SQLITE_SIDECAR_METADATA_KEY);
+  const schemaLiteral = JSON.stringify(SIDECAR_ENTANGLE_SCHEMA);
+  const kindLiteral = JSON.stringify(SQLITE_SIDECAR_METADATA_KIND);
+  const viewLiteral = JSON.stringify(SQLITE_SIDECAR_VIEW_NAME);
+  // The view SQL uses: AS "bla.sidecar.v1"
+  const asMarker = `AS "${SQLITE_SIDECAR_NOTE_COLUMN.replace(/"/g, '""')}"`;
+  const asMarkerLiteral = JSON.stringify(asMarker);
+  const identPrefixLiteral = JSON.stringify("bla.sqlite.sidecar.identity.v1\0");
+
+  const lines: string[] = [];
+  lines.push(`# ${SQLITE_SIDECAR_LOADER_MARKER}`);
+  lines.push(`def ${bindingName}():`);
+  lines.push(`    import hashlib as _sc_hashlib_${tag}`);
+  lines.push(`    import json as _sc_json_${tag}`);
+  lines.push(`    import os as _sc_os_${tag}`);
+  lines.push(`    import pathlib as _sc_pathlib_${tag}`);
+  lines.push(`    import sqlite3 as _sc_sqlite3_${tag}`);
+  lines.push(`    import struct as _sc_struct_${tag}`);
+  lines.push(`    import tempfile as _sc_tempfile_${tag}`);
+  lines.push(`    _sc_ids_${tag} = ${idsLiteral}`);
+  lines.push(`    _sc_idset_${tag} = set(_sc_ids_${tag})`);
+  lines.push(`    _sc_paths_${tag} = ${pathsLiteral}`);
+  lines.push(`    _sc_key_${tag} = ${keyLiteral}`);
+  lines.push(`    _sc_schema_${tag} = ${schemaLiteral}`);
+  lines.push(`    _sc_kind_${tag} = ${kindLiteral}`);
+  lines.push(`    _sc_view_${tag} = ${viewLiteral}`);
+  lines.push(`    _sc_as_${tag} = ${asMarkerLiteral}`);
+  lines.push(`    _sc_prefix_${tag} = ${identPrefixLiteral}`);
+  lines.push(`    _sc_base_${tag} = _sc_pathlib_${tag}.Path(__file__).resolve().parent`);
+  lines.push(`    def _sc_qid_${tag}(_sc_n_${tag}):`);
+  lines.push(`        return '"' + str(_sc_n_${tag}).replace('"', '""') + '"'`);
+  lines.push(`    def _sc_pref_${tag}(_sc_h_${tag}, _sc_s_${tag}):`);
+  lines.push(`        _sc_b_${tag} = _sc_s_${tag}.encode("utf-8")`);
+  lines.push(`        _sc_h_${tag}.update(len(_sc_b_${tag}).to_bytes(4, "big"))`);
+  lines.push(`        _sc_h_${tag}.update(_sc_b_${tag})`);
+  lines.push(`    def _sc_val_${tag}(_sc_h_${tag}, _sc_typ_${tag}, _sc_v_${tag}):`);
+  lines.push(`        if _sc_typ_${tag} == "null" or _sc_v_${tag} is None:`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`            return`);
+  lines.push(`        if _sc_typ_${tag} == "integer":`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x01")`);
+  lines.push(`            _sc_h_${tag}.update(int(_sc_v_${tag}).to_bytes(8, "big", signed=True))`);
+  lines.push(`            return`);
+  lines.push(`        if _sc_typ_${tag} == "real":`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x02")`);
+  lines.push(`            _sc_h_${tag}.update(_sc_struct_${tag}.pack(">d", float(_sc_v_${tag})))`);
+  lines.push(`            return`);
+  lines.push(`        if _sc_typ_${tag} == "text":`);
+  lines.push(`            _sc_b_${tag} = _sc_v_${tag}.encode("utf-8") if isinstance(_sc_v_${tag}, str) else bytes(_sc_v_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x03")`);
+  lines.push(`            _sc_h_${tag}.update(len(_sc_b_${tag}).to_bytes(4, "big"))`);
+  lines.push(`            _sc_h_${tag}.update(_sc_b_${tag})`);
+  lines.push(`            return`);
+  lines.push(`        if _sc_typ_${tag} == "blob":`);
+  lines.push(`            _sc_b_${tag} = bytes(_sc_v_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x04")`);
+  lines.push(`            _sc_h_${tag}.update(len(_sc_b_${tag}).to_bytes(4, "big"))`);
+  lines.push(`            _sc_h_${tag}.update(_sc_b_${tag})`);
+  lines.push(`            return`);
+  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`    def _sc_parse_view_${tag}(_sc_sql_${tag}):`);
+  lines.push(`        if not isinstance(_sc_sql_${tag}, str) or len(_sc_sql_${tag}) == 0:`);
+  lines.push(`            return None`);
+  lines.push(`        import re as _sc_re_${tag}`);
+  lines.push(`        _sc_sel_${tag} = _sc_re_${tag}.search(r"SELECT\\s+", _sc_sql_${tag}, _sc_re_${tag}.I)`);
+  lines.push(`        if _sc_sel_${tag} is None:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_asidx_${tag} = _sc_sql_${tag}.find(_sc_as_${tag}, _sc_sel_${tag}.start())`);
+  lines.push(`        if _sc_asidx_${tag} < 0:`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_end_${tag} = _sc_asidx_${tag} - 1`);
+  lines.push(`        while _sc_end_${tag} >= 0 and _sc_sql_${tag}[_sc_end_${tag}].isspace():`);
+  lines.push(`            _sc_end_${tag} -= 1`);
+  lines.push(`        if _sc_end_${tag} < 1 or _sc_sql_${tag}[_sc_end_${tag}] != "'":`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_start_${tag} = _sc_end_${tag} - 1`);
+  lines.push(`        while _sc_start_${tag} >= 0:`);
+  lines.push(`            if _sc_sql_${tag}[_sc_start_${tag}] == "'":`);
+  lines.push(`                _sc_quotes_${tag} = 1`);
+  lines.push(`                _sc_k_${tag} = _sc_start_${tag}`);
+  lines.push(`                while _sc_k_${tag} - 1 >= 0 and _sc_sql_${tag}[_sc_k_${tag} - 1] == "'":`);
+  lines.push(`                    _sc_quotes_${tag} += 1`);
+  lines.push(`                    _sc_k_${tag} -= 1`);
+  lines.push(`                if _sc_quotes_${tag} % 2 == 1:`);
+  lines.push(`                    return _sc_sql_${tag}[_sc_start_${tag} + 1:_sc_end_${tag}].replace("''", "'")`);
+  lines.push(`                _sc_start_${tag} = _sc_k_${tag} - 1`);
+  lines.push(`                continue`);
+  lines.push(`            _sc_start_${tag} -= 1`);
+  lines.push(`        return None`);
+  lines.push(`    def _sc_identity_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        if len(_sc_buf_${tag}) < 100 or _sc_buf_${tag}[0:16] != b"SQLite format 3\\x00":`);
+  lines.push(`            return _sc_hashlib_${tag}.sha256(_sc_buf_${tag}).hexdigest()`);
+  lines.push(`        _sc_app_${tag} = int.from_bytes(_sc_buf_${tag}[68:72], "big")`);
+  lines.push(`        _sc_uver_${tag} = int.from_bytes(_sc_buf_${tag}[60:64], "big")`);
+  lines.push(`        _sc_fd_${tag} = -1`);
+  lines.push(`        _sc_tmp_${tag} = None`);
+  lines.push(`        _sc_conn_${tag} = None`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_fd_${tag}, _sc_tmp_${tag} = _sc_tempfile_${tag}.mkstemp(suffix=".sqlite")`);
+  lines.push(`            _sc_os_${tag}.write(_sc_fd_${tag}, _sc_buf_${tag})`);
+  lines.push(`            _sc_os_${tag}.close(_sc_fd_${tag})`);
+  lines.push(`            _sc_fd_${tag} = -1`);
+  lines.push(`            _sc_conn_${tag} = _sc_sqlite3_${tag}.connect("file:" + _sc_tmp_${tag} + "?mode=ro", uri=True)`);
+  lines.push(`            _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`            _sc_h_${tag}.update(_sc_prefix_${tag}.encode("utf-8") if isinstance(_sc_prefix_${tag}, str) else _sc_prefix_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(_sc_app_${tag}.to_bytes(4, "big") + _sc_uver_${tag}.to_bytes(4, "big"))`);
+  lines.push(`            _sc_cur_${tag} = _sc_conn_${tag}.execute(`);
+  lines.push(`                "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name IS NOT NULL AND name != ? AND name NOT LIKE 'sqlite_%' ORDER BY type, name",`);
+  lines.push(`                (_sc_view_${tag},),`);
+  lines.push(`            )`);
+  lines.push(`            for _sc_row_${tag} in _sc_cur_${tag}:`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, _sc_row_${tag}[0] or "")`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, _sc_row_${tag}[1] or "")`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, _sc_row_${tag}[2] or "")`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, _sc_row_${tag}[3] or "")`);
+  lines.push(`            _sc_h_${tag}.update(b"\\xff")`);
+  lines.push(`            _sc_tables_${tag} = list(_sc_conn_${tag}.execute(`);
+  lines.push(`                "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != ? ORDER BY name",`);
+  lines.push(`                (_sc_view_${tag},),`);
+  lines.push(`            ))`);
+  lines.push(`            for (_sc_tname_${tag},) in _sc_tables_${tag}:`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, _sc_tname_${tag})`);
+  lines.push(`                _sc_info_${tag} = list(_sc_conn_${tag}.execute("PRAGMA table_xinfo(" + _sc_qid_${tag}(_sc_tname_${tag}) + ")"))`);
+  lines.push(`                _sc_stored_${tag} = [str(_sc_col_${tag}[1]) for _sc_col_${tag} in _sc_info_${tag} if int(_sc_col_${tag}[6]) == 0]`);
+  lines.push(`                _sc_pref_${tag}(_sc_h_${tag}, "\\x00".join(_sc_stored_${tag}))`);
+  lines.push(`                if len(_sc_stored_${tag}) == 0:`);
+  lines.push(`                    _sc_h_${tag}.update(b"\\xfe")`);
+  lines.push(`                    continue`);
+  lines.push(`                _sc_sellist_${tag} = ", ".join(`);
+  lines.push(`                    "typeof(" + _sc_qid_${tag}(_sc_c_${tag}) + ") AS " + _sc_qid_${tag}("t" + str(_sc_i_${tag})) + ", " + _sc_qid_${tag}(_sc_c_${tag}) + " AS " + _sc_qid_${tag}("v" + str(_sc_i_${tag}))`);
+  lines.push(`                    for _sc_i_${tag}, _sc_c_${tag} in enumerate(_sc_stored_${tag})`);
+  lines.push(`                )`);
+  lines.push(`                _sc_tsql_${tag} = "SELECT " + _sc_sellist_${tag} + " FROM " + _sc_qid_${tag}(_sc_tname_${tag})`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_rows_${tag} = list(_sc_conn_${tag}.execute(_sc_tsql_${tag} + " ORDER BY rowid"))`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    _sc_rows_${tag} = list(_sc_conn_${tag}.execute(_sc_tsql_${tag} + " ORDER BY " + ", ".join(_sc_qid_${tag}(_sc_c_${tag}) for _sc_c_${tag} in _sc_stored_${tag})))`);
+  lines.push(`                for _sc_row_${tag} in _sc_rows_${tag}:`);
+  lines.push(`                    for _sc_i_${tag} in range(len(_sc_stored_${tag})):`);
+  lines.push(`                        _sc_val_${tag}(_sc_h_${tag}, str(_sc_row_${tag}[_sc_i_${tag} * 2] or "null"), _sc_row_${tag}[_sc_i_${tag} * 2 + 1])`);
+  lines.push(`                _sc_h_${tag}.update(b"\\xfe")`);
+  lines.push(`            return _sc_h_${tag}.hexdigest()`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return _sc_hashlib_${tag}.sha256(_sc_buf_${tag}).hexdigest()`);
+  lines.push(`        finally:`);
+  lines.push(`            if _sc_conn_${tag} is not None:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_conn_${tag}.close()`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`            if _sc_fd_${tag} >= 0:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_os_${tag}.close(_sc_fd_${tag})`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`            if _sc_tmp_${tag}:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_os_${tag}.unlink(_sc_tmp_${tag})`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`    def _sc_extract_${tag}(_sc_buf_${tag}):`);
+  lines.push(`        if len(_sc_buf_${tag}) < 100 or _sc_buf_${tag}[0:16] != b"SQLite format 3\\x00":`);
+  lines.push(`            return None`);
+  lines.push(`        _sc_fd_${tag} = -1`);
+  lines.push(`        _sc_tmp_${tag} = None`);
+  lines.push(`        _sc_conn_${tag} = None`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_fd_${tag}, _sc_tmp_${tag} = _sc_tempfile_${tag}.mkstemp(suffix=".sqlite")`);
+  lines.push(`            _sc_os_${tag}.write(_sc_fd_${tag}, _sc_buf_${tag})`);
+  lines.push(`            _sc_os_${tag}.close(_sc_fd_${tag})`);
+  lines.push(`            _sc_fd_${tag} = -1`);
+  lines.push(`            _sc_conn_${tag} = _sc_sqlite3_${tag}.connect("file:" + _sc_tmp_${tag} + "?mode=ro", uri=True)`);
+  lines.push(`            _sc_row_${tag} = _sc_conn_${tag}.execute(`);
+  lines.push(`                "SELECT sql FROM sqlite_schema WHERE type = 'view' AND name = ?",`);
+  lines.push(`                (_sc_view_${tag},),`);
+  lines.push(`            ).fetchone()`);
+  lines.push(`            if _sc_row_${tag} is None or not isinstance(_sc_row_${tag}[0], str):`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_rawnote_${tag} = _sc_parse_view_${tag}(_sc_row_${tag}[0])`);
+  lines.push(`            if not isinstance(_sc_rawnote_${tag}, str) or len(_sc_rawnote_${tag}) == 0:`);
+  lines.push(`                return None`);
+  lines.push(`            try:`);
+  lines.push(`                _sc_obj_${tag} = _sc_json_${tag}.loads(_sc_rawnote_${tag})`);
+  lines.push(`            except Exception:`);
+  lines.push(`                return None`);
+  lines.push(`            if _sc_obj_${tag}.get("schema") != _sc_schema_${tag} or _sc_obj_${tag}.get("kind") != _sc_kind_${tag}:`);
+  lines.push(`                return None`);
+  lines.push(`            _sc_dig_${tag} = _sc_obj_${tag}.get("digest")`);
+  lines.push(`            if not isinstance(_sc_dig_${tag}, str) or len(_sc_dig_${tag}) != 64:`);
+  lines.push(`                return None`);
+  lines.push(`            return _sc_obj_${tag}`);
+  lines.push(`        except Exception:`);
+  lines.push(`            return None`);
+  lines.push(`        finally:`);
+  lines.push(`            if _sc_conn_${tag} is not None:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_conn_${tag}.close()`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`            if _sc_fd_${tag} >= 0:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_os_${tag}.close(_sc_fd_${tag})`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`            if _sc_tmp_${tag}:`);
+  lines.push(`                try:`);
+  lines.push(`                    _sc_os_${tag}.unlink(_sc_tmp_${tag})`);
+  lines.push(`                except Exception:`);
+  lines.push(`                    pass`);
+  lines.push(`    def _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}):`);
+  lines.push(`        _sc_h_${tag} = _sc_hashlib_${tag}.sha256()`);
+  lines.push(`        _sc_h_${tag}.update(_sc_entry_${tag}.encode("utf-8"))`);
+  lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        for _sc_sp_${tag}, _sc_data_${tag} in _sc_parts_${tag}:`);
+  lines.push(`            _sc_h_${tag}.update(_sc_sp_${tag}.encode("utf-8"))`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`            _sc_h_${tag}.update(_sc_data_${tag})`);
+  lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
+  lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
+  lines.push(`        return _sc_h_${tag}.hexdigest()`);
+  lines.push(`    _sc_seen_${tag} = False`);
+  lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
+  lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
+  lines.push(`        if not _sc_path_${tag}.is_absolute():`);
+  lines.push(`            _sc_path_${tag} = _sc_base_${tag} / _sc_rel_${tag}`);
+  lines.push(`        try:`);
+  lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
+  lines.push(`        except Exception:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_seen_${tag} = True`);
+  lines.push(`        _sc_ident_${tag} = _sc_identity_${tag}(_sc_raw_${tag})`);
+  lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
+  lines.push(`            continue`);
+  lines.push(`        _sc_note_${tag} = _sc_extract_${tag}(_sc_raw_${tag})`);
+  lines.push(`        if _sc_note_${tag} is None:`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        _sc_parts_${tag} = []`);
+  lines.push(`        _sc_dir_${tag} = _sc_path_${tag}.parent`);
+  lines.push(`        _sc_sp_list_${tag} = _sc_note_${tag}.get("sidecarPaths") or []`);
+  lines.push(`        if not isinstance(_sc_sp_list_${tag}, list):`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        for _sc_sp_${tag} in _sc_sp_list_${tag}:`);
+  lines.push(`            if not isinstance(_sc_sp_${tag}, str) or len(_sc_sp_${tag}) == 0:`);
+  lines.push(`                continue`);
+  lines.push(`            _sc_sib_${tag} = _sc_pathlib_${tag}.Path(_sc_sp_${tag})`);
+  lines.push(`            if not _sc_sib_${tag}.is_absolute():`);
+  lines.push(`                _sc_sib_${tag} = _sc_dir_${tag} / _sc_sp_${tag}`);
+  lines.push(`            try:`);
+  lines.push(`                _sc_parts_${tag}.append((_sc_sp_${tag}, _sc_sib_${tag}.read_bytes()))`);
+  lines.push(`            except Exception:`);
+  lines.push(`                raise RuntimeError("integrity binding mismatch") from None`);
+  lines.push(`        _sc_seed_${tag} = _sc_note_${tag}.get("seedTag")`);
+  lines.push(`        if not isinstance(_sc_seed_${tag}, str) or len(_sc_seed_${tag}) == 0:`);
+  lines.push(`            _sc_seed_${tag} = "bla-sidecar-v1"`);
+  lines.push(`        _sc_entry_${tag} = _sc_note_${tag}.get("entryPath")`);
+  lines.push(`        if not isinstance(_sc_entry_${tag}, str):`);
+  lines.push(`            _sc_entry_${tag} = ""`);
+  lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
+  lines.push(`            raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`        return`);
+  lines.push(`    if _sc_seen_${tag}:`);
+  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`try:`);
+  lines.push(`    ${bindingName}()`);
+  lines.push(`finally:`);
+  lines.push(`    del ${bindingName}`);
+
+  return {
+    schema: SIDECAR_ENTANGLE_SCHEMA,
+    preamble: lines.join("\n"),
+    bindingName,
+    codeIdentityHexes: list,
+    sqliteRelPaths: relPaths,
+  };
+}
+
+/**
+ * Insert a SQLite load-time hook after shebang / encoding / docstring /
+ * `from __future__`, idempotent when {@link SQLITE_SIDECAR_LOADER_MARKER}
+ * is already present. Preserves surrounding newlines the same way
+ * `bindPythonSidecarEntanglement` does.
+ */
+export function prependSqliteSidecarLoaderHook(
+  entrySource: string,
+  preamble: string,
+): string {
+  if (entrySource.includes(SQLITE_SIDECAR_LOADER_MARKER)) return entrySource;
+  const eol = entrySource.includes("\r\n") ? "\r\n" : "\n";
+  const analysis = findPythonPrologueInsertionOffset(entrySource);
+  const headRaw = entrySource.slice(0, analysis.insertOffset);
+  const tailRaw = entrySource.slice(analysis.insertOffset);
+  const head = headRaw.replace(/(?:\r?\n)+$/, "");
+  const tail = tailRaw.replace(/^(?:\r?\n)+/, "");
+  const body = preamble.replace(/\r?\n/g, eol).replace(/(?:\r?\n)+$/, "");
+  const parts: string[] = [];
+  if (head.length > 0) parts.push(head);
+  parts.push(body);
+  if (tail.length > 0) parts.push(tail);
+  return (
+    parts.join(eol) +
+    (entrySource.endsWith("\n") || entrySource.endsWith("\r\n") ? eol : "")
+  );
+}
+
+/**
+ * Convenience: prepend a loader hook bound to this SQLite file's
+ * logical identity. Idempotent when the marker is already present.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function entangleSqliteLoaderWithSidecars(options: {
+  readonly loaderSource: string;
+  readonly sqliteBytes: Uint8Array;
+  readonly sqliteRelPath: string | readonly string[];
+}): { readonly code: string; readonly identity: string } {
+  const identity = computeSqliteSidecarCodeIdentity(options.sqliteBytes);
+  const paths = (
+    Array.isArray(options.sqliteRelPath)
+      ? options.sqliteRelPath
+      : [options.sqliteRelPath]
+  ).filter((p) => p.length > 0);
+  const inject = generateSidecarSqliteLoaderSnippet({
+    codeIdentityHex: identity,
+    sqliteRelPaths: paths,
+  });
+  return {
+    code: prependSqliteSidecarLoaderHook(options.loaderSource, inject.preamble),
+    identity,
+  };
+}
+
+const MAX_SQLITE_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
+const MAX_SQLITE_LOADER_AUTOWIRE_CHARS = 64 * 1024;
+const SQLITE_LOADER_BASENAME_RE = /\.(sqlite3?|db)$/i;
+
+/**
+ * True when `source` mentions `sqliteBasename` in a quoted string /
+ * template.
+ */
+export function sourceMentionsSqliteFile(
+  source: string,
+  sqliteBasename: string,
+): boolean {
+  const name = (sqliteBasename.replaceAll("\\", "/").split("/").pop() ?? "");
+  if (!name || !SQLITE_LOADER_BASENAME_RE.test(name)) return false;
+  const quoted = new RegExp(
+    `['"\`](?:[^'"\`\\\\]|\\\\.)*${escapeRegExpLiteral(name)}['"\`]`,
+  );
+  return quoted.test(source);
+}
+
+/**
+ * Conservative auto-wire predicate: a Python file with a known loader name
+ * (`loader.py`, `__init__.py`, `__main__.py`) that already mentions the
+ * target database basename. Test, already-entangled, and oversized
+ * files return false.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function isSafePythonSqliteLoader(options: {
+  readonly source: string;
+  readonly filename: string;
+  readonly sqliteBasename: string;
+}): boolean {
+  if (!isPythonPycLoaderFilename(options.filename)) return false;
+  if (options.source.length > MAX_SQLITE_LOADER_AUTOWIRE_CHARS) return false;
+  if (ALREADY_ENTANGLED_PY_RE.test(options.source)) return false;
+  return sourceMentionsSqliteFile(options.source, options.sqliteBasename);
+}
+
+function sqliteLoaderPreference(loaderName: string): number {
+  const base = basename(loaderName);
+  if (/^loader\.py$/i.test(base)) return 0;
+  if (/^__init__\.py$/i.test(base)) return 1;
+  if (/^__main__\.py$/i.test(base)) return 2;
+  return 3;
+}
+
+export interface PythonSqliteLoaderCandidate {
+  readonly name: string;
+  readonly source: string;
+}
+
+/**
+ * Pick a single same-directory Python loader, or `null` when none qualify
+ * or several unranked files all qualify (do not guess). Preferred names:
+ * `loader.py`, then `__init__.py`, then `__main__.py`.
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function selectPythonSqliteLoader(
+  sqliteBasename: string,
+  candidates: readonly PythonSqliteLoaderCandidate[],
+): string | null {
+  const qualifying = candidates.filter((c) =>
+    isSafePythonSqliteLoader({
+      source: c.source,
+      filename: c.name,
+      sqliteBasename,
+    }),
+  );
+  if (qualifying.length === 0) return null;
+  const scored = qualifying.map((c) => ({
+    c,
+    score: sqliteLoaderPreference(c.name),
+  }));
+  scored.sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name));
+  const best = scored[0]!;
+  if (best.score >= 3) return null;
+  const ties = scored.filter((s) => s.score === best.score);
+  if (ties.length > 1) return null;
+  return best.c.name;
+}
+
+export interface DiscoveredPythonSqliteLoader {
+  readonly absPath: string;
+  readonly name: string;
+  readonly source: string;
+}
+
+function readSqliteLoaderCandidateSource(absPath: string): string | null {
+  try {
+    const st = statSync(absPath);
+    if (st.isFile() === false || st.size <= 0 || st.size > MAX_SQLITE_LOADER_CANDIDATE_BYTES) {
+      return null;
+    }
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Directories to search for a Python loader next to a SQLite database. */
+export function listSqliteLoaderSearchDirectories(sqlitePath: string): string[] {
+  return [dirname(sqlitePath)];
+}
+
+/**
+ * List same-directory `.py` candidates (no recursion). Unreadable or
+ * oversized files are skipped.
+ */
+export function listSameDirPythonSqliteLoaderCandidates(
+  directory: string,
+): DiscoveredPythonSqliteLoader[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const out: DiscoveredPythonSqliteLoader[] = [];
+  for (const name of names) {
+    if (!isPythonPycLoaderFilename(name)) continue;
+    const absPath = join(directory, name);
+    const source = readSqliteLoaderCandidateSource(absPath);
+    if (source === null) continue;
+    out.push({ absPath, name, source });
+  }
+  return out;
+}
+
+/**
+ * Discover the unique safe Python loader for `sqliteBasename` in the
+ * first search directory that yields a selection. Later directories are
+ * not consulted once one directory produces a hit (output dir wins over
+ * source).
+ *
+ * DEFENSIVE ONLY. Opt-in. No crack / RE advice.
+ */
+export function discoverPythonSqliteLoader(options: {
+  readonly sqliteBasename: string;
+  readonly searchDirectories: readonly string[];
+}): DiscoveredPythonSqliteLoader | null {
+  const seen = new Set<string>();
+  for (const directory of options.searchDirectories) {
+    if (typeof directory !== "string" || directory.length === 0) continue;
+    if (seen.has(directory)) continue;
+    seen.add(directory);
+    const candidates = listSameDirPythonSqliteLoaderCandidates(directory);
+    const selected = selectPythonSqliteLoader(
+      options.sqliteBasename,
+      candidates,
+    );
+    if (!selected) continue;
+    const hit = candidates.find((c) => c.name === selected || c.absPath === selected);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * True when a same-directory Python file already carries the SQLite
+ * load-time hook bound to this file's code identity (used by defenseScore
+ * honesty).
+ *
+ * DEFENSIVE ONLY.
+ */
+export function isSqliteSidecarLoaderHookWired(options: {
+  readonly sqliteBytes: Uint8Array;
+  readonly sqlitePath: string;
+}): boolean {
+  const identity = computeSqliteSidecarCodeIdentity(options.sqliteBytes);
+  const directories = listSqliteLoaderSearchDirectories(options.sqlitePath);
+  return directories.some((directory) =>
+    listSameDirPythonSqliteLoaderCandidates(directory).some(
+      (c) =>
+        c.source.includes(SQLITE_SIDECAR_LOADER_MARKER) &&
+        c.source.includes(identity),
+    ),
+  );
+}
+
+/** Relative path from a loader file's directory to the protected SQLite database. */
+export function relativeSqlitePathFromLoader(
+  loaderPath: string,
+  sqlitePath: string,
+): string {
+  const rel = relative(dirname(loaderPath), sqlitePath).split("\\").join("/");
+  return rel.length === 0 ? basename(sqlitePath) : rel;
 }

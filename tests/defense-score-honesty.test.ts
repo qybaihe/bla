@@ -155,6 +155,16 @@ describe("Issue #40.6: defenseScore honesty", () => {
     expect(hostOnly.gaps.map((g) => g.id)).toContain("sqlite-sidecar-host-verify-only");
     expect(hostOnly.gaps.map((g) => g.id)).not.toContain("sidecar-entangle-not-enabled");
     expect(hostOnly.gaps.find((g) => g.id === "sqlite-sidecar-host-verify-only")!.scoreCap).toBe(93);
+
+    const hooked = applyDefenseScoreHonesty(99, {
+      detectedFormat: "sqlite",
+      sidecarEntangleEnabled: true,
+      sqliteSidecarLoaderHookApplied: true,
+      sqliteTrapMode: "eval",
+    });
+    expect(hooked.gaps.map((g) => g.id)).not.toContain("sqlite-sidecar-host-verify-only");
+    expect(hooked.gaps.map((g) => g.id)).toContain("sqlite-business-data-readable");
+    expect(hooked.cappedScore).toBe(78);
   });
 
   it("caps a SQLite database for what the shield does not do: hide the application's tables", () => {

@@ -80,6 +80,12 @@ export interface DefenseScoreHonestyInput {
    */
   readonly safetensorsSidecarLoaderHookApplied?: boolean;
   /**
+   * True when a same-directory Python loader was auto-wired with
+   * `entangleSqliteLoaderWithSidecars` (or the hook is already present
+   * next to the database). Clears `sqlite-sidecar-host-verify-only`.
+   */
+  readonly sqliteSidecarLoaderHookApplied?: boolean;
+  /**
    * How a SQLite database's generated decoy columns are defined: `"eval"`
    * when they call the function no stock connection has (opt-in), otherwise
    * plain SQL. Unknown counts as plain SQL.
@@ -224,12 +230,18 @@ export function collectDefenseScoreGaps(
     });
   }
 
-  // SQLite schema-comment view is host-verify only (SQLite ignores the unused WHERE 0 view).
-  if (input.detectedFormat === "sqlite" && input.sidecarEntangleEnabled === true) {
+  // SQLite schema-comment view is host-verify only (SQLite ignores the unused
+  // WHERE 0 view) until a same-directory Python load-time hook is actually
+  // auto-wired (or already present) beside the database.
+  if (
+    input.detectedFormat === "sqlite" &&
+    input.sidecarEntangleEnabled === true &&
+    input.sqliteSidecarLoaderHookApplied !== true
+  ) {
     gaps.push({
       id: "sqlite-sidecar-host-verify-only",
       summary:
-        "sidecarEntangle planted a SQLite bla.sidecar.v1 schema-comment view verified only by host verifySqliteSidecarSchemaComment; SQLite still opens after strip or sibling delete. Load-time hook TBD — do not treat this as process-start strip⇒fail (issue #40 / DESIGN).",
+        "sidecarEntangle planted a SQLite bla.sidecar.v1 schema-comment view verified by host verifySqliteSidecarSchemaComment; SQLite still opens after strip or sibling delete unless a same-directory Python loader (loader.py / __init__.py / __main__.py) was auto-wired with the load-time hook (issue #40 / DESIGN).",
       scoreCap: 93,
     });
   }

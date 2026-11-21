@@ -129,6 +129,11 @@ import {
   listSafetensorsLoaderSearchDirectories,
   relativeSafetensorsPathFromLoader,
   SAFETENSORS_SIDECAR_LOADER_MARKER,
+  entangleSqliteLoaderWithSidecars,
+  discoverPythonSqliteLoader,
+  listSqliteLoaderSearchDirectories,
+  relativeSqlitePathFromLoader,
+  SQLITE_SIDECAR_LOADER_MARKER,
 } from "../shields/runtime/sidecar-entangle.js";
 
 /**
@@ -574,6 +579,59 @@ function applySidecarSafetensorsLoaderAutoWire(options: {
   return { applied: true, destPath };
 }
 
+function applySidecarSqliteLoaderAutoWire(options: {
+  readonly sqliteBytes: Uint8Array;
+  readonly sqliteBasenames: readonly string[];
+  readonly outputDir: string;
+  readonly sourceDir: string;
+  readonly outputSqlitePath: string;
+}): { applied: boolean; destPath?: string } {
+  const search: string[] = [];
+  const seen = new Set<string>();
+  const addDir = (dir: string): void => {
+    if (!dir || seen.has(dir)) return;
+    seen.add(dir);
+    search.push(dir);
+  };
+  addDir(options.outputDir);
+  if (options.sourceDir !== options.outputDir) addDir(options.sourceDir);
+  for (const extra of listSqliteLoaderSearchDirectories(options.outputSqlitePath)) {
+    addDir(extra);
+  }
+
+  const names = [...new Set(options.sqliteBasenames.filter((n) => /\.(sqlite3?|db)$/i.test(n)))];
+  let found: ReturnType<typeof discoverPythonSqliteLoader> = null;
+  for (const sqliteBasename of names) {
+    found = discoverPythonSqliteLoader({
+      sqliteBasename,
+      searchDirectories: search,
+    });
+    if (found) break;
+  }
+  if (!found) return { applied: false };
+  let destPath = found.absPath;
+  const foundDir = dirname(found.absPath);
+  if (foundDir !== options.outputDir && options.sourceDir !== options.outputDir) {
+    destPath = join(options.outputDir, found.name);
+    if (existsSync(destPath) && destPath !== found.absPath) {
+      return { applied: false };
+    }
+  }
+  const sqliteRel = relativeSqlitePathFromLoader(destPath, options.outputSqlitePath);
+  const entangled = entangleSqliteLoaderWithSidecars({
+    loaderSource: found.source,
+    sqliteBytes: options.sqliteBytes,
+    sqliteRelPath: sqliteRel,
+  });
+  if (entangled.code === found.source && destPath === found.absPath) {
+    return found.source.includes(SQLITE_SIDECAR_LOADER_MARKER)
+      ? { applied: true, destPath }
+      : { applied: false };
+  }
+  writeFileAtomicSync(destPath, entangled.code, "utf8");
+  return { applied: true, destPath };
+}
+
 function applySidecarEntangleToSafetensors(
   safetensorsBytes: Buffer,
   options: ProtectionOptions,
@@ -921,6 +979,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   let pycSidecarLoaderHookApplied = false;
   let ggufSidecarLoaderHookApplied = false;
   let safetensorsSidecarLoaderHookApplied = false;
+  let sqliteSidecarLoaderHookApplied = false;
   const counteredVectors = new Set<ReaAttackVectorId>();
 
   if (
@@ -1540,9 +1599,17 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       finalSqlite = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
-        // Host-verify schema-comment view only: SQLite ignores the unused
-        // WHERE 0 view, so strip / sibling delete still open. Do not record
-        // sqlite-sidecar-entangle until a load-time hook lands.
+        const hook = applySidecarSqliteLoaderAutoWire({
+          sqliteBytes: finalSqlite,
+          sqliteBasenames: [basename(absInput), basename(absOutput)],
+          outputDir: dirname(absOutput),
+          sourceDir: dirname(absInput),
+          outputSqlitePath: absOutput,
+        });
+        if (hook.applied) {
+          sqliteSidecarLoaderHookApplied = true;
+          counteredVectors.add("sqlite-sidecar-entangle");
+        }
       }
     }
     writeProtectedOutput(absOutput, finalSqlite);
@@ -1872,6 +1939,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),
     ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true as const } : {}),
     ...(safetensorsSidecarLoaderHookApplied ? { safetensorsSidecarLoaderHookApplied: true as const } : {}),
+    ...(sqliteSidecarLoaderHookApplied ? { sqliteSidecarLoaderHookApplied: true as const } : {}),
     ...(wasmExportsRenamed > 0 ? { wasmExportRenameApplied: true as const } : {}),
     ...(wasmExportRenames.length > 0 ? { wasmExportRenames } : {}),
     ...(wasmExportOrderShuffled ? { wasmExportOrderShuffled: true as const } : {}),

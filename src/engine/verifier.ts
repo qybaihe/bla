@@ -27,6 +27,7 @@ import {
   isGgufSidecarLoaderHookWired,
   isPycSidecarLoaderHookWired,
   isSafetensorsSidecarLoaderHookWired,
+  isSqliteSidecarLoaderHookWired,
   isWasmSidecarLoaderHookWired,
 } from "../shields/runtime/sidecar-entangle.js";
 
@@ -251,6 +252,18 @@ export function verifyTarget(
     }
   }
 
+  let sqliteSidecarLoaderHookApplied = false;
+  if (afterAudit.detectedFormat === "sqlite") {
+    try {
+      sqliteSidecarLoaderHookApplied = isSqliteSidecarLoaderHookWired({
+        sqliteBytes: targetBytes ?? readFileSync(absTarget),
+        sqlitePath: absTarget,
+      });
+    } catch {
+      sqliteSidecarLoaderHookApplied = false;
+    }
+  }
+
   // Auto-detect on-disk sidecar entanglement when `autoDetectBindings` is set
   // (CLI `bla verify <protected> <original>`) and caller did not override.
   let effectiveSidecarEntangleEnabled = options.sidecarEntangleEnabled === true;
@@ -290,7 +303,9 @@ export function verifyTarget(
       } else if (fmt === "android-dex") {
         effectiveSidecarEntangleEnabled = extractDexSidecarStringPoolNote(targetBytes) !== null;
       } else if (fmt === "sqlite") {
-        effectiveSidecarEntangleEnabled = extractSqliteSidecarSchemaComment(targetBytes) !== null;
+        effectiveSidecarEntangleEnabled =
+          sqliteSidecarLoaderHookApplied ||
+          extractSqliteSidecarSchemaComment(targetBytes) !== null;
       } else if (fmt === "native-elf" || fmt === "native-macho" || fmt === "native-pe") {
         effectiveSidecarEntangleEnabled = existsSync(`${absTarget}${BUN_SIDECAR_COMPANION_SUFFIX}`);
       }
@@ -411,6 +426,7 @@ export function verifyTarget(
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true } : {}),
     ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true } : {}),
     ...(safetensorsSidecarLoaderHookApplied ? { safetensorsSidecarLoaderHookApplied: true } : {}),
+    ...(sqliteSidecarLoaderHookApplied ? { sqliteSidecarLoaderHookApplied: true } : {}),
   });
 
   const agentActions: VerificationAgentAction[] = [];

@@ -1145,3 +1145,182 @@ export function stripSqliteSidecarSchemaComment(bytes: Uint8Array): Buffer {
     rmSync(tempDir, { recursive: true, force: true });
   }
 }
+
+/**
+ * Canonical logical identity of a SQLite database used by the optional
+ * load-time hook. Planting or stripping the reserved `bla_sidecar_v1`
+ * view does not change this digest (DROP VIEW is not bit-exact, so a
+ * raw-file SHA-256 would not be stable). The hash covers the 100-byte
+ * header's application_id / user_version plus schema SQL and stored
+ * (non-generated) column values of every user object except
+ * `bla_sidecar_v1`. Honey tables are included; `sqlite_*` objects are not.
+ *
+ * DEFENSIVE ONLY. Does not rewrite the database.
+ */
+const SQLITE_SIDECAR_IDENTITY_PREFIX = Buffer.from(
+  "bla.sqlite.sidecar.identity.v1\0",
+  "utf8",
+);
+
+function writeSqliteIdentityPrefixedString(
+  hash: ReturnType<typeof createHash>,
+  value: string,
+): void {
+  const bytes = Buffer.from(value, "utf8");
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(bytes.length);
+  hash.update(len);
+  hash.update(bytes);
+}
+
+function writeSqliteIdentityStorageValue(
+  hash: ReturnType<typeof createHash>,
+  storageClass: string,
+  value: unknown,
+): void {
+  if (storageClass === "null" || value === null || value === undefined) {
+    hash.update(Buffer.from([0x00]));
+    return;
+  }
+  if (storageClass === "integer") {
+    hash.update(Buffer.from([0x01]));
+    const buf = Buffer.alloc(8);
+    buf.writeBigInt64BE(typeof value === "bigint" ? value : BigInt(value as number | string));
+    hash.update(buf);
+    return;
+  }
+  if (storageClass === "real") {
+    hash.update(Buffer.from([0x02]));
+    const buf = Buffer.alloc(8);
+    buf.writeDoubleBE(Number(value));
+    hash.update(buf);
+    return;
+  }
+  if (storageClass === "text") {
+    const bytes = Buffer.from(String(value), "utf8");
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(bytes.length);
+    hash.update(Buffer.from([0x03]));
+    hash.update(len);
+    hash.update(bytes);
+    return;
+  }
+  if (storageClass === "blob") {
+    const bytes = Buffer.isBuffer(value)
+      ? value
+      : value instanceof Uint8Array
+        ? Buffer.from(value)
+        : Buffer.from(value as ArrayBuffer);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(bytes.length);
+    hash.update(Buffer.from([0x04]));
+    hash.update(len);
+    hash.update(bytes);
+    return;
+  }
+  throw new Error(`unsupported SQLite storage class: ${storageClass}`);
+}
+
+function hashSqliteSidecarLogicalIdentity(input: Buffer): string {
+  const identity = readSqliteHeaderIdentity(input);
+  const DatabaseSync = getDatabaseSyncClass();
+  const tempDir = mkdtempSync(join(tmpdir(), "bla-sqlite-sidecar-id-"));
+  const dbPath = join(tempDir, "id.sqlite");
+  try {
+    writeFileSync(dbPath, input);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const hash = createHash("sha256");
+      hash.update(SQLITE_SIDECAR_IDENTITY_PREFIX);
+      const header = Buffer.alloc(8);
+      header.writeUInt32BE(identity.applicationId >>> 0, 0);
+      header.writeUInt32BE(identity.userVersion >>> 0, 4);
+      hash.update(header);
+
+      const schema = db
+        .prepare(
+          "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name IS NOT NULL AND name != ? AND name NOT LIKE 'sqlite_%' ORDER BY type, name",
+        )
+        .all(SQLITE_SIDECAR_VIEW_NAME) as Array<{
+        type: string;
+        name: string;
+        tbl_name: string;
+        sql: string | null;
+      }>;
+      for (const row of schema) {
+        writeSqliteIdentityPrefixedString(hash, String(row.type ?? ""));
+        writeSqliteIdentityPrefixedString(hash, String(row.name ?? ""));
+        writeSqliteIdentityPrefixedString(hash, String(row.tbl_name ?? ""));
+        writeSqliteIdentityPrefixedString(hash, row.sql ?? "");
+      }
+      hash.update(Buffer.from([0xff]));
+
+      const tables = db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != ? ORDER BY name",
+        )
+        .all(SQLITE_SIDECAR_VIEW_NAME) as Array<{ name: string }>;
+      for (const { name } of tables) {
+        writeSqliteIdentityPrefixedString(hash, name);
+        const info = db
+          .prepare(`PRAGMA table_xinfo(${quoteIdentifier(name)})`)
+          .all() as Array<{ name: string; hidden: number | bigint }>;
+        const stored = info
+          .filter((col) => Number(col.hidden) === 0)
+          .map((col) => col.name);
+        writeSqliteIdentityPrefixedString(hash, stored.join("\0"));
+        if (stored.length === 0) {
+          hash.update(Buffer.from([0xfe]));
+          continue;
+        }
+        const selectList = stored
+          .map(
+            (col, i) =>
+              `typeof(${quoteIdentifier(col)}) AS ${quoteIdentifier(`t${i}`)}, ${quoteIdentifier(col)} AS ${quoteIdentifier(`v${i}`)}`,
+          )
+          .join(", ");
+        const tableSql = `SELECT ${selectList} FROM ${quoteIdentifier(name)}`;
+        const readRows = (sql: string): Array<Record<string, unknown>> => {
+          const statement = db.prepare(sql);
+          statement.setReadBigInts(true);
+          return statement.all() as Array<Record<string, unknown>>;
+        };
+        let rows: Array<Record<string, unknown>>;
+        try {
+          rows = readRows(`${tableSql} ORDER BY rowid`);
+        } catch {
+          rows = readRows(
+            `${tableSql} ORDER BY ${stored.map((col) => quoteIdentifier(col)).join(", ")}`,
+          );
+        }
+        for (const row of rows) {
+          for (let i = 0; i < stored.length; i++) {
+            writeSqliteIdentityStorageValue(
+              hash,
+              String(row[`t${i}`] ?? "null"),
+              row[`v${i}`],
+            );
+          }
+        }
+        hash.update(Buffer.from([0xfe]));
+      }
+      return hash.digest("hex");
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+export function computeSqliteSidecarCodeIdentity(bytes: Uint8Array): string {
+  const input = Buffer.from(bytes);
+  if (!hasValidSqlite3Header(input)) {
+    return createHash("sha256").update(input).digest("hex");
+  }
+  try {
+    return hashSqliteSidecarLogicalIdentity(input);
+  } catch {
+    return createHash("sha256").update(input).digest("hex");
+  }
+}

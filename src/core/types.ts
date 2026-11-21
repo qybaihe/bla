@@ -294,6 +294,8 @@ export interface ProtectionResult {
   readonly ggufSidecarLoaderHookApplied?: boolean;
   /** Present when a same-directory Python loader was auto-wired with the Safetensors load-time hook. */
   readonly safetensorsSidecarLoaderHookApplied?: boolean;
+  /** Present when a same-directory Python loader was auto-wired with the SQLite load-time hook. */
+  readonly sqliteSidecarLoaderHookApplied?: boolean;
   /** Present when WASM export rename actually rewrote at least one non-preserved export (#40.3). */
   readonly wasmExportRenameApplied?: boolean;
   /**
