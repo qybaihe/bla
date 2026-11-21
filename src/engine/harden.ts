@@ -67,6 +67,15 @@ import {
   releaseHygieneRefuseMessage,
 } from "./release-hygiene-lint.js";
 import {
+  plaintextSecretRefuseMessage,
+} from "./plaintext-secret-lint.js";
+import {
+  integrityCoverageRefuseMessage,
+} from "./integrity-coverage.js";
+import {
+  bindScopeRefuseMessage,
+} from "./bind-scope.js";
+import {
   evaluateHardenProjectPackagingBlocks,
 } from "./packaging-gates.js";
 import {
@@ -343,6 +352,14 @@ export interface HardenProjectOptions {
   readonly allowReleaseHygieneLeak?: boolean;
   readonly allowWasmXorMaskSidecar?: boolean;
   readonly allowWasmSealXorKnownPlaintext?: boolean;
+  /**
+   * Opt-in: make the three lint-only packaging gates (`plaintext-secret`,
+   * `integrity-coverage`, `bind-scope`) refuse `harden` at project level, the way
+   * `bla lint` already does. Default false — a release pipeline that treats
+   * `harden` as its gate can then gate on plaintext survivors and integrity
+   * coverage instead of running `lint` as a second command.
+   */
+  readonly requireLintGates?: boolean;
   /** Allow bankrupt despite panel offline-oracle packaging (red-blue round-4). Default false. */
   readonly allowPanelOfflineOracle?: boolean;
   /**
@@ -2139,6 +2156,7 @@ function hardenProjectCore(
     allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
     allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
     allowReleaseHygieneLeak: options.allowReleaseHygieneLeak,
+    requireLintGates: options.requireLintGates,
   });
   const blockingSeals = packagingBlocks.blockingSeals;
   const blockingWasmParms = packagingBlocks.blockingWasmParms;
@@ -2147,6 +2165,9 @@ function hardenProjectCore(
   const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
   const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
   const blockingReleaseHygiene = packagingBlocks.blockingReleaseHygiene;
+  const blockingPlaintextSecrets = packagingBlocks.blockingPlaintextSecrets;
+  const blockingIntegrityCoverage = packagingBlocks.blockingIntegrityCoverage;
+  const blockingBindScope = packagingBlocks.blockingBindScope;
   // Pre-flight lane-independence check across discovered JS/TS targets so a
   // refused gate blocks the whole harden run atomically instead of writing
   // sibling HTML/assets into `.bla-hardened` and omitting the refused script.
@@ -2511,7 +2532,10 @@ function hardenProjectCore(
     blockingJsHydrateDump.length > 0 ||
     blockingWasmXorMask.length > 0 ||
     blockingWasmSealXor.length > 0 ||
-    blockingReleaseHygiene.length > 0
+    blockingReleaseHygiene.length > 0 ||
+    blockingPlaintextSecrets.length > 0 ||
+    blockingIntegrityCoverage.length > 0 ||
+    blockingBindScope.length > 0
   ) {
     const laneArtifacts = blockingLanes.map((r) => ({
       inputPath: r.path,
@@ -2609,6 +2633,43 @@ function hardenProjectCore(
       outputExisted: false,
       error: releaseHygieneRefuseMessage(r, r.path),
     }));
+    // Only reachable with `requireLintGates`; the arrays are empty otherwise.
+    const plaintextSecretArtifacts = blockingPlaintextSecrets.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "unknown" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: plaintextSecretRefuseMessage(r, r.path),
+    }));
+    const integrityCoverageArtifacts = blockingIntegrityCoverage.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "unknown" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: integrityCoverageRefuseMessage(r, r.path),
+    }));
+    const bindScopeArtifacts = blockingBindScope.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: "unknown" as const,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: bindScopeRefuseMessage(r, r.path),
+    }));
     const blockParts: string[] = [];
     if (blockingLanes.length > 0) blockParts.push("lane-independent JS gate");
     if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
@@ -2618,6 +2679,9 @@ function hardenProjectCore(
     if (blockingWasmXorMask.length > 0) blockParts.push("WASM XOR-mask sidecar");
     if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
     if (blockingReleaseHygiene.length > 0) blockParts.push("leaked release environment artifact");
+    if (blockingPlaintextSecrets.length > 0) blockParts.push("plaintext sensitive literal (lint-only gate, enforced)");
+    if (blockingIntegrityCoverage.length > 0) blockParts.push("integrity coverage gap (lint-only gate, enforced)");
+    if (blockingBindScope.length > 0) blockParts.push("bind-scope contract (lint-only gate, enforced)");
     const blockedExtras = [
       ...laneArtifacts,
       ...sealArtifacts,
@@ -2627,6 +2691,9 @@ function hardenProjectCore(
       ...wasmXorMaskArtifacts,
       ...wasmSealXorArtifacts,
       ...releaseHygieneArtifacts,
+      ...plaintextSecretArtifacts,
+      ...integrityCoverageArtifacts,
+      ...bindScopeArtifacts,
     ];
     // Attribute the specific refusal to the artifact that triggered the gate;
     // every other planned artifact is skipped because the run was blocked.

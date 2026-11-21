@@ -201,6 +201,16 @@ export interface PackagingGatesScanOptions extends PackagingGatesAllowOptions {
    * only — lanes/panel stay protect-time unless includeProtectTimeGates.
    */
   readonly includeProtectTimeGates?: boolean;
+  /**
+   * When true, the three lint-only gates (`plaintext-secret`,
+   * `integrity-coverage`, `bind-scope`) also refuse `harden` at project level.
+   *
+   * `bla lint` has always refused on them; `harden` deliberately did not, so a
+   * release pipeline that treats `harden` as its gate had no way to gate on
+   * "a secret still ships in plaintext" or "the integrity matrix does not cover
+   * the tree". Default false keeps every existing workflow byte-identical.
+   */
+  readonly requireLintGates?: boolean;
 }
 
 export interface PackagingGatesReport {
@@ -754,7 +764,7 @@ export function scanPackagingGates(
       ...(meta.recommendedMcpTool !== undefined
         ? { recommendedMcpTool: meta.recommendedMcpTool }
         : {}),
-      enforcedByHarden: !LINT_ONLY_GATES.has(f.gate),
+      enforcedByHarden: options.requireLintGates === true || !LINT_ONLY_GATES.has(f.gate),
     };
   });
 
@@ -949,6 +959,10 @@ export function evaluateHardenProjectPackagingBlocks(
   readonly blockingWasmXorMask: readonly WasmXorMaskSidecarReport[];
   readonly blockingWasmSealXor: readonly WasmSealXorKnownPlaintextReport[];
   readonly blockingReleaseHygiene: readonly ReleaseHygieneFileReport[];
+  /** Only populated when `requireLintGates` is set; empty otherwise. */
+  readonly blockingPlaintextSecrets: readonly PlaintextSecretReport[];
+  readonly blockingIntegrityCoverage: readonly IntegrityCoverageFileReport[];
+  readonly blockingBindScope: readonly BindScopeLintReport[];
 } {
   // Harden project-level: do not include protect-time gates in the scan used
   // for the early refuse path (preserves prior semantics).
@@ -991,6 +1005,34 @@ export function evaluateHardenProjectPackagingBlocks(
     options.allowReleaseHygieneLeak !== true
       ? report.details.releaseHygiene.filter((r) => r.shouldRefuseBankrupt)
       : [];
+  // The three lint-only gates never block unless the caller opts in. Reuse
+  // `filterBlockingFindings` so the enforced set agrees exactly with the
+  // `enforcedByHarden` marker the scan stamped on the same findings — its
+  // per-gate intensity threshold and every `--allow-*` override included.
+  const lintGatesEnforced = options.requireLintGates === true;
+  const lintOnlyGates: readonly PackagingGateId[] = [
+    "plaintext-secret",
+    "integrity-coverage",
+    "bind-scope",
+  ];
+  const blockingLintOnly = lintGatesEnforced
+    ? filterBlockingFindings(
+        report.findings.filter((f) => lintOnlyGates.includes(f.gate)),
+        intensity,
+        options,
+      )
+    : [];
+  const blockingLintOnlyPaths = (gate: PackagingGateId): Set<string> =>
+    new Set(blockingLintOnly.filter((f) => f.gate === gate).map((f) => f.path));
+  const blockingPlaintextSecrets = report.details.plaintextSecrets.filter(
+    (r) => blockingLintOnlyPaths("plaintext-secret").has(r.path) === true,
+  );
+  const blockingIntegrityCoverage = report.details.integrityCoverage.filter(
+    (r) => blockingLintOnlyPaths("integrity-coverage").has(r.path) === true,
+  );
+  const blockingBindScope = report.details.bindScope.filter(
+    (r) => blockingLintOnlyPaths("bind-scope").has(r.path) === true,
+  );
   return {
     report,
     blockingSeals,
@@ -1000,6 +1042,9 @@ export function evaluateHardenProjectPackagingBlocks(
     blockingWasmXorMask,
     blockingWasmSealXor,
     blockingReleaseHygiene,
+    blockingPlaintextSecrets,
+    blockingIntegrityCoverage,
+    blockingBindScope,
   };
 }
 

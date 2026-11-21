@@ -187,6 +187,8 @@ interface ParsedCliArgs {
   readonly allowSinglePointIntegrity: boolean;
   readonly allowMissingBindRuntime: boolean;
   readonly allowReleaseHygieneLeak: boolean;
+  /** Opt-in: the lint-only gates (`plaintext-secret`, `integrity-coverage`, `bind-scope`) also refuse harden. */
+  readonly requireLintGates: boolean;
   readonly lang: NativeHeaderLanguage;
   readonly clients: SupportedAgentClientId[];
   readonly allDetected: boolean;
@@ -266,6 +268,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let allowSinglePointIntegrity = false;
   let allowMissingBindRuntime = false;
   let allowReleaseHygieneLeak = false;
+  let requireLintGates = false;
   let allowPanelOfflineOracle = false;
   let lang: NativeHeaderLanguage = "c";
   const clients: SupportedAgentClientId[] = [];
@@ -411,6 +414,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       allowMissingBindRuntime = true;
     } else if (arg === "--allow-release-hygiene-leak") {
       allowReleaseHygieneLeak = true;
+    } else if (arg === "--require-lint-gates") {
+      requireLintGates = true;
     } else if (arg === "--wasm-preserve-exports") {
       const value = expandedArgs[++i];
       if (value === undefined) {
@@ -567,6 +572,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     allowSinglePointIntegrity,
     allowMissingBindRuntime,
     allowReleaseHygieneLeak,
+    requireLintGates,
     lang,
     clients,
     allDetected,
@@ -809,6 +815,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
             ? { sqliteEvalTrap: true }
             : {}),
+          ...(parsed.requireLintGates || loaded.config.requireLintGates === true
+            ? { requireLintGates: true }
+            : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
             parsed.allowLaneIndependentGates ||
@@ -888,6 +897,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             : {}),
           ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
             ? { sqliteEvalTrap: true }
+            : {}),
+          ...(parsed.requireLintGates || loaded.config.requireLintGates === true
+            ? { requireLintGates: true }
             : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
@@ -1259,6 +1271,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...(parsed.sqliteEvalTrap || loaded.config.sqliteEvalTrap === true
             ? { sqliteEvalTrap: true }
+            : {}),
+          ...(parsed.requireLintGates || loaded.config.requireLintGates === true
+            ? { requireLintGates: true }
             : {}),
           ...mergeWasmPreserveExports(parsed, loaded.config),
           allowLaneIndependentGates:
