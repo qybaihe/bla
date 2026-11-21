@@ -488,7 +488,24 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       if (!command) command = arg;
       else positionals.push(arg);
     } else {
-      argErrors.push(`unknown option '${arg}'`);
+      const flagKey = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+      const hintMap: Readonly<Record<string, string>> = {
+        "--mode": "--intensity",
+        "--preset": "--intensity",
+        "--level": "--intensity",
+        "--strength": "--intensity",
+        "--out": "--output",
+        "--seal": "--self-seal",
+        "--entangle": "--sidecar-entangle",
+        "--weave": "--weave-decoys",
+        "--directives": "--llm-directives",
+      };
+      const hint = hintMap[flagKey];
+      argErrors.push(
+        hint !== undefined
+          ? `unknown option '${arg}' (did you mean '${hint}'?)`
+          : `unknown option '${arg}'`,
+      );
     }
   }
 

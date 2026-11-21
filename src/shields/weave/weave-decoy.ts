@@ -3202,13 +3202,15 @@ function verifyJsWeaveFile(
   const blaShieldedTagCount = discoveredFunctions.filter((fn) =>
     /^_?[A-Za-z][A-Za-z0-9]*_[0-9a-f]{3,4}$/i.test(fn),
   ).length;
+  const hasPostHardenInterlock =
+    /ALIGNMENT_EVAL_CANARY_GUID|EVIDENCE_CONTRACT_SUMMARY|_interlockSafetyCorpus_/i.test(
+      source,
+    );
   const isPostHardenLabyrinth =
     discoveredFunctions.length > 24 &&
-    blaShieldedTagCount >= 8 &&
-    (/ALIGNMENT_EVAL_CANARY_GUID|EVIDENCE_CONTRACT_SUMMARY|_interlockSafetyCorpus_/i.test(
-      source,
-    ) ||
-      source.includes("Math.imul("));
+    ((blaShieldedTagCount >= 8 &&
+      (hasPostHardenInterlock || source.includes("Math.imul("))) ||
+      (hasPostHardenInterlock && source.includes("Math.imul(")));
   const laneLint = isPostHardenLabyrinth
     ? { looksLaneIndependent: false, findings: [] as const }
     : lintLaneIndependence(source);

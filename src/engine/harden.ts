@@ -40,6 +40,12 @@ import {
   type OneClickDefenseReport,
 } from "./defender.js";
 import {
+  formatSupportsLaneIndependenceLint,
+  laneIndependenceRefuseMessage,
+  lintLaneIndependence,
+  type LaneIndependenceReport,
+} from "./lane-independence-lint.js";
+import {
   sealCommitmentRefuseMessage,
 } from "./seal-commitment-lint.js";
 import {
@@ -1888,6 +1894,11 @@ function withNextSteps(
           : ""),
     );
   }
+  if (report.selfSeal === true && report.hardenedCount > 0 && report.dryRun !== true) {
+    steps.push(
+      "self_seal pins exact file bytes: finish bundling, transpiling, or minifying (esbuild, terser, webpack, vite) BEFORE hardening, and do not edit, reformat, or append comments to the hardened files afterwards — any post-harden byte change triggers an integrity failure at runtime.",
+    );
+  }
   const sqliteHardened = report.artifacts.filter((a) => a.success && a.format === "sqlite");
   if (sqliteHardened.length > 0 && report.dryRun !== true) {
     const one = sqliteHardened.length === 1;
@@ -2136,6 +2147,31 @@ function hardenProjectCore(
   const blockingWasmXorMask = packagingBlocks.blockingWasmXorMask;
   const blockingWasmSealXor = packagingBlocks.blockingWasmSealXor;
   const blockingReleaseHygiene = packagingBlocks.blockingReleaseHygiene;
+  // Pre-flight lane-independence check across discovered JS/TS targets so a
+  // refused gate blocks the whole harden run atomically instead of writing
+  // sibling HTML/assets into `.bla-hardened` and omitting the refused script.
+  const blockingLanes: Array<{
+    readonly path: string;
+    readonly format: ArtifactFormat;
+    readonly report: LaneIndependenceReport;
+  }> = [];
+  if (options.allowLaneIndependentGates !== true) {
+    for (const artifact of discovered) {
+      if (!formatSupportsLaneIndependenceLint(artifact.format)) continue;
+      try {
+        const laneReport = lintLaneIndependence(readFileSync(artifact.path, "utf8"));
+        if (laneReport.looksLaneIndependent) {
+          blockingLanes.push({
+            path: artifact.path,
+            format: artifact.format,
+            report: laneReport,
+          });
+        }
+      } catch {
+        /* unreadable artifacts surface in the per-artifact pass */
+      }
+    }
+  }
   let plannedOutputs = discovered.map((artifact) => {
     const outputPath = planArtifactOutputPath(artifact, outputRoot);
     return { artifact, outputPath, outputExisted: existsSync(outputPath) };
@@ -2468,6 +2504,7 @@ function hardenProjectCore(
   }
 
   if (
+    blockingLanes.length > 0 ||
     blockingSeals.length > 0 ||
     blockingWasmParms.length > 0 ||
     blockingJsAes.length > 0 ||
@@ -2476,6 +2513,18 @@ function hardenProjectCore(
     blockingWasmSealXor.length > 0 ||
     blockingReleaseHygiene.length > 0
   ) {
+    const laneArtifacts = blockingLanes.map((r) => ({
+      inputPath: r.path,
+      relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
+      format: r.format,
+      outputPath: r.path,
+      success: false,
+      defenseScore: 0,
+      tokenAmplificationFactor: 0,
+      costAmplificationFactor: 0,
+      outputExisted: false,
+      error: laneIndependenceRefuseMessage(r.report, r.path),
+    }));
     const sealArtifacts = blockingSeals.map((r) => ({
       inputPath: r.path,
       relativePath: (relative(absDir, r.path) || basename(r.path)).split(sep).join("/"),
@@ -2561,6 +2610,7 @@ function hardenProjectCore(
       error: releaseHygieneRefuseMessage(r, r.path),
     }));
     const blockParts: string[] = [];
+    if (blockingLanes.length > 0) blockParts.push("lane-independent JS gate");
     if (blockingSeals.length > 0) blockParts.push("plaintext/reversible seal sidecar");
     if (blockingWasmParms.length > 0) blockParts.push("clear WASM param carrier");
     if (blockingJsAes.length > 0) blockParts.push("JS AES wrap-key unwrap");
@@ -2569,6 +2619,7 @@ function hardenProjectCore(
     if (blockingWasmSealXor.length > 0) blockParts.push("WASM seal.revision XOR known-plaintext");
     if (blockingReleaseHygiene.length > 0) blockParts.push("leaked release environment artifact");
     const blockedExtras = [
+      ...laneArtifacts,
       ...sealArtifacts,
       ...wasmArtifacts,
       ...jsAesArtifacts,

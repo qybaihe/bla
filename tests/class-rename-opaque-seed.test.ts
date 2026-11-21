@@ -120,10 +120,11 @@ describe("Issue #40: class/new rename consistency + deterministic opaque seed", 
     expect(a.code).toBe(b.code);
     expect(a.code).not.toMatch(/hrtime/);
     expect(a.code).not.toMatch(/Date\.now\s*\(/);
-    // Seed initializer: deterministic numeric base OR'd with a digest-check bit that is
-    // now entangled with every injected decoy function (strip => ReferenceError / bit flip).
+    // Seed initializer: deterministic numeric base mixed with corpus-digest &
+    // rolling shadow-heap latch deltas, OR'd with a digest-check bit that is
+    // entangled with every injected decoy function (strip => ReferenceError / bit flip).
     expect(a.code).toMatch(
-      /const\s+\w+\s*=\s*\d+\s*\|\s*\(\[[^\]]+\]\.every\(\w+\s*=>\s*typeof\s+\w+\s*===\s*"function"\)\s*&&\s*\w+\(0\)\s*===/,
+      /const\s+\w+\s*=\s*\(?\d+\s*(?:\^[\s\S]{0,260}?)?\|\s*\(\[[^\]]+\]\.every\(\w+\s*=>\s*typeof\s+\w+\s*===\s*"function"\)\s*&&\s*\w+(?:\(0\))?\s*===/,
     );
 
     const orig = runCommonJs<{ id: (x: number) => number }>(source);

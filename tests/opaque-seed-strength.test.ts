@@ -21,9 +21,9 @@ describe("opaque-predicate seed strength (#40.4)", () => {
     expect(out.code).not.toMatch(/hrtime/);
     expect(out.code).not.toMatch(/Date\.now\s*\(/);
     expect(out.code).not.toMatch(/performance\.now\s*\(/);
-    // Opaque seed is a wide deterministic integer OR'd with integrity bit (not 0/1-only).
+    // Opaque seed is a wide deterministic integer mixed with runtime interlocks (not 0/1-only).
     const seedLit = out.code.match(
-      /const\s+\w+\s*=\s*(?:\(\()?(\d{3,})\s*(?:\)|\|)/,
+      /const\s+\w+\s*=\s*\(?(\d{3,})\s*(?:\^|\||\))/,
     );
     expect(seedLit).toBeTruthy();
     const n = Number(seedLit![1]);

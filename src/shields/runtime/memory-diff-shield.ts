@@ -4,8 +4,16 @@ import type { ProtectionIntensity } from "../../core/types.js";
 
 export interface ShadowHeapChurnShieldResult {
   readonly code: string;
+  /** Top-level `var <heap> = { ... };` initializer (can be placed ahead of `runtimeSeed`). */
+  readonly heapInitCode: string;
+  /** Hoisted stepper + split-share helper functions (kept in post-seed SCC mesh). */
+  readonly stepperCode: string;
   readonly stepperFunctionName: string;
   readonly heapObjectName: string;
+  /** Property name holding the rolling 2-word `Uint32Array` invariant latch. */
+  readonly latchPropertyName: string;
+  /** Low-byte invariant `(latch[0] ^ latch[1]) & 0xff` preserved across every step. */
+  readonly latchInvariantByte: number;
   readonly mutableSlotsCount: number;
   readonly diffOverflowFieldsCount: number;
   readonly mutationsPerInvocation: number;
@@ -57,6 +65,14 @@ export function generateShadowHeapChurnShield(
 
   const stepperFunctionName = prng.identifier({ style: "camel", hint: "advanceSlotCursor", entropy: 4 });
   const heapObjectName = prng.identifier({ style: "camel", hint: "stateRingBuffer", entropy: 4 });
+  const latchPropertyName = prng.identifier({ style: "camel", hint: "slotLatch", entropy: 3 });
+  const latchWordA = prng.nextInt(0x10000000, 0x7fffffff);
+  let latchWordB = prng.nextInt(0x10000000, 0x7fffffff);
+  // Guarantee a non-zero low-byte invariant so zeroing the latch always flips seed/decoders.
+  if (((latchWordA ^ latchWordB) & 0xff) === 0) {
+    latchWordB ^= prng.nextInt(1, 0xfe);
+  }
+  const latchInvariantByte = (latchWordA ^ latchWordB) & 0xff;
 
   const initialSlots: string[] = [];
   for (let i = 0; i < mutableSlotsCount; i++) {
@@ -106,11 +122,15 @@ export function generateShadowHeapChurnShield(
   // Avoid accidentally re-emitting the classic probe (hex or decimal).
   if (mixConst === 0x9e3779b9) mixConst ^= 2;
 
-  const code = [
+  const heapInitCode = [
     `var ${heapObjectName} = {`,
     `  cursor: 0,`,
     `  tick: 1,`,
     `  rollingMask: 0x${prng.hex(6)},`,
+    // Rolling 2-word Uint32Array latch: stepper XOR-rolls both words with the
+    // same live mask so memory changes on every step while `(w[0] ^ w[1]) & 255`
+    // stays invariant (`latchInvariantByte`) and is read by runtimeSeed + string decoders.
+    `  ${latchPropertyName}: new Uint32Array([${latchWordA}, ${latchWordB}]),`,
     // CSV→map avoids lane-lint BYTE_COMPARE_ARRAY on bankrupt output (R8 red residual / R9 blue)
     `  splitShareA: "${decoySecret.shareA.join(",")}".split(",").map(function (n) { return n | 0; }),`,
     `  splitShareB: "${decoySecret.shareB.join(",")}".split(",").map(function (n) { return n | 0; }),`,
@@ -121,12 +141,21 @@ export function generateShadowHeapChurnShield(
     overflowFieldsInit.join(",\n"),
     `  }`,
     `};`,
+  ].join("\n");
+
+  const stepperCode = [
     `function ${stepperFunctionName}(delta) {`,
     `  if (!${heapObjectName}) return 0;`,
     `  const _d = ((delta | 0) ^ ${heapObjectName}.tick) | 1;`,
     `  ${heapObjectName}.tick = (${heapObjectName}.tick + 1) & 0x7fffffff;`,
     `  const _mask = Math.imul(_d, ${mixConst}) ^ (${heapObjectName}.rollingMask >>> 7);`,
     `  ${heapObjectName}.rollingMask = (_mask ^ 0x5bd1e995) & 0x7fffffff;`,
+    `  const _lt = ${heapObjectName}.${latchPropertyName};`,
+    `  if (_lt && _lt.length >= 2) {`,
+    `    const _lr = (_mask & 0xffff) | 1;`,
+    `    _lt[0] = (_lt[0] ^ _lr) >>> 0;`,
+    `    _lt[1] = (_lt[1] ^ _lr) >>> 0;`,
+    `  }`,
     `  const _len = ${heapObjectName}.slots.length;`,
     `  for (let _i = 0; _i < 8; _i++) {`,
     `    const _idx = (${heapObjectName}.cursor + _i) % _len;`,
@@ -159,10 +188,16 @@ export function generateShadowHeapChurnShield(
     splitShareHelper.code,
   ].join("\n");
 
+  const code = `${heapInitCode}\n${stepperCode}`;
+
   return {
     code,
+    heapInitCode,
+    stepperCode,
     stepperFunctionName,
     heapObjectName,
+    latchPropertyName,
+    latchInvariantByte,
     mutableSlotsCount,
     diffOverflowFieldsCount,
     mutationsPerInvocation: mutationsPerStep,

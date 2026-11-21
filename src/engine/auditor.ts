@@ -212,10 +212,74 @@ function analyzeJsSourceForAudit(
       FunctionDeclaration(path) {
         totalFunctions++;
         const fnName = path.node.id?.name ?? "anonymous";
-        const hasNonTrivialBody = (path.node.body?.body?.length ?? 0) >= 2;
+        const bodyStmts = path.node.body?.body ?? [];
+        const hasNonTrivialBody = bodyStmts.length >= 2;
+        const firstStmt = bodyStmts[0];
+        const isParityZeroExpr = (node: t.Node | null | undefined): boolean => {
+          if (!node) return false;
+          const expr =
+            t.isLogicalExpression(node) && node.operator === "&&" ? node.right : node;
+          return (
+            t.isBinaryExpression(expr) &&
+            expr.operator === "===" &&
+            t.isNumericLiteral(expr.right) &&
+            expr.right.value === 0 &&
+            t.isBinaryExpression(expr.left) &&
+            expr.left.operator === "&" &&
+            t.isIdentifier(expr.left.left) &&
+            t.isNumericLiteral(expr.left.right) &&
+            expr.left.right.value === 1
+          );
+        };
+        const isSccLinkExpr = (node: t.Node | null | undefined): boolean => {
+          if (!node) return false;
+          if (
+            t.isMemberExpression(node) &&
+            !node.computed &&
+            t.isIdentifier(node.object) &&
+            t.isIdentifier(node.property) &&
+            node.property.name === "length"
+          ) {
+            return true;
+          }
+          if (t.isConditionalExpression(node)) {
+            return isSccLinkExpr(node.alternate);
+          }
+          if (t.isCallExpression(node) && t.isIdentifier(node.callee)) {
+            return true;
+          }
+          return false;
+        };
+        const hasSccParityGuard = (() => {
+          if (!firstStmt) return false;
+          if (t.isIfStatement(firstStmt) && isParityZeroExpr(firstStmt.test)) {
+            const cons = firstStmt.consequent;
+            const retStmt = t.isReturnStatement(cons)
+              ? cons
+              : t.isBlockStatement(cons) && cons.body.length > 0
+                ? cons.body[cons.body.length - 1]
+                : undefined;
+            return (
+              retStmt !== undefined &&
+              t.isReturnStatement(retStmt) &&
+              isSccLinkExpr(retStmt.argument)
+            );
+          }
+          if (
+            bodyStmts.length === 1 &&
+            t.isReturnStatement(firstStmt) &&
+            t.isConditionalExpression(firstStmt.argument) &&
+            isParityZeroExpr(firstStmt.argument.test) &&
+            isSccLinkExpr(firstStmt.argument.consequent)
+          ) {
+            return true;
+          }
+          return false;
+        })();
         if (
-          hasNonTrivialBody &&
-          (fnName.includes("enclave") || fnName.includes("Shadow") || fnName.includes("tarpit") ||
+          (hasNonTrivialBody || hasSccParityGuard) &&
+          (hasSccParityGuard ||
+            fnName.includes("enclave") || fnName.includes("Shadow") || fnName.includes("tarpit") ||
             /_[a-f0-9]{4}$/i.test(fnName) ||
             /^(?:_)?(?:verifyEnclave|deriveHardware|reconcileQuorum|validateZeroKnowledge|dispatchSealed|computeMerkle|synchronizeHsm|decodeRingBuffer|authenticateTpm|evaluateLicense|negotiateVsock|projectShadow|resolveCryptographic|auditMonotonic|unsealProtected|verifySchnorr|stepShadowHeap|advanceSlotCursor|readSplitShare|registerDecoyIpc|bindChannelRoutes)/.test(
               fnName,
