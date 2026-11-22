@@ -1229,6 +1229,34 @@ export function injectWasmBytecodeFlowerInstructions(
   };
 }
 
+/**
+ * Reject a malformed section table before any transformation. `protect` must
+ * fail closed: a section whose LEB128 size is truncated, or whose declared size
+ * runs past EOF, previously fell out of the walk and the shield still emitted a
+ * container the runtime refuses to instantiate.
+ */
+function assertWasmSectionFraming(bytes: Buffer): void {
+  let offset = 8;
+  while (offset < bytes.length) {
+    const sectionStart = offset;
+    offset += 1; // section id
+    const header = tryDecodeUnsignedLeb128(bytes, offset);
+    if (header === null) {
+      throw new Error(
+        `Malformed WebAssembly section header at byte ${sectionStart}: truncated LEB128 section size`,
+      );
+    }
+    const { value: sectionSize, nextOffset } = header;
+    const sectionEnd = nextOffset + sectionSize;
+    if (sectionEnd > bytes.length) {
+      throw new Error(
+        `Malformed WebAssembly section at byte ${sectionStart}: declared size ${sectionSize} runs past the ${bytes.length - nextOffset} remaining byte(s)`,
+      );
+    }
+    offset = sectionEnd;
+  }
+}
+
 export function protectWasmBinary(
   bytes: Buffer,
   options: {
@@ -1281,6 +1309,7 @@ export function protectWasmBinary(
   ) {
     throw new Error("Invalid WebAssembly binary magic header");
   }
+  assertWasmSectionFraming(bytes);
 
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-wasm-shield-v1");
@@ -1318,10 +1347,18 @@ export function protectWasmBinary(
     const sectionStart = offset;
     const sectionId = sourceBytes[offset++]!;
     const header = tryDecodeUnsignedLeb128(sourceBytes, offset);
-    if (header === null) break; // truncated section-size header → stop defensively
+    if (header === null) {
+      throw new Error(
+        `Malformed WebAssembly section header at byte ${offset - 1}: truncated LEB128 section size`,
+      );
+    }
     const { value: sectionSize, nextOffset } = header;
     const sectionEnd = nextOffset + sectionSize;
-    if (sectionEnd > sourceBytes.length) break;
+    if (sectionEnd > sourceBytes.length) {
+      throw new Error(
+        `Malformed WebAssembly section at byte ${offset - 1}: declared size ${sectionSize} runs past the ${sourceBytes.length - nextOffset} remaining byte(s)`,
+      );
+    }
 
     if (sectionId === 0) {
       // Strip original custom/debug sections, but keep the ones a linker or the
