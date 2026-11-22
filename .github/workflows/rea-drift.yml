@@ -1,0 +1,98 @@
+name: REA drift
+
+# `npm run verify:rea` is the only check that BLA's pinned REA expectations
+# (`REA_INTERNAL_LIMITS` in `src/identity.ts`, the exhaustion budget tables) still
+# match the real REA tree. It needs that tree on disk: `scripts/verify-rea-constants.mjs`
+# resolves `REA_ROOT`, or falls back to a sibling `../rea`.
+#
+# On a GitHub-hosted runner the workspace is `/<workdir>/<repo>`, so the sibling
+# candidate used by `ci.yml` — `$(dirname "$GITHUB_WORKSPACE")/rea` — can never
+# exist there. That step has therefore always printed SKIP: a future REA rename
+# would land with nothing to notice it.
+#
+# This workflow gives the gate a real checkout. It is scheduled rather than part
+# of `ci.yml` because it clones a third-party repository and answers "did REA
+# move?", which is not a property of the commit under test.
+on:
+  schedule:
+    # Weekly, off the hour so it does not pile onto other cron traffic.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The REA revision BLA's expectations were last reconciled against. This revision
+# passes all 74 assertions locally (`verify:rea` exits 0), so:
+#   - `pinned` failing means BLA's own expectations regressed;
+#   - `upstream` failing means REA moved and this pin needs a review.
+env:
+  REA_PINNED_REVISION: 66d1bb13dcb0722134e698d91c3a9da8d5a21ec4
+
+jobs:
+  pinned:
+    name: Constants match the pinned REA revision
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out BLA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out morluto/rea at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: morluto/rea
+          ref: ${{ env.REA_PINNED_REVISION }}
+          path: rea
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".nvmrc"
+
+      # The harness walks REA's TypeScript sources and BLA's; it needs no install
+      # and no BLA build.
+      - name: Verify REA constant alignment
+        run: npm run verify:rea
+        env:
+          REA_ROOT: ${{ github.workspace }}/rea
+
+  upstream:
+    name: Report whether REA moved (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out BLA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out morluto/rea main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: morluto/rea
+          ref: main
+          path: rea
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".nvmrc"
+
+      # Informational on purpose: upstream moving is a reason to review the pin,
+      # not a reason to fail this workflow. The step summary says which constants
+      # moved so the review starts from evidence.
+      - name: Report drift against REA main
+        continue-on-error: true
+        run: |
+          {
+            echo "### REA main drift"
+            echo
+            echo "Pinned revision: \`$REA_PINNED_REVISION\`"
+            echo
+            echo "If this job reports FAIL, REA moved the constants BLA asserts."
+            echo "Review the pin and \`REA_INTERNAL_LIMITS\` before bumping it."
+            echo
+            echo '```'
+            npm run verify:rea || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          npm run verify:rea
+        env:
+          REA_ROOT: ${{ github.workspace }}/rea
