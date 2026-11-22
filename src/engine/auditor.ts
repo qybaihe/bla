@@ -15,7 +15,7 @@ import type {
   ReaSemanticSimulationResult,
 } from "../core/types.js";
 import { unpackAsarBuffer } from "../shields/formats/asar.js";
-import { inspectWasmBinary } from "../shields/formats/wasm.js";
+import { inspectWasmBinary, readWasmCustomSectionContent } from "../shields/formats/wasm.js";
 import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
 import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
@@ -489,6 +489,39 @@ function analyzeJsSourceForAudit(
 /**
  * Runs a Pre-flight REA Exposure & Vulnerability Audit on any file or directory.
  */
+/** JSON payload of a BLA WASM shield custom section, or null when absent/unparsable. */
+function parseWasmShieldPayload(
+  bytes: Buffer,
+  sectionName: string,
+): Record<string, unknown> | null {
+  const payload = readWasmCustomSectionContent(bytes, sectionName);
+  if (payload === null || payload.length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(payload.toString("utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A WASM artifact counts as BLA-shielded only when the three marker custom
+ * sections carry the payloads `protectWasmBinary` writes, not merely their
+ * names: three empty (or foreign) sections must not read as protection.
+ */
+function wasmEnclaveShieldIsStructural(bytes: Buffer): boolean {
+  const manifest = parseWasmShieldPayload(bytes, "bla.enclave.manifest");
+  const canary = parseWasmShieldPayload(bytes, "bla.canary.credentials");
+  const iface = parseWasmShieldPayload(bytes, "bla.wasm.interface.exhaustion");
+  return (
+    manifest?.schema === "bla-wasm-enclave-shield/v1" &&
+    canary?.classification === "TELEMETRY_ATTESTATION_LEASE_METADATA" &&
+    iface?.schema === "bla-wasm-interface-exhaustion/v1"
+  );
+}
+
 export function auditTarget(targetPath: string): AuditReport {
   const absPath = resolve(targetPath);
   const format = detectArtifactFormat(absPath);
@@ -847,12 +880,12 @@ export function auditTarget(targetPath: string): AuditReport {
     } else if (format === "wasm") {
       vulnerableVectors.add("wasm-wat-interface");
       const info = inspectWasmBinary(rawBytes);
+      // Marker section *names* are a self-assertion: an unprotected module can
+      // carry three empty custom sections with the BLA names and score as fully
+      // shielded (issue #155/#157 class, WASM variant). Require the payloads a
+      // real `protectWasmBinary` run writes before claiming protection.
       const isProtected =
-        info.validMagic &&
-        info.exactFraming &&
-        info.customSectionNames.includes("bla.enclave.manifest") &&
-        info.customSectionNames.includes("bla.canary.credentials") &&
-        info.customSectionNames.includes("bla.wasm.interface.exhaustion");
+        info.validMagic && info.exactFraming && wasmEnclaveShieldIsStructural(rawBytes);
       for (const exp of info.exportNames) {
         exposedItems.push({
           id: `wasm_exp_${exp}`,

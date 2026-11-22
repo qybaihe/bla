@@ -41,7 +41,6 @@ describe("audit exposure score reflects real protection, not a syntactic shape",
     const report = auditTarget(plainPath);
     expect(report.protectionStatus).toBe("UNPROTECTED");
     expect(report.exposureScore).toBeGreaterThan(50);
-    expect(report.exposureScore).toBeGreaterThan(50);
   });
 
   it("still recognises a genuinely hardened artifact", () => {
