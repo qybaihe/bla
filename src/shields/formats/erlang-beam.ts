@@ -258,6 +258,31 @@ export function protectErlangBeamBuffer(
       "Invalid or truncated BEAM module: expected an IFF FOR1/BEAM container; refusing to synthesize a replacement module.",
     );
   }
+  // Fail closed on a truncated chunk table: never emit a partially rebuilt module.
+  const formEnd = 8 + parsed.formSize;
+  if (formEnd > input.length) {
+    throw new Error(
+      `Truncated BEAM container: the FOR1 form declares ${parsed.formSize} bytes but the file holds ${input.length}; refusing to emit a partially rebuilt module.`,
+    );
+  }
+  let at = 12;
+  while (at < formEnd) {
+    if (at + 8 > formEnd) {
+      throw new Error(
+        `Truncated BEAM chunk table at byte offset ${at}: incomplete chunk header inside the FOR1 form (form end ${formEnd}, input ${input.length} bytes); refusing to emit a partially rebuilt module.`,
+      );
+    }
+    const name = input.subarray(at, at + 4).toString("latin1");
+    const size = input.readUInt32BE(at + 4);
+    const payloadOffset = at + 8;
+    const padded = payloadOffset + size + ((4 - (size % 4)) % 4);
+    if (padded > formEnd || payloadOffset + size > input.length) {
+      throw new Error(
+        `Truncated BEAM chunk '${name}' at byte offset ${at}: declares ${size}-byte payload but only ${Math.max(0, input.length - payloadOffset)} bytes remain before the form end (${formEnd}) / input EOF (${input.length}); refusing to emit a partially rebuilt module.`,
+      );
+    }
+    at = padded;
+  }
   const baseChunks: BeamChunkView[] = parsed.chunks.map((c) => ({
     name: c.name,
     payload: Buffer.from(c.payload),
