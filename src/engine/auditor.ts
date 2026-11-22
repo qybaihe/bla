@@ -1625,7 +1625,11 @@ export function auditTarget(targetPath: string): AuditReport {
         Math.min(8, sim.triggeredResourceLimits.length * 2) -
         Math.min(3, Math.floor(sim.decoyFunctionsDetectedAsReal / 8)),
     );
-  } else if (sim.triggeredResourceLimits.length > 0 || sim.decoyFunctionsDetectedAsReal > 0) {
+  } else if (sim.decoyFunctionsDetectedAsReal > 0 || sim.architecturalChaffPayloads > 0) {
+    // Real injected content is present but not the full shield: the middle
+    // band. A merely syntactic shape — tripping a resource limit like
+    // `primitive-candidates` with no decoy or chaff anywhere — used to land
+    // here too, publishing PARTIALLY_SHIELDED for completely plain code.
     exposureScore = 38;
   } else {
     exposureScore = Math.min(
