@@ -68,6 +68,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     ".agents/skills/blind-llm-agents",
     "README.md",
     "LICENSE",
