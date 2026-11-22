@@ -554,6 +554,26 @@ export interface SidecarJsInjectResult {
 }
 
 /**
+ * `bindingName` overrides are interpolated verbatim into `var <name> = …`
+ * declarations, so a caller-supplied value must be a plain identifier: a
+ * newline or an unbalanced quote would otherwise inject statements into the
+ * preamble that ships inside the protected artifact, and a merely malformed
+ * one (a space, a leading digit) would emit code that does not parse.
+ */
+function assertJsBindingName(bindingName: string): void {
+  if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(bindingName)) {
+    throw new Error("sidecar bindingName must be a valid JavaScript identifier");
+  }
+}
+
+/** Python counterpart of {@link assertJsBindingName}; `$` is not a Python identifier character. */
+function assertPythonBindingName(bindingName: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(bindingName)) {
+    throw new Error("sidecar bindingName must be a valid Python identifier");
+  }
+}
+
+/**
  * Emit a Node JS preamble that re-measures sidecar siblings and compares
  * against the protect-time SHA-256 hex. Strip / alter ⇒ throw (hard) or
  * expose a flipped digest (softFold) for opaque-seed entanglement.
@@ -574,9 +594,7 @@ export function generateSidecarJsPreamble(
   const bindingName = options.bindingName ?? `_verifySiblingDigest_${tag}`;
   // Interpolated verbatim into `var <name> = …` declarations — require a plain
   // identifier so an override cannot break or inject into the preamble.
-  if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(bindingName)) {
-    throw new Error("sidecar bindingName must be a valid JavaScript identifier");
-  }
+  assertJsBindingName(bindingName);
   const expectedU32 = parseInt(tag, 16) >>> 0;
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
@@ -806,6 +824,7 @@ export function generateSidecarPythonPreamble(
   }
   const tag = expectedHex.slice(0, 8);
   const bindingName = options.bindingName ?? `_verify_sibling_digest_${tag}`;
+  assertPythonBindingName(bindingName);
   const expectedU32 = parseInt(tag, 16) >>> 0;
   const sidecarsLiteral = JSON.stringify(sidecars);
   const entryLiteral = JSON.stringify(options.entryPath);
@@ -1404,6 +1423,7 @@ export function generateSidecarWasmLoaderSnippet(
   }
   const tag = list[0]!.slice(0, 8);
   const bindingName = options.bindingName ?? `${WASM_SIDECAR_LOADER_MARKER}_${tag}`;
+  assertJsBindingName(bindingName);
   const isEsm = options.carrier === "module";
   const reqHelperAlias = `_resolveWasmLoaderRequire_${tag}`;
   const idsLiteral = JSON.stringify(list);
@@ -2814,6 +2834,7 @@ export function generateSidecarAsarMainJsPreamble(
   const seedTag = options.seedTag ?? "bla-sidecar-v1";
   const softFold = options.softFold === true;
   const bindingName = options.bindingName ?? ASAR_SIDECAR_MAIN_JS_MARKER;
+  assertJsBindingName(bindingName);
   const expectedHex = options.expectedHex.toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(expectedHex)) {
     throw new Error("expectedHex must be a 64-char lowercase hex SHA-256 digest");
@@ -3390,6 +3411,7 @@ export function generateSidecarPycLoaderSnippet(
   }
   const tag = list[0]!.slice(0, 8);
   const bindingName = options.bindingName ?? `${PYC_SIDECAR_LOADER_MARKER}_${tag}`;
+  assertPythonBindingName(bindingName);
   const idsLiteral = JSON.stringify(list);
   const pathsLiteral = JSON.stringify(relPaths);
   const markerLiteral = JSON.stringify(PYC_SIDECAR_MARSHAL_MARKER);
@@ -4241,6 +4263,7 @@ export function generateSidecarGgufLoaderSnippet(
   }
   const tag = list[0]!.slice(0, 8);
   const bindingName = options.bindingName ?? `${GGUF_SIDECAR_LOADER_MARKER}_${tag}`;
+  assertPythonBindingName(bindingName);
   const idsLiteral = JSON.stringify(list);
   const pathsLiteral = JSON.stringify(relPaths);
   const keyLiteral = JSON.stringify(GGUF_SIDECAR_METADATA_KEY);
@@ -5093,6 +5116,7 @@ export function generateSidecarSafetensorsLoaderSnippet(
   const tag = list[0]!.slice(0, 8);
   const bindingName =
     options.bindingName ?? `${SAFETENSORS_SIDECAR_LOADER_MARKER}_${tag}`;
+  assertPythonBindingName(bindingName);
   const idsLiteral = JSON.stringify(list);
   const pathsLiteral = JSON.stringify(relPaths);
   const keyLiteral = JSON.stringify(SAFETENSORS_SIDECAR_METADATA_KEY);
