@@ -34,7 +34,8 @@ export type PlaintextSecretFindingId =
   | "plaintext-url-endpoint"
   | "plaintext-pem-header"
   | "plaintext-b64-or-hex"
-  | "plaintext-derive-keyname";
+  | "plaintext-derive-keyname"
+  | "plaintext-scan-truncated";
 
 export type PlaintextSecretSeverity = "warning" | "error";
 
@@ -684,6 +685,7 @@ export function classifySensitiveLiteral(
 function severityFor(id: PlaintextSecretFindingId): PlaintextSecretSeverity {
   switch (id) {
     case "plaintext-url-endpoint":
+    case "plaintext-scan-truncated":
       return "warning";
     default:
       return "error";
@@ -695,10 +697,21 @@ export function lintPlaintextSecretsSource(
   options: { readonly path?: string; readonly allowPlaintextString?: boolean } = {},
 ): PlaintextSecretReport {
   const path = options.path ?? "<memory>";
-  const truncated =
-    source.length > MAX_SCAN_CHARS ? source.slice(0, MAX_SCAN_CHARS) : source;
+  const scanTruncated = source.length > MAX_SCAN_CHARS;
+  const truncated = scanTruncated ? source.slice(0, MAX_SCAN_CHARS) : source;
   const findings: PlaintextSecretFinding[] = [];
   const seen = new Set<string>();
+  // The 800k cap is a silent blind spot on a large bundle unless the report
+  // names it; the contract is that a report says what it did not do.
+  if (scanTruncated) {
+    findings.push({
+      id: "plaintext-scan-truncated",
+      severity: severityFor("plaintext-scan-truncated"),
+      summary: `Plaintext-secret scan truncated: only the first ${MAX_SCAN_CHARS} of ${source.length} characters were scanned; the tail was not inspected.`,
+      evidence: `scanned 0..${MAX_SCAN_CHARS} of ${source.length} chars`,
+      literal: "",
+    });
+  }
 
   const extraction = extractLiteralsDetailed(truncated);
   for (const { value: lit, line, inRegex } of extraction.literals) {
@@ -724,16 +737,20 @@ export function lintPlaintextSecretsSource(
     });
   }
 
-  const errorFindings = findings.filter((f) => f.severity === "error");
-  const looksExposed = findings.length > 0;
+  const secretFindings = findings.filter((f) => f.id !== "plaintext-scan-truncated");
+  const errorFindings = secretFindings.filter((f) => f.severity === "error");
+  const looksExposed = secretFindings.length > 0;
   const shouldRefuseBankrupt =
     errorFindings.length > 0 && options.allowPlaintextString !== true;
 
-  const oneLineAdvice = shouldRefuseBankrupt
+  const baseAdvice = shouldRefuseBankrupt
     ? "ERROR: Cleartext sensitive literals remain — run bla_encrypt_strings (XOR/combinatorial; never JS AES) or pass allow_plaintext_string (lab only)."
     : looksExposed
       ? "WARNING: Non-refusing sensitive literals (e.g. URLs) still in cleartext — prefer bla_encrypt_strings."
       : "No cleartext sensitive-literal findings (heuristic).";
+  const oneLineAdvice = scanTruncated
+    ? `${baseAdvice} NOTE: only the first ${MAX_SCAN_CHARS} of ${source.length} characters were scanned; the tail was not inspected.`
+    : baseAdvice;
 
   return {
     schema: PLAINTEXT_SECRET_SCHEMA,
