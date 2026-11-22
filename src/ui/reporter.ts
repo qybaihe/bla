@@ -205,9 +205,15 @@ export function formatBenchmarkReport(bench: BenchmarkReport): string {
     );
   }
 
+  const passedCount = bench.cases.filter((c) => c.functionalCheckPassed).length;
+  const allPassed = passedCount === bench.cases.length;
+  const footer = allPassed
+    ? `${ANSI.green}${ANSI.bold}All ${bench.cases.length} Targets: 100% Runtime-Equivalent & REA-Resistant${ANSI.reset}`
+    : `${ANSI.red}${ANSI.bold}${passedCount} of ${bench.cases.length} Targets: Runtime-Equivalent & REA-Resistant — not fully equivalent${ANSI.reset}`;
+
   lines.push(
     `─────────────────────────────────────────┴───────────────────────────────┴──────────────────────────────────────────┴────────────┴──────────────`,
-    `${ANSI.bold}Aggregate Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${ANSI.green}${ANSI.bold}All ${bench.cases.length} Targets: 100% Runtime-Equivalent & REA-Resistant${ANSI.reset}`,
+    `${ANSI.bold}Aggregate Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${footer}`,
   );
 
   return lines.join("\n");
