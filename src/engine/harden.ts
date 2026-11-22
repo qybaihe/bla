@@ -711,12 +711,28 @@ function resolveSearchRoots(absRoot: string): {
   // `release` and `Release` are one directory on a case-insensitive file
   // system (macOS, Windows): walk it once, under the name it has on disk.
   const seenPhysical = new Set<string>();
+  const physicalRoot = realpathSync.native(absRoot);
+  /**
+   * True when `physical` is `absRoot` itself or lives under it.
+   *
+   * `walkBounded` skips symlinked directory *entries*, but it reads its own root
+   * with `readdirSync`, which follows a link. Without this check a build
+   * directory that is a symlink — or that sits behind one — would let discovery
+   * (and therefore the report and the mirror) read files from outside the
+   * project. Both sides are canonicalised first, so a case-insensitive file
+   * system cannot make a legitimate build directory look like an escape.
+   */
+  const isInsideProject = (physical: string): boolean => {
+    const rel = relative(physicalRoot, physical);
+    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  };
   const addRoot = (candidate: string): void => {
     try {
       if (!statSync(candidate).isDirectory()) return;
       // The output of an earlier `bla harden -o ./release` is not build output.
       if (existsSync(join(candidate, HARDEN_SUMMARY_FILE_NAME))) return;
       const physical = realpathSync.native(candidate);
+      if (!isInsideProject(physical)) return;
       if (seenPhysical.has(physical)) return;
       seenPhysical.add(physical);
       const onDiskName = basename(physical);
