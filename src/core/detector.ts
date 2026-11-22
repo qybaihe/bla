@@ -16,6 +16,49 @@ export function isTypeScriptDeclarationPath(targetPath: string): boolean {
 }
 
 /**
+ * True only when the PE optional header declares a CLR Runtime Header (data
+ * directory 14) with non-zero RVA and Size. A native PE whose stub, resources
+ * or section names merely contain the bytes `BSJB` is not a .NET assembly.
+ * Every read is bounds-checked: malformed or truncated input returns false.
+ */
+function hasClrRuntimeHeader(header: Buffer): boolean {
+  // e_lfanew: u32LE at 0x3c; the PE\0\0 signature must follow it.
+  if (header.length < 0x40) return false;
+  const e_lfanew = header.readUInt32LE(0x3c);
+  if (e_lfanew + 4 > header.length) return false;
+  if (header.subarray(e_lfanew, e_lfanew + 4).toString("latin1") !== "PE\0\0") {
+    return false;
+  }
+
+  const coff = e_lfanew + 4;
+  if (coff + 20 > header.length) return false;
+  const sizeOfOptionalHeader = header.readUInt16LE(coff + 16);
+
+  const opt = coff + 20;
+  if (opt + 2 > header.length) return false;
+  const magic = header.readUInt16LE(opt);
+  const prefixLen = magic === 0x10b ? 96 : magic === 0x20b ? 112 : -1;
+  if (prefixLen < 0 || sizeOfOptionalHeader < prefixLen) return false;
+  if (opt + prefixLen > header.length) return false;
+
+  // NumberOfRvaAndSizes closes the optional-header prefix
+  // (PE32: +92, PE32+: +108); index 14 must exist.
+  const numRvaAndSizes = header.readUInt32LE(
+    opt + (magic === 0x10b ? 92 : 108),
+  );
+  if (numRvaAndSizes < 15) return false;
+
+  // CLR Runtime Header is data-directory index 14: RVA u32 + Size u32.
+  const clrDir = opt + prefixLen + 14 * 8;
+  if (clrDir + 8 > header.length) return false;
+  if (clrDir + 8 > opt + sizeOfOptionalHeader) return false;
+
+  const rva = header.readUInt32LE(clrDir);
+  const size = header.readUInt32LE(clrDir + 4);
+  return rva !== 0 && size !== 0;
+}
+
+/**
  * Format-aware detector that inspects both magic bytes and file extensions
  * to route targets accurately across all 26 artifact formats.
  */
@@ -136,9 +179,9 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
     }
   }
 
-  // 8. PE binary (`MZ`) or .NET Managed CLR assembly (contains `BSJB` metadata root)
+  // 8. PE binary (`MZ`) or .NET Managed CLR assembly (real CLR runtime header)
   if (header.length >= 2 && header[0] === 0x4d && header[1] === 0x5a) {
-    if (header.includes(Buffer.from("BSJB", "ascii"))) {
+    if (hasClrRuntimeHeader(header)) {
       return "dotnet-managed";
     }
     return "native-pe";
