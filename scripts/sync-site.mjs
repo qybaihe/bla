@@ -3,47 +3,99 @@
  * Syncs ./website/* from qybaihe/bla to https://github.com/qybaihe/bla-site
  * Usage: npm run sync:site  |  node scripts/sync-site.mjs --dry-run
  */
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseSiteSyncArgs, planSiteSync } from "./site-sync-plan.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const websiteDir = path.join(rootDir, "website");
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bla-site-sync-"));
-const { dryRun } = parseSiteSyncArgs(process.argv);
+const defaultWebsiteDir = path.join(rootDir, "website");
+const defaultRepoUrl = "https://github.com/qybaihe/bla-site.git";
 
-try {
-  console.log("Cloning qybaihe/bla-site...");
-  execSync(`git clone --depth 1 https://github.com/qybaihe/bla-site.git "${tmpDir}"`, {
-    stdio: "inherit",
-  });
+/**
+ * Invoke git directly without a shell so paths (e.g. from TMPDIR/TEMP) are
+ * never subject to shell quoting or command substitution.
+ */
+function runGit(args, options = {}) {
+  return execFileSync("git", args, { stdio: "inherit", ...options });
+}
 
-  // Copy all files from website/ to tmpDir
-  fs.cpSync(websiteDir, tmpDir, { recursive: true, force: true });
-
-  const status = execSync("git status --porcelain", { cwd: tmpDir, encoding: "utf8" });
-  const plan = planSiteSync(status);
-  if (plan.upToDate) {
-    console.log("qybaihe/bla-site is already up to date with ./website.");
-  } else if (dryRun) {
-    console.log(`Dry-run: ${plan.changedPaths.length} path(s) would be synced:`);
-    for (const changed of plan.changedPaths) {
-      console.log(`  ${changed}`);
-    }
-    console.log("Dry-run: no commit or push performed.");
-  } else {
-    execSync("git add -A", { cwd: tmpDir, stdio: "inherit" });
-    execSync('git commit -m "chore(site): sync website from qybaihe/bla"', {
-      cwd: tmpDir,
-      stdio: "inherit",
+export function syncSite(options = {}) {
+  const {
+    websiteDir = defaultWebsiteDir,
+    repoUrl = defaultRepoUrl,
+    tmpBaseDir = os.tmpdir(),
+    dryRun = false,
+    quiet = false,
+    gitEnv,
+  } = options;
+  const tmpDir = fs.mkdtempSync(path.join(tmpBaseDir, "bla-site-sync-"));
+  const defaultStdio = quiet ? "pipe" : "inherit";
+  const git = (args, opts = {}) =>
+    runGit(args, {
+      stdio: defaultStdio,
+      ...(gitEnv ? { env: gitEnv } : {}),
+      ...opts,
     });
-    execSync("git push origin main", { cwd: tmpDir, stdio: "inherit" });
-    console.log("Successfully synced ./website to https://github.com/qybaihe/bla-site");
+
+  try {
+    if (!quiet) {
+      console.log("Cloning qybaihe/bla-site...");
+    }
+    git(["clone", "--depth", "1", repoUrl, tmpDir]);
+
+    // Copy all files from website/ to tmpDir
+    fs.cpSync(websiteDir, tmpDir, { recursive: true, force: true });
+
+    const status = git(["status", "--porcelain"], {
+      cwd: tmpDir,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    const plan = planSiteSync(status);
+    if (plan.upToDate) {
+      if (!quiet) {
+        console.log("qybaihe/bla-site is already up to date with ./website.");
+      }
+      return { action: "up-to-date", changedPaths: plan.changedPaths };
+    }
+    if (dryRun) {
+      if (!quiet) {
+        console.log(`Dry-run: ${plan.changedPaths.length} path(s) would be synced:`);
+        for (const changed of plan.changedPaths) {
+          console.log(`  ${changed}`);
+        }
+        console.log("Dry-run: no commit or push performed.");
+      }
+      return { action: "dry-run", changedPaths: plan.changedPaths };
+    }
+    git(["add", "-A"], { cwd: tmpDir });
+    git(["commit", "-m", "chore(site): sync website from qybaihe/bla"], {
+      cwd: tmpDir,
+    });
+    git(["push", "origin", "main"], { cwd: tmpDir });
+    if (!quiet) {
+      console.log("Successfully synced ./website to https://github.com/qybaihe/bla-site");
+    }
+    return { action: "pushed", changedPaths: plan.changedPaths };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
-} finally {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+  }
+}
+
+if (isMainModule()) {
+  const { dryRun } = parseSiteSyncArgs(process.argv);
+  syncSite({ dryRun });
 }

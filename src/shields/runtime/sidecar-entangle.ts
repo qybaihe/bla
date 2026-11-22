@@ -6193,6 +6193,7 @@ export function generateSidecarSqliteLoaderSnippet(
   const tag = list[0]!.slice(0, 8);
   const bindingName =
     options.bindingName ?? `${SQLITE_SIDECAR_LOADER_MARKER}_${tag}`;
+  assertPythonBindingName(bindingName);
   const idsLiteral = JSON.stringify(list);
   const pathsLiteral = JSON.stringify(relPaths);
   const keyLiteral = JSON.stringify(SQLITE_SIDECAR_METADATA_KEY);

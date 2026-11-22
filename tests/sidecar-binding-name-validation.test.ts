@@ -6,6 +6,7 @@ import {
   generateSidecarPycLoaderSnippet,
   generateSidecarPythonPreamble,
   generateSidecarSafetensorsLoaderSnippet,
+  generateSidecarSqliteLoaderSnippet,
   generateSidecarWasmLoaderSnippet,
 } from "../src/shields/runtime/sidecar-entangle.js";
 
@@ -164,6 +165,25 @@ describe("sidecar bindingName override validation", () => {
     expect(ok.preamble).toContain("def _safetensors_binding():");
   });
 
+  it("generateSidecarSqliteLoaderSnippet rejects non-identifiers", () => {
+    for (const bindingName of [...HOSTILE_NAMES, ...PYTHON_ONLY_HOSTILE]) {
+      expect(() =>
+        generateSidecarSqliteLoaderSnippet({
+          codeIdentityHex: HEX,
+          sqliteRelPaths: ["app.db"],
+          bindingName,
+        }),
+      ).toThrow(/identifier/);
+    }
+    const ok = generateSidecarSqliteLoaderSnippet({
+      codeIdentityHex: HEX,
+      sqliteRelPaths: ["app.db"],
+      bindingName: "_sqlite_binding",
+    });
+    expect(ok.bindingName).toBe("_sqlite_binding");
+    expect(ok.preamble).toContain("def _sqlite_binding():");
+  });
+
   it("defaults are unaffected for every generator", () => {
     const js = generateSidecarJsPreamble({
       entryPath: "main.js",
@@ -207,5 +227,11 @@ describe("sidecar bindingName override validation", () => {
       safetensorsRelPaths: ["model.safetensors"],
     });
     expect(safetensors.bindingName).toMatch(/^_installSafetensorsSidecarLoaderHook_[0-9a-f]{8}$/);
+
+    const sqlite = generateSidecarSqliteLoaderSnippet({
+      codeIdentityHex: HEX,
+      sqliteRelPaths: ["app.db"],
+    });
+    expect(sqlite.bindingName).toMatch(/^_installSqliteSidecarLoaderHook_[0-9a-f]{8}$/);
   });
 });
