@@ -366,6 +366,31 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
  * small snapshot length can truncate ordinary frames. Non-Ethernet captures
  * are returned unchanged.
  */
+/**
+ * Refuse a capture whose record table does not tile the file: a record whose
+ * `incl_len` runs past EOF, or a trailing fragment too short for a record
+ * header, means the original packets are damaged. `protect` must not append
+ * decoys to that and ship it. `inspectPcapCapture` stays read-only.
+ */
+function assertPcapRecordTableComplete(bytes: Buffer, littleEndian: boolean): void {
+  let at = 24;
+  while (at + 16 <= bytes.length) {
+    const incl = littleEndian ? bytes.readUInt32LE(at + 8) : bytes.readUInt32BE(at + 8);
+    const nextAt = at + 16 + incl;
+    if (nextAt > bytes.length) {
+      throw new Error(
+        `Invalid or truncated libpcap capture: record at byte ${at} declares ${incl} captured byte(s) but only ${bytes.length - (at + 16)} remain; refusing to protect a capture with incomplete records.`,
+      );
+    }
+    at = nextAt;
+  }
+  if (at !== bytes.length) {
+    throw new Error(
+      `Invalid or truncated libpcap capture: ${bytes.length - at} trailing byte(s) at offset ${at} cannot form a record header; refusing to protect a capture with incomplete records.`,
+    );
+  }
+}
+
 export function protectPcapCaptureBuffer(
   input: Buffer,
   options: {
@@ -386,6 +411,7 @@ export function protectPcapCaptureBuffer(
   if (!header) {
     throw new Error("Invalid or truncated libpcap capture: expected a 24-byte global header with the pcap magic.");
   }
+  assertPcapRecordTableComplete(input, header.littleEndian);
   if (header.linkType !== LINKTYPE_ETHERNET || header.snaplen === 0) {
     return {
       buffer: input,
