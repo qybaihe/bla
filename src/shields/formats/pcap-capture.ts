@@ -357,6 +357,31 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
  * capture of another link type gets no flood: tshark would not dissect its
  * Ethernet frames as DNS.
  */
+/**
+ * Refuse a capture whose record table does not tile the file: a record whose
+ * `incl_len` runs past EOF, or a trailing fragment too short for a record
+ * header, means the original packets are damaged. `protect` must not append
+ * decoys to that and ship it. `inspectPcapCapture` stays read-only.
+ */
+function assertPcapRecordTableComplete(bytes: Buffer, littleEndian: boolean): void {
+  let at = 24;
+  while (at + 16 <= bytes.length) {
+    const incl = littleEndian ? bytes.readUInt32LE(at + 8) : bytes.readUInt32BE(at + 8);
+    const nextAt = at + 16 + incl;
+    if (nextAt > bytes.length) {
+      throw new Error(
+        `Invalid or truncated libpcap capture: record at byte ${at} declares ${incl} captured byte(s) but only ${bytes.length - (at + 16)} remain; refusing to protect a capture with incomplete records.`,
+      );
+    }
+    at = nextAt;
+  }
+  if (at !== bytes.length) {
+    throw new Error(
+      `Invalid or truncated libpcap capture: ${bytes.length - at} trailing byte(s) at offset ${at} cannot form a record header; refusing to protect a capture with incomplete records.`,
+    );
+  }
+}
+
 export function protectPcapCaptureBuffer(
   input: Buffer,
   options: {
@@ -392,6 +417,7 @@ export function protectPcapCaptureBuffer(
     input.readUInt32LE(0) === PCAP_MAGIC_LE ||
     input.readUInt32LE(0) === PCAP_MAGIC_NS_LE;
   const linkType = littleEndian ? input.readUInt32LE(20) : input.readUInt32BE(20);
+  assertPcapRecordTableComplete(input, littleEndian);
 
   const httpPackets =
     intensity === "bankrupt" ? 96 : intensity === "maximum" ? 24 : 4;
