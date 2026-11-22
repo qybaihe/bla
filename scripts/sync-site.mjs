@@ -50,6 +50,11 @@ export function syncSite(options = {}) {
     // Copy all files from website/ to tmpDir
     fs.cpSync(websiteDir, tmpDir, { recursive: true, force: true });
 
+    // Stage in the throwaway clone before checking status so Git applies
+    // line-ending normalization (e.g. core.autocrlf=true on Windows) and
+    // `git status --porcelain` matches what `git commit` will actually commit.
+    git(["add", "-A"], { cwd: tmpDir });
+
     const status = git(["status", "--porcelain"], {
       cwd: tmpDir,
       stdio: "pipe",
@@ -72,7 +77,6 @@ export function syncSite(options = {}) {
       }
       return { action: "dry-run", changedPaths: plan.changedPaths };
     }
-    git(["add", "-A"], { cwd: tmpDir });
     git(["commit", "-m", "chore(site): sync website from qybaihe/bla"], {
       cwd: tmpDir,
     });

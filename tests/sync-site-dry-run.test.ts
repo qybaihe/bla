@@ -70,6 +70,11 @@ describe("site sync dry-run planning", () => {
       GIT_AUTHOR_EMAIL: "test@bla.local",
       GIT_COMMITTER_NAME: "BLA Test",
       GIT_COMMITTER_EMAIL: "test@bla.local",
+      // Exercise Windows-style CRLF checkout normalization on every OS so a
+      // line-ending-only mismatch never triggers a spurious `git commit`.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.autocrlf",
+      GIT_CONFIG_VALUE_0: "true",
     };
     const git = (args: string[], cwd?: string): string =>
       execFileSync("git", args, {
