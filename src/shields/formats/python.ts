@@ -1059,6 +1059,8 @@ export function protectPythonPycBuffer(
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
   readonly weaveDecoys: boolean;
+  /** Set when weaveDecoys was requested but this pyc version has no bytecode weaver. */
+  readonly weaveSkipReason?: string;
   readonly decoyCodeObjectsInjected: number;
   readonly customerDefsWoven: number;
 } {
@@ -1074,12 +1076,18 @@ export function protectPythonPycBuffer(
   let working = bytes;
   let decoyCodeObjectsInjected = 0;
   let customerDefsWoven = 0;
+  let weaveSkipReason: string | undefined;
   if (weaveDecoys) {
     const woven = weavePythonPycBuffer(bytes, { intensity, seed });
     if (woven) {
       working = woven.buffer;
       decoyCodeObjectsInjected = woven.decoyCodeObjectsInjected;
       customerDefsWoven = woven.customerDefsWoven;
+    } else {
+      const magic = bytes.readUInt16LE(0);
+      weaveSkipReason =
+        `pyc magic ${magic} has no bytecode weaver (supported: CPython 3.11 magic 3495 and 3.12 magic 3531); ` +
+        "trailer-only protection was still applied.";
     }
   }
 
@@ -1118,6 +1126,7 @@ export function protectPythonPycBuffer(
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
     weaveDecoys: decoyCodeObjectsInjected > 0,
+    ...(weaveSkipReason ? { weaveSkipReason } : {}),
     decoyCodeObjectsInjected,
     customerDefsWoven,
   };

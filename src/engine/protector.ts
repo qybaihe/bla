@@ -1059,6 +1059,7 @@ function protectTargetInner(
   let chaffPayloadsEmbedded = 0;
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
+  let weaveSkipReason: string | undefined;
   let wasmExportsRenamed = 0;
   let wasmExportRenames: { from: string; to: string; kind: string }[] = [];
   let wasmExportOrderShuffled = false;
@@ -1600,6 +1601,7 @@ function protectTargetInner(
     writeProtectedOutput(absOutput, finalPyc);
     decoyFunctionsInjected =
       res.decoyCodeObjectsInjected > 0 ? res.decoyCodeObjectsInjected : 14;
+    weaveSkipReason = res.weaveSkipReason;
     chaffPayloadsEmbedded = res.chaffPayloadsEmbedded;
     binarySectionsPatched = 1;
     counteredVectors.add("python-pyc-marshal");
@@ -1985,6 +1987,7 @@ function protectTargetInner(
     detectedFormat: format,
     intensity,
     ...(options.weaveDecoys === true ? { weaveDecoys: true as const } : {}),
+    ...(weaveSkipReason ? { weaveSkipReason } : {}),
     ...(selfSealApplied ? { selfSeal: true as const } : {}),
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),

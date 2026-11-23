@@ -282,6 +282,8 @@ export interface ProtectionResult {
   readonly intensity: ProtectionIntensity;
   /** Present when protect was called with weaveDecoys:true (Python customer-def weave active). */
   readonly weaveDecoys?: boolean;
+  /** Set when weaveDecoys was requested but the artifact's version has no bytecode weaver. */
+  readonly weaveSkipReason?: string;
   /** Present when protect was called with selfSeal:true (JS self-integrity binding active). */
   readonly selfSeal?: boolean;
   /** Present when protect applied sidecar entry entanglement (strip⇒fail preamble). */
