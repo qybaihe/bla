@@ -562,6 +562,11 @@ export interface HardenProjectReport {
   readonly runId: string;
   /** Absolute path of the unsigned summary when written; omitted on dry-run. */
   readonly summaryPath?: string;
+  /**
+   * Set when the summary could not be written. `summaryPath` is then absent;
+   * report this so a later `bla_run_lookup` is not mistaken for a missing run.
+   */
+  readonly summaryWriteFailure?: { readonly path: string; readonly error: string };
   /** Absolute path of bla-integrity-coverage/v1 matrix when selfSeal wrote one. */
   readonly integrityCoveragePath?: string;
   /**
@@ -1868,6 +1873,11 @@ function withNextSteps(
   if (report.apply?.status === "refused" || report.apply?.status === "failed") {
     steps.push(`apply did not promote anything: ${report.apply.reason ?? "see apply.reason"}`);
   }
+  if (report.summaryWriteFailure !== undefined) {
+    steps.push(
+      `The run summary was not written to ${report.summaryWriteFailure.path} (${report.summaryWriteFailure.error}); bla_run_lookup has no baseline for this run. Check permissions or disk space, then re-run.`,
+    );
+  }
   if (report.agentWeaveGateBlocked === true) {
     steps.push(
       `Stage 2 is pending: edit [${(report.agentWeaveAssessment?.unwovenSourceFiles ?? []).join(", ")}] as agentWeaveAssessment.surgicalWorkorders and agentActions describe, confirm with bla_verify_weave, rebuild, then call bla_harden again.`,
@@ -3028,11 +3038,13 @@ function hardenProjectCore(
 
   // Persist a project-level summary for agents to read back (unsigned).
   let summaryPath: string | undefined;
+  let summaryWriteFailure: { path: string; error: string } | undefined;
   if (discovered.length > 0) {
-    summaryPath = join(outputRoot, HARDEN_SUMMARY_FILE_NAME);
+    const intendedSummaryPath = join(outputRoot, HARDEN_SUMMARY_FILE_NAME);
+    summaryPath = intendedSummaryPath;
     try {
       writeFileAtomicSync(
-        summaryPath,
+        intendedSummaryPath,
         JSON.stringify(
           {
             schema: HARDEN_SUMMARY_SCHEMA,
@@ -3052,8 +3064,12 @@ function hardenProjectCore(
         ),
         "utf8",
       );
-    } catch {
+    } catch (error) {
       summaryPath = undefined;
+      summaryWriteFailure = {
+        path: intendedSummaryPath,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -4368,6 +4384,7 @@ function hardenProjectCore(
     written: written.slice(),
     ...(cancelled ? { cancelled: true } : {}),
     ...(summaryPath !== undefined ? { summaryPath } : {}),
+    ...(summaryWriteFailure !== undefined ? { summaryWriteFailure } : {}),
     ...(integrityCoveragePath !== undefined
       ? { integrityCoveragePath }
       : {}),
