@@ -1,6 +1,8 @@
 import { relative, resolve, sep } from "node:path";
 import { walkBounded } from "./walk.js";
 
+const restrictedDirectories = new Set(["node_modules", ".git"]);
+
 /**
  * Compiles a forward-slash glob (`*`, `?`, double-star) anchored to a root
  * directory into an anchored regular expression over POSIX-style relative
@@ -50,20 +52,35 @@ export function expandSiblingGlobs(
   root: string,
   patterns: readonly string[],
 ): string[] {
-  const clean = patterns.filter((p) => p.length > 0);
-  if (clean.length === 0) return [];
+  const rules = patterns.filter((pattern) => pattern.length > 0).map((pattern) => {
+    const parts = pattern.split("/");
+    const explicitDirectories = parts.slice(0, -1).flatMap((part, index) =>
+      restrictedDirectories.has(part) ? [globToRegExp(parts.slice(0, index + 1).join("/"))] : [],
+    );
+    return { file: globToRegExp(pattern), explicitDirectories };
+  });
+  if (rules.length === 0) return [];
   const absRoot = resolve(root);
-  const regexes = clean.map(globToRegExp);
-  const files = walkBounded(absRoot, {
+  const relativeParts = (path: string): string[] => relative(absRoot, path).split(sep);
+  const restrictedPrefixes = (parts: string[]): string[] => parts.flatMap((part, index) =>
+    restrictedDirectories.has(part) ? [parts.slice(0, index + 1).join("/")] : [],
+  );
+  const explicitlyAllows = (prefixes: string[], directories: RegExp[]): boolean =>
+    prefixes.every((prefix) => directories.some((re) => re.test(prefix)));
+  return walkBounded(absRoot, {
     maxDepth: 16,
     maxFiles: 100_000,
-    skipHiddenDirs: true,
     sortEntries: true,
+    skipDir: (path, name) => {
+      if (!restrictedDirectories.has(name)) return name.startsWith(".");
+      const prefixes = restrictedPrefixes(relativeParts(path));
+      return !rules.some((rule) => explicitlyAllows(prefixes, rule.explicitDirectories));
+    },
+    accept: (path) => {
+      const parts = relativeParts(path);
+      const rel = parts.join("/");
+      const prefixes = restrictedPrefixes(parts.slice(0, -1));
+      return rules.some((rule) => rule.file.test(rel) && explicitlyAllows(prefixes, rule.explicitDirectories));
+    },
   });
-  const matches: string[] = [];
-  for (const abs of files) {
-    const rel = relative(absRoot, abs).split(sep).join("/");
-    if (regexes.some((re) => re.test(rel))) matches.push(abs);
-  }
-  return matches;
 }

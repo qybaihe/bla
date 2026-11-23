@@ -47,8 +47,14 @@ export function syncSite(options = {}) {
     }
     git(["clone", "--depth", "1", repoUrl, tmpDir]);
 
-    // Copy all files from website/ to tmpDir
-    fs.cpSync(websiteDir, tmpDir, { recursive: true, force: true });
+    // Only copy website content into the clone. Never overlay Git metadata or
+    // import links that point outside the website tree.
+    fs.cpSync(websiteDir, tmpDir, {
+      recursive: true,
+      force: true,
+      filter: (source) => path.basename(source).toLowerCase() !== ".git" &&
+        !fs.lstatSync(source).isSymbolicLink(),
+    });
 
     // Stage in the throwaway clone before checking status so Git applies
     // line-ending normalization (e.g. core.autocrlf=true on Windows) and

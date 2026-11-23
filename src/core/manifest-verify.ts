@@ -16,9 +16,9 @@ export interface ManifestVerifyResult {
 }
 
 function normalizePublicKeyPem(pem: string): string {
-  return String(
-    createPublicKey(pem).export({ type: "spki", format: "pem" }),
-  );
+  const key = createPublicKey(pem);
+  if (key.asymmetricKeyType !== "ed25519") throw new TypeError("expected an Ed25519 public key");
+  return String(key.export({ type: "spki", format: "pem" }));
 }
 
 /**
@@ -94,16 +94,16 @@ export function verifyManifestFile(
     try {
       const expected = normalizePublicKeyPem(readFileSync(resolve(publicKeyPath), "utf8"));
       const actual = normalizePublicKeyPem(embedded);
-      pinned = true;
       if (expected !== actual) {
         return {
           ok: false,
           signed: true,
-          pinned: true,
+          pinned: false,
           artifactVerified: false,
           reason: "manifest public key does not match the pinned --public-key",
         };
       }
+      pinned = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {

@@ -12,7 +12,9 @@ import type { ArtifactFormat } from "./types.js";
  * byte-identical.
  */
 export function isTypeScriptDeclarationPath(targetPath: string): boolean {
-  return /\.d\.(?:[a-z0-9]+\.)?[cm]?ts$/i.test(basename(targetPath));
+  const name = basename(targetPath);
+  return name.endsWith(".d.mts") || name.endsWith(".d.cts") ||
+    (name.endsWith(".ts") && name.includes(".d."));
 }
 
 /**
@@ -30,15 +32,17 @@ export function detectArtifactFormat(targetPath: string): ArtifactFormat {
   if (stats.isDirectory()) {
     return "directory";
   }
+  if (!stats.isFile()) return "unknown";
 
   const ext = extname(targetPath).toLowerCase();
 
   // Read up to 4096 header bytes for binary magic & CLR metadata inspection
-  const header = Buffer.alloc(Math.min(4096, stats.size));
+  let header = Buffer.alloc(Math.min(4096, stats.size));
   if (header.length > 0) {
     const fd = openSync(targetPath, "r");
     try {
-      readSync(fd, header, 0, header.length, 0);
+      const bytesRead = readSync(fd, header, 0, header.length, 0);
+      header = header.subarray(0, bytesRead);
     } finally {
       closeSync(fd);
     }

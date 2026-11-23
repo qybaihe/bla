@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runInNewContext } from "node:vm";
+import { parse } from "@babel/parser";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -109,15 +109,46 @@ function discoverHtmlPages(absRoot) {
   return pages.sort();
 }
 
-function loadI18nDictionary(absRoot) {
+function readLiteralObject(node, readValue) {
+  if (node.type !== "ObjectExpression") throw new Error("expected a literal object");
+  const result = Object.create(null);
+  for (const property of node.properties) {
+    if (property.type !== "ObjectProperty" || property.computed || property.shorthand) {
+      throw new Error("expected a static object property");
+    }
+    const { key, value } = property;
+    const name = key.type === "Identifier" ? key.name : key.type === "StringLiteral" ? key.value : null;
+    if (name === null || name === "__proto__" || Object.hasOwn(result, name)) {
+      throw new Error("object keys must be unique literal names");
+    }
+    result[name] = readValue(value);
+  }
+  return result;
+}
+
+function loadI18nDictionary(absRoot, errors) {
   const i18nPath = resolve(absRoot, "assets/i18n.js");
-  if (!existsSync(i18nPath)) return null;
+  if (!existsSync(i18nPath) || !statSync(i18nPath).isFile()) return null;
   try {
-    const sandbox = { window: {} };
-    runInNewContext(readFileSync(i18nPath, "utf8"), sandbox, { timeout: 1000 });
-    const dict = sandbox.window?.BLA_I18N;
-    return dict !== null && typeof dict === "object" ? dict : null;
-  } catch {
+    const { body, directives } = parse(readFileSync(i18nPath, "utf8")).program;
+    const assignment = body[0]?.type === "ExpressionStatement" ? body[0].expression : null;
+    const target = assignment?.type === "AssignmentExpression" ? assignment.left : null;
+    if (
+      body.length !== 1 || directives.length !== 0 || assignment?.operator !== "=" ||
+      target?.type !== "MemberExpression" || target.computed ||
+      target.object.type !== "Identifier" || target.object.name !== "window" ||
+      target.property.type !== "Identifier" || target.property.name !== "BLA_I18N"
+    ) {
+      throw new Error("expected a single static window.BLA_I18N assignment");
+    }
+    return readLiteralObject(assignment.right, (locale) =>
+      readLiteralObject(locale, (translation) => {
+        if (translation.type !== "StringLiteral") throw new Error("translations must be string literals");
+        return translation.value;
+      }),
+    );
+  } catch (error) {
+    errors.push(`assets/i18n.js: invalid static dictionary (${error.message})`);
     return null;
   }
 }
@@ -362,16 +393,11 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
     }
   }
 
-  const i18nDict = loadI18nDictionary(absRoot);
+  const i18nDict = loadI18nDictionary(absRoot, errors);
   let i18nCoverage = null;
   if (i18nDict !== null) {
     i18nCoverage = computeI18nCoverage(i18nDict, usedI18nKeys, errors);
-  }
-
-  const i18nPath = resolve(absRoot, "assets/i18n.js");
-  if (existsSync(i18nPath)) {
-    const i18n = readFileSync(i18nPath, "utf8");
-    if (/nav\.badge/.test(i18n)) {
+    if (Object.values(i18nDict).some((table) => Object.hasOwn(table, "nav.badge"))) {
       errors.push("assets/i18n.js: nav.badge must be removed");
     }
     for (const key of [
@@ -385,8 +411,8 @@ export function verifyWebsiteDirectory(websiteRoot = resolve(REPO_ROOT, "website
       "live.crackme.noSolve",
       "live.crackme.commitment",
     ]) {
-      const count = i18n.split(`"${key}"`).length - 1;
-      if (count < 8) {
+      const count = SUPPORTED_LOCALES.filter((locale) => Object.hasOwn(i18nDict[locale] ?? {}, key)).length;
+      if (count < SUPPORTED_LOCALES.length) {
         errors.push(`assets/i18n.js: ${key} must exist in all 8 languages (found ${count})`);
       }
     }

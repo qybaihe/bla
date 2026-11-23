@@ -14,8 +14,8 @@ import { isAbsolute, resolve } from "node:path";
  *
  * The manifest payload itself stays plain JSON; signing is additive so
  * unsigned manifests remain valid. A signed manifest embeds `signature` with
- * the SPKI public key and a base64 ed25519 signature over `JSON.stringify`
- * of the payload WITHOUT the `signature` field (key order preserved).
+ * the SPKI public key and a base64 ed25519 signature over the canonical JSON
+ * of the payload without the `signature` field.
  *
  * Honesty contract (matches defender.ts `attestationKind`):
  * - `attestationKind: "unsigned"` → no `signature` field, never claim signed.
@@ -37,6 +37,9 @@ export interface ManifestSignature {
 
 /** Deterministic JSON with recursively sorted object keys (arrays keep order). */
 export function canonicalManifestJson(value: unknown): string {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new TypeError("Manifest JSON numbers must be finite");
+  }
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalManifestJson).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>)
@@ -61,14 +64,16 @@ export function generateManifestSigningKeyPair(): ManifestSigningKeyPair {
 
 /**
  * Sign a manifest payload. Returns the payload plus an embedded `signature`.
- * The signature covers `JSON.stringify(payload)` exactly as passed (caller
- * controls key insertion order; `signature` is always appended last).
+ * The signature covers the payload serialized with recursively sorted keys.
  */
 export function signManifestPayload<T extends object>(
   payload: T,
   privateKeyPem: string,
 ): T & { readonly signature: ManifestSignature } {
   const privateKey = createPrivateKey(privateKeyPem);
+  if (privateKey.asymmetricKeyType !== "ed25519") {
+    throw new TypeError("Manifest signing requires an Ed25519 private key");
+  }
   const canonical = canonicalManifestJson(payload);
   const value = cryptoSign(null, Buffer.from(canonical, "utf8"), privateKey).toString("base64");
   const publicKeyPem = String(
@@ -103,29 +108,36 @@ export function verifyManifestSignature(
   if (
     signature.algorithm !== "ed25519" ||
     typeof signature.publicKey !== "string" ||
-    typeof signature.value !== "string"
+    typeof signature.value !== "string" ||
+    (signature.canonicalization !== undefined && signature.canonicalization !== "sorted-keys-v1")
   ) {
     return false;
   }
-    try {
-      const publicKey = createPublicKey(signature.publicKey);
-      if (expectedPublicKeyPem !== undefined) {
-        const pinned = createPublicKey(expectedPublicKeyPem);
-        const embeddedSpki = Buffer.from(String(publicKey.export({ type: "spki", format: "pem" })), "utf8");
-        const pinnedSpki = Buffer.from(String(pinned.export({ type: "spki", format: "pem" })), "utf8");
-        // The SPKI itself is public, but compare in constant time for
-        // consistency with the rest of the pinned-verification posture.
-        if (embeddedSpki.length !== pinnedSpki.length || !timingSafeEqual(embeddedSpki, pinnedSpki)) {
-          return false;
-        }
+  try {
+    const signatureBytes = Buffer.from(signature.value, "base64");
+    if (signatureBytes.length !== 64) return false;
+    const publicKey = createPublicKey(signature.publicKey);
+    if (publicKey.asymmetricKeyType !== "ed25519") return false;
+    if (expectedPublicKeyPem !== undefined) {
+      const pinned = createPublicKey(expectedPublicKeyPem);
+      if (pinned.asymmetricKeyType !== "ed25519") return false;
+      const embeddedSpki = publicKey.export({ type: "spki", format: "der" });
+      const pinnedSpki = pinned.export({ type: "spki", format: "der" });
+      if (embeddedSpki.length !== pinnedSpki.length || !timingSafeEqual(embeddedSpki, pinnedSpki)) {
+        return false;
       }
-      const { signature: _ignored, ...rest } = manifest;
-      const canonical =
-        signature.canonicalization === "sorted-keys-v1"
-          ? canonicalManifestJson(rest)
-          : JSON.stringify(rest);
-      return cryptoVerify(null, Buffer.from(canonical, "utf8"), publicKey, Buffer.from(signature.value, "base64"));
-    } catch {
+    }
+    const { signature: _ignored, ...rest } = manifest;
+    const canonical = signature.canonicalization === undefined
+      ? JSON.stringify(rest, (_key, value: unknown) => {
+          if (typeof value === "number" && !Number.isFinite(value)) {
+            throw new TypeError("Manifest JSON numbers must be finite");
+          }
+          return value;
+        })
+      : canonicalManifestJson(rest);
+    return cryptoVerify(null, Buffer.from(canonical, "utf8"), publicKey, signatureBytes);
+  } catch {
     return false;
   }
 }

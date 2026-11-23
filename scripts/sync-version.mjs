@@ -12,8 +12,8 @@ const version = String(pkg.version);
 
 // Refuse to propagate a malformed version: the regex rewrites below would
 // silently corrupt identity.ts, SEAL labels, badges, and marketplace manifests.
-const SEMVER_PATTERN =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+const SEMVER_TOKEN = /(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:\d*[a-zA-Z-][0-9a-zA-Z-]*|[1-9]\d*|0)(?:\.(?:\d*[a-zA-Z-][0-9a-zA-Z-]*|[1-9]\d*|0))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?/;
+const SEMVER_PATTERN = new RegExp(`^${SEMVER_TOKEN.source}$`);
 if (!SEMVER_PATTERN.test(version)) {
   console.error(
     `sync-version: package.json version "${version}" is not valid semver; refusing to sync any files.`,
@@ -86,7 +86,8 @@ for (const rel of ["README.md", "docs/readme/README_zh.md"]) {
   try {
     const docText = readFileSync(docPath, "utf8");
     const next = docText.replace(
-      /npm-bla--agents_v[0-9]+\.[0-9]+\.[0-9]+/g,
+      // The badge color is a separate final dash-delimited field.
+      new RegExp(`npm-bla--agents_v${SEMVER_TOKEN.source}(?=-[^-/?#\\s)]+(?:[/?#\\s)]|$))`, "g"),
       `npm-bla--agents_v${version}`,
     );
     if (next !== docText) {
@@ -110,11 +111,11 @@ for (const rel of [
     const pluginText = readFileSync(pluginPath, "utf8");
     const next = pluginText
       .replace(
-        /"version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"/g,
+        new RegExp(`"version"\\s*:\\s*"${SEMVER_TOKEN.source}"`, "g"),
         `"version": "${version}"`,
       )
       .replace(
-        /bla-agents@[0-9]+\.[0-9]+\.[0-9]+/g,
+        new RegExp(`bla-agents@${SEMVER_TOKEN.source}`, "g"),
         `bla-agents@${version}`,
       );
     if (next !== pluginText) {
@@ -164,7 +165,7 @@ for (const rel of ["STATE.md", ".agents/skills/blind-llm-agents/SKILL.md"]) {
     const next =
       rel === "STATE.md"
         ? docText.replace(
-            /^(\*\*Version:\*\*\s*)[0-9]+\.[0-9]+\.[0-9]+/m,
+            new RegExp(`^(\\*\\*Version:\\*\\*\\s*)${SEMVER_TOKEN.source}`, "m"),
             `$1${version}`,
           )
         : docText.replace(/(\n\s{2}version:\s*")[^"]+(")/, `$1${version}$2`);

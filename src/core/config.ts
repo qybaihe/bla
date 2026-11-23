@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync,
+  openSync, readFileSync, renameSync, rmSync, writeFileSync,
+  type Stats,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ProtectionIntensity } from "./types.js";
 
 export interface BlaProjectConfig {
@@ -162,21 +166,37 @@ export function validateBlaConfigShape(value: unknown, source: string): BlaProje
   return obj as BlaProjectConfig;
 }
 
-function readConfigFile(path: string): BlaProjectConfig {
-  const size = statSync(path).size;
-  if (size > MAX_CONFIG_BYTES) {
-    throw new Error(
-      `Invalid BLA config at ${path}: file is ${size} bytes (limit ${MAX_CONFIG_BYTES})`,
-    );
-  }
-  let parsed: unknown;
+function configFileStats(path: string): Stats | undefined {
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  if (stats?.isSymbolicLink()) throw new Error(`Refusing symlinked BLA config: ${path}`);
+  if (stats && !stats.isFile()) throw new Error(`BLA config is not a regular file: ${path}`);
+  return stats;
+}
+
+function isSameConfigFile(a: Stats, b: Stats | undefined): boolean {
+  return b !== undefined && a.dev === b.dev && a.ino === b.ino &&
+    a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+function readConfigFile(path: string, expected = configFileStats(path)): BlaProjectConfig {
+  if (!expected) throw new Error(`BLA config file not found: ${path}`);
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    const stats = fstatSync(fd);
+    if (!stats.isFile() || !isSameConfigFile(expected, stats)) {
+      throw new Error(`BLA config changed while opening: ${path}`);
+    }
+    if (stats.size > MAX_CONFIG_BYTES) {
+      throw new Error(`file is ${stats.size} bytes (limit ${MAX_CONFIG_BYTES})`);
+    }
+    return validateBlaConfigShape(JSON.parse(readFileSync(fd, "utf8")), path);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith("Invalid BLA config")) throw err;
     throw new Error(`Invalid BLA config at ${path}: ${message}`);
+  } finally {
+    closeSync(fd);
   }
-  return validateBlaConfigShape(parsed, path);
 }
 
 export function generateProjectSeed(): string {
@@ -199,9 +219,6 @@ export function loadBlaConfig(
 
   if (explicitConfigPath) {
     const absExplicit = resolve(root, explicitConfigPath);
-    if (!existsSync(absExplicit)) {
-      throw new Error(`BLA config file not found: ${absExplicit}`);
-    }
     const parsed = readConfigFile(absExplicit);
     return {
       config: { ...DEFAULT_BLA_CONFIG, ...parsed },
@@ -211,8 +228,9 @@ export function loadBlaConfig(
 
   for (const name of CONFIG_FILENAMES) {
     const candidate = join(root, name);
-    if (existsSync(candidate)) {
-      const parsed = readConfigFile(candidate);
+    const stats = configFileStats(candidate);
+    if (stats) {
+      const parsed = readConfigFile(candidate, stats);
       return {
         config: { ...DEFAULT_BLA_CONFIG, ...parsed },
         sourcePath: candidate,
@@ -246,13 +264,35 @@ export function loadBlaConfig(
   };
 }
 
-function persistSeed(targetPath: string, seed: string, existing: BlaProjectConfig): void {
-  const next: BlaProjectConfig = {
-    ...DEFAULT_BLA_CONFIG,
-    ...existing,
-    seed,
-  };
-  writeFileSync(targetPath, JSON.stringify(next, null, 2) + "\n", "utf8");
+function createConfigFile(path: string, contents: string): void {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags, 0o600);
+  try {
+    writeFileSync(fd, contents, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeConfigFile(targetPath: string, config: BlaProjectConfig, existing?: Stats): void {
+  const contents = JSON.stringify(config, null, 2) + "\n";
+  if (!existing) {
+    createConfigFile(targetPath, contents);
+    return;
+  }
+
+  const tempDir = mkdtempSync(join(dirname(targetPath), ".bla-config-"));
+  const tempPath = join(tempDir, "config.json");
+  try {
+    createConfigFile(tempPath, contents);
+    chmodSync(tempPath, existing.mode & 0o777);
+    if (!isSameConfigFile(existing, configFileStats(targetPath))) {
+      throw new Error(`BLA config changed before it could be replaced: ${targetPath}`);
+    }
+    renameSync(tempPath, targetPath);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -282,17 +322,20 @@ export function resolveProjectSeed(
     return { seed: loaded.config.seed, sourcePath: loaded.sourcePath, persisted: false };
   }
 
-  const seed = generateProjectSeed();
   const root = resolve(cwd);
-  let targetPath: string;
-  if (loaded.sourcePath && !loaded.sourcePath.endsWith("package.json")) {
-    targetPath = loaded.sourcePath;
-    const existing = readConfigFile(targetPath);
-    persistSeed(targetPath, seed, existing);
-  } else {
-    targetPath = join(root, ".blarc");
-    persistSeed(targetPath, seed, loaded.config);
+  const targetPath = loaded.sourcePath && basename(loaded.sourcePath) !== "package.json"
+    ? loaded.sourcePath
+    : join(root, ".blarc");
+  const stats = configFileStats(targetPath);
+  if (!stats && targetPath === loaded.sourcePath) {
+    throw new Error(`BLA config disappeared before seed persistence: ${targetPath}`);
   }
+  const existing = stats ? readConfigFile(targetPath, stats) : loaded.config;
+  if (isUsableSeed(existing.seed)) {
+    return { seed: existing.seed, sourcePath: targetPath, persisted: false };
+  }
+  const seed = generateProjectSeed();
+  writeConfigFile(targetPath, { ...DEFAULT_BLA_CONFIG, ...existing, seed }, stats);
   return { seed, sourcePath: targetPath, persisted: true };
 }
 
@@ -304,12 +347,13 @@ export function initBlaConfig(
   overwrite = false,
 ): { configPath: string; created: boolean; config: BlaProjectConfig } {
   const configPath = join(resolve(targetDir), "bla.config.json");
-  if (existsSync(configPath) && !overwrite) {
-    const existing = readConfigFile(configPath);
+  const stats = configFileStats(configPath);
+  if (stats && !overwrite) {
+    const existing = readConfigFile(configPath, stats);
     const merged = { ...DEFAULT_BLA_CONFIG, ...existing };
     if (!isUsableSeed(merged.seed)) {
       const seed = generateProjectSeed();
-      persistSeed(configPath, seed, existing);
+      writeConfigFile(configPath, { ...merged, seed }, stats);
       return {
         configPath,
         created: false,
@@ -327,7 +371,7 @@ export function initBlaConfig(
     ...DEFAULT_BLA_CONFIG,
     seed: generateProjectSeed(),
   };
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  writeConfigFile(configPath, config, stats);
   return {
     configPath,
     created: true,

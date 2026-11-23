@@ -1,5 +1,7 @@
 import { lstatSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+const realpath = realpathSync.native ?? realpathSync;
 
 function exists(path: string): boolean {
   try {
@@ -13,14 +15,32 @@ function exists(path: string): boolean {
 
 export function physicalPath(path: string): string {
   const suffix: string[] = [];
-  let ancestor = path;
+  let ancestor = resolve(path);
   while (!exists(ancestor)) {
     suffix.unshift(basename(ancestor));
     const parent = dirname(ancestor);
     if (parent === ancestor) throw new Error(`Cannot resolve output path: ${path}`);
     ancestor = parent;
   }
-  return join(realpathSync(ancestor), ...suffix);
+  return join(realpath(ancestor), ...suffix);
+}
+
+function containsPath(parent: string, path: string): boolean {
+  const rel = relative(parent, path);
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+function assertNoSymlinkedOutputParents(input: string, output: string): void {
+  // Shared ancestry was already chosen by the caller for the input. Only
+  // inspect the output-specific components (including any existing prefixes
+  // of a path whose immediate parent has yet to be created).
+  const source = resolve(input);
+  for (let parent = dirname(resolve(output)); !containsPath(parent, source); parent = dirname(parent)) {
+    if (lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(`Refusing symlinked output ancestor: ${parent}`);
+    }
+    if (parent === dirname(parent)) break;
+  }
 }
 
 /** Admission checks before any output is created. */
@@ -30,13 +50,10 @@ export function assertSafeOutputPath(
   directory: boolean,
   inPlace = false,
 ): void {
-  const physicalInput = realpathSync(input);
+  const physicalInput = realpath(input);
   const physicalOutput = physicalPath(output);
   if (directory) {
-    const rel = relative(physicalInput, physicalOutput);
-    const withinInput =
-      rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
-    if (inPlace || withinInput) {
+    if (inPlace || containsPath(physicalInput, physicalOutput)) {
       throw new Error(
         "Directory output must be outside the input directory; in-place directory protection is not supported.",
       );
@@ -44,6 +61,7 @@ export function assertSafeOutputPath(
     if (exists(output)) {
       throw new Error("Directory output must be a new path; existing outputs are not overwritten.");
     }
+    assertNoSymlinkedOutputParents(input, output);
     return;
   }
 
@@ -56,4 +74,5 @@ export function assertSafeOutputPath(
   if (sameFile && !inPlace) {
     throw new Error("Output refers to the input file; explicitly enable inPlace to overwrite it.");
   }
+  if (!sameFile || !inPlace) assertNoSymlinkedOutputParents(input, output);
 }
