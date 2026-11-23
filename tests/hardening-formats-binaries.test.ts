@@ -363,6 +363,7 @@ it("writes UF2 decoys as ordinary NOT_MAIN_FLASH comments", () => {
   expect(output.blocksInjected).toBeGreaterThan(0);
   expect(output.notMainFlashBlocks).toBe(output.blocksInjected);
   expect(output.fileContainerBlocks).toBe(0);
+  expect(output.decoyFamilies).toBe(2);
   expect(output.buffer.subarray(0, input.length)).toEqual(input);
   for (let i = 1; i <= output.blocksInjected; i++) {
     const at = i * UF2_BLOCK_BYTES;

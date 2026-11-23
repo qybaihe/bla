@@ -244,7 +244,7 @@ export function protectUf2FirmwareBuffer(
     blocksInjected: injected.length,
     notMainFlashBlocks: injected.length,
     fileContainerBlocks: 0,
-    decoyFamilies: 0,
+    decoyFamilies: families.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
     originalBlocksPreserved,
