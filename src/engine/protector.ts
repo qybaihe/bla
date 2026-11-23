@@ -1059,6 +1059,7 @@ function protectTargetInner(
   let chaffPayloadsEmbedded = 0;
   let honeySourceMapsGenerated = 0;
   let binarySectionsPatched = 0;
+  let protectionSkipped: string | undefined;
   let wasmExportsRenamed = 0;
   let wasmExportRenames: { from: string; to: string; kind: string }[] = [];
   let wasmExportOrderShuffled = false;
@@ -1816,10 +1817,15 @@ function protectTargetInner(
     const rawPlist = readFileSync(absInput);
     const res = protectApplePlistBuffer(rawPlist, { intensity, seed });
     writeProtectedOutput(absOutput, res.buffer);
-    decoyFunctionsInjected = 12;
+    const plistChanged = !res.buffer.equals(rawPlist);
+    decoyFunctionsInjected = res.decoyEnclaveEntitlementsAdded;
     chaffPayloadsEmbedded = res.decoyEnclaveEntitlementsAdded;
-    binarySectionsPatched = res.triggersBudgetAbort ? 2 : 1;
-    counteredVectors.add("apple-plist-budget");
+    binarySectionsPatched = plistChanged ? (res.triggersBudgetAbort ? 2 : 1) : 0;
+    if (res.protectionSkipped) {
+      protectionSkipped = res.protectionSkipped;
+    } else {
+      counteredVectors.add("apple-plist-budget");
+    }
   } else if (format === "dotnet-managed") {
     const rawDll = readFileSync(absInput);
     const res = protectDotnetManagedBuffer(rawDll, { intensity, seed });
@@ -2001,6 +2007,7 @@ function protectTargetInner(
     seed,
     originalSha256: beforeAudit.sha256,
     protectedSha256: afterAudit.sha256,
+    ...(protectionSkipped ? { protectionSkipped } : {}),
     metrics,
     counteredReaVectors: [...counteredVectors],
     beforeAudit,

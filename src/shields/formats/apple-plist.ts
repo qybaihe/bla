@@ -17,6 +17,8 @@ interface PlistShieldStats {
 export interface ApplePlistShieldResult extends PlistShieldStats {
   readonly xmlPlist: string;
   readonly triggersInternalSubsetBudgetAbort: boolean;
+  /** Set when the document's root is not a dictionary, so no entitlement was planted. */
+  readonly protectionSkipped?: string;
 }
 
 function buildPlistEntries(options: PlistOptions) {
@@ -135,7 +137,12 @@ export function protectAppleXmlPlist(rawXml: string, options: PlistOptions = {})
     const declarationEnd = xml.startsWith("<?xml") ? xml.indexOf("?>") + 2 : 0;
     xml = `${xml.slice(0, declarationEnd)}\n${PLIST_DOCTYPE}\n${xml.slice(declarationEnd)}`.trim();
   }
-  return { xmlPlist: xml, triggersInternalSubsetBudgetAbort: false, ...stats };
+  return {
+    xmlPlist: xml,
+    triggersInternalSubsetBudgetAbort: false,
+    ...stats,
+    ...(rootDict ? {} : { protectionSkipped: "XML plist root element is not a <dict>" }),
+  };
 }
 
 const BPLIST_HEADER = Buffer.from("bplist00", "ascii");
@@ -227,7 +234,10 @@ function encodeBplistString(value: string): Buffer {
   return encodePlistSizedObject(0x60, value.length, Buffer.from(value, "utf16le").swap16());
 }
 
-function protectBinaryPlist(input: Buffer, options: PlistOptions): { buffer: Buffer; stats: PlistShieldStats } {
+function protectBinaryPlist(
+  input: Buffer,
+  options: PlistOptions,
+): { buffer: Buffer; stats: PlistShieldStats; protectionSkipped?: string } {
   const trailerStart = input.length - BPLIST_TRAILER_BYTES;
   if (trailerStart <= BPLIST_HEADER.length || !input.subarray(0, 8).equals(BPLIST_HEADER)) {
     return invalidBinaryPlist("expected bplist00 header, object table, and trailer");
@@ -259,7 +269,13 @@ function protectBinaryPlist(input: Buffer, options: PlistOptions): { buffer: Buf
   });
   const objects = offsets.map((offset) => input.subarray(offset, ends.get(offset)!));
   const root = objects[rootId]!;
-  if ((root[0]! & 0xf0) !== 0xd0) return { buffer: input, stats: EMPTY_STATS };
+  if ((root[0]! & 0xf0) !== 0xd0) {
+    return {
+      buffer: input,
+      stats: EMPTY_STATS,
+      protectionSkipped: "binary plist root object is not a dictionary",
+    };
+  }
   const rootReferences = readBplistReferences(root, refWidth, count, true);
   const oldCount = rootReferences.length / 2;
   const keyRefs = rootReferences.slice(0, oldCount);
@@ -309,10 +325,16 @@ function protectBinaryPlist(input: Buffer, options: PlistOptions): { buffer: Buf
 export function protectApplePlistBuffer(rawBuffer: Buffer, options: PlistOptions = {}): PlistShieldStats & {
   readonly buffer: Buffer;
   readonly triggersBudgetAbort: boolean;
+  readonly protectionSkipped?: string;
 } {
   if (rawBuffer.subarray(0, 6).toString("ascii") === "bplist") {
-    const { buffer, stats } = protectBinaryPlist(rawBuffer, options);
-    return { buffer, triggersBudgetAbort: false, ...stats };
+    const { buffer, stats, protectionSkipped } = protectBinaryPlist(rawBuffer, options);
+    return {
+      buffer,
+      triggersBudgetAbort: false,
+      ...stats,
+      ...(protectionSkipped ? { protectionSkipped } : {}),
+    };
   }
   const utf16BE = rawBuffer[0] === 0xfe && rawBuffer[1] === 0xff ||
     rawBuffer[0] === 0 && rawBuffer[1] === 0x3c;

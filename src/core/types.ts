@@ -315,6 +315,8 @@ export interface ProtectionResult {
   readonly seed: string;
   readonly originalSha256: string;
   readonly protectedSha256: string;
+  /** Set when the format shield recognised the container but planted nothing (e.g. a plist whose root is not a dictionary). */
+  readonly protectionSkipped?: string;
   readonly metrics: ProtectionMetrics;
   readonly counteredReaVectors: readonly ReaAttackVectorId[];
   readonly beforeAudit: AuditReport;
