@@ -139,6 +139,9 @@ export function formatProtectionResult(res: ProtectionResult): string {
     ...(res.protectionSkipped
       ? [`  ${ANSI.red}⚠ Protection skipped: ${sanitizeTerminalText(res.protectionSkipped)}${ANSI.reset}`]
       : []),
+    ...(res.weaveSkipReason
+      ? [`  ${ANSI.yellow}⚠ Weave skipped: ${sanitizeTerminalText(res.weaveSkipReason)}${ANSI.reset}`]
+      : []),
     "",
     `${ANSI.bold}${ANSI.cyan}── Before vs. After BLA Impact (Claude Opus 4 / REA Loop) ──────────────────────${ANSI.reset}`,
     `  • REA Exposure Score:       ${ANSI.red}${res.beforeAudit.exposureScore}/100 (${res.beforeAudit.protectionStatus})${ANSI.reset}  -->  ${ANSI.green}${ANSI.bold}${res.afterAudit.exposureScore}/100 (${res.afterAudit.protectionStatus})${ANSI.reset}`,

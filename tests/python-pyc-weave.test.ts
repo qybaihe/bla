@@ -173,6 +173,11 @@ describe("python-pyc-weave", () => {
     });
     const supported = [3495, 3531].includes(raw.readUInt16LE(0));
     expect(res.weaveDecoys).toBe(supported);
+    if (supported) {
+      expect(res.weaveSkipReason).toBeUndefined();
+    } else {
+      expect(res.weaveSkipReason).toMatch(/no bytecode weaver/);
+    }
     expect(res.customerDefsWoven).toBe(supported ? 3 : 0);
     expect(res.decoyCodeObjectsInjected).toBeGreaterThanOrEqual(supported ? 9 : 0);
     if (!supported) expect(res.buffer.subarray(0, raw.length)).toEqual(raw);
