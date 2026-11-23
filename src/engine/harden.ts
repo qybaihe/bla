@@ -330,6 +330,8 @@ export interface HardenProjectOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** Apply/restore: clear a lock whose recorded owner process has exited. */
+  readonly clearStaleLock?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). */
   readonly sidecarEntangle?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
@@ -1553,7 +1555,11 @@ export function hardenProject(
     executeHardenApply({
       absDir, stateDirectory, stagingRoot, rawOptions, projectConfig, configuredRoot, buildDirNames, buildRoots,
     });
-  return dryRun ? executeApply() : withApplyTransaction(stateDirectory, executeApply);
+  return dryRun
+    ? executeApply()
+    : withApplyTransaction(stateDirectory, executeApply, {
+        clearStaleLock: rawOptions.clearStaleLock === true,
+      });
 }
 
 function executeHardenApply(params: {
@@ -1769,13 +1775,14 @@ function rememberHardenedOutputs(
  */
 export function restoreHardenedProject(
   directory: string = process.cwd(),
-  options: { readonly applyStateRoot?: string } = {},
+  options: { readonly applyStateRoot?: string; readonly clearStaleLock?: boolean } = {},
 ): HardenApplyReport {
   const absDir = resolve(directory);
   try {
     return restoreAppliedOriginals(
       absDir,
       resolveApplyStateDirectory(absDir, options.applyStateRoot),
+      { clearStaleLock: options.clearStaleLock },
     );
   } catch (error) {
     return {

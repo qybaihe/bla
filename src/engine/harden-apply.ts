@@ -29,8 +29,8 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
-  rmdirSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { physicalPath } from "../core/output-path.js";
@@ -229,24 +229,75 @@ function removeTree(path: string): void {
   if (lstatUnlinkedPath(path)) rmSync(path, { recursive: true, force: true });
 }
 
-/** Serialize apply, suspension and restore across processes sharing this state. */
-export function withApplyTransaction<T>(stateDirectory: string, action: () => T): T {
+const APPLY_LOCK_OWNER = "owner.json";
+
+function lockOwnerPid(lockPath: string): number | undefined {
+  try {
+    const owner = JSON.parse(readFileSync(join(lockPath, APPLY_LOCK_OWNER), "utf8")) as {
+      pid?: unknown;
+    };
+    return typeof owner.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0
+      ? owner.pid
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function lockOwnerIsGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+function acquireApplyLock(lockPath: string): void {
+  mkdirSync(lockPath, { mode: 0o700 });
+  writeFileSync(
+    join(lockPath, APPLY_LOCK_OWNER),
+    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+    "utf8",
+  );
+}
+
+/**
+ * Serialize apply, suspension and restore across processes sharing this state.
+ * `clearStaleLock` removes a lock only when its recorded owner process is gone;
+ * a live owner or a lock without an owner record is never cleared.
+ */
+export function withApplyTransaction<T>(
+  stateDirectory: string,
+  action: () => T,
+  options: { readonly clearStaleLock?: boolean } = {},
+): T {
   lstatUnlinkedPath(stateDirectory);
   mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   const lockPath = join(stateDirectory, APPLY_LOCK_NAME);
   lstatUnlinkedPath(lockPath);
   try {
-    mkdirSync(lockPath, { mode: 0o700 });
+    acquireApplyLock(lockPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`Another apply or restore owns ${lockPath}. If that run exited, check the saved backups before removing the stale lock.`, { cause: error });
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const ownerPid = lockOwnerPid(lockPath);
+    if (options.clearStaleLock === true && ownerPid !== undefined && lockOwnerIsGone(ownerPid)) {
+      rmSync(lockPath, { recursive: true, force: true });
+      acquireApplyLock(lockPath);
+    } else {
+      const detail =
+        ownerPid === undefined
+          ? "The lock has no owner record (an older BLA run); check the saved backups before removing it."
+          : lockOwnerIsGone(ownerPid)
+            ? `The recorded owner process ${ownerPid} has exited; re-run with --clear-stale-lock after checking the saved backups.`
+            : `It is owned by live process ${ownerPid}.`;
+      throw new Error(`Another apply or restore owns ${lockPath}. ${detail}`, { cause: error });
     }
-    throw error;
   }
   try {
     return action();
   } finally {
-    if (lstatUnlinkedPath(lockPath)?.isDirectory()) rmdirSync(lockPath);
+    rmSync(lockPath, { recursive: true, force: true });
   }
 }
 
@@ -356,12 +407,17 @@ export function suspendAppliedOutputs(
 export function restoreAppliedOriginals(
   projectDirectory: string,
   stateDirectory: string,
+  options: { readonly clearStaleLock?: boolean } = {},
 ): HardenApplyReport {
   try {
     if (loadProjectApplyState(resolve(projectDirectory), stateDirectory) === undefined) {
       return { status: "nothing-to-restore" };
     }
-    return withApplyTransaction(stateDirectory, () => restoreAppliedOriginalsLocked(projectDirectory, stateDirectory));
+    return withApplyTransaction(
+      stateDirectory,
+      () => restoreAppliedOriginalsLocked(projectDirectory, stateDirectory),
+      options,
+    );
   } catch (error) {
     return { status: "failed", reason: `Could not restore applied outputs: ${errorMessage(error)}` };
   }
@@ -487,11 +543,16 @@ export function applyHardenedOutputs(params: {
   readonly candidates: readonly HardenApplyCandidate[];
   readonly buildDirNames: readonly string[];
   readonly buildRoots?: readonly string[];
+  readonly clearStaleLock?: boolean;
 }, transactionAlreadyHeld = false): HardenApplyReport {
   if (!transactionAlreadyHeld) {
     try {
       loadProjectApplyState(resolve(params.projectDirectory), params.stateDirectory);
-      return withApplyTransaction(params.stateDirectory, () => applyHardenedOutputs(params, true));
+      return withApplyTransaction(
+        params.stateDirectory,
+        () => applyHardenedOutputs(params, true),
+        { clearStaleLock: params.clearStaleLock },
+      );
     } catch (error) {
       return { status: "failed", reason: `Could not start apply: ${errorMessage(error)}` };
     }
