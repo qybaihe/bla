@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -274,8 +274,14 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     );
     expect(chunkOut).not.toBeNull();
     expect(chunkOut!.code).not.toMatch(/_bla|\$00_AAA|__bla/);
-    expect(chunkOut!.map).toBeDefined();
-    expect(chunkOut!.map!.sourceRoot).toBe("enclave://tee-runtime/");
+    expect(chunkOut!.map).toBeNull();
+    const chunk = { type: "chunk" as const, fileName: "assets/index-abc123.js", ...chunkOut! };
+    const emitFile = vi.fn(() => "map");
+    vitePlugin.generateBundle.call({ emitFile }, undefined, { [chunk.fileName]: chunk });
+    expect(emitFile).toHaveBeenCalledWith(expect.objectContaining({
+      fileName: "assets/index-abc123.js.map",
+      source: expect.stringContaining("enclave://tee-runtime/"),
+    }));
 
     // Test Webpack plugin asset update hook
     const assets: Record<string, { source: () => string; size: () => number }> = {

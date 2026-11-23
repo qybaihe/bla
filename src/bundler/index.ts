@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+import { parse } from "@babel/parser";
 import type { ProtectionIntensity } from "../core/types.js";
 import { SeededPrng, deriveSeedLabel } from "../core/prng.js";
 import { generateChaffPayloads } from "../shields/chaff/chaff-generator.js";
@@ -17,6 +19,8 @@ export interface BlaBundlerPluginOptions {
   readonly seed?: string | number;
   /** File regex filter for chunks/modules to shield (default: `/\.(?:m?js|cjs)$/i`). */
   readonly include?: RegExp;
+  /** File regex filter for chunks/modules to leave untouched. */
+  readonly exclude?: RegExp;
   /** Emit a companion `.map` honey source map for each protected chunk (default: `true`). */
   readonly honeySourceMap?: boolean;
   /**
@@ -99,21 +103,49 @@ function shieldOrPassThrough(
  * refuses to leave implicit.
  */
 function createSkipTracker(pluginName: string) {
-  const skipped: string[] = [];
+  const skipped = new Set<string>();
   return {
     note(fileName: string): void {
-      skipped.push(fileName);
+      skipped.add(fileName);
     },
-    summary(): string | null {
-      if (skipped.length === 0) return null;
-      return (
-        `[bla-shield] ${pluginName}: ${skipped.length} chunk(s) shipped UNPROTECTED ` +
-        `(transform failed, failBuildOnError is false): ${skipped.join(", ")}. ` +
+    report(): void {
+      if (skipped.size === 0) return;
+      console.warn(
+        `[bla-shield] ${pluginName}: ${skipped.size} chunk(s) shipped UNPROTECTED ` +
+        `(transform failed, failBuildOnError is false): ${[...skipped].join(", ")}. ` +
         "Fix the parse/transform errors or set failBuildOnError: true."
       );
+      skipped.clear();
     },
   };
 }
+
+function createFileFilter(include: RegExp, exclude?: RegExp) {
+  const included = new RegExp(include);
+  const excluded = exclude && new RegExp(exclude);
+  return (fileName: string): boolean => {
+    included.lastIndex = 0;
+    if (excluded) excluded.lastIndex = 0;
+    return included.test(fileName) && !excluded?.test(fileName);
+  };
+}
+
+type RollupOutputOptions = {
+  readonly format?: string;
+  readonly sourcemap?: boolean | "inline" | "hidden";
+  readonly sourcemapBaseUrl?: string;
+};
+
+type RollupOutputChunk = {
+  type: "chunk";
+  fileName: string;
+  preliminaryFileName?: string;
+  sourcemapFileName?: string | null;
+  code: string;
+  map: unknown;
+};
+
+type RollupOutputBundle = Record<string, { type: "asset" } | RollupOutputChunk>;
 
 /**
  * Vite & Rollup plugin (`blaVitePlugin` / `blaRollupPlugin`) that automatically
@@ -132,22 +164,31 @@ function createSkipTracker(pluginName: string) {
 export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
   const intensity = options.intensity ?? "balanced";
   const include = options.include ?? /\.(?:m?js|cjs)$/i;
+  const acceptsFile = createFileFilter(include, options.exclude);
   const emitMap = options.honeySourceMap ?? true;
   const failBuildOnError = options.failBuildOnError ?? false;
-  const skips = createSkipTracker("rollup/vite");
+  const outputs = new WeakMap<RollupOutputOptions, {
+    skips: ReturnType<typeof createSkipTracker>;
+    protectedChunks: Map<string, string>;
+  }>();
+  const defaultOutput: RollupOutputOptions = {};
+  const outputState = (outputOptions: RollupOutputOptions) => {
+    let state = outputs.get(outputOptions);
+    if (!state) {
+      state = { skips: createSkipTracker("rollup/vite"), protectedChunks: new Map() };
+      outputs.set(outputOptions, state);
+    }
+    return state;
+  };
 
   return {
     name: "bla-shield-rollup-plugin",
-    buildEnd() {
-      const summary = skips.summary();
-      if (summary !== null) console.warn(summary);
-    },
     renderChunk(
       code: string,
       chunk: { fileName: string; isEntry?: boolean },
-      outputOptions?: { format?: string },
+      outputOptions: RollupOutputOptions = defaultOutput,
     ) {
-      if (!include.test(chunk.fileName)) {
+      if (!acceptsFile(chunk.fileName)) {
         return null;
       }
       const seed = deriveSeedLabel(options.seed ?? "bla-rollup", chunk.fileName);
@@ -156,6 +197,7 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
         chunk.fileName,
       );
       const loader = inferEsbuildLoader(chunk.fileName);
+      const { skips, protectedChunks } = outputState(outputOptions);
       const shieldedCode = shieldOrPassThrough(
         () =>
           transformJavaScriptWithBlaShield(code, {
@@ -170,26 +212,49 @@ export function blaRollupPlugin(options: BlaBundlerPluginOptions = {}) {
       if (shieldedCode === null) {
         return null; // Rollup treats null as "no change": chunk passes through.
       }
-      const transformed = { code: shieldedCode };
-
-      if (!emitMap) {
-        return { code: transformed.code, map: null };
-      }
-
-      const prng = new SeededPrng(seed);
-      const chaff = generateChaffPayloads(prng, intensity);
-      const lineCount = transformed.code.split("\n").length;
-      const honeyMap = generateHoneySourceMap(
-        chunk.fileName,
-        lineCount,
-        prng,
-        chaff,
-      );
-
+      protectedChunks.set(chunk.fileName, seed);
+      // An empty transform map breaks Rollup's mapping chain. A null map here
+      // would leave the original mappings (and source contents) in the chain.
       return {
-        code: transformed.code,
-        map: honeyMap.mapObject,
+        code: shieldedCode,
+        map: outputOptions.sourcemap ? { mappings: "" as const } : null,
       };
+    },
+    generateBundle(
+      this: { emitFile(asset: { type: "asset"; fileName: string; source: string }): string },
+      outputOptions: RollupOutputOptions = defaultOutput,
+      bundle: RollupOutputBundle,
+    ) {
+      const { skips, protectedChunks } = outputState(outputOptions);
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== "chunk") continue;
+        const seed = protectedChunks.get(chunk.preliminaryFileName ?? chunk.fileName);
+        if (seed === undefined) continue;
+        const mapName = chunk.sourcemapFileName ?? `${chunk.fileName}.map`;
+        if (bundle[mapName]?.type === "asset") delete bundle[mapName];
+        chunk.map = null;
+        chunk.sourcemapFileName = null;
+        chunk.code = chunk.code.replace(/(?:^|\r?\n)\/\/# sourceMappingURL=[^\r\n]*\r?\n?$/, "\n");
+        if (!emitMap) continue;
+
+        const prng = new SeededPrng(seed);
+        const chaff = generateChaffPayloads(prng, intensity);
+        const honeyMap = generateHoneySourceMap(
+          chunk.fileName,
+          chunk.code.split("\n").length,
+          prng,
+          chaff,
+        );
+        this.emitFile({ type: "asset", fileName: mapName, source: honeyMap.jsonString });
+        if (outputOptions.sourcemap && outputOptions.sourcemap !== "hidden") {
+          const mapUrl = outputOptions.sourcemapBaseUrl
+            ? new URL(posix.basename(mapName), outputOptions.sourcemapBaseUrl).toString()
+            : posix.relative(posix.dirname(chunk.fileName), mapName);
+          chunk.code += `\n//# sourceMappingURL=${mapUrl}\n`;
+        }
+      }
+      outputs.delete(outputOptions);
+      skips.report();
     },
   };
 }
@@ -217,6 +282,36 @@ function createWebpackRawSource(content: string) {
       hash.update(byteBuf);
     },
   };
+}
+
+function declaredWebpackSourceMaps(code: string, assetName: string): string[] {
+  if (!/sourceMappingURL\s*=/.test(code)) return [];
+  try {
+    const ast = parse(code, {
+      sourceType: "unambiguous",
+      allowReturnOutsideFunction: true,
+      plugins: ["decorators-legacy"],
+    });
+    const paths: string[] = [];
+    for (const comment of ast.comments ?? []) {
+      const url = /^\s*[@#]\s*sourceMappingURL\s*=\s*([^\s?#]+)/.exec(comment.value)?.[1];
+      if (url && !url.startsWith("//") && !/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+        let decoded: string;
+        try {
+          decoded = decodeURIComponent(url);
+        } catch {
+          continue;
+        }
+        const path = posix.isAbsolute(decoded)
+          ? posix.normalize(decoded).slice(1)
+          : posix.join(posix.dirname(assetName), decoded);
+        if (path.endsWith(".map")) paths.push(path);
+      }
+    }
+    return paths;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -256,6 +351,10 @@ export class BlaWebpackPlugin {
               name: string,
               newSource: { source: () => string; size: () => number },
             ) => void;
+            deleteAsset?: (name: string) => void;
+            getAsset?: (name: string) => {
+              info: { related?: { sourceMap?: string | string[] } };
+            } | undefined;
           }) => void,
         ) => void;
       };
@@ -263,11 +362,12 @@ export class BlaWebpackPlugin {
   }): void {
     const intensity = this.options.intensity ?? "balanced";
     const include = this.options.include ?? /\.(?:m?js|cjs)$/i;
+    const acceptsFile = createFileFilter(include, this.options.exclude);
     const emitMap = this.options.honeySourceMap ?? true;
     const failBuildOnError = this.options.failBuildOnError ?? false;
-    const skips = createSkipTracker("webpack");
 
     compiler.hooks.compilation.tap("BlaWebpackPlugin", (compilation) => {
+      const skips = createSkipTracker("webpack");
       compilation.hooks.processAssets.tap(
         {
           name: "BlaWebpackPlugin",
@@ -275,7 +375,7 @@ export class BlaWebpackPlugin {
         },
         (assets) => {
           for (const assetName of Object.keys(assets)) {
-            if (!include.test(assetName)) continue;
+            if (!acceptsFile(assetName)) continue;
             const rawAsset = assets[assetName];
             if (!rawAsset) continue;
             const rawSource = rawAsset.source().toString("utf8");
@@ -296,8 +396,20 @@ export class BlaWebpackPlugin {
             if (shieldedCode === null) {
               continue; // Webpack leaves the already-emitted asset untouched.
             }
+            const mapName = `${assetName}.map`;
+            const related = compilation.getAsset?.(assetName)?.info.related?.sourceMap;
+            const relatedMaps = new Set([
+              mapName,
+              ...(typeof related === "string" ? [related] : related ?? []),
+              ...declaredWebpackSourceMaps(rawSource, assetName),
+            ]);
             compilation.updateAsset(assetName, createWebpackRawSource(shieldedCode));
-            if (emitMap && typeof compilation.emitAsset === "function" && !assets[`${assetName}.map`]) {
+            for (const relatedMap of relatedMaps) {
+              if (!assets[relatedMap] || (emitMap && relatedMap === mapName)) continue;
+              if (compilation.deleteAsset) compilation.deleteAsset(relatedMap);
+              else delete assets[relatedMap];
+            }
+            if (emitMap) {
               const prng = new SeededPrng(seed);
               const chaff = generateChaffPayloads(prng, intensity);
               const honeyMap = generateHoneySourceMap(
@@ -306,13 +418,14 @@ export class BlaWebpackPlugin {
                 prng,
                 chaff,
               );
-              compilation.emitAsset(`${assetName}.map`, createWebpackRawSource(honeyMap.jsonString));
+              const honeySource = createWebpackRawSource(honeyMap.jsonString);
+              if (assets[mapName]) compilation.updateAsset(mapName, honeySource);
+              else compilation.emitAsset?.(mapName, honeySource);
             }
           }
           // Same honest build-end summary the Rollup plugin prints; webpack only
           // exposes the asset stage to a structural plugin type.
-          const summary = skips.summary();
-          if (summary !== null) console.warn(summary);
+          skips.report();
         },
       );
     });
@@ -326,15 +439,17 @@ export class BlaWebpackPlugin {
 export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
   const intensity = options.intensity ?? "balanced";
   const include = options.include ?? /\.(?:[cm]?[jt]sx?)$/i;
+  const acceptsFile = createFileFilter(include, options.exclude);
   const failBuildOnError = options.failBuildOnError ?? false;
 
   return {
     name: "bla-shield-esbuild-plugin",
     setup(build: {
       onLoad: (
-        opts: { filter: RegExp },
+        opts: { filter: RegExp; namespace: "file" },
         cb: (args: {
           path: string;
+          namespace?: string;
         }) => Promise<{ contents: string; loader: JsLoaderType } | null>,
       ) => void;
       onEnd?: (cb: () => void) => void;
@@ -343,11 +458,12 @@ export function blaEsbuildPlugin(options: BlaBundlerPluginOptions = {}) {
       // Real esbuild always provides onEnd; tolerate structural test doubles.
       if (typeof build.onEnd === "function") {
         build.onEnd(() => {
-          const summary = skips.summary();
-          if (summary !== null) console.warn(summary);
+          skips.report();
         });
       }
-      build.onLoad({ filter: include }, async (args) => {
+      // esbuild's Go regex engine does not implement all JavaScript flags or syntax.
+      build.onLoad({ filter: /.*/, namespace: "file" }, async (args) => {
+        if ((args.namespace !== undefined && args.namespace !== "file") || !acceptsFile(args.path)) return null;
         // Match the dependency directory as a path segment: a project folder
         // named "my-node_modules-backup" is application code, not a dependency.
         if (args.path.split(/[/\\]/).includes("node_modules")) return null;

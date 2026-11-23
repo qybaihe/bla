@@ -369,9 +369,9 @@ describe("Red-Blue v3.5.4 Reinforcements", () => {
     expect(modStripped.status).not.toBe(0);
     expect(modStripped.stderr + modStripped.stdout).toMatch(/bla\.sidecar\.v1|integrity binding mismatch/);
 
-    // 1-byte patched code + stripped section (matches protectedExportNames) fails closed!
-    const patched = Buffer.from(rawWasm);
-    patched[patched.length - 2] = 0x72; // change xor/and byte while keeping valid wasm
+    // A module that still carries its binding section fails when the code changes.
+    const patched = Buffer.from(bound!.bytes);
+    patched[rawWasm.length - 2] = 0x72; // change xor/and byte while keeping valid wasm
     writeFileSync(join(hookDir, "patched.wasm"), patched);
     const modPatched = spawnSync(
       process.execPath,

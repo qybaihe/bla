@@ -202,20 +202,10 @@ describe("v3.2.3 Counter-Critique Reinforcements & Issue #157 PE Hardening", () 
     expect(intact.computePrice(5, 1000)).toBe(5000);
     expect(intact.computePrice(20, 1000)).toBe(19500);
 
-    // Find an injected decoy function in the seed initializer array and strip its declaration:
-    const seedMatch =
-      /const\s+\w+\s*=\s*\(?\d+[\s\S]{0,260}?\|\s*\(\[([A-Za-z0-9_$,\s]+)\]\.every/.exec(
-        res.code,
-      );
-    expect(seedMatch).not.toBeNull();
-    const entangledFns = seedMatch![1]!
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    // Find the hoisted decoy reads in the seed initializer and remove one.
+    const entangledFns = [...res.code.matchAll(/\b(\w+)\.length >= 0 &&/g)];
     expect(entangledFns.length).toBeGreaterThanOrEqual(8);
-
-    // Strip the last entangled decoy function declaration from the file:
-    const targetDecoy = entangledFns[entangledFns.length - 1]!;
+    const targetDecoy = entangledFns.at(-1)![1]!;
     const strippedCode = res.code.replace(
       `function ${targetDecoy}(`,
       `function _removed_decoy(`,

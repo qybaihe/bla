@@ -37,7 +37,7 @@ describe("Python decoy density + vocabulary diversification (WorkBuddy peel)", (
     const prng = new SeededPrng("wb-live-xref");
     const chaff = generateChaffPayloads(prng, "balanced");
     const tarpit = generatePythonTarpit(prng, "balanced", chaff);
-    expect(tarpit.code).toMatch(/: dict = \{"epoch":/);
+    expect(tarpit.code).toMatch(/^\w+ = \{"epoch":/m);
     expect(tarpit.code).toMatch(/\["warm"\]\s*=/);
     expect(tarpit.code).toMatch(/hash\(\w+\.__name__\)/);
     // At least two distinct body shapes (bytearray / nested _fold / window)

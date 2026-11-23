@@ -15,12 +15,13 @@ function captureWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
 }
 
 describe("bundler skip summary", () => {
-  it("summarises unshielded chunks at build end", () => {
+  it("summarises unshielded chunks at bundle generation", () => {
     const plugin = blaRollupPlugin({ seed: "summary" });
+    const output = { format: "es" };
     const { warnings } = captureWarnings(() => {
-      plugin.renderChunk("function ( {", { fileName: "broken-a.js" }, { format: "es" });
-      plugin.renderChunk("function ( {", { fileName: "broken-b.js" }, { format: "es" });
-      plugin.buildEnd();
+      plugin.renderChunk("function ( {", { fileName: "broken-a.js" }, output);
+      plugin.renderChunk("function ( {", { fileName: "broken-b.js" }, output);
+      plugin.generateBundle.call({ emitFile: () => "map" }, output, {});
       return null;
     });
 
@@ -33,9 +34,10 @@ describe("bundler skip summary", () => {
 
   it("stays quiet when every chunk was shielded", () => {
     const plugin = blaRollupPlugin({ seed: "quiet", honeySourceMap: false });
+    const output = { format: "es" };
     const { warnings } = captureWarnings(() => {
-      plugin.renderChunk("export const a = 1;\n", { fileName: "ok.js" }, { format: "es" });
-      plugin.buildEnd();
+      plugin.renderChunk("export const a = 1;\n", { fileName: "ok.js" }, output);
+      plugin.generateBundle.call({ emitFile: () => "map" }, output, {});
       return null;
     });
 
@@ -44,12 +46,13 @@ describe("bundler skip summary", () => {
 
   it("exposes the same summary on the Vite alias", () => {
     const plugin = blaVitePlugin({ seed: "vite-summary" });
+    const output = { format: "es" };
     const { warnings } = captureWarnings(() => {
-      plugin.renderChunk("function ( {", { fileName: "broken-vite.js" }, { format: "es" });
-      plugin.buildEnd();
+      plugin.renderChunk("function ( {", { fileName: "broken-vite.js" }, output);
+      plugin.generateBundle.call({ emitFile: () => "map" }, output, {});
       return null;
     });
 
-    expect(warnings.some((w) => w.includes("broken-vite.js"))).toBe(true);
+    expect(warnings.some((w) => w.includes("UNPROTECTED") && w.includes("broken-vite.js"))).toBe(true);
   });
 });

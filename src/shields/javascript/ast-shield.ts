@@ -1512,12 +1512,54 @@ function decideNameRestore(binding: Binding, escapes: boolean): NameRestoreDecis
  */
 const LEGAL_NOTICE_COMMENT_RE =
   /@license\b|@preserve\b|@copyright\b|SPDX-License-Identifier|\bCopyright\b|\(c\)\s*\d{4}|©|\bLicensed under\b|\bAll rights reserved\b/i;
+const SOURCE_DIRECTIVE_COMMENT_RE = /^\s*[@#]\s*source(?:Mapping)?URL\s*=/i;
+const JSX_PRAGMA_COMMENT_RE = /@jsx(?:Frag|ImportSource|Runtime)?\b/;
 
 function isLegalNoticeComment(comment: t.Comment): boolean {
   return (
     (comment.type === "CommentBlock" && comment.value.startsWith("!")) ||
     LEGAL_NOTICE_COMMENT_RE.test(comment.value)
   );
+}
+
+/**
+ * Stage 2 emits two compatibility aliases immediately after its decoder stub.
+ * Admit only that exact stub layout. Other declarations with those names can
+ * have customer-visible initializers or be read from outside the AST.
+ */
+function stageTwoMarkerAliases(program: t.Program, source: string): readonly t.VariableDeclarator[] {
+  const [table, key, decoder, aliasS, aliasT] = program.body;
+  if (
+    !t.isFunctionDeclaration(decoder) || !decoder.id || decoder.start == null || decoder.end == null ||
+    !t.isVariableDeclaration(table, { kind: "var" }) || table.declarations.length !== 1 ||
+    !t.isVariableDeclaration(key, { kind: "var" }) || key.declarations.length !== 1 ||
+    !t.isVariableDeclaration(aliasS, { kind: "var" }) || aliasS.declarations.length !== 1 ||
+    !t.isVariableDeclaration(aliasT, { kind: "var" }) || aliasT.declarations.length !== 1
+  ) return [];
+  const [tableDecl] = table.declarations;
+  const [keyDecl] = key.declarations;
+  const [decoderAlias] = aliasS.declarations;
+  const [tableAlias] = aliasT.declarations;
+  if (
+    !tableDecl || !keyDecl || !decoderAlias || !tableAlias ||
+    !t.isIdentifier(tableDecl.id) || !t.isIdentifier(keyDecl.id) ||
+    !t.isIdentifier(decoderAlias.id, { name: "_blaS" }) ||
+    !t.isIdentifier(decoderAlias.init, { name: decoder.id.name }) ||
+    !t.isIdentifier(tableAlias.id, { name: "_blaT" }) ||
+    !t.isIdentifier(tableAlias.init, { name: tableDecl.id.name })
+  ) return [];
+  // Match the exact serialized decoder emitted by encrypt-strings.ts.
+  const expectedDecoder =
+    `function ${decoder.id.name}(i){` +
+    `var e=${tableDecl.id.name}[i],k=${keyDecl.id.name},kl=k.length,o=new Uint8Array(e.length);` +
+    `for(var j=0;j<e.length;j++){` +
+    `var kb=k[(j+i*31)%kl],ks=k[(i*7+(j>>2))%kl];` +
+    `o[j]=(e[j]^(kb^((ks+i*73+j*19)&255)))&255;` +
+    `}` +
+    `return typeof Buffer!=="undefined"?Buffer.from(o).toString("utf8"):` +
+    `(typeof TextDecoder!=="undefined"?new TextDecoder().decode(o):` +
+    `String.fromCharCode.apply(null,Array.from(o)));}`;
+  return source.slice(decoder.start, decoder.end) === expectedDecoder ? [decoderAlias, tableAlias] : [];
 }
 
 /**
@@ -1919,6 +1961,14 @@ export function transformJavaScriptWithBlaShield(
       : "script";
 
   const exportedSymbolsBefore = collectEsmExportedSymbols(ast.program);
+  const generatedMarkerAliases = stageTwoMarkerAliases(ast.program, source);
+  const jsxPragmas = ast.comments?.filter((c) => JSX_PRAGMA_COMMENT_RE.test(c.value)) ?? [];
+  const jsxPragmaRoots = new Set<string>();
+  for (const comment of jsxPragmas) {
+    for (const [, root] of comment.value.matchAll(/@jsx(?:Frag)?\s+([$\p{ID_Start}_][$\p{ID_Continue}\u200c\u200d]*)/gu)) {
+      if (root !== undefined) jsxPragmaRoots.add(root);
+    }
+  }
   // The export shapes Node's scanner reads from a CommonJS file's text. A UMD
   // bundle is a "script" carrier here and CommonJS to Node; only a file that
   // is certainly an ES module is never scanned.
@@ -1931,55 +1981,16 @@ export function transformJavaScriptWithBlaShield(
   const bindingsVisibleToDirectEval = new Set<t.Identifier>();
   traverse(ast, {
     CallExpression(path) {
-      if (
-        t.isIdentifier(path.node.callee) &&
-        path.node.callee.name === "eval" &&
-        path.scope.getBinding("eval") === undefined
-      ) {
-        for (const binding of Object.values(path.scope.getAllBindings())) {
-          bindingsVisibleToDirectEval.add(binding.identifier);
+      if (t.isIdentifier(path.node.callee, { name: "eval" })) {
+        // Even a parameter or local named eval can hold the intrinsic. Walk
+        // every scope since a parameter initializer can see an outer binding
+        // that is shadowed by a declaration in the function body.
+        for (let scope: Scope | undefined = path.scope; scope !== undefined; scope = scope.parent) {
+          for (const binding of Object.values(scope.bindings)) {
+            bindingsVisibleToDirectEval.add(binding.identifier);
+          }
         }
       }
-    },
-  });
-
-  // Rename customer-local Math before creating any injected predicates.
-  // Renaming after insertion can rewrite BLA's own Math.imul references to
-  // the customer's Math parameter, causing a throw or a top-level TDZ.
-  traverse(ast, {
-    Scope(path) {
-      const binding = path.scope.bindings.Math;
-      if (binding === undefined) return;
-      if (
-        binding.kind === "module" ||
-        bindingsVisibleToDirectEval.has(binding.identifier) ||
-        binding.path.isFunctionDeclaration() ||
-        binding.path.isClassDeclaration() ||
-        exportedSymbolsBefore.includes("Math")
-      ) {
-        throw new InvalidJavaScriptCarrierError(
-          "Cannot safely protect a lexical Math binding: injected predicates require the ambient Math.imul",
-        );
-      }
-      if (effectiveCarrier === "script" && path.scope.path.isProgram()) {
-        // A program-level `Math` of a classic script replaces the page global
-        // for every other script; it can be neither renamed nor shared with
-        // the injected predicates.
-        throw new InvalidJavaScriptCarrierError(
-          "Cannot safely protect a program-level Math binding in a classic script: it must keep its name, and injected predicates require the ambient Math.imul",
-        );
-      }
-      // The replacement can survive into the output (a pinned binding is not
-      // renamed again below), so it is a realistic name from the start.
-      let localMathName = prng.identifier({ style: "camel", hint: "localMath", entropy: 3 });
-      while (
-        path.scope.hasBinding(localMathName) ||
-        path.scope.hasGlobal(localMathName) ||
-        path.scope.hasReference(localMathName)
-      ) {
-        localMathName = prng.identifier({ style: "camel", hint: "localMath", entropy: 3 });
-      }
-      path.scope.rename("Math", localMathName);
     },
   });
 
@@ -1987,6 +1998,7 @@ export function transformJavaScriptWithBlaShield(
   // rename follows Babel's idea of which declaration a reference reaches; where
   // the specification disagrees, the only safe move is to keep the names.
   const scopeModelPinnedBindings = new Set<t.Identifier>();
+  const withPinnedBindings = new Set<t.Identifier>();
   // `__exportStar(require("./m"), exports)` is a star re-export to Node only
   // under that name.
   for (const helper of cjsExportSurface?.helperBindings ?? []) {
@@ -2013,6 +2025,31 @@ export function transformJavaScriptWithBlaShield(
       return false;
     };
     traverse(ast, {
+      Program(path) {
+        for (const name of jsxPragmaRoots) pinBinding(path.scope.getOwnBinding(name));
+        if (effectiveCarrier !== "module") return;
+        for (const stmt of path.node.body) {
+          if ((t.isExportNamedDeclaration(stmt) || t.isExportDefaultDeclaration(stmt)) &&
+              t.isFunctionDeclaration(stmt.declaration) && stmt.declaration.id) {
+            pinBinding(path.scope.getOwnBinding(stmt.declaration.id.name));
+          }
+          if (!t.isExportNamedDeclaration(stmt) || stmt.source) continue;
+          for (const specifier of stmt.specifiers) {
+            if (!t.isExportSpecifier(specifier) || !t.isIdentifier(specifier.local)) continue;
+            const binding = path.scope.getOwnBinding(specifier.local.name);
+            if (binding?.path.isFunctionDeclaration() || binding?.path.isTSDeclareFunction()) {
+              pinBinding(binding);
+            }
+          }
+        }
+      },
+      Scope(path) {
+        if (path.findParent((parent) => parent.isWithStatement())) {
+          for (const binding of Object.values(path.scope.bindings)) {
+            withPinnedBindings.add(binding.identifier);
+          }
+        }
+      },
       // Annex B.3.3: in sloppy code a function declared inside a block is also
       // a `var` of the enclosing function / script once the block has run, so
       // `if (x) { function report() {} } report();` works. Babel binds it in
@@ -2062,11 +2099,58 @@ export function transformJavaScriptWithBlaShield(
       // local would no longer be looked up there under its original name.
       WithStatement(path) {
         for (const binding of Object.values(path.scope.getAllBindings())) {
-          pinBinding(binding);
+          withPinnedBindings.add(binding.identifier);
         }
       },
     });
   }
+
+  // Rename customer-local Math before creating any injected predicates.
+  // Renaming after insertion can rewrite BLA's own Math.imul references to
+  // the customer's Math parameter, causing a throw or a top-level TDZ.
+  traverse(ast, {
+    Scope(path) {
+      const binding = path.scope.bindings.Math;
+      if (binding === undefined) return;
+      const preserveName =
+        binding.kind === "module" ||
+        withPinnedBindings.has(binding.identifier) ||
+        binding.path.isFunctionDeclaration() ||
+        binding.path.isClassDeclaration() ||
+        exportedSymbolsBefore.includes("Math");
+      const evalVisible = bindingsVisibleToDirectEval.has(binding.identifier);
+      if (preserveName || evalVisible) {
+        if (!evalVisible && !path.scope.path.isProgram()) return;
+        throw new InvalidJavaScriptCarrierError(
+          "Cannot safely protect a lexical Math binding: injected predicates require the ambient Math.imul",
+        );
+      }
+      if (effectiveCarrier === "script" && path.scope.path.isProgram()) {
+        // A program-level `Math` of a classic script replaces the page global
+        // for every other script; it can be neither renamed nor shared with
+        // the injected predicates.
+        throw new InvalidJavaScriptCarrierError(
+          "Cannot safely protect a program-level Math binding in a classic script: it must keep its name, and injected predicates require the ambient Math.imul",
+        );
+      }
+      // The replacement can survive into the output (a pinned binding is not
+      // renamed again below), so it is a realistic name from the start.
+      let localMathName = prng.identifier({ style: "camel", hint: "localMath", entropy: 3 });
+      while (
+        path.scope.hasBinding(localMathName) ||
+        path.scope.hasGlobal(localMathName) ||
+        path.scope.hasReference(localMathName)
+      ) {
+        localMathName = prng.identifier({ style: "camel", hint: "localMath", entropy: 3 });
+      }
+      path.scope.rename("Math", localMathName);
+    },
+  });
+
+  // Keep injected Math reads out of lexical scopes that must preserve
+  // their own Math binding, as well as dynamic with environments.
+  const hasUnsafePredicateLookup = (path: NodePath): boolean =>
+    path.isWithStatement() || path.scope.getBinding("Math") !== undefined;
 
   // Preserve observable names without dropping the existing obfuscation
   // of unrelated private helper functions and class declarations.
@@ -2232,8 +2316,9 @@ export function transformJavaScriptWithBlaShield(
   >();
   traverse(ast, {
     enter(path) {
-      // No prologue, no guard, no frame seed inside export glue.
-      if (isCjsExportGlue(path.node)) path.skip();
+      // A with environment can capture Math and injected identifiers, even
+      // in functions called after execution has left the with statement.
+      if (isCjsExportGlue(path.node) || hasUnsafePredicateLookup(path)) path.skip();
     },
     Function(path) {
       if (!t.isBlockStatement(path.node.body)) return;
@@ -2593,7 +2678,7 @@ export function transformJavaScriptWithBlaShield(
 
   traverse(ast, {
     enter(path) {
-      if (isCjsExportGlue(path.node)) path.skip();
+      if (isCjsExportGlue(path.node) || hasUnsafePredicateLookup(path)) path.skip();
     },
     ImportDeclaration(path) {
       if (
@@ -2987,22 +3072,22 @@ export function transformJavaScriptWithBlaShield(
   for (const info of fnLocalSeedByBody.values()) {
     generatedNames.add(info.localSeedName);
   }
-  // Strip unreferenced Stage-2 encryptStrings marker aliases (`_blaS`, `_blaT`)
-  // before scope renaming so hardened artifacts retain zero marker dead-vars.
-  traverse(ast, {
-    VariableDeclarator(path) {
-      if (
-        t.isIdentifier(path.node.id) &&
-        (path.node.id.name === "_blaS" || path.node.id.name === "_blaT") &&
-        path.scope.path.isProgram()
-      ) {
-        const binding = path.scope.getBinding(path.node.id.name);
-        if (binding && binding.references === 0 && !exportedNameSet.has(path.node.id.name)) {
-          path.remove();
+  if (generatedMarkerAliases.length > 0) {
+    traverse(ast, {
+      Program(path) {
+        for (const alias of generatedMarkerAliases) {
+          if (!t.isIdentifier(alias.id)) continue;
+          const binding = path.scope.getOwnBinding(alias.id.name);
+          if (binding?.path.node === alias && binding.referencePaths.length === 0 && binding.constant &&
+              !bindingsVisibleToDirectEval.has(binding.identifier) &&
+              !withPinnedBindings.has(binding.identifier) &&
+              !scopeModelPinnedBindings.has(binding.identifier)) {
+            binding.path.remove();
+          }
         }
-      }
-    },
-  });
+      },
+    });
+  }
   // 2a. Plan `.name` preservation before any binding changes its name. The
   // in-file observation above only sees reads in *this* file; an exported
   // function, a class whose instances travel, or a handler stored in a table is
@@ -3069,8 +3154,9 @@ export function transformJavaScriptWithBlaShield(
         // …or when the name is readable before a restoration could run.
         if (namePinnedBindings.has(binding.identifier)) continue;
         // …or when Babel's scope model and the specification disagree about it.
-        if (scopeModelPinnedBindings.has(binding.identifier)) continue;
+        if (scopeModelPinnedBindings.has(binding.identifier) || withPinnedBindings.has(binding.identifier)) continue;
         if (RENAME_RESERVED.has(name)) continue;
+        if (nameRestorePlans.has(binding.identifier) && path.scope.getBinding("Math")) continue;
         if (exportedNameSet.has(name)) continue;
         if (binding.kind === "module") continue;
         // The classic JSX transform turns `<a />` into `React.createElement(…)`
@@ -3287,23 +3373,10 @@ export function transformJavaScriptWithBlaShield(
     for (const edit of edits) edit();
   }
 
-  // Injected predicates require the ambient Math.imul. Rename supported
-  // customer Math bindings, but fail closed for imported/exported or eval-
-  // visible bindings that cannot be renamed without breaking the programme.
-  traverse(ast, {
-    Scope(path) {
-      if (Object.hasOwn(path.scope.bindings, "Math")) {
-        throw new InvalidJavaScriptCarrierError(
-          "Cannot safely protect a lexical Math binding: injected predicates require the ambient Math.imul",
-        );
-      }
-    },
-  });
-
   // 2c. Transform / relocate comments so original Chinese/doc comments are not pristine
   if (ast.comments) {
     for (const c of ast.comments) {
-      if (/sourceMappingURL=/i.test(c.value)) continue;
+      if (SOURCE_DIRECTIVE_COMMENT_RE.test(c.value) || JSX_PRAGMA_COMMENT_RE.test(c.value)) continue;
       // Licence banners ship verbatim; everything else is scrambled below.
       if (isLegalNoticeComment(c)) continue;
       // Relocate + scramble: destroy verbatim original comments (incl. Chinese docs)
@@ -3931,28 +4004,16 @@ export function transformJavaScriptWithBlaShield(
         (decl.init.operator === "|" || decl.init.operator === "^") &&
         t.isConditionalExpression(decl.init.right)
       ) {
-        const checkParam = prng.identifier({ style: "camel", hint: "fn", entropy: 2 });
-        const everyCheck = t.callExpression(
-          t.memberExpression(
-            t.arrayExpression(meshFns.map((fn) => t.identifier(fn.id!.name))),
-            t.identifier("every"),
-          ),
-          [
-            t.arrowFunctionExpression(
-              [t.identifier(checkParam)],
-              t.binaryExpression(
-                "===",
-                t.unaryExpression("typeof", t.identifier(checkParam)),
-                t.stringLiteral("function"),
-              ),
-            ),
-          ],
-        );
-        decl.init.right.test = t.logicalExpression(
-          "&&",
-          everyCheck,
-          decl.init.right.test,
-        );
+        // Read each hoisted declaration directly. A removed function fails
+        // at startup, without allocating a mesh array or calling its methods.
+        for (const fn of meshFns) {
+          const present = t.binaryExpression(
+            ">=",
+            t.memberExpression(t.identifier(fn.id!.name), t.identifier("length")),
+            t.numericLiteral(0),
+          );
+          decl.init.right.test = t.logicalExpression("&&", present, decl.init.right.test);
+        }
       }
     }
   }
@@ -4079,11 +4140,13 @@ export function transformJavaScriptWithBlaShield(
     );
   }
 
-  // Strip any existing `//# sourceMappingURL=` comments from AST
-  if (ast.comments) {
-    ast.comments = ast.comments.filter(
-      (c) => !/sourceMappingURL=/i.test(c.value),
-    );
+  // Some JSX compilers only read pragmas in the leading comments.
+  const firstOutputNode = ast.program.directives[0] ?? ast.program.body[0];
+  if (firstOutputNode && jsxPragmas.length > 0) {
+    firstOutputNode.leadingComments = [
+      ...jsxPragmas,
+      ...(firstOutputNode.leadingComments ?? []).filter((comment) => !jsxPragmas.includes(comment)),
+    ];
   }
 
   // `module.exports = { label: "…" }`: a string or number the shield rewrote
@@ -4117,6 +4180,9 @@ export function transformJavaScriptWithBlaShield(
       retainLines: false,
       compact: false,
       comments: true,
+      // Babel prints the comments attached to nodes, even if they were
+      // removed from the file's standalone comments array.
+      shouldPrintComment: (comment) => !SOURCE_DIRECTIVE_COMMENT_RE.test(comment),
     },
     source,
   );

@@ -288,7 +288,7 @@ describe("integrity bindings: what is checked, and what is not", () => {
     expect(plain.selfSealRecommended).toBe(false);
   }, 240000);
 
-  it.skipIf(!hasPython)("a Python package checks its siblings, and a bytecode-only copy still starts", () => {
+  it.skipIf(!hasPython)("a Python package checks its siblings even from a bytecode-only copy", () => {
     const dir = tempDir("bla-int-py-");
     put(dir, "pyproject.toml", "[project]\nname = 'p'\n");
     put(dir, "app/__init__.py", "");
@@ -302,7 +302,6 @@ describe("integrity bindings: what is checked, and what is not", () => {
     const report = harden(dir, { intensity: "balanced", sidecarEntangle: true });
     expect(report.overallSuccess).toBe(true);
     expect(report.pythonSidecarEntry).toBe("app/main.py");
-    expect(report.nextSteps?.join("\n")).toMatch(/bytecode-only tree .* lets the program start without verifying anything/);
 
     const out = join(dir, ".bla-hardened");
     const py = (cwd: string) => {
@@ -317,8 +316,7 @@ describe("integrity bindings: what is checked, and what is not", () => {
     };
     expect(py(out)).toMatchObject({ status: 0, stdout: "result 5\n" });
 
-    // Shipped as .pyc only there are no sibling sources to read. That used to
-    // stop an untouched program with "integrity binding mismatch".
+    // A bytecode-only copy still requires the pinned sibling bytes.
     const bytecodeOnly = tempDir("bla-int-pyc-");
     cpSync(out, bytecodeOnly, { recursive: true });
     expect(
@@ -328,7 +326,9 @@ describe("integrity bindings: what is checked, and what is not", () => {
     for (const file of tree(join(bytecodeOnly, "app")).filter((f) => f.endsWith(".py"))) {
       rmSync(join(bytecodeOnly, "app", file));
     }
-    expect(py(bytecodeOnly)).toMatchObject({ status: 0, stdout: "result 5\n" });
+    const missingSources = py(bytecodeOnly);
+    expect(missingSources.status).not.toBe(0);
+    expect(missingSources.stderr).toMatch(/integrity binding mismatch/);
 
     // Loose sources are still checked: a changed sibling and a missing one both stop it.
     const util = join(out, "app", "util.py");

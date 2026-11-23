@@ -1,5 +1,32 @@
+import { parse } from "@babel/parser";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
+
+export function parseNodeRuntimeJavaScript(
+  source: string,
+  carrier?: "module" | "commonjs",
+  filename?: string,
+) {
+  return parse(source, {
+    sourceType: carrier ?? "unambiguous",
+    ...(carrier === undefined ? {
+      allowReturnOutsideFunction: true,
+      allowNewTargetOutsideFunction: true,
+    } : {}),
+    plugins: [
+      ...(/\.[cm]?tsx?$/i.test(filename ?? "") ? ["typescript" as const] : []),
+      ...(/\.[jt]sx$/i.test(filename ?? "") ? ["jsx" as const] : []),
+      "decorators-legacy",
+    ],
+  }).program;
+}
+
+/** Read an explicit Node package type from a disk or archive manifest. */
+export function readNodePackageType(manifest: string): "module" | "commonjs" | undefined {
+  const parsed: unknown = JSON.parse(manifest);
+  const type = parsed !== null && typeof parsed === "object" ? (parsed as { type?: unknown }).type : undefined;
+  return type === "module" || type === "commonjs" ? type : undefined;
+}
 
 /**
  * Node resolves the module system of a `.js` (and, with type stripping, `.ts`)
@@ -22,12 +49,7 @@ export function resolveNodePackageModuleType(
     const candidate = join(dir, "package.json");
     if (existsSync(candidate)) {
       try {
-        const parsed: unknown = JSON.parse(readFileSync(candidate, "utf8"));
-        const type =
-          parsed !== null && typeof parsed === "object"
-            ? (parsed as { type?: unknown }).type
-            : undefined;
-        return type === "module" ? "module" : "commonjs";
+        return readNodePackageType(readFileSync(candidate, "utf8")) ?? "commonjs";
       } catch {
         return undefined;
       }

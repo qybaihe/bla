@@ -46,7 +46,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
 import { isBuiltin } from "node:module";
 import {
   INTEGRITY_COVERAGE_SCHEMA,
@@ -92,97 +92,27 @@ import {
   plantSqliteSidecarSchemaComment,
   stripSqliteSidecarSchemaComment as dropSqliteSidecarSchemaView,
 } from "../formats/sqlite.js";
+import type { Program } from "@babel/types";
+import {
+  parseNodeRuntimeJavaScript,
+  readNodePackageType,
+  resolveNodePackageModuleType,
+} from "../javascript/node-runtime-carrier.js";
 import { ESM_PREHOIST_CAPTURE_DATA_URL } from "./self-seal.js";
 
-/**
- * Split a JavaScript source string into its leading prologue (optional shebang,
- * leading comments/whitespace, and any leading directive literals such as
- * `"use strict"`, `"use client"`, `"use server"` — with or without a trailing
- * newline) and the remaining body. Ensures prepended integrity preambles never
- * break strict mode, React Server Component directives, or preserved license
- * banners in either CJS or ESM.
- */
-function splitJsLeadingPrologue(source: string): {
-  readonly prologue: string;
-  readonly body: string;
-} {
-  let pos = 0;
-  const len = source.length;
-  if (source.startsWith("#!")) {
-    const nl = source.indexOf("\n");
-    pos = nl === -1 ? len : nl + 1;
+/** Insert after the shebang, leading comments, and all directive statements. */
+function prependJsPreamble(source: string, preamble: string, filename?: string): string {
+  const program = parseNodeRuntimeJavaScript(source, undefined, filename);
+  const bodyStart = program.body[0]?.start ?? source.length;
+  const directiveEnd = program.directives.at(-1)?.end;
+  let prologue = source.slice(0, bodyStart);
+  if (directiveEnd != null && source[directiveEnd - 1] !== ";") {
+    // A newline alone would let a leading IIFE continue the directive as
+    // a call expression. Terminate the literal before its trailing comments.
+    prologue = source.slice(0, directiveEnd) + ";" + source.slice(directiveEnd, bodyStart);
   }
-  const skipWsAndComments = (start: number): number => {
-    let i = start;
-    while (i < len) {
-      const ch = source[i]!;
-      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "\f" || ch === "\v" || ch === "\ufeff") {
-        i += 1;
-        continue;
-      }
-      if (ch === "/" && source[i + 1] === "/") {
-        const nl = source.indexOf("\n", i + 2);
-        i = nl === -1 ? len : nl + 1;
-        continue;
-      }
-      if (ch === "/" && source[i + 1] === "*") {
-        const end = source.indexOf("*/", i + 2);
-        if (end === -1) return len;
-        i = end + 2;
-        continue;
-      }
-      break;
-    }
-    return i;
-  };
-  let directiveEnd = pos;
-  let scan = skipWsAndComments(pos);
-  while (scan < len) {
-    const quote = source[scan];
-    if (quote !== '"' && quote !== "'") break;
-    let end = scan + 1;
-    let escaped = false;
-    while (end < len) {
-      const c = source[end]!;
-      if (escaped) {
-        escaped = false;
-      } else if (c === "\\") {
-        escaped = true;
-      } else if (c === "\n" || c === "\r") {
-        end = len + 1;
-        break;
-      } else if (c === quote) {
-        break;
-      }
-      end += 1;
-    }
-    if (end >= len || source[end] !== quote) break;
-    const literalValue = source.slice(scan + 1, end);
-    if (!/^use\s+[a-z0-9_-]+$/i.test(literalValue)) break;
-    let after = end + 1;
-    while (after < len && (source[after] === " " || source[after] === "\t")) after += 1;
-    if (source[after] === ";") {
-      after += 1;
-      while (after < len && (source[after] === " " || source[after] === "\t")) after += 1;
-      if (source[after] === "\r" && source[after + 1] === "\n") after += 2;
-      else if (source[after] === "\n" || source[after] === "\r") after += 1;
-    } else if (source[after] === "\r" && source[after + 1] === "\n") {
-      after += 2;
-    } else if (source[after] === "\n" || source[after] === "\r") {
-      after += 1;
-    } else if (after < len) {
-      // Not a standalone directive statement (e.g. `"use strict" + x`).
-      break;
-    }
-    directiveEnd = after;
-    scan = skipWsAndComments(after);
-  }
-  let prologue = source.slice(0, directiveEnd);
-  const body = source.slice(directiveEnd);
-  if (prologue.length > 0 && !prologue.endsWith("\n") && !prologue.endsWith("\r")) {
-    prologue += "\n";
-  }
-  return { prologue, body };
+  const newline = prologue && !/[\r\n]$/.test(prologue) ? "\n" : "";
+  return `${prologue}${newline}${preamble}\n${source.slice(bodyStart)}`;
 }
 
 export const SIDECAR_ENTANGLE_SCHEMA = "bla-sidecar-entangle/v1" as const;
@@ -735,7 +665,6 @@ export function bindSidecarEntanglement(
   });
   const entrySource =
     options.entrySource ?? new TextDecoder().decode(options.entryBytes);
-  const { prologue, body } = splitJsLeadingPrologue(entrySource);
   const boundPlan: SidecarEntanglePlan = {
     ...plan,
     status: "bound",
@@ -745,7 +674,7 @@ export function bindSidecarEntanglement(
     plan: boundPlan,
     digest,
     inject,
-    code: `${prologue}${inject.preamble}\n${body}`,
+    code: prependJsPreamble(entrySource, inject.preamble, options.entryPath),
   };
 }
 
@@ -831,7 +760,6 @@ export function generateSidecarPythonPreamble(
   const seedLiteral = JSON.stringify(seedTag);
   const expectedLiteral = JSON.stringify(expectedHex);
 
-  const allPySidecars = sidecars.length > 0 && sidecars.every((p) => /\.py$/i.test(p));
   const lines: string[] = [];
   lines.push(`import builtins as _sc_bi_${tag}`);
   lines.push(`import hashlib as _sc_hashlib_${tag}`);
@@ -853,16 +781,6 @@ export function generateSidecarPythonPreamble(
   lines.push(`            _sc_sha256_${tag} = None`);
   lines.push(`    if _sc_sha256_${tag} is None:`);
   lines.push(`        _sc_sha256_${tag} = _sc_hashlib_${tag}.sha256`);
-  // A bytecode-only tree (`python main.pyc`), a PyInstaller / cx_Freeze bundle
-  // (`sys.frozen`) or a Nuitka build (`__compiled__`) ships no sibling `.py`
-  // sources. Only waive when all missing sidecars are `.py` source files (never
-  // waive missing binary/model sidecars on a bare `.pyc` invocation).
-  lines.push(
-    allPySidecars
-      ? `    _sc_packaged_${tag} = _sc_bi_${tag}.bool(_sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("sys"), "frozen", False)) or ("__compiled__" in _sc_bi_${tag}.globals()) or _sc_bi_${tag}.str(_sc_bi_${tag}.globals().get("__file__", "")).endswith((".pyc", ".pyo"))`
-      : `    _sc_packaged_${tag} = _sc_bi_${tag}.bool(_sc_bi_${tag}.getattr(_sc_bi_${tag}.__import__("sys"), "frozen", False)) or ("__compiled__" in _sc_bi_${tag}.globals())`,
-  );
-  lines.push(`    _sc_missing_${tag} = 0`);
   lines.push(`    _sc_h_${tag} = _sc_sha256_${tag}()`);
   lines.push(`    _sc_entry_label_${tag} = ${entryLiteral}`);
   lines.push(`    _sc_h_${tag}.update(_sc_entry_label_${tag}.encode("utf-8"))`);
@@ -885,24 +803,16 @@ export function generateSidecarPythonPreamble(
     `                _sc_h_${tag}.update(__loader__.get_data(_sc_bi_${tag}.__import__("os").path.join(_sc_bi_${tag}.__import__("os").path.dirname(__file__), _sc_sp_${tag})))`,
   );
   lines.push(`            except _sc_bi_${tag}.Exception:`);
-  lines.push(`                _sc_missing_${tag} += 1`);
-  lines.push(`                _sc_h_${tag}.update(("missing:" + _sc_bi_${tag}.str(_sc_sp_${tag})).encode("utf-8"))`);
+  lines.push(`                raise _sc_bi_${tag}.RuntimeError("integrity binding mismatch") from None`);
   lines.push(`        _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`    _sc_h_${tag}.update(${seedLiteral}.encode("utf-8"))`);
   lines.push(`    _sc_hex_${tag} = _sc_h_${tag}.hexdigest()`);
   lines.push(`    ${bindingName} = _sc_bi_${tag}.int(_sc_hex_${tag}[:8], 16) & 0xffffffff`);
   lines.push(`    if _sc_hex_${tag} != _sc_expected_${tag}:`);
-  lines.push(
-    `        if _sc_packaged_${tag} and _sc_missing_${tag} == _sc_bi_${tag}.len(_sc_sidecars_${tag}):`,
-  );
-  lines.push(
-    `            ${bindingName} = _sc_bi_${tag}.int(_sc_expected_${tag}[:8], 16) & 0xffffffff`,
-  );
-  lines.push(`        else:`);
   if (softFold) {
-    lines.push(`            ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
+    lines.push(`        ${bindingName} = (${bindingName} ^ 0xffffffff) & 0xffffffff`);
   } else {
-    lines.push(`            raise _sc_bi_${tag}.RuntimeError("integrity binding mismatch")`);
+    lines.push(`        raise _sc_bi_${tag}.RuntimeError("integrity binding mismatch")`);
   }
   lines.push(`except _sc_bi_${tag}.Exception as _sc_err_${tag}:`);
   if (softFold) {
@@ -1365,9 +1275,8 @@ export interface SidecarWasmLoaderInjectOptions {
    */
   readonly baseDir?: string;
   /**
-   * Optional non-ABI export names belonging to the protected WASM module so
-   * stripping `bla.sidecar.v1` AND patching a code byte simultaneously still
-   * fails closed instead of falling through as an unrelated module.
+   * @deprecated Export names do not identify a protected module. Runtime
+   * enforcement uses the code identity and the binding section.
    */
   readonly protectedExportNames?: readonly string[];
 }
@@ -1434,11 +1343,6 @@ export function generateSidecarWasmLoaderSnippet(
     typeof options.baseDir === "string" && options.baseDir.length > 0
       ? JSON.stringify(options.baseDir)
       : "null";
-  const exportSigList = (options.protectedExportNames ?? []).filter(
-    (n) => typeof n === "string" && n.length > 0 && !n.startsWith("enclave_export_"),
-  );
-  const exportSigLiteral = JSON.stringify(exportSigList);
-
   const lines: string[] = [];
   if (isEsm) {
     lines.push(`import { createRequire as ${reqHelperAlias} } from "node:module";`);
@@ -1449,9 +1353,6 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`  var __ids = ${idsLiteral};`);
   lines.push(`  var __idSet = Object.create(null);`);
   lines.push(`  for (var __i = 0; __i < __ids.length; __i++) __idSet[__ids[__i]] = true;`);
-  lines.push(`  var __expSigs = ${exportSigLiteral};`);
-  lines.push(`  var __expSigSet = Object.create(null);`);
-  lines.push(`  for (var __j = 0; __j < __expSigs.length; __j++) __expSigSet[__expSigs[__j]] = true;`);
   lines.push(`  var __section = ${sectionLiteral};`);
   lines.push(`  var __schema = ${schemaLiteral};`);
   lines.push(`  var __marker = ${markerLiteral};`);
@@ -1484,12 +1385,8 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`    return null;`);
   lines.push(`  }`);
   lines.push(`  function __asU8(src) {`);
-  lines.push(`    if (!src) return null;`);
-  lines.push(`    if (src instanceof Uint8Array) return src;`);
-  lines.push(`    if (src instanceof ArrayBuffer) return new Uint8Array(src);`);
-  lines.push(`    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(src)) {`);
-  lines.push(`      return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);`);
-  lines.push(`    }`);
+  lines.push(`    if (_types.isArrayBuffer(src)) return new Uint8Array(src);`);
+  lines.push(`    if (_types.isTypedArray(src)) return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);`);
   lines.push(`    return null;`);
   lines.push(`  }`);
   lines.push(`  function __concat(chunks) {`);
@@ -1590,42 +1487,12 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`    if (hex === digest) return { ok: true, softFold: softFold };`);
   lines.push(`    return { ok: false, reason: softFold ? "integrity binding mismatch (soft-fold)" : "integrity binding mismatch", softFold: softFold };`);
   lines.push(`  }`);
-  lines.push(`  function __matchesProtectedExports(bytes) {`);
-  lines.push(`    if (__expSigs.length === 0) return false;`);
-  lines.push(`    if (bytes.length < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return false;`);
-  lines.push(`    var offset = 8;`);
-  lines.push(`    while (offset < bytes.length) {`);
-  lines.push(`      var sectionId = bytes[offset++];`);
-  lines.push(`      var header = __uleb(bytes, offset);`);
-  lines.push(`      if (!header) break;`);
-  lines.push(`      var sectionEnd = header.next + header.value;`);
-  lines.push(`      if (sectionEnd > bytes.length) break;`);
-  lines.push(`      if (sectionId === 7) {`);
-  lines.push(`        var payload = bytes.subarray(header.next, sectionEnd);`);
-  lines.push(`        var cnt = __uleb(payload, 0);`);
-  lines.push(`        if (!cnt) break;`);
-  lines.push(`        var p = cnt.next;`);
-  lines.push(`        for (var e = 0; e < cnt.value && p < payload.length; e++) {`);
-  lines.push(`          var nl = __uleb(payload, p);`);
-  lines.push(`          if (!nl || nl.next + nl.value >= payload.length) break;`);
-  lines.push(`          var name = new TextDecoder("utf-8").decode(payload.subarray(nl.next, nl.next + nl.value));`);
-  lines.push(`          if (__expSigSet[name]) return true;`);
-  lines.push(`          p = nl.next + nl.value + 1;`);
-  lines.push(`          var idx = __uleb(payload, p);`);
-  lines.push(`          if (!idx) break;`);
-  lines.push(`          p = idx.next;`);
-  lines.push(`        }`);
-  lines.push(`      }`);
-  lines.push(`      offset = sectionEnd;`);
-  lines.push(`    }`);
-  lines.push(`    return false;`);
-  lines.push(`  }`);
   lines.push(`  function __enforce(src) {`);
   lines.push(`    var bytes = __asU8(src);`);
   lines.push(`    if (!bytes) return;`);
   lines.push(`    var id = __identity(bytes);`);
   lines.push(`    if (!__idSet[id]) {`);
-  lines.push(`      if (__readNote(bytes) !== null || __matchesProtectedExports(bytes)) {`);
+  lines.push(`      if (__readNote(bytes) !== null) {`);
   lines.push(`        ${bindingName} = { ok: false, reason: "integrity binding mismatch" };`);
   lines.push(`        throw new Error("integrity binding mismatch");`);
   lines.push(`      }`);
@@ -1637,61 +1504,60 @@ export function generateSidecarWasmLoaderSnippet(
   lines.push(`    if (result.softFold) return;`);
   lines.push(`    throw new Error(result.reason || "integrity binding mismatch");`);
   lines.push(`  }`);
+  lines.push(`  var _types = ${isEsm ? "_req" : "require"}("node:util").types;`);
+  // A construct trap leaves all native properties and call semantics on
+  // Module intact, and Reflect.construct preserves a subclass's newTarget.
   lines.push(`  var _OrigModule = WebAssembly.Module;`);
-  lines.push(`  if (typeof _OrigModule === "function") {`);
-  lines.push(`    var _WrappedModule = function Module(bytes) {`);
-  lines.push(`      __enforce(bytes);`);
-  lines.push(`      return new _OrigModule(bytes);`);
-  lines.push(`    };`);
-  lines.push(`    _WrappedModule.prototype = _OrigModule.prototype;`);
-  lines.push(`    if (typeof _OrigModule.customSections === "function") _WrappedModule.customSections = _OrigModule.customSections.bind(_OrigModule);`);
-  lines.push(`    if (typeof _OrigModule.exports === "function") _WrappedModule.exports = _OrigModule.exports.bind(_OrigModule);`);
-  lines.push(`    if (typeof _OrigModule.imports === "function") _WrappedModule.imports = _OrigModule.imports.bind(_OrigModule);`);
-  lines.push(`    try { WebAssembly.Module = _WrappedModule; } catch (_eMod) {}`);
-  lines.push(`  }`);
+  lines.push(`  WebAssembly.Module = new Proxy(_OrigModule, {`);
+  lines.push(`    construct: function(target, args, newTarget) {`);
+  lines.push(`      __enforce(args[0]);`);
+  lines.push(`      return Reflect.construct(target, args, newTarget);`);
+  lines.push(`    }`);
+  lines.push(`  });`);
   lines.push(`  var _instantiate = WebAssembly.instantiate;`);
   lines.push(`  WebAssembly.instantiate = function(first, imports) {`);
-  lines.push(`    if (first instanceof _OrigModule) return _instantiate(first, imports);`);
-  lines.push(`    var bytes = __asU8(first);`);
+  lines.push(`    var args = arguments;`);
+  lines.push(`    if (first instanceof _OrigModule) return Reflect.apply(_instantiate, WebAssembly, args);`);
   lines.push(`    return Promise.resolve().then(function(){`);
-  lines.push(`      if (bytes) __enforce(bytes);`);
-  lines.push(`      return _instantiate(first, imports);`);
+  lines.push(`      __enforce(first);`);
+  lines.push(`      return Reflect.apply(_instantiate, WebAssembly, args);`);
   lines.push(`    });`);
   lines.push(`  };`);
   lines.push(`  var _compile = WebAssembly.compile;`);
   lines.push(`  WebAssembly.compile = function(source) {`);
-  lines.push(`    var bytes = __asU8(source);`);
+  lines.push(`    var args = arguments;`);
   lines.push(`    return Promise.resolve().then(function(){`);
-  lines.push(`      if (bytes) __enforce(bytes);`);
-  lines.push(`      return _compile(source);`);
+  lines.push(`      __enforce(source);`);
+  lines.push(`      return Reflect.apply(_compile, WebAssembly, args);`);
   lines.push(`    });`);
   lines.push(`  };`);
+  // Read a duplicate before instantiation can run any WASM start function.
+  // Pass the original Response (including status, headers, and body state)
+  // to the native API, which owns validation and its error types.
+  lines.push(`  function __checkedResponse(source) {`);
+  lines.push(`    return Promise.resolve(source).then(function(response) {`);
+  lines.push(`      if (typeof Response !== "function" || !(response instanceof Response) ||`);
+  lines.push(`          !response.ok || response.bodyUsed || response.headers.get("Content-Type") !== "application/wasm") return response;`);
+  lines.push(`      return Response.prototype.clone.call(response).arrayBuffer().then(function(bytes) {`);
+  lines.push(`        __enforce(bytes);`);
+  lines.push(`        return response;`);
+  lines.push(`      });`);
+  lines.push(`    });`);
+  lines.push(`  }`);
   lines.push(`  if (typeof WebAssembly.instantiateStreaming === "function") {`);
   lines.push(`    var _is = WebAssembly.instantiateStreaming;`);
   lines.push(`    WebAssembly.instantiateStreaming = function(source, imports) {`);
-  lines.push(`      return Promise.resolve(source).then(function(resolved) {`);
-  lines.push(`        if (resolved && typeof resolved.arrayBuffer === "function") {`);
-  lines.push(`          return resolved.arrayBuffer().then(function(ab) {`);
-  lines.push(`            __enforce(ab);`);
-  lines.push(`            return _instantiate(ab, imports);`);
-  lines.push(`          });`);
-  lines.push(`        }`);
-  lines.push(`        return _is(source, imports);`);
-  lines.push(`      });`);
+  lines.push(`      var args = Array.from(arguments);`);
+  lines.push(`      args[0] = __checkedResponse(source);`);
+  lines.push(`      return Reflect.apply(_is, WebAssembly, args);`);
   lines.push(`    };`);
   lines.push(`  }`);
   lines.push(`  if (typeof WebAssembly.compileStreaming === "function") {`);
   lines.push(`    var _cs = WebAssembly.compileStreaming;`);
   lines.push(`    WebAssembly.compileStreaming = function(source) {`);
-  lines.push(`      return Promise.resolve(source).then(function(resolved) {`);
-  lines.push(`        if (resolved && typeof resolved.arrayBuffer === "function") {`);
-  lines.push(`          return resolved.arrayBuffer().then(function(ab) {`);
-  lines.push(`            __enforce(ab);`);
-  lines.push(`            return _compile(ab);`);
-  lines.push(`          });`);
-  lines.push(`        }`);
-  lines.push(`        return _cs(source);`);
-  lines.push(`      });`);
+  lines.push(`      var args = Array.from(arguments);`);
+  lines.push(`      args[0] = __checkedResponse(source);`);
+  lines.push(`      return Reflect.apply(_cs, WebAssembly, args);`);
   lines.push(`    };`);
   lines.push(`  }`);
   lines.push(`  ${bindingName} = { ok: true, installed: true, marker: __marker };`);
@@ -1715,8 +1581,7 @@ export function prependWasmSidecarLoaderHook(
   preamble: string,
 ): string {
   if (entrySource.includes(WASM_SIDECAR_LOADER_MARKER)) return entrySource;
-  const { prologue, body } = splitJsLeadingPrologue(entrySource);
-  return `${prologue}${preamble}\n${body}`;
+  return prependJsPreamble(entrySource, preamble);
 }
 
 /**
@@ -1735,14 +1600,11 @@ export function entangleWasmLoaderWithSidecars(options: {
   readonly codeIdentityHex: string;
 } {
   const codeIdentityHex = computeWasmSidecarCodeIdentity(options.wasmBytes);
-  const wasmExports = inspectWasmBinary(Buffer.from(options.wasmBytes)).exportNames.filter(
-    (name) => !name.startsWith("enclave_export_") && name !== "memory" && name !== "_start",
-  );
   const inject = generateSidecarWasmLoaderSnippet({
     codeIdentityHex,
-    carrier: options.carrier,
+    carrier: options.carrier ??
+      (parseNodeRuntimeJavaScript(options.loaderSource).sourceType === "module" ? "module" : "commonjs"),
     baseDir: options.baseDir,
-    ...(wasmExports.length > 0 ? { protectedExportNames: wasmExports } : {}),
   });
   return {
     code: prependWasmSidecarLoaderHook(options.loaderSource, inject.preamble),
@@ -1761,10 +1623,7 @@ const WASM_INSTANTIATE_API_RE =
   /WebAssembly\s*\.\s*(instantiate(?:Streaming)?|compile(?:Streaming)?)\b/;
 
 const NODE_FS_LOADER_RE =
-  /require\s*\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)|\bfrom\s+["'](?:node:)?fs(?:\/promises)?["']|createRequire\s*\(|\bfs\.readFile(?:Sync)?\b/;
-
-/** Line-leading ESM `import` / `export` (or `import.meta`). */
-const ESM_STATIC_IMPORT_RE = /^\s*(?:import(?:\s+type)?\s|export\s)/m;
+  /\b(?:require|import)\s*\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)|\bfrom\s+["'](?:node:)?fs(?:\/promises)?["']|createRequire\s*\(|\bfs\.readFile(?:Sync)?\b/;
 
 /** Soft cap so we do not slurp huge bundled artifacts as loader candidates. */
 const MAX_WASM_LOADER_CANDIDATE_BYTES = 2 * 1024 * 1024;
@@ -1824,66 +1683,22 @@ function isNodeBuiltinModuleSpecifier(specifier: string): boolean {
  * a file whose import graph is unclear.
  */
 export function listStaticEsmModuleSpecifiers(source: string): string[] | null {
+  try {
+    return collectStaticEsmModuleSpecifiers(parseNodeRuntimeJavaScript(source));
+  } catch {
+    return null;
+  }
+}
+
+function collectStaticEsmModuleSpecifiers(program: Program): string[] {
   const specs: string[] = [];
-  const lines = source.split(/\r?\n/);
-  let pending = false;
-  for (const rawLine of lines) {
-    const trimmed = rawLine.replace(/(^|[^:])\/\/.*$/, "$1").trim();
-    if (trimmed.length === 0) continue;
-    if (pending) {
-      const from = trimmed.match(/\bfrom\s*["']([^"']+)["']/);
-      if (from) {
-        specs.push(from[1]!);
-        pending = false;
-        continue;
-      }
-      // Still inside `import { ... }` / a multiline export list.
-      if (
-        /^[{},*\w$\s]+$/.test(trimmed) ||
-        trimmed.endsWith(",") ||
-        trimmed === "{" ||
-        trimmed === "}"
-      ) {
-        continue;
-      }
-      return null;
-    }
-    if (/^import\s*\(/.test(trimmed) || /^import\s*\./.test(trimmed)) continue;
-    const isImport = /^(?:import(?:\s+type)?)\b/.test(trimmed);
-    const isExport = /^export\b/.test(trimmed);
-    if (!isImport && !isExport) continue;
-    if (
-      isExport &&
-      !/\bfrom\s*["']/.test(trimmed) &&
-      /^export\s+(?:default\s+|(?:async\s+)?function\b|class\b|const\b|let\b|var\b|enum\b|type\b|interface\b|\{)/u.test(
-        trimmed,
-      )
-    ) {
-      // `export { x };` is a local export. `export {` without `from` on this
-      // line may still be `export { x } from "..."` split across lines.
-      if (/^export\s+(?:\*|\{)/.test(trimmed) && !/\bfrom\s*["']/.test(trimmed)) {
-        if (/^export\s+\{[^}]*\}\s*;?\s*$/.test(trimmed)) continue;
-        pending = true;
-        continue;
-      }
-      continue;
-    }
-    const from = trimmed.match(/\bfrom\s*["']([^"']+)["']/);
-    const bare = trimmed.match(/^import\s*["']([^"']+)["']/);
-    if (from) {
-      specs.push(from[1]!);
-      continue;
-    }
-    if (bare) {
-      specs.push(bare[1]!);
-      continue;
-    }
-    if (isImport || /^export\s+(?:\*|\{)/.test(trimmed)) {
-      pending = true;
-      continue;
+  for (const statement of program.body) {
+    if ((statement.type === "ImportDeclaration" ||
+         statement.type === "ExportNamedDeclaration" ||
+         statement.type === "ExportAllDeclaration") && statement.source) {
+      specs.push(statement.source.value);
     }
   }
-  if (pending) return null;
   return specs;
 }
 
@@ -1908,18 +1723,20 @@ export function detectWasmJsLoaderCarrier(
   source: string,
 ): WasmJsLoaderCarrier | null {
   const lower = basename(filename).toLowerCase();
-  const hasEsmSyntax =
-    ESM_STATIC_IMPORT_RE.test(source) || /\bimport\.meta\b/.test(source);
-  if (lower.endsWith(".cjs")) {
-    return hasEsmSyntax ? null : "commonjs";
+  const explicitCarrier = lower.endsWith(".cjs")
+    ? "commonjs"
+    : lower.endsWith(".mjs") ? "module" :
+      isAbsolute(filename) ? resolveNodePackageModuleType(filename) : undefined;
+  try {
+    const program = parseNodeRuntimeJavaScript(source, explicitCarrier);
+    if (program.sourceType !== "module") return "commonjs";
+    if (program.body.some((statement) => statement.type === "ReturnStatement")) return null;
+    return collectStaticEsmModuleSpecifiers(program).every(isNodeBuiltinModuleSpecifier)
+      ? "module"
+      : null;
+  } catch {
+    return null;
   }
-  if (lower.endsWith(".mjs")) {
-    return esmStaticImportsAreNodeBuiltinsOnly(source) ? "module" : null;
-  }
-  if (hasEsmSyntax) {
-    return esmStaticImportsAreNodeBuiltinsOnly(source) ? "module" : null;
-  }
-  return "commonjs";
 }
 
 /**
@@ -2795,6 +2612,8 @@ export interface SidecarAsarMainJsInjectOptions {
   readonly entryPath: string;
   /** In-archive relative path of the main JS member that will host the preamble. */
   readonly mainRelativePath: string;
+  /** Runtime carrier resolved from the archive's package context. */
+  readonly carrier?: SidecarJsCarrier;
   /** Asar-root-relative sidecar member paths (digest labels). */
   readonly sidecarPaths: readonly string[];
   readonly seedTag?: string;
@@ -2846,15 +2665,22 @@ export function generateSidecarAsarMainJsPreamble(
   const readsLiteral = JSON.stringify(readPaths);
   const entryLiteral = JSON.stringify(options.entryPath);
   const seedLiteral = JSON.stringify(seedTag);
+  const isEsm = (options.carrier ?? (/\.mjs$/i.test(mainRelativePath) ? "module" : "commonjs")) === "module";
+  const reqAlias = `_resolveAsarRequire_${expectedHex.slice(0, 8)}`;
 
   const lines: string[] = [];
+  if (isEsm) lines.push(`import { createRequire as ${reqAlias} } from "node:module";`);
   lines.push(`(function(){`);
   lines.push(`  var __expected = ${JSON.stringify(expectedHex)};`);
   lines.push(`  var ${bindingName} = 0;`);
   lines.push(`  try {`);
-  lines.push(`    var _c = require("node:crypto");`);
-  lines.push(`    var _fs = require("node:fs");`);
-  lines.push(`    var _path = require("node:path");`);
+  lines.push(`    var _req = ${isEsm ? `${reqAlias}(import.meta.url)` : "require"};`);
+  lines.push(`    var _c = _req("node:crypto");`);
+  lines.push(`    var _fs = _req("node:fs");`);
+  lines.push(`    var _path = _req("node:path");`);
+  lines.push(isEsm
+    ? `    var baseDir = _path.dirname(_req("node:url").fileURLToPath(import.meta.url));`
+    : `    var baseDir = (typeof __dirname === "string" ? __dirname : null);`);
   lines.push(`    var h = _c.createHash("sha256");`);
   lines.push(`    var entryLabel = ${entryLiteral};`);
   lines.push(`    h.update(entryLabel);`);
@@ -2865,7 +2691,7 @@ export function generateSidecarAsarMainJsPreamble(
   lines.push(`      var sp = sidecars[i];`);
   lines.push(`      var spAbs = reads[i];`);
   lines.push(
-    `      if (!_path.isAbsolute(spAbs) && typeof __dirname === "string") spAbs = _path.join(__dirname, spAbs);`,
+    `      if (!_path.isAbsolute(spAbs) && typeof baseDir === "string") spAbs = _path.join(baseDir, spAbs);`,
   );
   lines.push(`      h.update(sp);`);
   lines.push(`      h.update(String.fromCharCode(0));`);
@@ -2922,8 +2748,30 @@ export function prependAsarMainJsPreamble(
   preamble: string,
 ): string {
   if (entrySource.includes(ASAR_SIDECAR_MAIN_JS_MARKER)) return entrySource;
-  const { prologue, body } = splitJsLeadingPrologue(entrySource);
-  return `${prologue}${preamble}\n${body}`;
+  return prependJsPreamble(entrySource, preamble);
+}
+
+function resolveAsarMainJsCarrier(
+  main: string,
+  members: ReadonlyMap<string, Buffer>,
+): "module" | "commonjs" {
+  if (/\.mjs$/i.test(main)) return "module";
+  if (/\.cjs$/i.test(main)) return "commonjs";
+  for (let dir = posix.dirname(main); ; dir = posix.dirname(dir)) {
+    const manifest = members.get(posix.join(dir, "package.json"));
+    if (manifest !== undefined) {
+      try {
+        const type = readNodePackageType(manifest.toString("utf8"));
+        if (type !== undefined) return type;
+      } catch {
+        // Leave an invalid package manifest to the runtime.
+      }
+      break;
+    }
+    if (dir === "." || dir === "/") break;
+  }
+  const source = members.get(main)?.toString("utf8") ?? "";
+  return parseNodeRuntimeJavaScript(source).sourceType === "module" ? "module" : "commonjs";
 }
 
 /**
@@ -2952,9 +2800,13 @@ export function entangleAsarMainJsWithSidecars(options: {
 } | null {
   const mainRelativePath = selectAsarMainJsMember(options.members);
   if (!mainRelativePath) return null;
+  const membersByPath = new Map(options.members.map((member) => [
+    member.relativePath.replaceAll("\\", "/"), member.content,
+  ]));
   const inject = generateSidecarAsarMainJsPreamble({
     entryPath: options.entryPath,
     mainRelativePath,
+    carrier: resolveAsarMainJsCarrier(mainRelativePath, membersByPath),
     sidecarPaths: options.sidecarPaths,
     seedTag: options.seedTag,
     expectedHex: options.expectedHex,
@@ -3378,9 +3230,7 @@ function normalizePycCodeIdentity(hex: string): string {
  * Emit a self-contained host Python snippet that, at import time of the
  * loader it is inserted into, reads the sibling `.pyc`, and when the
  * stripped-body identity matches, verifies the TYPE_ASCII marshal note and
- * sibling sidecar digest. Strip or sibling delete fails closed. Unrelated
- * `.pyc` files (identity mismatch) and a missing file pass through so a
- * later import can fail naturally or recompile from source.
+ * sibling sidecar digest. Missing targets or siblings and mismatches fail closed.
  *
  * The hook does not rewrite the `.pyc` (marshal layout, `co_filename` /
  * `co_name`, PEP 552 hash header, and `co_consts` weaves stay untouched).
@@ -3499,7 +3349,6 @@ export function generateSidecarPycLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
-  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -3508,7 +3357,6 @@ export function generateSidecarPycLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
-  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(
     `        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`,
   );
@@ -3545,8 +3393,7 @@ export function generateSidecarPycLoaderSnippet(
   );
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
-  lines.push(`    if _sc_seen_${tag}:`);
-  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`    raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);
@@ -4229,9 +4076,8 @@ function normalizeGgufCodeIdentity(hex: string): string {
  * Emit a self-contained host Python snippet that, at import time of the
  * loader it is inserted into, reads the sibling `.gguf`, and when the
  * stripped-body identity matches, verifies the `bla.sidecar.v1` STRING
- * metadata note and sibling sidecar digest. Strip or sibling delete fails
- * closed. Unrelated GGUF files (identity mismatch) and a missing file pass
- * through so a later open can fail naturally.
+ * metadata note and sibling sidecar digest. Missing targets or siblings and
+ * mismatches fail closed.
  *
  * The hook does not rewrite the `.gguf` (tensor infos, relative tensor
  * offsets, and tensor bytes stay untouched; the existing alignment-safe
@@ -4437,7 +4283,6 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
-  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -4446,7 +4291,6 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
-  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
   lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
   lines.push(`            continue`);
@@ -4477,8 +4321,7 @@ export function generateSidecarGgufLoaderSnippet(
   lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
-  lines.push(`    if _sc_seen_${tag}:`);
-  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`    raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);
@@ -5080,9 +4923,8 @@ function normalizeSafetensorsCodeIdentity(hex: string): string {
  * Emit a self-contained host Python snippet that, at import time of the
  * loader it is inserted into, reads the sibling `.safetensors`, and when
  * the stripped-body identity matches, verifies the `bla.sidecar.v1`
- * `__metadata__` note and sibling sidecar digest. Strip or sibling
- * delete fails closed. Unrelated Safetensors files (identity mismatch)
- * and a missing file pass through so a later open can fail naturally.
+ * `__metadata__` note and sibling sidecar digest. Missing targets or siblings
+ * and mismatches fail closed.
  *
  * The hook does not rewrite the `.safetensors` (header JSON tensor
  * descriptors, `data_offsets`, dtype, and tensor bytes stay untouched;
@@ -5204,7 +5046,6 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
-  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -5213,7 +5054,6 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
-  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(`        _sc_ident_${tag} = _sc_hashlib_${tag}.sha256(_sc_strip_${tag}(_sc_raw_${tag})).hexdigest()`);
   lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
   lines.push(`            continue`);
@@ -5244,8 +5084,7 @@ export function generateSidecarSafetensorsLoaderSnippet(
   lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
-  lines.push(`    if _sc_seen_${tag}:`);
-  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`    raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);
@@ -6157,9 +5996,8 @@ function normalizeSqliteCodeIdentity(hex: string): string {
  * Emit a self-contained host Python snippet that, at import time of the
  * loader it is inserted into, opens the sibling SQLite database read-only
  * and, when the logical identity matches, verifies the `bla.sidecar.v1`
- * schema-comment view and sibling sidecar digest. Strip or sibling delete
- * fails closed. A missing file passes through so a later open can fail
- * naturally.
+ * schema-comment view and sibling sidecar digest. Missing targets or siblings
+ * and mismatches fail closed.
  *
  * The hook does not rewrite the database (user tables, rows, query
  * results, WAL/FK, and application_id / user_version stay unchanged; the
@@ -6416,7 +6254,6 @@ export function generateSidecarSqliteLoaderSnippet(
   lines.push(`            _sc_h_${tag}.update(b"\\x00")`);
   lines.push(`        _sc_h_${tag}.update(_sc_seed_${tag}.encode("utf-8"))`);
   lines.push(`        return _sc_h_${tag}.hexdigest()`);
-  lines.push(`    _sc_seen_${tag} = False`);
   lines.push(`    for _sc_rel_${tag} in _sc_paths_${tag}:`);
   lines.push(`        _sc_path_${tag} = _sc_pathlib_${tag}.Path(_sc_rel_${tag})`);
   lines.push(`        if not _sc_path_${tag}.is_absolute():`);
@@ -6425,7 +6262,6 @@ export function generateSidecarSqliteLoaderSnippet(
   lines.push(`            _sc_raw_${tag} = _sc_path_${tag}.read_bytes()`);
   lines.push(`        except Exception:`);
   lines.push(`            continue`);
-  lines.push(`        _sc_seen_${tag} = True`);
   lines.push(`        _sc_ident_${tag} = _sc_identity_${tag}(_sc_raw_${tag})`);
   lines.push(`        if _sc_ident_${tag} not in _sc_idset_${tag}:`);
   lines.push(`            continue`);
@@ -6456,8 +6292,7 @@ export function generateSidecarSqliteLoaderSnippet(
   lines.push(`        if _sc_digest_${tag}(_sc_entry_${tag}, _sc_parts_${tag}, _sc_seed_${tag}) != str(_sc_note_${tag}.get("digest")).lower():`);
   lines.push(`            raise RuntimeError("integrity binding mismatch")`);
   lines.push(`        return`);
-  lines.push(`    if _sc_seen_${tag}:`);
-  lines.push(`        raise RuntimeError("integrity binding mismatch")`);
+  lines.push(`    raise RuntimeError("integrity binding mismatch")`);
   lines.push(`try:`);
   lines.push(`    ${bindingName}()`);
   lines.push(`finally:`);

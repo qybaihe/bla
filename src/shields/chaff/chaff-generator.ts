@@ -74,12 +74,13 @@ function sampleAlignedAddressHex(
   end: bigint,
   align: bigint,
   hexWidth: number,
-): string {
+): string | undefined {
   const safeAlign = align > 0n ? align : 16n;
-  const span = end > start ? end - start : 0x1000n;
-  const slots = Number(span / safeAlign);
-  const pickedSlot = slots > 1 ? BigInt(prng.nextInt(0, Math.min(slots - 1, 0x7fff_ffff))) : 0n;
-  const addr = start + pickedSlot * safeAlign;
+  const first = start + ((safeAlign - start % safeAlign) % safeAlign);
+  if (first >= end) return undefined;
+  const lastSlot = (end - 1n - first) / safeAlign;
+  const pickedSlot = BigInt(prng.nextInt(0, Number(lastSlot > 0x7fff_ffffn ? 0x7fff_ffffn : lastSlot)));
+  const addr = first + pickedSlot * safeAlign;
   return addr.toString(16).padStart(hexWidth, "0");
 }
 
@@ -143,7 +144,12 @@ export function generateChaffPayloads(
         const dataAddr = addrCtx
           ? sampleAlignedAddressHex(prng, addrCtx.dataStart, addrCtx.dataEnd, 8n, width)
           : prng.hex(8);
-        rawText = `SYMBOL_OFFSET_MANIFEST_${hexId.toUpperCase()}: .text.enclave_entry=0x${codeAddr} (hardware_sealed); .rodata.abi_shim=0x${rodataAddr} (rx_verified); .data.dispatch_vtable=0x${dataAddr} (rw_sealed)`;
+        const entries = [
+          codeAddr === undefined ? undefined : `.text.enclave_entry=0x${codeAddr} (hardware_sealed)`,
+          rodataAddr === undefined ? undefined : `.rodata.abi_shim=0x${rodataAddr} (rx_verified)`,
+          dataAddr === undefined ? undefined : `.data.dispatch_vtable=0x${dataAddr} (rw_sealed)`,
+        ].filter((entry) => entry !== undefined);
+        rawText = `SYMBOL_OFFSET_MANIFEST_${hexId.toUpperCase()}:${entries.length > 0 ? ` ${entries.join("; ")}` : ""}`;
         break;
       }
       case "state-machine-spec":

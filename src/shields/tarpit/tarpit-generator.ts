@@ -105,7 +105,7 @@ export function generateJsTarpitAndBudgetBreaker(
   const lines: string[] = [];
   const stateVar = prng.identifier({ style: "privateCamel", hint: "runtimeState", entropy: 4 });
   lines.push(`/* runtime attestation boundary */`);
-  lines.push(`const ${stateVar} = (typeof process !== "undefined" && process.pid ? (process.pid & 0xff) : 42) | 1;`);
+  lines.push(`const ${stateVar} = 0x${prng.derive("js-tarpit-state").hex(2)} | 1;`);
 
   // 1. REA Semantic Budget Breaker #1: `alias-selections` + `returned-reference-widening`
   // Directly modeled on REA's `javascriptAliasSelectionBudget.ts` and `javascriptReturnedReferenceCoverage.test.ts`!
@@ -215,16 +215,12 @@ export function generateJsTarpitAndBudgetBreaker(
   };
 }
 
-/**
- * Escape text for a Python triple-quoted docstring. A raw `"""` (or a trailing
- * backslash) would terminate the literal early and emit invalid Python into the
- * protected artifact. Newlines are folded so the docstring stays a single line.
- */
-function escapePythonDocstring(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/"""/g, '\\"\\"\\"')
-    .replace(/[\r\n]+/g, " ");
+function pythonStringLiteral(text: string): string {
+  // JSON's common escapes also work in Python. Escape DEL and C1 controls
+  // so none of them appear literally in the emitted source.
+  return JSON.stringify(text).replace(/[\x7f-\x9f\u2028\u2029]/g, (ch) =>
+    `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 /**
@@ -275,10 +271,10 @@ export function generatePythonTarpit(
 
   lines.push(`# runtime attestation boundary`);
   lines.push(`${stateVar} = 0x${prng.hex(6)} | 1`);
-  lines.push(`${slotVar}: dict = {"epoch": 0, "peer": 0, "tag": 0}`);
+  lines.push(`${slotVar} = {"epoch": 0, "peer": 0, "tag": 0}`);
   lines.push(`${manifestsVar} = (`);
   for (const payload of chaffPayloads) {
-    lines.push(`    ${JSON.stringify(payload.rawText)},`);
+    lines.push(`    ${pythonStringLiteral(payload.rawText)},`);
   }
   lines.push(`)`);
   lines.push(``);
@@ -297,14 +293,12 @@ export function generatePythonTarpit(
     let mix = (prng.nextUint32() | 1) >>> 0;
     if (mix === 0x9e3779b9 || mix === 2654435769) mix ^= 2;
 
-    const docstring = escapePythonDocstring(
-      chaffPayloads[chaffIdx]?.rawText ??
-        "Compatibility shim retained for ABI alignment.",
-    );
+    const manifest = chaffPayloads[chaffIdx]?.rawText ?? "Compatibility shim retained for ABI alignment.";
+    const docstring = pythonStringLiteral(manifest.replace(/[\r\n]+/g, " "));
 
     lines.push(`def ${fnName}(seed: int = 0, depth: int = 0) -> int:`);
-    lines.push(`    """${docstring}"""`);
-    lines.push(`    tag = ${manifestsVar}[${chaffIdx} % len(${manifestsVar})]`);
+    lines.push(`    ${docstring}`);
+    lines.push(`    tag = ${manifestsVar}[${chaffIdx}] if ${manifestsVar} else ""`);
     lines.push(`    acc = (seed ^ ${k1} ^ ${stateVar}) & 0xFFFFFFFF`);
 
     if (bodyVariant === 0) {

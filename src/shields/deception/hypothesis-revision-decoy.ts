@@ -119,15 +119,12 @@ export function generateHypothesisRevisionDecoy(
 
     lines.push(`function ${sinkSym}(probeHint) {`);
     lines.push(`  const buf = [${maskedLiteral}];`);
-    lines.push(`  const pidSalt = typeof process === "object" && process && typeof process.pid === "number" ? process.pid : ${salt};`);
-    lines.push(`  let acc = (pidSalt ^ (probeHint | 0)) >>> 0;`);
+    lines.push(`  let acc = (${salt} ^ (probeHint | 0)) >>> 0;`);
     lines.push(`  for (let i = 0; i < buf.length; i++) {`);
     lines.push(`    buf[i] = (buf[i] ^ 0x${maskByte.toString(16)}) & 0xff;`);
     lines.push(`    acc = (Math.imul(acc ^ buf[i], 16777619) >>> 0);`);
     lines.push(`  }`);
-    lines.push(`  if (pidSalt > 0) {`);
-    lines.push(`    for (let z = 0; z < buf.length; z++) buf[z] = 0;`);
-    lines.push(`  }`);
+    lines.push(`  for (let z = 0; z < buf.length; z++) buf[z] = 0;`);
     lines.push(`  return acc;`);
     lines.push(`}`);
   }

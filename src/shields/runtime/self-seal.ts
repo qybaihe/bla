@@ -33,6 +33,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isValidIdentifier } from "@babel/types";
 import type { SeededPrng } from "../../core/prng.js";
 import {
   buildInterleavedCoverageMatrix,
@@ -242,7 +243,7 @@ function emitMeasureFunction(
   const lines: string[] = [];
   const useLowLevelFdRead = siteIndex % 2 === 1 && !esmCapReadIdent;
   lines.push(`function ${helperName}() {`);
-  lines.push(`  var digest = 0;`);
+  lines.push(hardFailOnSiblingMismatch ? `  var digest;` : `  var digest = 0;`);
   lines.push(`  var _tampered = false;`);
   lines.push(`  try {`);
   if (esmRequireHelperIdent && esmMetaUrlIdent) {
@@ -270,12 +271,10 @@ function emitMeasureFunction(
     lines.push(
       `    var selfPath = (typeof __filename === "string" ? __filename : null);`,
     );
-    lines.push(
-      `    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`,
-    );
-    lines.push(
-      `    var baseDir = (typeof __dirname === "string" ? __dirname : null);`,
-    );
+    if (!hardFailOnSiblingMismatch) {
+      lines.push(`    if (!selfPath && typeof __dirname === "string") selfPath = _path.join(__dirname, "index.js");`);
+    }
+    lines.push(`    var baseDir = (typeof __dirname === "string" ? __dirname : selfPath ? _path.dirname(selfPath) : null);`);
   }
   if (esmCapReadIdent) {
     lines.push(`    var _readRaw = function(p) { return ${esmCapReadIdent}(p); };`);
@@ -295,15 +294,23 @@ function emitMeasureFunction(
     lines.push(`          if (n <= 0) break;`);
     lines.push(`          off += n;`);
     lines.push(`        }`);
-    lines.push(`        return off === sz ? ${bufVar} : ${bufVar}.subarray(0, off);`);
+    if (hardFailOnSiblingMismatch) {
+      lines.push(`        if (off !== sz) throw new Error("integrity check failed");`);
+      lines.push(`        return ${bufVar};`);
+    } else {
+      lines.push(`        return off === sz ? ${bufVar} : ${bufVar}.subarray(0, off);`);
+    }
     lines.push(`      } finally { _fs.closeSync(${fdVar}); }`);
     lines.push(`    };`);
   }
   lines.push(`    h.update(${JSON.stringify(siteSalt)});`);
   lines.push(`    var selfBuf = null;`);
-  lines.push(
-    `    if (selfPath) { try { selfBuf = _readRaw(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`,
-  );
+  if (hardFailOnSiblingMismatch) {
+    lines.push(`    if (!selfPath) throw new Error("integrity check failed");`);
+    lines.push(`    selfBuf = _readRaw(selfPath); h.update(selfBuf);`);
+  } else {
+    lines.push(`    if (selfPath) { try { selfBuf = _readRaw(selfPath); h.update(selfBuf); } catch (_e) { selfBuf = null; } }`);
+  }
   if (selfDigestCheck) {
     // Canonical self-digest: zero every occurrence of the embedded literal, hash,
     // compare. Only the exact build-time unfinalized placeholder soft-skips;
@@ -337,7 +344,7 @@ function emitMeasureFunction(
   lines.push(`    var siblings = ${siblingsLiteral};`);
   lines.push(`    var expected = ${expectedLiteral};`);
   lines.push(`    for (var i = 0; i < siblings.length; i++) {`);
-  lines.push(`      try {`);
+  if (!hardFailOnSiblingMismatch) lines.push(`      try {`);
   lines.push(`        var spKey = siblings[i];`);
   lines.push(`        var sp = spKey;`);
   lines.push(
@@ -356,21 +363,13 @@ function emitMeasureFunction(
   lines.push(`        }`);
   lines.push(`        h.update(sp);`);
   lines.push(`        h.update(sibBuf);`);
-  lines.push(`      } catch (_e2) {`);
-  lines.push(
-    `        if (_e2 && _e2.message === "integrity check failed") throw _e2;`,
-  );
-  if (hardFailOnSiblingMismatch) {
-    // A missing sibling is a failed integrity invariant, not a benign state:
-    // otherwise deleting the anchor file silently downgrades the hard-fail check.
-    lines.push(
-      `        if (expected[String(siblings[i])]) throw new Error("integrity check failed");`,
-    );
-  } else {
+  if (!hardFailOnSiblingMismatch) {
+    lines.push(`      } catch (_e2) {`);
+    lines.push(`        if (_e2 && _e2.message === "integrity check failed") throw _e2;`);
     lines.push(`        if (expected[String(siblings[i])]) _tampered = true;`);
+    lines.push(`        h.update("missing:" + String(siblings[i]));`);
+    lines.push(`      }`);
   }
-  lines.push(`        h.update("missing:" + String(siblings[i]));`);
-  lines.push(`      }`);
   lines.push(`    }`);
   if (envFingerprint) {
     lines.push(`    var envNote = "";`);
@@ -388,7 +387,9 @@ function emitMeasureFunction(
     lines.push(`      if (!_nativeToStr || !_nativeFs) _tampered = true;`);
     lines.push(`      envNote += (_nativeToStr && _nativeFs ? "N" : "T");`);
     lines.push(`      try { var _ins = _req("node:inspector"); if (_ins && typeof _ins.url === "function" && _ins.url()) { envNote += "I"; _tampered = true; } } catch (_ei) {}`);
-    lines.push(`    } catch (_e3) { envNote += "E"; }`);
+    lines.push(hardFailOnSiblingMismatch
+      ? `    } catch (_e3) { throw _e3; }`
+      : `    } catch (_e3) { envNote += "E"; }`);
     lines.push(`    h.update(envNote);`);
   }
   if (hardFailOnSiblingMismatch) {
@@ -411,10 +412,12 @@ function emitMeasureFunction(
     lines.push(`    if (_tampered) ${softTamperFlag} = true;`);
   }
   lines.push(`  } catch (_e4) {`);
-  lines.push(
-    `    if (_e4 && _e4.message === "integrity check failed") throw _e4;`,
-  );
-  lines.push(`    digest = 0;`);
+  if (hardFailOnSiblingMismatch) {
+    lines.push(`    throw new Error("integrity check failed");`);
+  } else {
+    lines.push(`    if (_e4 && _e4.message === "integrity check failed") throw _e4;`);
+    lines.push(`    digest = 0;`);
+  }
   lines.push(`  }`);
   lines.push(`  return digest >>> 0;`);
   lines.push(`}`);
@@ -435,8 +438,16 @@ export function generateSelfSealSnippet(
   // The name is interpolated verbatim into `var <name> = …` declarations, so
   // anything that is not a plain identifier would break or inject into the
   // generated preamble.
-  if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(bindingName)) {
-    throw new Error("self-seal bindingName must be a valid JavaScript identifier");
+  for (const [option, name] of Object.entries({
+    bindingName,
+    esmRequireHelperIdent: options.esmRequireHelperIdent,
+    esmMetaUrlIdent: options.esmMetaUrlIdent,
+    esmCapReadIdent: options.esmCapReadIdent,
+    esmCapHashIdent: options.esmCapHashIdent,
+  })) {
+    if (name !== undefined && (!isValidIdentifier(name) || name === "eval" || name === "arguments")) {
+      throw new Error(`self-seal ${option} must be a valid JavaScript identifier`);
+    }
   }
   const envFingerprint = options.envFingerprint !== false;
   const siblings = (options.siblingPaths ?? []).filter(
