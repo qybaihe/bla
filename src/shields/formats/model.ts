@@ -1,9 +1,19 @@
-import { parseGgufLayout, rebuildGguf } from "./gguf-layout.js";
+import {
+  GGUF_TYPE_ARRAY,
+  GGUF_TYPE_STRING,
+  GGUF_TYPE_UINT32,
+  encodeGgufString,
+  encodeGgufStringKv,
+  parseGgufLayout,
+  rebuildGguf,
+} from "./gguf-layout.js";
 import { REA_INTERNAL_LIMITS } from "../../identity.js";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
+
+const GGUF_DESCRIPTION_MARKER = Buffer.from("[BLA-MODEL-SHIELD]");
 
 export interface ModelInspectionSummary {
   readonly validModel: boolean;
@@ -147,15 +157,6 @@ export function inspectModelBuffer(bytes: Buffer): ModelInspectionSummary {
     bytes[2] === 0x55 &&
     bytes[3] === 0x46
   ) {
-    const textLatin1 = bytes.toString("latin1");
-    const blaProtected =
-      textLatin1.includes("enclave.delegation") ||
-      textLatin1.includes("BLA-MODEL-SHIELD") ||
-      textLatin1.includes("bla.sidecar.v1");
-    const exceedsReaNestingLimit = textLatin1.includes("enclave.nesting.breaker");
-    // Four magic bytes are not a model. Walk the container with the same parser
-    // the protection path uses, so a header whose counts do not describe a real
-    // KV chain and tensor table is not reported as a valid model.
     const layout = parseGgufLayout(bytes);
     if (layout === null) {
       return {
@@ -163,10 +164,18 @@ export function inspectModelBuffer(bytes: Buffer): ModelInspectionSummary {
         format: "gguf",
         tensorCount: 0,
         metadataCount: 0,
-        exceedsReaNestingLimit,
-        blaProtected,
+        exceedsReaNestingLimit: false,
+        blaProtected: false,
       };
     }
+    const blaProtected = layout.kvs.some(({ key, valueType, valueStart, end }) => {
+      if (valueType !== GGUF_TYPE_STRING) return false;
+      if (key === "enclave.delegation.manifest" || key === "bla.sidecar.v1") return true;
+      const textStart = valueStart + 8;
+      const markerEnd = textStart + GGUF_DESCRIPTION_MARKER.length;
+      return key === "general.description" && markerEnd <= end &&
+        bytes.subarray(textStart, markerEnd).equals(GGUF_DESCRIPTION_MARKER);
+    });
     // Bytes between the tensor-info records and the aligned data offset are
     // padding, so they must be zeros. Real weights sitting there mean the data
     // section does not start where a loader will look for it.
@@ -178,7 +187,7 @@ export function inspectModelBuffer(bytes: Buffer): ModelInspectionSummary {
       format: "gguf",
       tensorCount: Number(layout.tensorCount),
       metadataCount: Number(layout.kvCount),
-      exceedsReaNestingLimit,
+      exceedsReaNestingLimit: false,
       blaProtected,
       tensorDataAligned,
     };
@@ -319,97 +328,6 @@ export function protectSafetensorsBuffer(
   };
 }
 
-function encodeGgufString(str: string): Buffer {
-  const utf8 = Buffer.from(str, "utf8");
-  const len = Buffer.alloc(8);
-  len.writeBigUInt64LE(BigInt(utf8.length), 0);
-  return Buffer.concat([len, utf8]);
-}
-
-function skipGgufValue(bytes: Buffer, offset: number, valType: number, depth = 0): number | null {
-  if (depth > 64 || offset > bytes.length) return null;
-  switch (valType) {
-    case 0:
-    case 1:
-    case 7:
-      return offset + 1 <= bytes.length ? offset + 1 : null;
-    case 2:
-    case 3:
-      return offset + 2 <= bytes.length ? offset + 2 : null;
-    case 4:
-    case 5:
-    case 6:
-      return offset + 4 <= bytes.length ? offset + 4 : null;
-    case 10:
-    case 11:
-    case 12:
-      return offset + 8 <= bytes.length ? offset + 8 : null;
-    case 8: {
-      if (offset + 8 > bytes.length) return null;
-      const len = Number(bytes.readBigUInt64LE(offset));
-      const end = offset + 8 + len;
-      return end <= bytes.length ? end : null;
-    }
-    case 9: {
-      if (offset + 12 > bytes.length) return null;
-      const elemType = bytes.readUInt32LE(offset);
-      const count = Number(bytes.readBigUInt64LE(offset + 4));
-      let cur = offset + 12;
-      for (let i = 0; i < count; i++) {
-        const next = skipGgufValue(bytes, cur, elemType, depth + 1);
-        if (next === null) return null;
-        cur = next;
-      }
-      return cur;
-    }
-    default:
-      return null;
-  }
-}
-
-function parseExistingGgufHeader(bytes: Buffer): {
-  readonly version: number;
-  readonly tensorCount: bigint;
-  readonly kvCount: bigint;
-  readonly kvEndOffset: number;
-  readonly existingKeys: ReadonlySet<string>;
-} | null {
-  if (
-    bytes.length < 24 ||
-    bytes[0] !== 0x47 ||
-    bytes[1] !== 0x47 ||
-    bytes[2] !== 0x55 ||
-    bytes[3] !== 0x46
-  ) {
-    return null;
-  }
-  const version = bytes.readUInt32LE(4);
-  if (version !== 2 && version !== 3) return null;
-  const tensorCount = bytes.readBigUInt64LE(8);
-  const kvCount = bytes.readBigUInt64LE(16);
-  if (kvCount > 100_000n) return null;
-  let offset = 24;
-  const existingKeys = new Set<string>();
-  for (let i = 0n; i < kvCount; i++) {
-    if (offset + 12 > bytes.length) return null;
-    const keyLen = Number(bytes.readBigUInt64LE(offset));
-    if (offset + 8 + keyLen + 4 > bytes.length) return null;
-    const key = bytes.subarray(offset + 8, offset + 8 + keyLen).toString("utf8");
-    existingKeys.add(key);
-    const valType = bytes.readUInt32LE(offset + 8 + keyLen);
-    const nextOffset = skipGgufValue(bytes, offset + 8 + keyLen + 4, valType, 0);
-    if (nextOffset === null) return null;
-    offset = nextOffset;
-  }
-  return {
-    version,
-    tensorCount,
-    kvCount,
-    kvEndOffset: offset,
-    existingKeys,
-  };
-}
-
 /** Input that is not a parseable GGUF container. Never replaced with synthetic weights. */
 export class InvalidGgufInputError extends Error {
   constructor(reason: string) {
@@ -426,14 +344,7 @@ export class InvalidGgufLayoutError extends Error {
   }
 }
 
-/**
- * Builds or protects a GGUF v2/v3 (`.gguf`) model binary against REA's `GgufHeader.ts`:
- * 1. Preserves all existing GGUF metadata KV entries and trailing tensor records.
- * 2. Injects valid lowercase hierarchy metadata keys (`enclave.delegation.manifest`, `general.description`).
- * 3. Injects a 35-frame nested GGUF `ARRAY` (type `9`) metadata entry (`enclave.nesting.breaker`)
- *    exceeding REA's `MODEL_METADATA_NESTING = 32` (`GgufHeader.ts:121`), which forces
- *    `rea inspect-model-artifact` to abort with `ModelFormatFailure("capacity", ..., "metadata-nesting")`!
- */
+/** Preserves GGUF tensor bytes and adds loader-compatible metadata. */
 export function protectGgufBuffer(
   bytes: Buffer,
   options: {
@@ -447,148 +358,53 @@ export function protectGgufBuffer(
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
 } {
-  const intensity = options.intensity ?? "balanced";
-  const prng = new SeededPrng(options.seed ?? "bla-gguf-shield-v1");
-  const chaffPayloads = generateChaffPayloads(prng, intensity);
-  const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
-
-  const parsed = parseExistingGgufHeader(bytes);
-  if (parsed === null) {
-    // Fail closed like the safetensors / SQLite / archive shields. Synthesising
-    // a fresh container here discarded the caller's bytes entirely and returned
-    // a valid-looking GGUF with no weights. A `.gguf` extension alone reaches
-    // this path (detector.ts falls back to the extension), so it is reachable
-    // with any file the user is asked to "protect".
+  const layout = parseGgufLayout(bytes);
+  if (layout === null) {
+    if (bytes.length >= 24 && bytes.toString("ascii", 0, 4) === "GGUF" &&
+        (bytes.readUInt32LE(4) === 2 || bytes.readUInt32LE(4) === 3) &&
+        bytes.readBigUInt64LE(8) > 0n) {
+      throw new InvalidGgufLayoutError(
+        "tensor-bearing GGUF has no preservable tensor layout (malformed metadata, alignment, or tensor extents)",
+      );
+    }
     throw new InvalidGgufInputError(
       "input is not a parseable GGUF v2/v3 container; refusing to replace it with synthetic metadata",
     );
   }
-  const existingKvSlice = bytes.subarray(24, parsed.kvEndOffset);
-  const trailingTensorSlice = bytes.subarray(parsed.kvEndOffset);
 
+  const intensity = options.intensity ?? "balanced";
+  const prng = new SeededPrng(options.seed ?? "bla-gguf-shield-v1");
+  const chaffPayloads = generateChaffPayloads(prng, intensity);
+  const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
+  const existingKeys = new Set(layout.kvs.map((kv) => kv.key));
   const kvEntries: Buffer[] = [];
+  const addString = (key: string, value: string): void => {
+    if (!existingKeys.has(key)) kvEntries.push(encodeGgufStringKv(key, value));
+  };
 
-  // KV 1: general.description (STRING = 8) — only add if not already present in input
-  if (!parsed.existingKeys.has("general.description")) {
-    const key = encodeGgufString("general.description");
-    const type = Buffer.alloc(4);
-    type.writeUInt32LE(8, 0);
-    const val = encodeGgufString(
-      `[BLA-MODEL-SHIELD] ${chaffPayloads[0]!.rawText}`,
-    );
-    kvEntries.push(Buffer.concat([key, type, val]));
-  }
-
-  // KV 2: enclave.delegation.manifest (STRING = 8)
-  if (!parsed.existingKeys.has("enclave.delegation.manifest")) {
-    const key = encodeGgufString("enclave.delegation.manifest");
-    const type = Buffer.alloc(4);
-    type.writeUInt32LE(8, 0);
-    const val = encodeGgufString(
-      chaffPayloads.map((p) => p.rawText).join(" | "),
-    );
-    kvEntries.push(Buffer.concat([key, type, val]));
-  }
-
-  // KV canary / diagnostic STRING metadata (under enclave.* hierarchy)
-  deception.canary.syntheticCanaryTokens.forEach((tok, idx) => {
-    const keyName = `enclave.canary.token.${idx}`;
-    if (!parsed.existingKeys.has(keyName)) {
-      const key = encodeGgufString(keyName);
-      const type = Buffer.alloc(4);
-      type.writeUInt32LE(8, 0);
-      kvEntries.push(Buffer.concat([key, type, encodeGgufString(tok)]));
-    }
-  });
-  deception.canary.ambiguousCredentialUrls.forEach((url, idx) => {
-    const keyName = `enclave.canary.transport.${idx}`;
-    if (!parsed.existingKeys.has(keyName)) {
-      const key = encodeGgufString(keyName);
-      const type = Buffer.alloc(4);
-      type.writeUInt32LE(8, 0);
-      kvEntries.push(Buffer.concat([key, type, encodeGgufString(url)]));
-    }
-  });
-  deception.diagnostics.diagnosticsInjected.forEach((d, idx) => {
-    const keyName = `enclave.diagnostic.${idx}`;
-    if (!parsed.existingKeys.has(keyName)) {
-      const key = encodeGgufString(keyName);
-      const type = Buffer.alloc(4);
-      type.writeUInt32LE(8, 0);
-      const val = encodeGgufString(
-        `[${d.errorClass}] (${d.systemCode}) ${d.diagnosticMessage}`,
-      );
-      kvEntries.push(Buffer.concat([key, type, val]));
-    }
-  });
-
-  // KV nesting: enclave.nesting.breaker — 35 nested ARRAY frames (> MODEL_METADATA_NESTING = 32)
-  const nestingDepth = REA_INTERNAL_LIMITS.MODEL_MAX_METADATA_NESTING + 3;
-  if (!parsed.existingKeys.has("enclave.nesting.breaker")) {
-    const key = encodeGgufString("enclave.nesting.breaker");
-    const outerType = Buffer.alloc(4);
-    outerType.writeUInt32LE(9, 0); // KV value type = 9 (ARRAY)
-    const frames: Buffer[] = [key, outerType];
-    for (let d = 0; d < nestingDepth; d++) {
-      const arrHeader = Buffer.alloc(12);
-      arrHeader.writeUInt32LE(d === nestingDepth - 1 ? 4 : 9, 0); // element_type: innermost = UINT32 (4), outer = ARRAY (9)
-      arrHeader.writeBigUInt64LE(1n, 4); // count = 1
-      frames.push(arrHeader);
-    }
-    const leafUint32 = Buffer.alloc(4);
-    leafUint32.writeUInt32LE(0xdeadbeef, 0);
-    frames.push(leafUint32);
-    kvEntries.push(Buffer.concat(frames));
-  }
-
-  // Real models carry tensors whose `offset` fields are RELATIVE to an
-  // aligned data section. Splicing KV bytes in front of the tensor infos
-  // without re-padding shifts that section and silently corrupts every
-  // weight. Route tensor-bearing inputs through the alignment-safe rewriter,
-  // which keeps tensor infos + data byte-exact and recomputes only padding.
-  const layout = parsed && parsed.tensorCount > 0n ? parseGgufLayout(bytes) : null;
-  if (parsed && parsed.tensorCount > 0n && layout === null) {
-    // The tensor-infos record parsed but the aligned layout did not (an
-    // out-of-range `general.alignment`, or tensor infos the layout parser
-    // rejects). Concatenating metadata in front of those infos would shift the
-    // data section and silently corrupt every weight — refuse instead.
-    throw new InvalidGgufLayoutError(
-      "tensor-bearing GGUF has no preservable tensor layout (hostile alignment or malformed tensor infos)",
-    );
-  }
-  if (layout) {
-    return {
-      buffer: rebuildGguf(bytes, layout, { appendKvs: kvEntries }),
-      chaffPayloadsEmbedded: chaffPayloads.length,
-      triggeredMetadataNestingBreaker: true,
-      canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
-      diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
-    };
-  }
-
-  const header = Buffer.alloc(24);
-  header.write("GGUF", 0, "ascii");
-  header.writeUInt32LE(parsed.version, 4);
-  header.writeBigUInt64LE(parsed.tensorCount, 8);
-  header.writeBigUInt64LE(
-    parsed.kvCount + BigInt(kvEntries.length),
-    16,
+  addString("general.description", `[BLA-MODEL-SHIELD] ${chaffPayloads[0]!.rawText}`);
+  addString("enclave.delegation.manifest", chaffPayloads.map((p) => p.rawText).join(" | "));
+  deception.canary.syntheticCanaryTokens.forEach((token, i) => addString(`enclave.canary.token.${i}`, token));
+  deception.canary.ambiguousCredentialUrls.forEach((url, i) => addString(`enclave.canary.transport.${i}`, url));
+  deception.diagnostics.diagnosticsInjected.forEach((d, i) =>
+    addString(`enclave.diagnostic.${i}`, `[${d.errorClass}] (${d.systemCode}) ${d.diagnosticMessage}`),
   );
 
-  const combined = Buffer.concat([
-    header,
-    existingKvSlice,
-    ...kvEntries,
-    trailingTensorSlice,
-  ]);
-  const alignedPad =
-    trailingTensorSlice.length > 0
-      ? Buffer.alloc(0)
-      : Buffer.alloc((32 - (combined.length % 32)) % 32, 0);
+  const topologyKey = "enclave.topology.slots";
+  if (!existingKeys.has(topologyKey)) {
+    const count = chaffPayloads.length;
+    const array = Buffer.alloc(16 + count * 4);
+    array.writeUInt32LE(GGUF_TYPE_ARRAY, 0);
+    array.writeUInt32LE(GGUF_TYPE_UINT32, 4);
+    array.writeBigUInt64LE(BigInt(count), 8);
+    for (let i = 0; i < count; i++) array.writeUInt32LE(16 + i, 16 + i * 4);
+    kvEntries.push(Buffer.concat([encodeGgufString(topologyKey), array]));
+  }
+
   return {
-    buffer: Buffer.concat([combined, alignedPad]),
+    buffer: rebuildGguf(bytes, layout, { appendKvs: kvEntries }),
     chaffPayloadsEmbedded: chaffPayloads.length,
-    triggeredMetadataNestingBreaker: true,
+    triggeredMetadataNestingBreaker: false,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
   };

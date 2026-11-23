@@ -1,7 +1,7 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { REA_INTERNAL_LIMITS } from "../../identity.js";
-import type { VirtualAsarFile } from "../formats/asar.js";
+import { ASAR_DECOY_DIRECTORY, type VirtualAsarFile } from "../formats/asar.js";
 
 /**
  * REA ASAR header admission limits — values centralized in
@@ -22,8 +22,8 @@ export interface AsarHeaderAmplificationPlan {
 /**
  * Generates virtual decoy enclave manifest entries inside an Electron `.asar`
  * archive so REA's `admitAsarHeader` trips `DEFAULT_ASAR_MAX_HEADER_BYTES`
- * (16 MiB) at bankrupt intensity. Paths are long and bodies tiny so the Pickle
- * JSON header dominates — inventory growth without mutating real app modules.
+ * (16 MiB) at bankrupt intensity. The Pickle JSON header grows through more
+ * members with portable basenames and small bodies.
  */
 export function generateAsarHeaderDecoyFiles(
   prng: SeededPrng,
@@ -36,7 +36,8 @@ export function planAsarHeaderAmplification(
   prng: SeededPrng,
   intensity: ProtectionIntensity = "balanced",
 ): AsarHeaderAmplificationPlan {
-  // bankrupt: ~4000 × ~4 KiB paths → header ≳ 17 MiB (> DEFAULT 16 MiB).
+  // At bankrupt intensity, basenames and integrity metadata alone
+  // contribute more than 16 MiB to the header.
   // lower intensities: inventory chaff only (header stays well under admission).
   const count =
     intensity === "stealth"
@@ -45,21 +46,23 @@ export function planAsarHeaderAmplification(
         ? 8
         : intensity === "maximum"
           ? 64
-          : 4000;
+          : 48_000;
   const pathPadLen =
     intensity === "stealth"
       ? 24
       : intensity === "balanced"
         ? 48
         : intensity === "maximum"
-          ? 256
-          : 4096;
+          ? 140
+          : 150;
   const tag = prng.hex(3);
   const pad = "a".repeat(pathPadLen);
   const files: VirtualAsarFile[] = [];
+  const directory = "enclave/shards";
 
   for (let i = 0; i < count; i++) {
-    const relPath = `enclave/shards/ring0-slot-${tag}-${pad}_${i}.json`;
+    const batch = Math.floor(i / 256);
+    const relPath = `${directory}/batch-${batch}/ring0-slot-${tag}-${pad}_${i}.json`;
     const body = JSON.stringify({
       shardId: i,
       enclaveCid: 16,
@@ -69,12 +72,13 @@ export function planAsarHeaderAmplification(
     files.push({
       relativePath: relPath,
       content: Buffer.from(body, "utf8"),
+      [ASAR_DECOY_DIRECTORY]: directory,
     });
   }
 
-  // Conservative estimate: path + JSON entry overhead (~80 bytes framing).
+  // Lower bound using each basename and the packed-file integrity record.
   const estimatedHeaderBytes = files.reduce(
-    (sum, f) => sum + f.relativePath.length + 80 + f.content.length,
+    (sum, f) => sum + f.relativePath.slice(f.relativePath.lastIndexOf("/") + 1).length + 185,
     64,
   );
 

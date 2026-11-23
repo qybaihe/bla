@@ -83,7 +83,7 @@ describe("gguf-layout alignment-safe rewrite", () => {
       const encoded = Buffer.from(text, "utf8");
       return Buffer.concat([u64(encoded.length), encoded]);
     };
-    return Buffer.concat([
+    const headerAndInfos = Buffer.concat([
       Buffer.from("GGUF", "ascii"),
       u32(3),
       u64(1), // tensorCount
@@ -96,8 +96,10 @@ describe("gguf-layout alignment-safe rewrite", () => {
       u64(1), // dim
       u32(0), // ggml_type
       u64(0), // offset
-      Buffer.alloc(dataBytes, 7),
     ]);
+    // Leave the deliberately hostile alignments unpadded without allocating them.
+    const padSize = alignment <= 64 ? (alignment - headerAndInfos.length % alignment) % alignment : 0;
+    return Buffer.concat([headerAndInfos, Buffer.alloc(padSize), Buffer.alloc(dataBytes, 7)]);
   }
 
   it("accepts a sane alignment and preserves the tensor bytes", () => {
@@ -117,14 +119,9 @@ describe("gguf-layout alignment-safe rewrite", () => {
     expect(parseGgufLayout(makeGgufWithAlignment(64))).not.toBeNull();
   });
 
-  it("refuses to rebuild when the declared data section starts past the input", () => {
+  it("rejects a data section shorter than the tensor extent", () => {
     const bytes = makeGgufWithAlignment(GGUF_DEFAULT_ALIGNMENT, 2);
-    const layout = parseGgufLayout(bytes);
-    expect(layout).not.toBeNull();
-    expect(layout!.dataStart).toBeGreaterThan(bytes.length);
-    expect(() => rebuildGguf(bytes, layout!, { appendKvs: [] })).toThrow(
-      /exceeds the .* input/,
-    );
+    expect(parseGgufLayout(bytes)).toBeNull();
   });
 
   it("protectGgufBuffer fails closed when a tensor-bearing GGUF has no layout", () => {
@@ -172,7 +169,7 @@ describe("gguf-layout alignment-safe rewrite", () => {
     const after = readTensorDigests(protected_.buffer);
     expect(after.tensors).toEqual(before.tensors);
     expect(after.keys).toContain("enclave.delegation.manifest");
-    expect(after.keys).toContain("enclave.nesting.breaker");
+    expect(after.keys).toContain("enclave.topology.slots");
   });
 
   it("rejects non-GGUF / truncated input without throwing", () => {

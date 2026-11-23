@@ -187,7 +187,7 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     }
   });
 
-  it("adds Safetensors canary metadata and a valid JSON nesting breaker", () => {
+  it("adds Safetensors and GGUF canary metadata using each container’s supported structure", () => {
     const rawSafetensors = buildSafetensorsBuffer({
       attn_weights: { dtype: "F32", shape: [2, 2], data_offsets: [0, 16] },
     });
@@ -222,7 +222,7 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
       intensity: "bankrupt",
       seed: "gguf-seed",
     });
-    expect(protGguf.triggeredMetadataNestingBreaker).toBe(true);
+    expect(protGguf.triggeredMetadataNestingBreaker).toBe(false);
     expect(protGguf.canaryTokensEmbedded).toBeGreaterThanOrEqual(2);
     expect(protGguf.diagnosticsEmbedded).toBeGreaterThanOrEqual(2);
     expect(protGguf.buffer.toString("latin1")).toContain("enclave.canary.token.0");
@@ -232,7 +232,7 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     const afterGguf = inspectModelBuffer(protGguf.buffer);
     expect(afterGguf.validModel).toBe(true);
     expect(afterGguf.format).toBe("gguf");
-    expect(afterGguf.exceedsReaNestingLimit).toBe(true);
+    expect(afterGguf.exceedsReaNestingLimit).toBe(false);
     expect(afterGguf.blaProtected).toBe(true);
   });
 

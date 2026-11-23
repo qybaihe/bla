@@ -72,10 +72,9 @@ describe("GGUF inspection does not trust the magic alone", () => {
     expect(inspection.tensorCount).toBe(0);
   });
 
-  it("flags a tensor region that is not padded to the alignment", () => {
+  it("rejects an unpadded tensor region ending before the declared extent", () => {
     const inspection = inspectModelBuffer(gguf({ pad: false }));
-    expect(inspection.validModel).toBe(true);
-    expect(inspection.tensorDataAligned).toBe(false);
+    expect(inspection.validModel).toBe(false);
   });
 
   it("rejects a buffer that is not GGUF at all", () => {
@@ -83,12 +82,12 @@ describe("GGUF inspection does not trust the magic alone", () => {
     expect(inspection.validModel).toBe(false);
   });
 
-  it("keeps reporting a protected GGUF as protected even when it does not parse", () => {
+  it("does not treat a marker outside parsed metadata as proof of protection", () => {
     const broken = gguf({ truncateTensorInfo: true });
     const tagged = Buffer.concat([broken, Buffer.from(" BLA-MODEL-SHIELD")]);
     const inspection = inspectModelBuffer(tagged);
     expect(inspection.validModel).toBe(false);
-    expect(inspection.blaProtected).toBe(true);
+    expect(inspection.blaProtected).toBe(false);
   });
 
   it("refuses to replace a non-GGUF file with synthetic metadata", () => {

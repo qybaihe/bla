@@ -550,10 +550,9 @@ describe.skipIf(!isNodeSqliteAvailable())("fuzz regression: SQLite shield and st
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(SqliteWalConsistencyError);
-    expect((thrown as Error).message).toMatch(/unmodified SQLite/);
-    expect((thrown as Error).message).toMatch(/enclave_unseal_payload/);
-    // The opt-in does not promise stock usability, so the same input is accepted there.
-    expect(protectSqliteBuffer(foreign, { seed: "fuzz-16", evalTrap: true }).trapMode).toBe("eval");
+    expect((thrown as Error).message).toMatch(/reserved SQLite object name.*enclave_key_hierarchy/i);
+    expect(() => protectSqliteBuffer(foreign, { seed: "fuzz-16", evalTrap: true }))
+      .toThrow(SqliteWalConsistencyError);
   });
 
   it("hardens a database whose tables hold 64-bit integers", () => {

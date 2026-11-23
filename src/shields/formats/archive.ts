@@ -20,6 +20,29 @@ export interface ZipEntryInfo {
   readonly data: Buffer;
 }
 
+interface ZipOutputEntry {
+  readonly name: string;
+  readonly data: Buffer;
+  readonly storeOnly?: boolean;
+  readonly compressionMethod?: 0 | 8;
+}
+
+function normalizeZipMemberName(name: string): string {
+  const normalized = posix.normalize(name).replace(/\/$/, "");
+  if (
+    posix.isAbsolute(name) ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    normalized === "." ||
+    name.includes("\\") ||
+    /^[a-z]:/i.test(name) ||
+    /^[a-z]:/i.test(normalized)
+  ) {
+    throw new UnsupportedArchiveError(`entry name resolves outside the archive root: ${name}`);
+  }
+  return normalized;
+}
+
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -100,8 +123,9 @@ export function readZipEntries(bytes: Buffer): readonly ZipEntryInfo[] {
     if (!nameBytes.equals(bytes.subarray(central + 46, central + 46 + nameLen)) ||
         nameBytes.length === 0 || nameBytes.some((v) => v < 32 || v > 126)) reject("unsupported or inconsistent filenames");
     const name = nameBytes.toString("ascii");
-    if (names.has(name)) reject("duplicate filenames");
-    names.add(name);
+    const normalizedName = normalizeZipMemberName(name);
+    if (names.has(normalizedName)) reject("duplicate filenames after path normalization");
+    names.add(normalizedName);
     decodedTotal += uncompressedSize;
     if (uncompressedSize > 64 * 1024 * 1024 || decodedTotal > 256 * 1024 * 1024) reject("decoded size exceeds admission limits");
     const compressed = bytes.subarray(dataStart, dataEnd);
@@ -133,7 +157,7 @@ export function readZipEntries(bytes: Buffer): readonly ZipEntryInfo[] {
  * Writes a minimal ZIP archive from a list of named file buffers.
  */
 export function writeZipArchive(
-  files: readonly { readonly name: string; readonly data: Buffer; readonly storeOnly?: boolean }[],
+  files: readonly ZipOutputEntry[],
 ): Buffer {
   const localHeaders: Buffer[] = [];
   const centralHeaders: Buffer[] = [];
@@ -143,7 +167,9 @@ export function writeZipArchive(
     const nameBuf = Buffer.from(file.name, "utf8");
     const uncompressedSize = file.data.length;
     const crc = crc32(file.data);
-    const useStore = file.storeOnly === true || uncompressedSize < 64;
+    const useStore = file.compressionMethod === undefined
+      ? file.storeOnly === true || uncompressedSize < 64
+      : file.compressionMethod === 0;
     const compressedData = useStore ? file.data : deflateRawSync(file.data);
     const method = useStore ? 0 : 8;
 
@@ -212,10 +238,9 @@ export function validateZipProtectionInput(
   if (existingEntries.length > 0xfffe - 16) {
     throw new UnsupportedArchiveError("insufficient classic ZIP entry-count capacity for output");
   }
-  const isSigned = existingEntries.some((e) =>
-    /^META-INF\/.*\.(SF|RSA|DSA|EC)$/i.test(e.name),
-  );
-  const hasManifest = existingEntries.some((e) => e.name === "AndroidManifest.xml");
+  const normalizedNames = existingEntries.map((e) => normalizeZipMemberName(e.name));
+  const isSigned = normalizedNames.some((name) => /^META-INF\/.*\.(SF|RSA|DSA|EC)$/i.test(name));
+  const hasManifest = normalizedNames.includes("AndroidManifest.xml");
   if (isSigned) {
     throw new UnsupportedArchiveError("APK or signed archive requires a signing-aware pipeline");
   }
@@ -231,20 +256,6 @@ export function validateZipProtectionInput(
   // Normalize every entry name before the reserved-prefix check so a
   // traversal (`../evil`) or an aliased name (`./assets/bla-shield/x`) cannot
   // escape the archive root or collide with the reserved output namespace.
-  const normalizedNames = existingEntries.map((e) => {
-    const normalized = posix.normalize(e.name);
-    if (
-      normalized.startsWith("/") ||
-      normalized.startsWith("../") ||
-      normalized === ".." ||
-      e.name.includes("\\")
-    ) {
-      throw new UnsupportedArchiveError(
-        `entry name resolves outside the archive root: ${e.name}`,
-      );
-    }
-    return normalized;
-  });
   if (
     normalizedNames.some(
       (name) =>
@@ -289,9 +300,9 @@ export function protectZipOrApkBuffer(
   readonly androidDexXrefBytes: number;
   readonly androidDexXrefCallers: number;
 } {
-  const preview = readZipEntries(bytes);
-  const isSigned = preview.some((e) => /^META-INF\/.*\.(SF|RSA|DSA|EC)$/i.test(e.name));
-  const hasManifest = preview.some((e) => e.name === "AndroidManifest.xml");
+  const preview = readZipEntries(bytes).map((e) => normalizeZipMemberName(e.name));
+  const isSigned = preview.some((name) => /^META-INF\/.*\.(SF|RSA|DSA|EC)$/i.test(name));
+  const hasManifest = preview.includes("AndroidManifest.xml");
   const treatAsApk = Boolean(options.isApk) || hasManifest;
 
   if (treatAsApk && isSigned) {
@@ -307,19 +318,20 @@ export function protectZipOrApkBuffer(
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
   let membersHardened = 0;
-  const outputFiles: { name: string; data: Buffer; storeOnly?: boolean }[] = existingEntries.map((e) => {
+  const outputFiles: ZipOutputEntry[] = existingEntries.map((e) => {
     const lower = e.name.toLowerCase();
+    const compressionMethod = e.compressionMethod === 0 ? 0 : 8;
     if (lower.endsWith(".dex")) {
       const protectedDex = protectAndroidDexBuffer(e.data, { intensity, seed: options.seed });
       membersHardened += 1;
-      return { name: e.name, data: protectedDex.buffer };
+      return { name: e.name, data: protectedDex.buffer, compressionMethod };
     }
     if (lower.endsWith("global-metadata.dat")) {
       const protectedMeta = protectIl2cppMetadataBuffer(e.data, { intensity, seed: options.seed });
       membersHardened += 1;
-      return { name: e.name, data: protectedMeta.buffer };
+      return { name: e.name, data: protectedMeta.buffer, compressionMethod };
     }
-    return { name: e.name, data: e.data };
+    return { name: e.name, data: e.data, compressionMethod };
   });
 
   const decoyRoot = treatAsApk ? "assets/bla-shield" : "assets/enclave";
@@ -419,7 +431,7 @@ export function protectZipOrApkBuffer(
     // MAX_EXTERNAL_XREF_BYTES caller inventory. Never rewrite the developer's
     // own classes.dex beyond the existing trailer shield above.
     const xref = generateAndroidDexXrefCounter(prng, intensity);
-    const xrefName = nextMultidexName(outputFiles.map((f) => f.name));
+    const xrefName = nextMultidexName(outputFiles.map((f) => normalizeZipMemberName(f.name)));
     outputFiles.push({ name: xrefName, data: xref.dexBuffer });
     androidDexXrefBytes = xref.dexBuffer.length;
     androidDexXrefCallers = xref.callerClassesEmitted;

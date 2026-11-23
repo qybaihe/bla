@@ -233,11 +233,13 @@ export function renameWasmExports(
     return { payload: exportSectionPayload, renames: [] };
   }
   const renames: WasmExportRename[] = [];
+  const reservedNames = new Set(entries.map((entry) => entry.name));
   const rewritten: WasmExportEntry[] = entries.map((e) => {
     if (preserve.has(e.name) || isAbiMandatedWasmExport(e.name)) return e;
     if (onlyInternal && !looksLikeInternalWasmExport(e.name)) return e;
     const tag = prng.hex(4);
-    const to = `ops_${tag}_${prng.identifier({ style: "snake", hint: "dispatch", entropy: 3 })}`;
+    const candidate = `ops_${tag}_${prng.identifier({ style: "snake", hint: "dispatch", entropy: 3 })}`;
+    const to = reserveWasmExportName(candidate, reservedNames);
     renames.push({ from: e.name, to, kind: e.kind, index: e.index });
     return { name: to, kind: e.kind, index: e.index };
   });
@@ -247,6 +249,14 @@ export function renameWasmExports(
   };
 }
 
+function reserveWasmExportName(candidate: string, reserved: Set<string>): string {
+  let name = candidate;
+  for (let suffix = 1; reserved.has(name); suffix++) {
+    name = `${candidate}_${suffix}`;
+  }
+  reserved.add(name);
+  return name;
+}
 
 /**
  * Append decoy export entries that alias an existing function index.
@@ -413,7 +423,9 @@ function planWasmExportNameDecoys(
   prng: SeededPrng,
   intensity: ProtectionIntensity,
   funcIndices: readonly number[],
+  reservedNames: Set<string>,
 ): readonly { readonly name: string; readonly funcIndex: number }[] {
+  if (funcIndices.length === 0) return [];
   // bankrupt: ~250 × ~12 KiB names → Wabt interface charge ≫ 32 MiB.
   // Round-10: spread aliases across exported function indices (stubs + unlock)
   // so ~all-250 do not concentrate on funcIndex 0 / the real unlock body.
@@ -428,8 +440,7 @@ function planWasmExportNameDecoys(
           : 250;
   const namePad = intensity === "bankrupt" ? 12_000 : intensity === "maximum" ? 48 : 16;
   const tag = prng.hex(4);
-  const indices =
-    funcIndices.length > 0 ? prng.shuffle([...new Set(funcIndices)]) : [0];
+  const indices = prng.shuffle([...funcIndices]);
   const out: { name: string; funcIndex: number }[] = [];
   const segVocab = [
     "frame", "codec", "route", "state", "delta", "cache", "graph", "entry",
@@ -449,7 +460,7 @@ function planWasmExportNameDecoys(
         ? seedChunk.slice(0, namePad)
         : seedChunk.repeat(Math.ceil(namePad / seedChunk.length)).slice(0, namePad);
     out.push({
-      name: `enclave_export_${tag}_${i}_${pad}`,
+      name: reserveWasmExportName(`enclave_export_${tag}_${i}_${pad}`, reservedNames),
       funcIndex: indices[i % indices.length]!,
     });
   }
@@ -629,7 +640,7 @@ export function readWasmCustomSectionContent(
 
 /**
  * Drop every custom section whose name matches `sectionName`. Preserves all
- * other sections (including other custom sections) in order.
+ * other sections in order, including the prefix indexed by relocations.
  */
 export function stripWasmCustomSectionByName(
   bytes: Buffer,
@@ -644,6 +655,7 @@ export function stripWasmCustomSectionByName(
   ) {
     return Buffer.from(bytes);
   }
+  const relocatablePrefixEnd = findWasmRelocatablePrefixEnd(bytes);
   const out: Buffer[] = [Buffer.from(bytes.subarray(0, 8))];
   let offset = 8;
   while (offset < bytes.length) {
@@ -662,7 +674,7 @@ export function stripWasmCustomSectionByName(
       break;
     }
     let drop = false;
-    if (sectionId === 0) {
+    if (sectionId === 0 && sectionStart >= relocatablePrefixEnd) {
       const payload = bytes.subarray(nextOffset, sectionEnd);
       try {
         const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
@@ -690,21 +702,42 @@ export function appendWasmCustomSection(
   content: Buffer,
 ): Buffer {
   const cleaned = stripWasmCustomSectionByName(bytes, sectionName);
+  if (readWasmCustomSectionContent(cleaned, sectionName) !== null) {
+    throw new Error(`Cannot replace custom section in relocatable WASM: ${sectionName}`);
+  }
   return Buffer.concat([cleaned, createWasmCustomSection(sectionName, content)]);
 }
 
-/**
- * Protects a WebAssembly `.wasm` binary against `rea inspect-wasm-artifact` and `compare-wasm-interfaces`
- * by stripping real debug custom sections and injecting:
- * 1. A honey `"name"` custom section (parsed by WABT and REA's `WabtWat.ts`)
- * 2. Multiple `@custom` architectural chaff sections (`"bla.enclave.manifest"`, `"producers"`, `"dylink.0"`)
- * while keeping the WASM module 100% valid and executable by V8 / WebAssembly runtimes.
- */
+function isRelocatableWasmSection(name: string): boolean {
+  return name === "linking" || name.startsWith("reloc.");
+}
+
+function findWasmRelocatablePrefixEnd(bytes: Buffer): number {
+  let offset = 8;
+  let prefixEnd = 0;
+  while (offset < bytes.length) {
+    const id = bytes[offset++]!;
+    const size = tryDecodeUnsignedLeb128(bytes, offset);
+    if (!size) break;
+    const end = size.nextOffset + size.value;
+    if (end > bytes.length) break;
+    if (id === 0) {
+      const payload = bytes.subarray(size.nextOffset, end);
+      const name = tryDecodeUnsignedLeb128(payload, 0);
+      if (name && name.nextOffset + name.value <= payload.length &&
+          isRelocatableWasmSection(payload.toString("utf8", name.nextOffset, name.nextOffset + name.value))) {
+        prefixEnd = end;
+      }
+    }
+    offset = end;
+  }
+  return prefixEnd;
+}
+
 /**
  * Custom sections a linker or the host runtime needs to load the module:
  * `dylink.0`/`linking`/`reloc.*` for dynamically linked modules (Emscripten side
- * modules) and `target_features` for feature negotiation. Debug/metadata
- * sections such as `name` and `producers` are still stripped.
+ * modules) and `target_features` for feature negotiation.
  */
 const LINKING_CRITICAL_CUSTOM_SECTIONS: ReadonlySet<string> = new Set([
   "dylink.0",
@@ -1105,7 +1138,7 @@ export function injectWasmBytecodeFlowerInstructions(
       try {
         const { value: nameLen, nextOffset: nameStart } = decodeUnsignedLeb128(payload, 0);
         const customName = payload.subarray(nameStart, nameStart + nameLen).toString("utf8");
-        if (customName.startsWith("reloc.")) return noop;
+        if (isRelocatableWasmSection(customName)) return noop;
       } catch {
         // Ignore malformed custom section name
       }
@@ -1216,7 +1249,7 @@ export function injectWasmBytecodeFlowerInstructions(
   if (
     typeof WebAssembly !== "undefined" &&
     typeof WebAssembly.validate === "function" &&
-    !WebAssembly.validate(new Uint8Array(candidate))
+    !WebAssembly.validate(new Uint8Array(candidate.buffer, candidate.byteOffset, candidate.byteLength))
   ) {
     return noop;
   }
@@ -1281,6 +1314,13 @@ export function protectWasmBinary(
   ) {
     throw new Error("Invalid WebAssembly binary magic header");
   }
+  const validationBytes = bytes.buffer instanceof ArrayBuffer
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+  if (!WebAssembly.validate(validationBytes)) {
+    throw new Error("Input failed WebAssembly validation");
+  }
+  const relocatable = findWasmRelocatablePrefixEnd(bytes) > 0;
 
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-wasm-shield-v1");
@@ -1304,11 +1344,7 @@ export function protectWasmBinary(
   // so first arity-2 is not a stable pointer to the unlock body.
   // Round-12: collectExportedFuncIndices prefers arity-2 (host-visible) so
   // arity-1 exports do not burn alias budget.
-  const decoyExports = planWasmExportNameDecoys(
-    prng,
-    intensity,
-    collectExportedFuncIndices(sourceBytes),
-  );
+  const funcIndices = relocatable ? [] : collectExportedFuncIndices(sourceBytes);
   const keptChunks: Buffer[] = [sourceBytes.subarray(0, 8)];
   let offset = 8;
   let exportDecoysInjected = 0;
@@ -1323,7 +1359,10 @@ export function protectWasmBinary(
     const sectionEnd = nextOffset + sectionSize;
     if (sectionEnd > sourceBytes.length) break;
 
-    if (sectionId === 0) {
+    if (relocatable) {
+      // Relocations index the original sections and offsets within them.
+      keptChunks.push(sourceBytes.subarray(sectionStart, sectionEnd));
+    } else if (sectionId === 0) {
       // Strip original custom/debug sections, but keep the ones a linker or the
       // host runtime needs: dropping dylink/linking/reloc breaks dynamically
       // linked modules, and target_features breaks host feature negotiation.
@@ -1339,6 +1378,7 @@ export function protectWasmBinary(
       if (keepCustom) keptChunks.push(Buffer.from(sourceBytes.subarray(sectionStart, sectionEnd)));
     } else if (sectionId === 7) {
       let payload = sourceBytes.subarray(nextOffset, sectionEnd);
+      const reservedNames = new Set(parseWasmExportSectionPayload(payload).map((entry) => entry.name));
       // Issue #40.3: optional rename of non-public / internal exports first.
       const intensityWantsRename =
         intensity === "maximum" || intensity === "bankrupt";
@@ -1359,7 +1399,9 @@ export function protectWasmBinary(
         });
         payload = Buffer.from(renamed.payload);
         exportsRenamed = renamed.renames;
+        for (const rename of exportsRenamed) reservedNames.add(rename.to);
       }
+      const decoyExports = planWasmExportNameDecoys(prng, intensity, funcIndices, reservedNames);
       const appended =
         decoyExports.length > 0
           ? appendDecoyExports(payload, decoyExports)
@@ -1391,7 +1433,7 @@ export function protectWasmBinary(
 
   // Append honey `"name"` section + architectural chaff + canary/diagnostic custom sections.
   // Custom sections do not affect WebAssembly.validate() or export execution.
-  const addedSections: Buffer[] = [buildHoneyWasmNameSection(prng)];
+  const addedSections: Buffer[] = relocatable ? [] : [buildHoneyWasmNameSection(prng)];
 
   const manifestJson = JSON.stringify({
     schema: "bla-wasm-enclave-shield/v1",
@@ -1478,8 +1520,12 @@ export function protectWasmBinary(
     createWasmCustomSection("bla.wasm.interface.exhaustion", ifacePayload),
   );
 
+  const buffer = Buffer.concat([...keptChunks, ...addedSections]);
+  if (!WebAssembly.validate(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength))) {
+    throw new Error("Protected output failed WebAssembly validation");
+  }
   return {
-    buffer: Buffer.concat([...keptChunks, ...addedSections]),
+    buffer,
     customSectionsAdded: addedSections.length,
     chaffPayloadsEmbedded: chaffPayloads.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,

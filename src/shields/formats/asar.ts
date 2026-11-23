@@ -46,6 +46,8 @@ export type AsarHeaderNode =
 
 export type AsarNode = AsarHeaderNode;
 
+export const ASAR_DECOY_DIRECTORY = Symbol("ASAR decoy directory");
+
 export interface VirtualAsarFile {
   readonly relativePath: string;
   readonly content: Buffer;
@@ -53,6 +55,8 @@ export interface VirtualAsarFile {
   readonly unpacked?: boolean;
   readonly link?: string;
   readonly size?: number;
+  readonly directory?: true;
+  readonly [ASAR_DECOY_DIRECTORY]?: string;
 }
 
 export interface AsarValidationOptions {
@@ -63,6 +67,8 @@ export interface AsarValidationOptions {
 }
 
 const ASAR_BLOCK_SIZE = 4 * 1024 * 1024;
+const MAX_ASAR_DIRECTORY_DEPTH = 64;
+const MAX_ASAR_SHARED_PAYLOAD_ALLOWANCE = 64 * 1024 * 1024;
 const ALLOWED_NODE_KEYS = new Set([
   "files",
   "link",
@@ -92,7 +98,8 @@ function validateEntrySegment(segment: string): void {
     segment === ".." ||
     segment.includes("/") ||
     segment.includes("\\") ||
-    segment.includes("\0")
+    segment.includes("\0") ||
+    /^[a-z]:/i.test(segment)
   ) {
     throw new UnsupportedAsarError(`Invalid ASAR path segment: ${JSON.stringify(segment)}`);
   }
@@ -111,8 +118,8 @@ function validateRelativeLinkTarget(relativePath: string, linkTarget: unknown): 
     );
   }
 
-  const parentSegments = relativePath.split("/").slice(0, -1).filter(Boolean);
-  let depth = parentSegments.length;
+  // Electron's ASAR header stores links relative to the archive root.
+  let depth = 0;
   const targetSegments = linkTarget.split("/");
   for (const seg of targetSegments) {
     if (seg === "" || seg === ".") {
@@ -126,14 +133,12 @@ function validateRelativeLinkTarget(relativePath: string, linkTarget: unknown): 
         );
       }
     } else {
+      validateEntrySegment(seg);
       depth += 1;
     }
   }
 
-  const parentDir = posix.dirname(relativePath);
-  const resolved = posix.normalize(
-    parentDir === "." ? linkTarget : posix.join(parentDir, linkTarget),
-  );
+  const resolved = posix.normalize(linkTarget);
   if (
     resolved === "" ||
     resolved === "." ||
@@ -229,8 +234,16 @@ export function unpackAsarBuffer(
     options.rejectLinks === true || options.allowLinks === false;
 
   const files: VirtualAsarFile[] = [];
+  let materializedBytes = 0;
+  const payloadBytes = asarBytes.length - dataOffsetBase;
+  // Electron can deduplicate equal contents. Allow bounded additional copies,
+  // with at most one extra copy's worth of the archive's packed data.
+  const materializedLimit = payloadBytes + Math.min(payloadBytes, MAX_ASAR_SHARED_PAYLOAD_ALLOWANCE);
 
-  const walkDirectory = (dirFiles: Record<string, unknown>, prefix: string): void => {
+  const walkDirectory = (dirFiles: Record<string, unknown>, prefix: string, depth: number): void => {
+    if (depth > MAX_ASAR_DIRECTORY_DEPTH) {
+      throw new UnsupportedAsarError("ASAR directory depth exceeds admission limit");
+    }
     for (const [name, child] of Object.entries(dirFiles)) {
       validateEntrySegment(name);
       const nextPath = prefix ? `${prefix}/${name}` : name;
@@ -268,7 +281,10 @@ export function unpackAsarBuffer(
         ) {
           throw new UnsupportedAsarError(`Malformed ASAR directory node at ${nextPath}`);
         }
-        walkDirectory(child.files, nextPath);
+        if (Object.keys(child.files).length === 0) {
+          files.push({ relativePath: nextPath, content: Buffer.alloc(0), directory: true });
+        }
+        walkDirectory(child.files, nextPath, depth + 1);
         continue;
       }
 
@@ -359,17 +375,23 @@ export function unpackAsarBuffer(
         throw new UnsupportedAsarError(`ASAR file offset/size out of bounds for ${nextPath}`);
       }
 
+      materializedBytes += child.size;
+      if (materializedBytes > materializedLimit) {
+        throw new UnsupportedAsarError("ASAR aggregate packed payload exceeds the materialization limit");
+      }
       files.push({
         relativePath: nextPath,
-        content: Buffer.from(asarBytes.subarray(start, end)),
+        content: asarBytes.subarray(start, end),
         size: child.size,
         ...(child.executable ? { executable: true } : {}),
       });
     }
   };
 
-  walkDirectory(rootRaw.files, "");
-  return files;
+  walkDirectory(rootRaw.files, "", 0);
+  return files.map((file) => file.content.length === 0
+    ? file
+    : { ...file, content: Buffer.from(file.content) });
 }
 
 /**
@@ -405,20 +427,34 @@ export function validateAsarProtectionInput(
  * with full SHA-256 block integrity metadata, preserving `executable`, `unpacked`, and `link` nodes.
  */
 export function packAsarBuffer(files: readonly VirtualAsarFile[]): Buffer {
-  const root: AsarDirectoryNode = { files: {} };
+  const root = createAsarDirectory();
   const payloadChunks: Buffer[] = [];
   let currentOffset = 0;
+  const decoyDirectories = new Map<string, string>();
+  const ordinary = files.filter((file) => file[ASAR_DECOY_DIRECTORY] === undefined);
+  const generated = files.filter((file) => file[ASAR_DECOY_DIRECTORY] !== undefined);
 
-  for (const file of files) {
-    if (file.relativePath.includes("\\") || file.relativePath.includes("\0")) {
-      throw new UnsupportedAsarError(`Invalid ASAR file relativePath: ${file.relativePath}`);
+  for (const file of [...ordinary, ...generated]) {
+    let relativePath = file.relativePath;
+    const preferred = file[ASAR_DECOY_DIRECTORY];
+    if (preferred !== undefined) {
+      let allocated = decoyDirectories.get(preferred);
+      if (allocated === undefined) {
+        allocated = allocateAsarDecoyDirectory(root, preferred);
+        decoyDirectories.set(preferred, allocated);
+      }
+      relativePath = allocated + relativePath.slice(preferred.length);
     }
-    const rawSegments = file.relativePath.replace(/^\/+/, "").split("/");
+    const rawSegments = relativePath.replace(/^\/+/, "").split("/");
     if (rawSegments.length === 0 || (rawSegments.length === 1 && rawSegments[0] === "")) {
       continue;
     }
     for (const seg of rawSegments) {
       validateEntrySegment(seg);
+    }
+    const directoryDepth = rawSegments.length - (file.directory ? 0 : 1);
+    if (directoryDepth > MAX_ASAR_DIRECTORY_DEPTH) {
+      throw new UnsupportedAsarError("ASAR directory depth exceeds admission limit");
     }
 
     const normalizedPath = rawSegments.join("/");
@@ -427,7 +463,7 @@ export function packAsarBuffer(files: readonly VirtualAsarFile[]): Buffer {
       const seg = rawSegments[i]!;
       const existing = currentDir.files[seg];
       if (!existing) {
-        const nextDir: AsarDirectoryNode = { files: {} };
+        const nextDir = createAsarDirectory();
         currentDir.files[seg] = nextDir;
         currentDir = nextDir;
       } else if (isDirectoryNode(existing)) {
@@ -440,6 +476,13 @@ export function packAsarBuffer(files: readonly VirtualAsarFile[]): Buffer {
     }
 
     const leafName = rawSegments[rawSegments.length - 1]!;
+    if (Object.hasOwn(currentDir.files, leafName)) {
+      throw new UnsupportedAsarError(`Duplicate or conflicting ASAR entry at ${normalizedPath}`);
+    }
+    if (file.directory) {
+      currentDir.files[leafName] = createAsarDirectory();
+      continue;
+    }
     if (file.link !== undefined) {
       const validatedLink = validateRelativeLinkTarget(normalizedPath, file.link);
       currentDir.files[leafName] = {
@@ -487,4 +530,25 @@ export function packAsarBuffer(files: readonly VirtualAsarFile[]): Buffer {
   jsonBytes.copy(headerBuffer, 16);
 
   return Buffer.concat([headerBuffer, ...payloadChunks]);
+}
+
+function createAsarDirectory(): AsarDirectoryNode {
+  return { files: Object.create(null) as Record<string, AsarHeaderNode> };
+}
+
+function allocateAsarDecoyDirectory(root: AsarDirectoryNode, preferred: string): string {
+  const [parent, leaf] = preferred.split("/") as [string, string];
+  const parentNode = root.files[parent];
+  const parentCaseCollision = Object.keys(root.files).some(
+    (name) => name !== parent && name.toLowerCase() === parent.toLowerCase(),
+  );
+  const parentAvailable = !parentCaseCollision && (parentNode === undefined || isDirectoryNode(parentNode));
+  const siblings = parentAvailable && parentNode !== undefined ? parentNode.files : root.files;
+  const siblingNames = new Set(Object.keys(siblings).map((name) => name.toLowerCase()));
+  const stem = parentAvailable ? leaf : `${parent}-${leaf}`;
+  let name = stem;
+  for (let suffix = 1; siblingNames.has(name.toLowerCase()); suffix++) {
+    name = `${stem}-${suffix}`;
+  }
+  return parentAvailable ? `${parent}/${name}` : name;
 }

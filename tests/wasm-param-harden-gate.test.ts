@@ -6,6 +6,7 @@ import { protectTarget } from "../src/engine/protector.js";
 import { hardenProject } from "../src/engine/harden.js";
 import { buildTestWasmWithParamCarrier } from "../src/engine/wasm-param-carrier-lint.js";
 import { rewriteStablePanelDeriveSymbols } from "../src/engine/panel-derive-abi-lint.js";
+import { createWasmCustomSection } from "../src/shields/formats/wasm.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -18,7 +19,11 @@ describe("red-blue round-3 residual gates", () => {
     dirs.push(dir);
     const input = join(dir, "core.wasm");
     const output = join(dir, "core.out.wasm");
-    writeFileSync(input, buildTestWasmWithParamCarrier({}));
+    const fixture = buildTestWasmWithParamCarrier({});
+    writeFileSync(input, Buffer.concat([
+      fixture.subarray(0, 8),
+      createWasmCustomSection("parameter-carrier", fixture.subarray(8)),
+    ]));
     expect(() =>
       protectTarget({
         inputPath: input,

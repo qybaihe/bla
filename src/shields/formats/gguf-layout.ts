@@ -25,8 +25,50 @@ export const GGUF_DEFAULT_ALIGNMENT = 32;
 /** Bounds that keep parsing cheap on hostile / malformed input. */
 const MAX_KV_COUNT = 100_000n;
 const MAX_TENSOR_COUNT = 1_000_000n;
-const MAX_TENSOR_DIMS = 8;
-const MAX_VALUE_DEPTH = 64;
+const MAX_TENSOR_DIMS = 4;
+const MAX_KV_KEY_BYTES = 65_535n;
+const MAX_SIGNED_DIM = (1n << 63n) - 1n;
+const GGUF_SCALAR_BYTES = [1, 1, 2, 2, 4, 4, 4, 1, 0, 0, 8, 8, 8] as const;
+// GGML on-disk types: [elements per block, bytes per block].
+// Type IDs and block layouts follow ggml.h and ggml-common.h.
+const GGML_BLOCK_LAYOUT: Readonly<Record<number, readonly [bigint, bigint]>> = {
+  0: [1n, 4n],      // F32
+  1: [1n, 2n],      // F16
+  2: [32n, 18n],    // Q4_0
+  3: [32n, 20n],    // Q4_1
+  6: [32n, 22n],    // Q5_0
+  7: [32n, 24n],    // Q5_1
+  8: [32n, 34n],    // Q8_0
+  9: [32n, 36n],    // Q8_1
+  10: [256n, 84n],  // Q2_K
+  11: [256n, 110n], // Q3_K
+  12: [256n, 144n], // Q4_K
+  13: [256n, 176n], // Q5_K
+  14: [256n, 210n], // Q6_K
+  15: [256n, 292n], // Q8_K
+  16: [256n, 66n],  // IQ2_XXS
+  17: [256n, 74n],  // IQ2_XS
+  18: [256n, 98n],  // IQ3_XXS
+  19: [256n, 50n],  // IQ1_S
+  20: [32n, 18n],   // IQ4_NL
+  21: [256n, 110n], // IQ3_S
+  22: [256n, 82n],  // IQ2_S
+  23: [256n, 136n], // IQ4_XS
+  24: [1n, 1n],     // I8
+  25: [1n, 2n],     // I16
+  26: [1n, 4n],     // I32
+  27: [1n, 8n],     // I64
+  28: [1n, 8n],     // F64
+  29: [256n, 56n],  // IQ1_M
+  30: [1n, 2n],     // BF16
+  34: [256n, 54n],  // TQ1_0
+  35: [256n, 66n],  // TQ2_0
+  39: [32n, 17n],   // MXFP4
+  40: [64n, 36n],   // NVFP4
+  41: [128n, 18n],  // Q1_0
+  42: [64n, 18n],   // Q2_0
+  43: [1n, 1n],     // F8_E4M3
+};
 /**
  * Upper bound on `general.alignment`. Real GGUF writers use 32 (some use 64 or
  * 128). A hostile file can claim up to 2^31, which makes `alignUp` request a
@@ -41,6 +83,7 @@ export interface GgufKvEntry {
   readonly start: number;
   /** Absolute offset one past the end of the KV record. */
   readonly end: number;
+  readonly valueStart: number;
   readonly valueType: number;
 }
 
@@ -63,9 +106,8 @@ function skipValue(
   bytes: Buffer,
   offset: number,
   valType: number,
-  depth: number,
 ): number | null {
-  if (depth > MAX_VALUE_DEPTH || offset > bytes.length) return null;
+  if (offset > bytes.length) return null;
   switch (valType) {
     case 0:
     case 1:
@@ -92,12 +134,15 @@ function skipValue(
       if (offset + 12 > bytes.length) return null;
       const elemType = bytes.readUInt32LE(offset);
       const count = bytes.readBigUInt64LE(offset + 4);
-      // Each element consumes >= 1 byte, so a count larger than the remaining
-      // bytes is necessarily malformed (also bounds the loop).
-      if (count > BigInt(bytes.length - (offset + 12))) return null;
+      if (elemType === GGUF_TYPE_ARRAY || elemType > 12) return null;
       let cur = offset + 12;
+      if (elemType !== GGUF_TYPE_STRING) {
+        const end = BigInt(cur) + count * BigInt(GGUF_SCALAR_BYTES[elemType]!);
+        return end <= BigInt(bytes.length) ? Number(end) : null;
+      }
+      if (count * 8n > BigInt(bytes.length - cur)) return null;
       for (let i = 0n; i < count; i++) {
-        const next = skipValue(bytes, cur, elemType, depth + 1);
+        const next = skipValue(bytes, cur, elemType);
         if (next === null) return null;
         cur = next;
       }
@@ -119,7 +164,7 @@ function alignUp(value: number, alignment: number): number {
  * structure. Never throws on hostile input.
  */
 export function parseGgufLayout(input: Uint8Array): GgufLayout | null {
-  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   if (
     bytes.length < 24 ||
     bytes[0] !== 0x47 ||
@@ -137,34 +182,35 @@ export function parseGgufLayout(input: Uint8Array): GgufLayout | null {
 
   let offset = 24;
   const kvs: GgufKvEntry[] = [];
+  const keys = new Set<string>();
   let alignment = GGUF_DEFAULT_ALIGNMENT;
   for (let i = 0n; i < kvCount; i++) {
     const start = offset;
     if (offset + 8 > bytes.length) return null;
     const keyLen = bytes.readBigUInt64LE(offset);
     const keyEnd = BigInt(offset) + 8n + keyLen;
-    if (keyEnd + 4n > BigInt(bytes.length)) return null;
+    if (keyLen === 0n || keyLen > MAX_KV_KEY_BYTES || keyEnd + 4n > BigInt(bytes.length)) return null;
     const keyEndN = Number(keyEnd);
     const key = bytes.subarray(offset + 8, keyEndN).toString("utf8");
     const valueType = bytes.readUInt32LE(keyEndN);
     const valueStart = keyEndN + 4;
-    const next = skipValue(bytes, valueStart, valueType, 0);
+    if (keys.has(key)) return null;
+    keys.add(key);
+    const next = skipValue(bytes, valueStart, valueType);
     if (next === null) return null;
-    if (key === "general.alignment" && valueType === GGUF_TYPE_UINT32) {
+    if (key === "general.alignment") {
+      if (valueType !== GGUF_TYPE_UINT32) return null;
       const a = bytes.readUInt32LE(valueStart);
-      // Spec: a non-zero multiple of 8. Out-of-range values are treated as
-      // malformed rather than silently clamped, so the caller never rebuilds a
-      // file whose declared data section lies beyond the file itself.
-      if (a > 0 && a % 8 === 0) {
-        if (a > MAX_ALIGNMENT) return null;
-        alignment = a;
-      }
+      if (a === 0 || a % 8 !== 0 || a > MAX_ALIGNMENT) return null;
+      alignment = a;
     }
-    kvs.push({ key, start, end: next, valueType });
+    kvs.push({ key, start, end: next, valueStart, valueType });
     offset = next;
   }
   const kvEnd = offset;
 
+  const fileEnd = BigInt(bytes.length);
+  let maxTensorEnd = 0n;
   for (let t = 0n; t < tensorCount; t++) {
     if (offset + 8 > bytes.length) return null;
     const nameLen = bytes.readBigUInt64LE(offset);
@@ -176,11 +222,28 @@ export function parseGgufLayout(input: Uint8Array): GgufLayout | null {
     offset += 4;
     const tail = nDims * 8 + 4 + 8; // dims (u64 each) + ggml_type (u32) + offset (u64)
     if (offset + tail > bytes.length) return null;
+    const dimensions = offset;
     offset += tail;
+    const [blockElements, blockBytes] = GGML_BLOCK_LAYOUT[bytes.readUInt32LE(offset - 12)] ?? [0n, 0n];
+    if (blockElements === 0n) return null;
+    const firstDim = nDims === 0 ? 1n : bytes.readBigUInt64LE(dimensions);
+    if (firstDim > MAX_SIGNED_DIM || firstDim % blockElements !== 0n) return null;
+    let size = (firstDim / blockElements) * blockBytes;
+    for (let d = 1; d < nDims; d++) {
+      const dimension = bytes.readBigUInt64LE(dimensions + d * 8);
+      if (dimension > MAX_SIGNED_DIM) return null;
+      size *= dimension;
+    }
+    const tensorOffset = bytes.readBigUInt64LE(offset - 8);
+    if (tensorOffset % BigInt(alignment) !== 0n) return null;
+    const end = tensorOffset + size;
+    if (end > fileEnd) return null;
+    if (end > maxTensorEnd) maxTensorEnd = end;
   }
   const tensorInfoEnd = offset;
   const hasDataRegion = bytes.length > tensorInfoEnd;
   const dataStart = alignUp(tensorInfoEnd, alignment);
+  if (tensorCount > 0n && BigInt(dataStart) + maxTensorEnd > fileEnd) return null;
 
   return {
     version,
@@ -232,6 +295,9 @@ export function rebuildGguf(
   const drop = options.dropKeys ?? new Set<string>();
   const append = options.appendKvs ?? [];
   const kept = layout.kvs.filter((kv) => !drop.has(kv.key));
+  if (BigInt(kept.length + append.length) > MAX_KV_COUNT) {
+    throw new Error("Refusing to rebuild GGUF: metadata count exceeds the supported limit");
+  }
 
   const header = Buffer.alloc(24);
   header.write("GGUF", 0, "ascii");
@@ -269,11 +335,8 @@ export function readGgufStringKv(
   layout: GgufLayout,
   key: string,
 ): string | null {
-  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   const kv = layout.kvs.find((k) => k.key === key);
   if (!kv || kv.valueType !== GGUF_TYPE_STRING) return null;
-  const keyLen = Number(bytes.readBigUInt64LE(kv.start));
-  const valueStart = kv.start + 8 + keyLen + 4;
-  const len = Number(bytes.readBigUInt64LE(valueStart));
-  return bytes.subarray(valueStart + 8, valueStart + 8 + len).toString("utf8");
+  return bytes.subarray(kv.valueStart + 8, kv.end).toString("utf8");
 }

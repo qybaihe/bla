@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { protectAndroidDexBuffer, protectIl2cppMetadataBuffer } from "../src/shields/formats/mobile-game.js";
-import { protectApplePlistBuffer, REA_MAX_BINARY_PLIST_NESTING_DEPTH } from "../src/shields/formats/apple-plist.js";
+import { protectApplePlistBuffer } from "../src/shields/formats/apple-plist.js";
 import {
   protectDotnetManagedBuffer,
   REA_MAX_MANAGED_METADATA_REPRESENTATION_BYTES,
@@ -34,17 +34,15 @@ describe("Canary + system-diagnostic coverage on remaining formats", () => {
     expect(res.buffer.toString("latin1")).toContain("PROTECTED_CANARY_CREDENTIAL=");
   });
 
-  it(`claims bplist nesting past REA_MAX_BINARY_PLIST_NESTING_DEPTH (${REA_MAX_BINARY_PLIST_NESTING_DEPTH}) with canaries`, () => {
-    const bplist = Buffer.concat([
-      Buffer.from("bplist00", "latin1"),
-      Buffer.alloc(32, 0),
-    ]);
+  it("embeds canaries and diagnostics as binary plist entries", () => {
+    const bplist = Buffer.from("YnBsaXN0MDDQCAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAJ", "base64");
     const res = protectApplePlistBuffer(bplist, { intensity: "balanced", seed: "bplist-canary" });
-    expect(res.exceedsBinaryPlistNestingDepth).toBe(true);
+    expect(res.exceedsBinaryPlistNestingDepth).toBe(false);
     expect(res.canaryTokensEmbedded).toBeGreaterThan(0);
     expect(res.diagnosticsEmbedded).toBeGreaterThan(0);
     expect(res.buffer.subarray(0, 6).toString("latin1")).toBe("bplist");
-    expect(res.buffer.toString("latin1")).toContain(`BLA_BPLIST_DEPTH_GUARD_${REA_MAX_BINARY_PLIST_NESTING_DEPTH + 4}`);
+    expect(res.buffer.toString("latin1")).toContain("BLACanaryCredential_0");
+    expect(res.buffer.toString("latin1")).toContain("BLASystemDiagnostic_0");
   });
 
   it(`embeds canary/diagnostic into .NET managed assemblies under ${REA_MAX_MANAGED_METADATA_REPRESENTATION_BYTES} cap`, () => {

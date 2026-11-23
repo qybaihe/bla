@@ -512,8 +512,11 @@ describe("Issue #155 extended hardening: anti-marker-spoofing across formats & S
     // 7. WASM: single empty `bla.enclave.manifest` custom section must fail audit/verify
     const wasmHeader = Buffer.from([
       0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+      0x03, 0x02, 0x01, 0x00,
       // Export section (id=7, 1 export "run")
       0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x00,
+      0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
     ]);
     const secName = Buffer.from("bla.enclave.manifest", "utf8");
     const singleCustomSec = Buffer.concat([
@@ -551,7 +554,7 @@ describe("Issue #155 extended hardening: anti-marker-spoofing across formats & S
     protectTarget({ inputPath: stBase, outputPath: stReal, seed: "st-ok" });
     expect(verifyTarget(stReal, stBase).overallPassed).toBe(true);
 
-    // 9. GGUF: appending `BLA-MODEL-SHIELD` without valid >32 metadata nesting breaker must fail verify
+    // 9. GGUF: a protection marker after the metadata table must fail verify.
     const ggufBaseBuf = Buffer.alloc(24, 0);
     ggufBaseBuf.write("GGUF", 0, "ascii");
     ggufBaseBuf.writeUInt32LE(3, 4);
@@ -565,7 +568,7 @@ describe("Issue #155 extended hardening: anti-marker-spoofing across formats & S
     expect(verifyTarget(ggufReal, ggufBase).overallPassed).toBe(true);
 
     // 10. Apple binary plist (`bplist00`): single depth-guard token without full canary corpus must fail verify
-    const bplistBaseBuf = Buffer.concat([Buffer.from("bplist00", "ascii"), Buffer.alloc(32, 0)]);
+    const bplistBaseBuf = Buffer.from("YnBsaXN0MDDQCAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAJ", "base64");
     const bplistSpoofBuf = Buffer.concat([
       bplistBaseBuf,
       Buffer.from("\0BLA_BPLIST_DEPTH_GUARD_132\0enclave\0enclave\0", "latin1"),

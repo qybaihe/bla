@@ -198,6 +198,82 @@ const HONEY_TRAP_TABLES: readonly HoneyTrapTable[] = [
   },
 ];
 
+const HONEY_SCHEMA = [
+  {
+    type: "view",
+    name: SQLITE_HONEY_TABLES.activeTopologyView,
+    definition: `AS
+          SELECT slot_id, key_domain, enclave_cid, attestation_notice
+          FROM ${SQLITE_HONEY_TABLES.keyHierarchy}
+          WHERE enclave_cid >= 16`,
+  },
+  {
+    type: "table",
+    name: SQLITE_HONEY_TABLES.canaryTransport,
+    definition: `(
+          canary_id INTEGER PRIMARY KEY,
+          canary_token TEXT NOT NULL,
+          ambiguous_transport_url TEXT NOT NULL,
+          conflicting_query_url TEXT NOT NULL,
+          policy_notice TEXT NOT NULL
+        )`,
+  },
+  {
+    type: "table",
+    name: SQLITE_HONEY_TABLES.systemDiagnostic,
+    definition: `(
+          diag_id INTEGER PRIMARY KEY,
+          subsystem TEXT NOT NULL,
+          error_class TEXT NOT NULL,
+          system_code TEXT NOT NULL,
+          diagnostic_message TEXT NOT NULL,
+          remediation_note TEXT NOT NULL
+        )`,
+  },
+] as const;
+
+interface SqliteSchemaObject {
+  readonly type: string;
+  readonly name: string;
+  readonly tbl_name: string;
+  readonly sql: string | null;
+}
+
+type SqliteDatabase = InstanceType<ReturnType<typeof getDatabaseSyncClass>>;
+
+function lookupSqliteObjects(db: SqliteDatabase, name: string): readonly SqliteSchemaObject[] {
+  return db.prepare(
+    "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE name = ? COLLATE NOCASE",
+  ).all(name) as unknown as SqliteSchemaObject[];
+}
+
+function assertHoneySchemaAvailable(db: SqliteDatabase): void {
+  const reserved = [
+    ...HONEY_TRAP_TABLES.map((table) => ({
+      name: table.name,
+      type: "table",
+      definitions: [stockTrapExpression, evalTrapExpression].map(table.columnsSql),
+    })),
+    ...HONEY_SCHEMA.map((entry) => ({ ...entry, definitions: [entry.definition] })),
+  ];
+  const attachedObjects = db.prepare(
+    "SELECT name FROM main.sqlite_schema WHERE tbl_name = ? COLLATE NOCASE AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+  );
+  for (const { name, type, definitions } of reserved) {
+    const expected = definitions.map((def) => normalizeSchemaSql(`CREATE ${type.toUpperCase()} ${name} ${def}`));
+    for (const object of lookupSqliteObjects(db, name)) {
+      if (object.name !== name || object.type !== type ||
+          object.sql === null || !expected.includes(normalizeSchemaSql(object.sql))) {
+        throw new SqliteWalConsistencyError(`Reserved SQLite object name is already in use: ${object.name}`);
+      }
+    }
+    const attached = attachedObjects.get(name);
+    if (attached) {
+      throw new SqliteWalConsistencyError(`Customer schema object ${String(attached.name)} references reserved SQLite object ${name}`);
+    }
+  }
+}
+
 /**
  * Which trap form a schema carries. Ordinary application generated columns
  * match neither. One function-form column is enough to make the database
@@ -338,14 +414,15 @@ interface BusinessTableDigest {
   readonly rowsSha256: string;
 }
 
-function snapshotBusinessTables(
-  db: InstanceType<ReturnType<typeof getDatabaseSyncClass>>,
-): readonly BusinessTableDigest[] {
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-    )
-    .all() as Array<{ name: string }>;
+function snapshotBusinessDatabase(
+  db: SqliteDatabase,
+  excludedNames: ReadonlySet<string>,
+): { readonly schema: readonly SqliteSchemaObject[]; readonly tables: readonly BusinessTableDigest[] } {
+  const schema = (db.prepare(
+    "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE lower(name) NOT GLOB 'sqlite_*' ORDER BY type, name",
+  ).all() as unknown as SqliteSchemaObject[]).filter(
+    (object) => !excludedNames.has(object.name) || (object.type !== "table" && object.type !== "view"),
+  );
 
   // Read integers as BigInt: a 64-bit value (snowflake id, nanosecond timestamp)
   // does not fit a JavaScript number and would otherwise abort the whole run.
@@ -356,8 +433,8 @@ function snapshotBusinessTables(
   };
 
   const digests: BusinessTableDigest[] = [];
-  for (const { name } of tables) {
-    if (isHoneyTableName(name)) continue;
+  for (const { name, type } of schema) {
+    if (type !== "table") continue;
     let rows: unknown[];
     try {
       rows = readRows(`SELECT * FROM ${quoteIdentifier(name)} ORDER BY rowid`);
@@ -377,7 +454,7 @@ function snapshotBusinessTables(
       rowsSha256: hash,
     });
   }
-  return digests;
+  return { schema, tables: digests };
 }
 
 /**
@@ -684,14 +761,12 @@ export function protectSqliteBuffer(
     const db = new DatabaseSync(dbPath);
     let honeyTablesInjected = 0;
     let generatedTrapColumnsAdded = 0;
-    let beforeDigests: readonly BusinessTableDigest[] = [];
-
     try {
-      beforeDigests = snapshotBusinessTables(db);
-
+      assertHoneySchemaAvailable(db);
       // Needed to create or read eval-mode honey tables; the stock form does
       // not use it.
       registerEvalTrapFunction(db);
+      const beforeDigests = snapshotBusinessDatabase(db, SQLITE_HONEY_TABLE_NAME_SET);
       switchTrapTablesTo(db, trapExpression);
 
       db.exec(`
@@ -700,42 +775,24 @@ export function protectSqliteBuffer(
             `CREATE TABLE IF NOT EXISTS ${table.name} ${table.columnsSql(trapExpression)};`,
         ).join("\n\n        ")}
 
-        CREATE VIEW IF NOT EXISTS ${SQLITE_HONEY_TABLES.activeTopologyView} AS
-          SELECT slot_id, key_domain, enclave_cid, attestation_notice
-          FROM ${SQLITE_HONEY_TABLES.keyHierarchy}
-          WHERE enclave_cid >= 16;
-
-        CREATE TABLE IF NOT EXISTS ${SQLITE_HONEY_TABLES.canaryTransport} (
-          canary_id INTEGER PRIMARY KEY,
-          canary_token TEXT NOT NULL,
-          ambiguous_transport_url TEXT NOT NULL,
-          conflicting_query_url TEXT NOT NULL,
-          policy_notice TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS ${SQLITE_HONEY_TABLES.systemDiagnostic} (
-          diag_id INTEGER PRIMARY KEY,
-          subsystem TEXT NOT NULL,
-          error_class TEXT NOT NULL,
-          system_code TEXT NOT NULL,
-          diagnostic_message TEXT NOT NULL,
-          remediation_note TEXT NOT NULL
-        );
+        ${HONEY_SCHEMA.map(({ type, name, definition }) =>
+          `CREATE ${type.toUpperCase()} IF NOT EXISTS ${name} ${definition};`,
+        ).join("\n")}
       `);
 
       honeyTablesInjected += 5;
       generatedTrapColumnsAdded += 3;
 
       const insertKeyStmt = db.prepare(`
-        INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.keyHierarchy} (slot_id, key_domain, enclave_cid, sealed_payload, attestation_notice)
+        INSERT OR IGNORE INTO ${SQLITE_HONEY_TABLES.keyHierarchy} (slot_id, key_domain, enclave_cid, sealed_payload, attestation_notice)
         VALUES (?, ?, ?, ?, ?)
       `);
       const insertQuoteStmt = db.prepare(`
-        INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.attestationLedger} (quote_id, pcr0_sha256, monotonic_counter, enclave_manifest)
+        INSERT OR IGNORE INTO ${SQLITE_HONEY_TABLES.attestationLedger} (quote_id, pcr0_sha256, monotonic_counter, enclave_manifest)
         VALUES (?, ?, ?, ?)
       `);
       const insertLeaseStmt = db.prepare(`
-        INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.sessionLeases} (lease_token, tier_scope, expires_epoch, hardware_bound)
+        INSERT OR IGNORE INTO ${SQLITE_HONEY_TABLES.sessionLeases} (lease_token, tier_scope, expires_epoch, hardware_bound)
         VALUES (?, ?, ?, 1)
       `);
 
@@ -763,7 +820,7 @@ export function protectSqliteBuffer(
       }
 
       const insertCanaryStmt = db.prepare(`
-        INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.canaryTransport}
+        INSERT OR IGNORE INTO ${SQLITE_HONEY_TABLES.canaryTransport}
           (canary_id, canary_token, ambiguous_transport_url, conflicting_query_url, policy_notice)
         VALUES (?, ?, ?, ?, ?)
       `);
@@ -781,7 +838,7 @@ export function protectSqliteBuffer(
       }
 
       const insertDiagStmt = db.prepare(`
-        INSERT OR REPLACE INTO ${SQLITE_HONEY_TABLES.systemDiagnostic}
+        INSERT OR IGNORE INTO ${SQLITE_HONEY_TABLES.systemDiagnostic}
           (diag_id, subsystem, error_class, system_code, diagnostic_message, remediation_note)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
@@ -796,10 +853,10 @@ export function protectSqliteBuffer(
         );
       });
 
-      const afterDigests = snapshotBusinessTables(db);
+      const afterDigests = snapshotBusinessDatabase(db, SQLITE_HONEY_TABLE_NAME_SET);
       if (JSON.stringify(beforeDigests) !== JSON.stringify(afterDigests)) {
         throw new SqliteWalConsistencyError(
-          "Post-transform business table digest mismatch; aborting output.",
+          "Post-transform business schema or table digest mismatch; aborting output.",
         );
       }
     } finally {
@@ -863,7 +920,7 @@ export function buildSampleSqliteDatabase(): Buffer {
 
 /**
  * Reserved unused VIEW that carries the opt-in sidecarEntangle schema
- * comment / metadata note. Not a user table: `snapshotBusinessTables` and
+ * comment / metadata note. The business snapshot and
  * `inspectSqliteBuffer` only enumerate `type = 'table'`. The view has
  * `WHERE 0` so `SELECT * FROM bla_sidecar_v1` returns no rows.
  *
@@ -988,7 +1045,7 @@ export function extractSqliteSidecarSchemaCommentJson(
     try {
       const row = db
         .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type = 'view' AND name = ?",
+          "SELECT sql FROM main.sqlite_schema WHERE type = 'view' AND name = ?",
         )
         .get(SQLITE_SIDECAR_VIEW_NAME) as { sql: string | null } | undefined;
       const sql = row?.sql;
@@ -1009,37 +1066,34 @@ export function extractSqliteSidecarSchemaCommentJson(
  * and un-escape the SQL string literal.
  */
 export function parseSqliteSidecarViewSql(sql: string): string | null {
-  const marker = `AS ${quoteIdentifier(SQLITE_SIDECAR_NOTE_COLUMN)}`;
-  const selectIdx = sql.search(/SELECT\s+/i);
-  if (selectIdx < 0) return null;
-  const asIdx = sql.indexOf(marker, selectIdx);
-  if (asIdx < 0) return null;
-  // Walk backward from the AS marker over the closing quote of the literal.
-  let end = asIdx - 1;
-  while (end >= 0 && /\s/.test(sql[end]!)) end--;
-  if (end < 1 || sql[end] !== "'") return null;
-  // The literal started at the matching unescaped opening quote.
-  let start = end - 1;
-  while (start >= 0) {
-    if (sql[start] === "'") {
-      let quotes = 1;
-      let k = start;
-      while (k - 1 >= 0 && sql[k - 1] === "'") {
-        quotes++;
-        k--;
-      }
-      // An even run of quotes ending at `end` means they are all escapes;
-      // a lone (odd) quote at `start` is the opener.
-      if (quotes % 2 === 1) {
-        const raw = sql.slice(start + 1, end);
-        return raw.replace(/''/g, "'");
-      }
-      start = k - 1;
-      continue;
-    }
-    start--;
+  const match = /^CREATE VIEW "bla_sidecar_v1" AS SELECT '((?:[^']|'')*)' AS "bla\.sidecar\.v1" WHERE 0$/.exec(sql);
+  if (!match) return null;
+  const json = match[1]!.replace(/''/g, "'");
+  return isSqliteSidecarNote(json) ? json : null;
+}
+
+function isSqliteSidecarNote(json: string): boolean {
+  try {
+    const note = JSON.parse(json);
+    return note?.schema === "bla-sidecar-entangle/v1" &&
+      note.kind === "sqlite-schema-comment" &&
+      note.key === SQLITE_SIDECAR_NOTE_COLUMN &&
+      typeof note.digest === "string" && /^[a-f0-9]{64}$/.test(note.digest) &&
+      note.mode === "sidecars" && Array.isArray(note.sidecarPaths);
+  } catch {
+    return false;
   }
-  return null;
+}
+
+const SQLITE_SIDECAR_VIEW_SET: ReadonlySet<string> = new Set([SQLITE_SIDECAR_VIEW_NAME]);
+
+function assertSqliteSidecarSchemaAvailable(db: SqliteDatabase): void {
+  for (const object of lookupSqliteObjects(db, SQLITE_SIDECAR_VIEW_NAME)) {
+    if (object.type !== "view" || object.name !== SQLITE_SIDECAR_VIEW_NAME ||
+        object.sql === null || parseSqliteSidecarViewSql(object.sql) === null) {
+      throw new SqliteWalConsistencyError(`Reserved SQLite object name is already in use: ${object.name}`);
+    }
+  }
 }
 
 /**
@@ -1051,6 +1105,9 @@ export function plantSqliteSidecarSchemaComment(
   bytes: Uint8Array,
   noteJson: string,
 ): Buffer {
+  if (!isSqliteSidecarNote(noteJson)) {
+    throw new SqliteWalConsistencyError("Invalid SQLite sidecar note");
+  }
   const input = Buffer.from(bytes);
   validateSqliteStandaloneBuffer(input);
   const identityBefore = readSqliteHeaderIdentity(input);
@@ -1061,16 +1118,17 @@ export function plantSqliteSidecarSchemaComment(
     writeFileSync(dbPath, input);
     const db = new DatabaseSync(dbPath);
     try {
+      assertSqliteSidecarSchemaAvailable(db);
       registerEvalTrapFunction(db);
-      const before = snapshotBusinessTables(db);
+      const before = snapshotBusinessDatabase(db, SQLITE_SIDECAR_VIEW_SET);
       db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
       db.exec(
         `CREATE VIEW ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)} AS SELECT ${sqlStringLiteral(noteJson)} AS ${quoteIdentifier(SQLITE_SIDECAR_NOTE_COLUMN)} WHERE 0`,
       );
-      const after = snapshotBusinessTables(db);
+      const after = snapshotBusinessDatabase(db, SQLITE_SIDECAR_VIEW_SET);
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         throw new SqliteWalConsistencyError(
-          "Post-sidecar business table digest mismatch; aborting output.",
+          "Post-sidecar business schema or table digest mismatch; aborting output.",
         );
       }
     } finally {
@@ -1115,13 +1173,14 @@ export function stripSqliteSidecarSchemaComment(bytes: Uint8Array): Buffer {
     writeFileSync(dbPath, input);
     const db = new DatabaseSync(dbPath);
     try {
+      assertSqliteSidecarSchemaAvailable(db);
       registerEvalTrapFunction(db);
-      const before = snapshotBusinessTables(db);
+      const before = snapshotBusinessDatabase(db, SQLITE_SIDECAR_VIEW_SET);
       db.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(SQLITE_SIDECAR_VIEW_NAME)}`);
-      const after = snapshotBusinessTables(db);
+      const after = snapshotBusinessDatabase(db, SQLITE_SIDECAR_VIEW_SET);
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         throw new SqliteWalConsistencyError(
-          "Post-strip business table digest mismatch; aborting output.",
+          "Post-strip business schema or table digest mismatch; aborting output.",
         );
       }
     } finally {
