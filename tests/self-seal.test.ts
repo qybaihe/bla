@@ -302,3 +302,83 @@ describe("self-seal helper (#40.5)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+describe("self-seal inspector development escape hatch", () => {
+  it("drops the inspector fingerprint but keeps the sibling binding", () => {
+    const strict = generateSelfSealSnippet(new SeededPrng("self-seal-inspector"), {
+      siblingPaths: ["./core.wasm"],
+      bindingName: "integrityDigestStrict",
+    });
+    expect(strict.envFingerprint).toBe(true);
+    expect(strict.code).toContain("--inspect");
+    expect(strict.code).toContain("node:inspector");
+
+    const dev = generateSelfSealSnippet(new SeededPrng("self-seal-inspector"), {
+      siblingPaths: ["./core.wasm"],
+      bindingName: "integrityDigestDev",
+      allowInspector: true,
+    });
+    expect(dev.envFingerprint).toBe(false);
+    expect(dev.code).not.toContain("--inspect");
+    expect(dev.code).not.toContain("node:inspector");
+    expect(dev.code).toContain("./core.wasm");
+    expect(dev.code).toContain("integrityDigestDev");
+    expect(dev.code).toContain("_tampered");
+  });
+
+  it("protectTarget forwards the option and the output still hard-fails on a missing sibling", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-selfseal-devmode-"));
+    try {
+      const sib = join(dir, "core.wasm");
+      writeFileSync(sib, Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0xaa]));
+      const entry = join(dir, "gate.cjs");
+      writeFileSync(
+        entry,
+        [
+          '"use strict";',
+          "function main() { return 42; }",
+          "module.exports = { main };",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const strictOut = join(dir, "gate.strict.cjs");
+      protectTarget({
+        inputPath: entry,
+        outputPath: strictOut,
+        intensity: "balanced",
+        seed: "self-seal-devmode-strict",
+        selfSeal: true,
+        selfSealSiblingPaths: ["core.wasm"],
+      });
+      const devOut = join(dir, "gate.dev.cjs");
+      protectTarget({
+        inputPath: entry,
+        outputPath: devOut,
+        intensity: "balanced",
+        seed: "self-seal-devmode-dev",
+        selfSeal: true,
+        selfSealAllowInspector: true,
+        selfSealSiblingPaths: ["core.wasm"],
+      });
+
+      const devCode = readFileSync(devOut, "utf8");
+      // The runtime shield still records an inspector probe as decoy data; the
+      // self-seal-specific trip is the `envNote` fingerprint block.
+      expect(readFileSync(strictOut, "utf8")).toContain("envNote");
+      expect(devCode).not.toContain("envNote");
+      expect(devCode).toContain("integrity check failed");
+
+      const runs = spawnSync(process.execPath, [devOut], { encoding: "utf8" });
+      expect(runs.status, runs.stderr).toBe(0);
+
+      rmSync(sib, { force: true });
+      const deleted = spawnSync(process.execPath, [devOut], { encoding: "utf8" });
+      expect(deleted.status, deleted.stdout + deleted.stderr).not.toBe(0);
+      expect((deleted.stderr || "") + (deleted.stdout || "")).toMatch(/integrity check failed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

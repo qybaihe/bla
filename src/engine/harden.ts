@@ -330,6 +330,8 @@ export interface HardenProjectOptions {
   readonly weaveDecoys?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** Development-only self-seal variant that lets a debugger attach. */
+  readonly selfSealAllowInspector?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). */
   readonly sidecarEntangle?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
@@ -2913,6 +2915,9 @@ function hardenProjectCore(
           : {}),
         ...(options.selfSeal !== undefined
           ? { selfSeal: options.selfSeal && !browserBundles.has(artifact.path) }
+          : {}),
+        ...(options.selfSealAllowInspector === true
+          ? { selfSealAllowInspector: true }
           : {}),
         ...(options.sqliteEvalTrap === true && artifact.format === "sqlite"
           ? { sqliteEvalTrap: true }

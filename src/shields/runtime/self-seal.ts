@@ -166,6 +166,11 @@ export interface SelfSealOptions {
   /** Override the emitted binding name (tests). */
   readonly bindingName?: string;
   /**
+   * Development escape hatch: skip the inspector / NODE_OPTIONS / Function#toString
+   * fingerprint so a debugger can attach. Sibling and self-digest checks stay active.
+   */
+  readonly allowInspector?: boolean;
+  /**
    * Optional build-time SHA-256 hex of sibling file bytes (keyed by the same
    * path strings listed in siblingPaths). When present, runtime hard-fails if
    * a sibling's bytes diverge — opaque-seed entanglement alone does not gate
@@ -449,7 +454,8 @@ export function generateSelfSealSnippet(
       throw new Error(`self-seal ${option} must be a valid JavaScript identifier`);
     }
   }
-  const envFingerprint = options.envFingerprint !== false;
+  const envFingerprint =
+    options.envFingerprint !== false && options.allowInspector !== true;
   const siblings = (options.siblingPaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
