@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.9] — 2026-11-24
+
+Cross-platform CI & release verification fix for `3.5.8` (which was not published): makes `scripts/verify-website.mjs` zero-dependency (static parser without `node_modules` or `node:vm`), keeps isolated `homeDir` overrides in `resolveSupportedAgentClients` hermetic from host `XDG_CONFIG_HOME`/`APPDATA`/`CODEX_HOME`, and adds Python 3.14 PEP 649 `__annotate__` test compatibility. All 4 CI platforms (Ubuntu Node 24/22.23.4, macOS Node 24, Windows Node 24) and Website Check verified green.
+
 ## [3.5.8] — 2026-11-24
 
 Comprehensive security, runtime-equivalence, format-compatibility, and trust-boundary hardening release across core, engine, JS/runtime/bundler shields, all binary/container/model formats, CLI/MCP/setup/doctor, and the release pipeline (152 new regression tests; 216 suites / 1,529 tests passing).
