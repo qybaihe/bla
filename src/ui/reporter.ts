@@ -205,9 +205,13 @@ export function formatBenchmarkReport(bench: BenchmarkReport): string {
     );
   }
 
+  const failed = bench.cases.filter((entry) => entry.functionalCheckPassed === false).length;
+  const runtimeSummary = failed
+    ? `${ANSI.red}${failed} of ${bench.cases.length} runtime checks failed${ANSI.reset}`
+    : `${ANSI.green}All ${bench.cases.length} runtime checks passed${ANSI.reset}`;
   lines.push(
     `─────────────────────────────────────────┴───────────────────────────────┴──────────────────────────────────────────┴────────────┴──────────────`,
-    `${ANSI.bold}Aggregate Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${ANSI.green}${ANSI.bold}All ${bench.cases.length} Targets: 100% Runtime-Equivalent & REA-Resistant${ANSI.reset}`,
+    `${ANSI.bold}Aggregate Token Amplification:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateTokenMultiplier}x${ANSI.reset}   |   ${ANSI.bold}Aggregate Cost Multiplier:${ANSI.reset} ${ANSI.yellow}${ANSI.bold}${bench.aggregateCostMultiplier}x${ANSI.reset}   |   ${runtimeSummary}`,
   );
 
   return lines.join("\n");
@@ -250,14 +254,10 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
   for (const c of doc.agentClients) {
     const det = c.detected ? `${ANSI.green}detected${ANSI.reset}` : `${ANSI.dim}not found${ANSI.reset}`;
     const mcp = c.mcpRegistered
-      ? c.handshakeStatus === "verified"
-        ? `${ANSI.green}MCP registered, answers initialize${ANSI.reset}`
-        : c.versionSkew
-          ? `${ANSI.yellow}MCP registered (pinned ${c.pinnedVersion ?? "?"})${ANSI.reset}`
-          : `${ANSI.green}MCP registered${ANSI.reset}`
-      : c.handshakeStatus === "failed"
-        ? `${ANSI.red}MCP did not answer initialize${ANSI.reset}`
-        : `${ANSI.yellow}MCP not registered${ANSI.reset}`;
+      ? c.versionSkew
+        ? `${ANSI.yellow}MCP registered (pinned ${c.pinnedVersion ?? "?"})${ANSI.reset}`
+        : `${ANSI.green}MCP registered${ANSI.reset}`
+      : `${ANSI.yellow}MCP not registered${ANSI.reset}`;
     const skill = c.skillInstalled ? `${ANSI.green}Skill installed${ANSI.reset}` : `${ANSI.dim}Skill not installed${ANSI.reset}`;
     lines.push(`  • ${c.displayName.padEnd(22)} (${c.id.padEnd(15)}) : ${det} | ${mcp} | ${skill}`);
   }
@@ -267,20 +267,21 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
     for (const r of doc.projectRegistrations) {
       const state =
         r.status === "pass"
-          ? r.handshakeStatus === "verified"
-            ? `${ANSI.green}MCP registered, answers initialize${ANSI.reset}`
-            : `${ANSI.green}MCP registered${ANSI.reset}`
+          ? `${ANSI.green}MCP registered${ANSI.reset}`
           : r.status === "warn"
             ? r.versionSkew
               ? `${ANSI.yellow}MCP registered (pinned ${r.pinnedVersion ?? "?"})${ANSI.reset}`
               : `${ANSI.yellow}not checked (file could not be parsed)${ANSI.reset}`
-            : r.handshakeStatus === "failed"
-              ? `${ANSI.red}MCP did not answer initialize${ANSI.reset}`
-              : `${ANSI.red}entry is broken${ANSI.reset}`;
+            : `${ANSI.red}entry is broken${ANSI.reset}`;
       lines.push(
         `  • ${sanitizeTerminalText(r.relativePath).padEnd(22)} (${r.client.padEnd(15)}) : ${state}`,
       );
     }
+  }
+
+  if (doc.localMcpHandshake !== undefined) {
+    const passed = doc.localMcpHandshake === "verified";
+    lines.push("", `${ANSI.bold}Local BLA MCP self-test:${ANSI.reset} ${passed ? "VERIFIED" : "FAILED"}`);
   }
 
   if (doc.issues.length > 0) {
@@ -301,20 +302,24 @@ export function formatDoctorReport(doc: DoctorDiagnosticReport): string {
 }
 
 export function formatSetupReport(res: SetupRunResult): string {
+  const status = res.status === "planned" ? "PLANNED (Preview)" : res.status.toUpperCase();
+  const statusColor = res.status === "applied" ? ANSI.green : res.status === "planned" ? ANSI.yellow : ANSI.red;
   const lines: string[] = [
     formatBanner(),
     "",
-    `${ANSI.bold}Setup Status:${ANSI.reset} ${res.status === "applied" ? `${ANSI.green}APPLIED${ANSI.reset}` : `${ANSI.yellow}PLANNED (Preview)${ANSI.reset}`}`,
-    `  ${res.message}`,
+    `${ANSI.bold}Setup Status:${ANSI.reset} ${statusColor}${status}${ANSI.reset}`,
+    `  ${sanitizeTerminalText(res.message)}`,
     "",
     `${ANSI.bold}Agent Registrations (${res.actions.length}):${ANSI.reset}`,
   ];
 
   for (const a of res.actions) {
-    lines.push(`  • ${ANSI.bold}${a.displayName}${ANSI.reset} (${a.clientId})`);
+    const status = a.mcpEnabled === false && a.applied ? "DISABLED (preserved)" : a.status.toUpperCase();
+    lines.push(`  • ${ANSI.bold}${a.displayName}${ANSI.reset} (${a.clientId}) — ${status}`);
     lines.push(`      Config: ${sanitizeTerminalText(a.configPath)}`);
     lines.push(`      Skill:  ${sanitizeTerminalText(a.skillPath)}`);
     lines.push(`      MCP:    ${sanitizeTerminalText(a.mcpCommand)} ${sanitizeTerminalText(a.mcpArgs.join(" "))}`);
+    if (a.error) lines.push(`      Error:  ${sanitizeTerminalText(a.error)}`);
   }
 
   return lines.join("\n");

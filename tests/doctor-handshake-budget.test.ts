@@ -1,51 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HANDSHAKE_TIMEOUT_MS,
   probeLocalMcpHandshake,
   resolveHandshakeTimeoutMs,
 } from "../src/setup/doctor.js";
-
-const dirs: string[] = [];
-const dir = (): string => {
-  const d = mkdtempSync(join(tmpdir(), "bla-doctor-budget-"));
-  dirs.push(d);
-  return d;
-};
-
-afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-});
-
-/** A local MCP server that answers `initialize`, but only after `delayMs`. */
-function slowMcpServer(delayMs: number): string {
-  const script = join(dir(), "slow-mcp.mjs");
-  writeFileSync(
-    script,
-    `
-let buf = "";
-process.stdin.on("data", (chunk) => { buf += chunk; });
-process.stdin.on("end", () => {
-  setTimeout(() => {
-    process.stdout.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        result: {
-          protocolVersion: "2024-11-05",
-          serverInfo: { name: "bla", version: "3.2.5" },
-        },
-      }) + "\\n",
-    );
-  }, ${delayMs});
-});
-`,
-    "utf8",
-  );
-  return script;
-}
 
 describe("doctor handshake budget", () => {
   it("gives a working-but-slow server enough time by default", () => {
@@ -70,13 +28,7 @@ describe("doctor handshake budget", () => {
     }
   });
 
-  it("still fails a probe whose budget is genuinely too small", () => {
-    const script = slowMcpServer(1_500);
-    expect(probeLocalMcpHandshake(process.execPath, [script], 300)).toBe(false);
-  });
-
-  it("verifies a slow-but-working server once the budget allows it", () => {
-    const script = slowMcpServer(700);
-    expect(probeLocalMcpHandshake(process.execPath, [script], 8_000)).toBe(true);
+  it("verifies the installed BLA CLI with the resolved budget", () => {
+    expect(probeLocalMcpHandshake(resolveHandshakeTimeoutMs())).toBe(true);
   });
 });

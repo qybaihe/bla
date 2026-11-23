@@ -1,5 +1,5 @@
 import { BLA_IDENTITY } from "../identity.js";
-import { initBlaConfig } from "../core/config.js";
+import { initBlaConfig, loadBlaConfig } from "../core/config.js";
 import { verifyManifestFile } from "../core/manifest-verify.js";
 import { inspectReleaseExposure } from "../core/release-exposure.js";
 import { registerBlaOutput } from "../core/output-registry.js";
@@ -8,15 +8,15 @@ import { auditTarget } from "../engine/auditor.js";
 import { protectTarget, resolveProtectOutputPath } from "../engine/protector.js";
 import { verifyTarget, type VerifyTargetOptions } from "../engine/verifier.js";
 import { defendTarget } from "../engine/defender.js";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join as joinPath, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
 import {
   discoverHardenTargets,
   hardenProject,
   restoreHardenedProject,
 } from "../engine/harden.js";
-import { listAppliedFiles, resolveApplyStateDirectory } from "../engine/harden-apply.js";
+import { BLA_BUILD_OUTPUT_DIR_NAMES, listAppliedFiles, resolveApplyStateDirectory } from "../engine/harden-apply.js";
 import {
   lintLaneIndependence,
   type LaneIndependenceReport,
@@ -55,6 +55,7 @@ import {
 } from "../engine/packaging-gates.js";
 import {
   computeArtifactRunId,
+  HARDEN_SUMMARY_FILE_NAME,
   readHardenRunSummary,
   sha256File,
 } from "../engine/run-evidence.js";
@@ -130,7 +131,7 @@ export interface JsonRpcRequest {
   readonly jsonrpc: "2.0";
   readonly id?: string | number | null;
   readonly method: string;
-  readonly params?: Record<string, unknown>;
+  readonly params?: unknown;
 }
 
 export interface JsonRpcResponse {
@@ -886,7 +887,7 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
         verify_handshake: {
           type: "boolean",
           description:
-            "Also start each registered BLA server locally and check that it answers the MCP initialize handshake (default false: registrations are only read from disk).",
+            "Self-test the installed BLA CLI with an MCP initialize request. Registration launchers are inspected from disk.",
         },
       },
       additionalProperties: false,
@@ -1426,22 +1427,22 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "bla_redteam_report",
     description:
-      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report, unready REA, or a harness that could not call this REA checkout for a probe → status unverified (nothing measured; not a verdict on a shield). Pass execute:true only when sibling REA dist is built.",
+      "Read (or optionally re-run) the empirical REA red-team report at docs/redteam/empirical-rea-validation.json. On-disk read without execute → status available (not a live REA verdict). execute:true → pass/fail from the harness. Missing report, unready REA, or a harness that could not call this REA checkout for a probe → status unverified (nothing measured; not a verdict on a shield). Live execution requires a trusted absolute REA_ROOT configured by the MCP server operator.",
     inputSchema: {
       type: "object",
       properties: {
         execute: {
           type: "boolean",
           description:
-            "When true, spawn npm redteam:rea (requires sibling REA dist). Default false: read the on-disk report only.",
+            "Run the local harness against the built REA checkout configured by the server operator. Default false.",
         },
         rea_root: {
           type: "string",
-          description: "Optional path to a local REA checkout (defaults to REA_ROOT or ../rea)",
+          description: "Optional checkout location for read-mode diagnostics. Live mode uses the operator-configured REA_ROOT.",
         },
         report_path: {
           type: "string",
-          description: "Optional override path for the empirical JSON report",
+          description: "Read mode only. Path to a bla-redteam-rea/v1 JSON report under the workspace, BLA package, or BLA state directory.",
         },
       },
       additionalProperties: false,
@@ -1608,6 +1609,49 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 function existingPaths(paths: readonly string[]): string[] {
   return paths.filter((p) => existsSync(p));
+}
+
+function planHardenOverwrites(
+  preview: ReturnType<typeof hardenProject>,
+  args: Record<string, unknown>,
+  apply: boolean,
+  customOutput: boolean,
+): string[] {
+  const planned = new Set(preview.wouldOverwrite);
+  if (preview.artifacts.length === 0) return [...planned];
+
+  let emitManifests = args.sign_manifest === true || args.emit_manifest === true;
+  if (!emitManifests && args.emit_manifest === undefined) {
+    const configDir = statSync(preview.directory).isDirectory()
+      ? preview.directory
+      : dirname(preview.directory);
+    let loaded = loadBlaConfig(configDir);
+    if (!loaded.sourcePath && (BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(configDir))) {
+      loaded = loadBlaConfig(dirname(configDir));
+    }
+    emitManifests = loaded.config.emitManifest === true;
+  }
+  const shadowPaths = preview.artifacts.map((artifact) =>
+    joinPath(preview.outputDirectory, artifact.relativePath),
+  );
+  const skippedBindings = new Set(preview.integrityBindingSkipped?.map((item) => item.relativePath));
+  const canWriteCoverage = preview.selfSeal && preview.artifacts.some((artifact) =>
+    /\.(mjs|cjs|js|ts|tsx|jsx)$/i.test(artifact.relativePath) &&
+    !skippedBindings.has(artifact.relativePath.replaceAll("\\", "/")),
+  );
+  const auxiliary = [
+    joinPath(preview.outputDirectory, HARDEN_SUMMARY_FILE_NAME),
+    ...(canWriteCoverage ? [joinPath(preview.outputDirectory, "integrity-coverage.json")] : []),
+    ...(emitManifests ? shadowPaths.map((path) => `${path}.bla-manifest.json`) : []),
+  ];
+  const writes = !apply || customOutput ? [...shadowPaths, ...auxiliary] : [];
+  if (apply && emitManifests) {
+    writes.push(...preview.artifacts.map((artifact) => `${artifact.inputPath}.bla-manifest.json`));
+  }
+  for (const path of writes) {
+    if (lstatSync(path, { throwIfNoEntry: false })) planned.add(path);
+  }
+  return [...planned];
 }
 
 function confirmationRequiredPayload(
@@ -2252,32 +2296,45 @@ export function validateMcpToolCall(
   return { ok: true, tool, args: rawArgs };
 }
 
+function isRequestId(value: unknown): value is string | number {
+  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {
+  return isPlainObject(value) && value.jsonrpc === "2.0" && typeof value.method === "string" &&
+    (value.id === undefined || value.id === null || isRequestId(value.id)) &&
+    (value.params === undefined || isPlainObject(value.params) || Array.isArray(value.params));
+}
+
+function invalidRequest(value: unknown): JsonRpcResponse {
+  return {
+    jsonrpc: "2.0",
+    id: isPlainObject(value) && isRequestId(value.id) ? value.id : null,
+    error: { code: -32600, message: "Invalid Request: expected JSON-RPC 2.0 request object" },
+  };
+}
+
+function cancellationOf(req: JsonRpcRequest): { requestId: string | number; reason: string } | undefined {
+  if (req.id !== undefined || !isPlainObject(req.params)) return undefined;
+  const { requestId, reason } = req.params;
+  if (!isRequestId(requestId) || (reason !== undefined && typeof reason !== "string")) return undefined;
+  return { requestId, reason: reason ?? "cancelled" };
+}
+
 export async function handleMcpRequest(
-  req: JsonRpcRequest,
+  req: unknown,
   handlers: McpEngineHandlers = DEFAULT_ENGINE_HANDLERS,
 ): Promise<JsonRpcResponse | null> {
-  if (!isPlainObject(req) || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
-    return {
-      jsonrpc: "2.0",
-      id: isPlainObject(req) && (typeof req.id === "string" || typeof req.id === "number") ? req.id : null,
-      error: {
-        code: -32600,
-        message: "Invalid Request: expected JSON-RPC 2.0 request object",
-      },
-    };
-  }
+  if (!isJsonRpcRequest(req)) return invalidRequest(req);
 
-  // Cancel must be honored even when the notification has no `id` (MCP spec)
-  // and must not wait behind a serial harden call (issue #75).
   if (req.method === "notifications/cancelled") {
-    const params = (req.params ?? {}) as {
-      requestId?: string | number;
-      reason?: string;
-    };
-    const rid = params.requestId;
-    if (rid !== undefined && rid !== null) {
-      const ctl = activeHardenAborts.get(rid);
-      if (ctl) ctl.abort(params.reason ?? "cancelled");
+    const cancellation = cancellationOf(req);
+    if (cancellation) activeHardenAborts.get(cancellation.requestId)?.abort(cancellation.reason);
+    if (req.id !== undefined) {
+      return {
+        jsonrpc: "2.0", id: req.id,
+        error: { code: -32600, message: "Cancellation must be sent as a notification without an id" },
+      };
     }
     return null;
   }
@@ -2429,7 +2486,8 @@ export async function handleMcpRequest(
             },
           };
         }
-        const promptDef = BLA_MCP_PROMPTS.find((p) => p.name === req.params!.name);
+        const promptName = req.params.name;
+        const promptDef = BLA_MCP_PROMPTS.find((p) => p.name === promptName);
         if (!promptDef) {
           return {
             jsonrpc: "2.0",
@@ -2597,14 +2655,16 @@ export async function handleMcpRequest(
           if (!dryRun && existsSync(hardenDir)) {
             // Zero-write preview with the real engine to find clobbered outputs
             // (with apply: the build-output files that would be replaced).
-            preOverwrite = hardenProject({
+            const preview = hardenProject({
               directory: hardenDir,
               dryRun: true,
               ...(applyMode ? { apply: true } : {}),
               ...(maxArtifacts !== undefined ? { maxArtifacts } : {}),
               ...(outputDirectory !== undefined ? { outputDirectory } : {}),
               ...(exclude !== undefined ? { exclude } : {}),
-            }).wouldOverwrite;
+              ...(typeof args.self_seal === "boolean" ? { selfSeal: args.self_seal } : {}),
+            });
+            preOverwrite = planHardenOverwrites(preview, args, applyMode, outputDirectory !== undefined);
           }
           if (!dryRun && preOverwrite.length > 0 && !confirmed) {
             refused = true;
@@ -2734,6 +2794,16 @@ export async function handleMcpRequest(
               if (report.summaryPath !== undefined) {
                 wrote.push(report.summaryPath);
               }
+              if (report.integrityCoveragePath !== undefined) {
+                wrote.push(report.integrityCoveragePath);
+              }
+              for (const path of preOverwrite) {
+                if (path.endsWith(".bla-manifest.json") && report.artifacts.some(
+                  (artifact) => artifact.success && `${artifact.outputPath}.bla-manifest.json` === path,
+                )) {
+                  wrote.push(path);
+                }
+              }
               if (report.apply?.status === "applied") {
                 const hardenRoot = resolvePath(hardenDir);
                 for (const rel of [...(report.apply.applied ?? []), ...(report.apply.added ?? [])]) {
@@ -2742,17 +2812,14 @@ export async function handleMcpRequest(
               }
               payload = {
                 ...report,
-                writeReceipt: writeReceipt(
-                  wrote,
-                  report.apply !== undefined && report.apply.status !== "applied" ? [] : preOverwrite,
-                  confirmed,
-                ),
+                wouldOverwrite: preOverwrite,
+                writeReceipt: writeReceipt(wrote, preOverwrite.filter((path) => wrote.includes(path)), confirmed),
               };
               // A run that hardened nothing, failed an artifact, or could not
               // promote is not a success the agent may build on.
               if (!report.overallSuccess) refused = true;
             } else {
-              payload = report;
+              payload = { ...report, wouldOverwrite: planHardenOverwrites(report, args, applyMode, outputDirectory !== undefined) };
             }
           }
           }
@@ -2776,6 +2843,7 @@ export async function handleMcpRequest(
             const report = compactArtifactReport(
               name === "bla_defend" ? runDefend(handlers, args) : runProtect(handlers, args),
             ) as Record<string, unknown>;
+            if (name === "bla_defend" && report.overallSuccess === false) refused = true;
             // A later bla_harden / bla_lint must recognise this file as hardened
             // output, not as a fresh artifact full of plaintext "secrets".
             if (typeof report.outputPath === "string") registerBlaOutput(report.outputPath);
@@ -2801,6 +2869,7 @@ export async function handleMcpRequest(
             typeof args.original_path === "string" ? args.original_path : undefined,
             verifyHonestyOptions(args),
           );
+          refused = verification.overallPassed === false;
           let verifyPayload: Record<string, unknown> = { ...verification };
           if (typeof args.summary_path === "string" && args.summary_path.trim().length > 0) {
             const lookup = readHardenRunSummary(
@@ -2824,26 +2893,29 @@ export async function handleMcpRequest(
               "bla_verify: run_id requires summary_path so the id can be correlated against an on-disk harden summary",
             );
           }
-          if (typeof args.manifest_path === "string" && args.manifest_path.trim().length > 0) {
+          const manifestPath = typeof args.manifest_path === "string" && args.manifest_path.trim()
+            ? args.manifest_path : undefined;
+          const publicKeyPath = typeof args.public_key_path === "string" && args.public_key_path.trim()
+            ? args.public_key_path : undefined;
+          if (args.require_pinned_key === true && (!manifestPath || !publicKeyPath)) {
+            verifyPayload.manifestVerification = {
+              ok: false, signed: false, pinned: false, artifactVerified: false,
+              reason: "require_pinned_key requires both manifest_path and public_key_path.",
+            };
+            refused = true;
+          } else if (manifestPath) {
             const manifestVerification = verifyManifestFile(
-              args.manifest_path,
-              typeof args.public_key_path === "string" && args.public_key_path.trim().length > 0
-                ? args.public_key_path
-                : undefined,
-              args.target_path as string,
+              manifestPath, publicKeyPath, args.target_path as string,
               { requirePinnedKey: args.require_pinned_key === true },
             );
-            verifyPayload = {
-              ...verifyPayload,
-              manifestVerification,
-            };
-            if (!manifestVerification.ok) {
-              refused = true;
-            }
+            verifyPayload.manifestVerification = manifestVerification;
+            if (!manifestVerification.ok) refused = true;
           }
           payload = verifyPayload;
         } else if (name === "bla_benchmark") {
-          payload = await handlers.runShowcaseBenchmark();
+          const benchmark = await handlers.runShowcaseBenchmark();
+          payload = benchmark;
+          refused = benchmark.cases.some((entry) => entry.functionalCheckPassed === false);
         } else if (name === "bla_emit_headers") {
           payload = handlers.emitCompileTimeNativeHeader(
             args.language as NativeHeaderLanguage,
@@ -3131,19 +3203,21 @@ export async function handleMcpRequest(
           };
           refused = allow ? false : anyRefuse;
         } else if (name === "bla_redteam_report") {
-          payload = getRedteamReport({
-            execute: args.execute === true,
-            ...(typeof args.rea_root === "string" && args.rea_root.trim().length > 0
-              ? { reaRoot: args.rea_root as string }
-              : {}),
-            ...(typeof args.report_path === "string" && args.report_path.trim().length > 0
-              ? { reportPath: args.report_path as string }
-              : {}),
-          });
-          {
-            const status = (payload as { status: string }).status;
-            refused = status === "unverified" || status === "fail";
+          const execute = args.execute === true;
+          const requestedRoot = typeof args.rea_root === "string" ? args.rea_root.trim() : "";
+          const reportPath = typeof args.report_path === "string" ? args.report_path.trim() : "";
+          const operatorRoot = process.env.REA_ROOT?.trim() ?? "";
+          if (execute && (!isAbsolute(operatorRoot) ||
+            (requestedRoot && resolvePath(requestedRoot) !== resolvePath(operatorRoot)))) {
+            throw new Error("Live red-team execution requires an absolute REA_ROOT configured by the MCP server operator. Set it before starting BLA.");
           }
+          const result = getRedteamReport({
+            execute,
+            ...(execute ? { reaRoot: operatorRoot } : requestedRoot ? { reaRoot: requestedRoot } : {}),
+            ...(!execute && reportPath ? { reportPath } : {}),
+          });
+          payload = result;
+          refused = result.status === "unverified" || result.status === "fail";
         }
 
         return {
@@ -3256,29 +3330,23 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
         buffer += chunk;
       }
 
-      while (buffer.length > 0) {
+      while (buffer.length > 0 || (!awaitingHeaderBlankLine && pendingContentBytes === 0)) {
         if (!awaitingHeaderBlankLine && pendingContentBytes !== null) {
           const byteLen = Buffer.byteLength(buffer, "utf8");
           if (byteLen >= pendingContentBytes) {
             const rawBuf = Buffer.from(buffer, "utf8");
-            const body = rawBuf.subarray(0, pendingContentBytes).toString("utf8").trim();
+            const body = rawBuf.subarray(0, pendingContentBytes).toString("utf8");
             buffer = rawBuf.subarray(pendingContentBytes).toString("utf8");
             pendingContentBytes = null;
             if (body.length > MAX_STDIO_LINE_CHARS) {
               hooks.onOversizedLine?.();
               continue;
             }
-            if (body.length > 0) {
-              hooks.onLine(body);
-            }
+            hooks.onLine(body);
             continue;
           }
-          // Fallback when a newline-delimited message arrives shorter than a stale/skipped header.
-          if (buffer.indexOf("\n") >= 0) {
-            pendingContentBytes = null;
-          } else {
-            break;
-          }
+          // A framed JSON body can contain newlines before the rest arrives.
+          break;
         }
 
         const newlineIdx = buffer.indexOf("\n");
@@ -3318,7 +3386,7 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
         hooks.onLine(line);
       }
 
-      if (buffer.length > MAX_STDIO_LINE_CHARS) {
+      if ((pendingContentBytes === null || awaitingHeaderBlankLine) && buffer.length > MAX_STDIO_LINE_CHARS) {
         buffer = "";
         pendingContentBytes = null;
         awaitingHeaderBlankLine = false;
@@ -3339,9 +3407,9 @@ export function startMcpStdioServer(): void {
     onLine: (line: string) => {
       // Parse first so cancel can abort an in-flight or queued harden without waiting
       // for the serial request queue (issue #75).
-      let req: JsonRpcRequest;
+      let req: unknown;
       try {
-        req = JSON.parse(line) as JsonRpcRequest;
+        req = JSON.parse(line);
       } catch {
         const parseErr: JsonRpcResponse = {
           jsonrpc: "2.0",
@@ -3354,25 +3422,24 @@ export function startMcpStdioServer(): void {
         process.stdout.write(JSON.stringify(parseErr) + "\n");
         return;
       }
-      if (req.method === "notifications/cancelled") {
-        const params = (req.params ?? {}) as {
-          requestId?: string | number;
-          reason?: string;
-        };
-        const rid = params.requestId;
-        if (
-          (typeof rid === "string" || typeof rid === "number") &&
-          queuedRequests.has(rid)
-        ) {
-          const entry = queuedRequests.get(rid)!;
-          entry.cancelled = true;
-          entry.reason = params.reason ?? "cancelled";
-        }
-        void handleMcpRequest(req);
+      if (!isJsonRpcRequest(req)) {
+        process.stdout.write(JSON.stringify(invalidRequest(req)) + "\n");
         return;
       }
-      const reqId =
-        typeof req.id === "string" || typeof req.id === "number" ? req.id : undefined;
+      if (req.method === "notifications/cancelled" && req.id === undefined) {
+        const cancellation = cancellationOf(req);
+        if (cancellation) {
+          const entry = queuedRequests.get(cancellation.requestId);
+          if (entry) {
+            entry.cancelled = true;
+            entry.reason = cancellation.reason;
+          }
+          activeHardenAborts.get(cancellation.requestId)?.abort(cancellation.reason);
+        }
+        return;
+      }
+      const reqId = req.method === "tools/call" && isPlainObject(req.params) &&
+        req.params.name === "bla_harden" && isRequestId(req.id) ? req.id : undefined;
       if (reqId !== undefined) {
         queuedRequests.set(reqId, { cancelled: false });
       }

@@ -17,6 +17,19 @@ import {
 import { handleMcpRequest } from "../src/mcp/server.js";
 
 const tempDirs: string[] = [];
+function makeReportDir(prefix: string): string {
+  const root = process.env.BLA_STATE_DIR!;
+  mkdirSync(root, { recursive: true });
+  const dir = mkdtempSync(join(root, prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+function outcome(phase: "before" | "after") {
+  return {
+    format: "wasm_module", phase, status: "ok", inputBytes: 8, budgetHit: false,
+    errorName: null, errorMessage: null, budgetName: null, redactionOrAmbiguity: null, metrics: {},
+  };
+}
 afterEach(() => {
   for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
@@ -42,8 +55,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("getRedteamReport returns unverified when report missing and REA unready", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-missing-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-missing-");
     const reportPath = join(dir, "no-report.json");
     const fakeRea = join(dir, "rea");
     mkdirSync(fakeRea);
@@ -59,12 +71,13 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("getRedteamReport reads a fixture report without needing REA", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-fixture-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-fixture-");
     const reportPath = join(dir, "empirical.json");
     const fixture = {
+      schema: "bla-redteam-rea/v1",
+      status: "measured",
       generatedAt: "test",
-      pairs: [{ format: "wasm", before: { status: "ok" }, after: { status: "ok" } }],
+      pairs: [{ format: "wasm_module", before: outcome("before"), after: outcome("after") }],
       unverified: [],
     };
     writeFileSync(reportPath, JSON.stringify(fixture), "utf8");
@@ -79,8 +92,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("execute:true without REA dist is unverified (never silent pass)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-exec-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-exec-");
     const fakeRea = join(dir, "rea");
     mkdirSync(join(fakeRea, "src"), { recursive: true });
     expect(reaDistReady(fakeRea)).toBe(false);
@@ -95,8 +107,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("execute:true against a REA checkout the harness cannot call is unverified, not fail", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-moved-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-moved-");
     // Built as far as the readiness check can tell, but REA's analyzers are not
     // where the harness names them — what a REA refactor looks like from here.
     const fakeRea = join(dir, "rea");
@@ -122,8 +133,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("a report on disk that records harness errors reads as unverified, report attached", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-unmeasured-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-unmeasured-");
     const reportPath = join(dir, "empirical.json");
     const fixture = {
       schema: "bla-redteam-rea/v1",
@@ -148,8 +158,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("a measured report on disk still reads as available", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-measured-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-measured-");
     const reportPath = join(dir, "empirical.json");
     writeFileSync(
       reportPath,
@@ -164,8 +173,7 @@ describe("REA observability engine (C2)", () => {
   });
 
   it("a report on disk names the formats whose plant REA read through", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-not-stopped-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-not-stopped-");
     const reportPath = join(dir, "empirical.json");
     writeFileSync(
       reportPath,
@@ -203,12 +211,11 @@ describe("REA observability MCP tools (C2)", () => {
   });
 
   it("bla_redteam_report reads fixture; missing path is unverified isError", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-mcp-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-mcp-");
     const reportPath = join(dir, "empirical.json");
     writeFileSync(
       reportPath,
-      JSON.stringify({ generatedAt: "fixture", pairs: [], unverified: ["demo"] }),
+      JSON.stringify({ schema: "bla-redteam-rea/v1", status: "measured", generatedAt: "fixture", pairs: [] }),
       "utf8",
     );
     const ok = await call("bla_redteam_report", {
@@ -237,8 +244,7 @@ describe("REA observability MCP tools (C2)", () => {
   });
 
   it("bla_redteam_report is an error for a report whose probes never reached REA", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "bla-rt-mcp-unmeasured-"));
-    tempDirs.push(dir);
+    const dir = makeReportDir("bla-rt-mcp-unmeasured-");
     const reportPath = join(dir, "empirical.json");
     writeFileSync(
       reportPath,

@@ -17,8 +17,9 @@ describe("MCP stdio line processor", () => {
   it("delimits newline-framed JSON-RPC lines across chunk boundaries and skips framing lines", () => {
     const { lines, processor } = collect();
     processor.push('{"jsonrpc":"2.0","id":1,"method":"in');
-    processor.push('itialize"}\nContent-Length: 64\r\n\r\n');
-    processor.push('{"jsonrpc":"2.0","id":2,"method":"ping"}\n');
+    const framed = '{"jsonrpc":"2.0","id":2,"method":"ping"}';
+    processor.push(`itialize"}\nContent-Length: ${Buffer.byteLength(framed)}\r\n\r\n`);
+    processor.push(framed);
     expect(lines).toEqual([
       '{"jsonrpc":"2.0","id":1,"method":"initialize"}',
       '{"jsonrpc":"2.0","id":2,"method":"ping"}',

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { BLA_IDENTITY } from "./identity.js";
 import {
   initBlaConfig,
@@ -23,6 +23,8 @@ import {
   hardenProject,
   restoreHardenedProject,
 } from "./engine/harden.js";
+import { loadApplyState, resolveApplyStateDirectory, type HardenApplyReport } from "./engine/harden-apply.js";
+import { sha256File } from "./engine/run-evidence.js";
 import { registerBlaOutput } from "./core/output-registry.js";
 import { lintLaneIndependence } from "./engine/lane-independence-lint.js";
 import { lintSealCommitmentFile } from "./engine/seal-commitment-lint.js";
@@ -136,7 +138,7 @@ Options:
   --sqlite-eval-trap          SQLite: honey-table columns call a function no stock connection has, so an inspector
                               cannot read those rows — and the application cannot run PRAGMA integrity_check,
                               VACUUM or a dump/restore on that database. OFF by default
-  --verify-handshake          doctor: also start each registered MCP server locally and check it answers initialize
+  --verify-handshake          doctor: self-test MCP initialize with the installed BLA CLI
   --apply                     harden: overwrite the build output with the hardened files (originals are backed up
                               outside the project; source files are never overwritten); re-runs re-harden from the originals
   --restore                   harden: undo --apply and put the original build output back
@@ -630,6 +632,56 @@ export function formatCliError(err: unknown): string {
   return `Error: ${sanitizeTerminalText(message)}`;
 }
 
+function previewHardenRestore(directory: string): HardenApplyReport {
+  const root = resolve(directory);
+  const stateDirectory = resolveApplyStateDirectory(root);
+  const state = loadApplyState(stateDirectory);
+  if (!state?.files.length) return { status: "nothing-to-restore" };
+
+  const backupDirectory = join(stateDirectory, "originals");
+  const restored: string[] = [];
+  const removed: string[] = [];
+  const skippedModified: string[] = [];
+  const missingBackups: string[] = [];
+  for (const file of state.files) {
+    const path = join(root, file.relativePath);
+    let current: string;
+    try {
+      if (!statSync(path).isFile()) continue;
+      current = sha256File(path);
+    } catch {
+      continue;
+    }
+    if (current === file.originalSha256) continue;
+    if (current !== file.hardenedSha256) {
+      skippedModified.push(file.relativePath);
+      continue;
+    }
+
+    if (file.originalSha256 === null) {
+      removed.push(file.relativePath);
+      continue;
+    }
+    try {
+      if (sha256File(join(backupDirectory, file.relativePath)) === file.originalSha256) {
+        restored.push(file.relativePath);
+        continue;
+      }
+    } catch {
+      // An unreadable backup also prevents restore.
+    }
+    missingBackups.push(file.relativePath);
+  }
+  return {
+    status: missingBackups.length ? "failed" : restored.length || removed.length ? "planned" : "nothing-to-restore",
+    ...(missingBackups.length ? { reason: `Backups missing or damaged for ${missingBackups.join(", ")}` } : {}),
+    restored,
+    removed,
+    skippedModified,
+    backupDirectory,
+  };
+}
+
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const parsed = parseCliArgs(argv);
 
@@ -671,15 +723,17 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           force: parsed.force,
           dryRun: parsed.dryRun,
           yes: parsed.yes,
+          env: process.env,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else console.log(formatSetupReport(res));
-        return res.status === "error" || res.status === "conflict" ? 1 : 0;
+        return res.status === "applied" || res.status === "planned" ? 0 : 1;
       }
 
       case "doctor": {
         const doc = runDoctor({
           verifyHandshake: parsed.verifyHandshake,
+          env: process.env,
           projectDirectory: process.cwd(),
         });
         if (parsed.json) console.log(JSON.stringify(doc, null, 2));
@@ -708,6 +762,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           ...(parsed.clients.length > 0 ? { clientIds: parsed.clients } : {}),
           force: parsed.force,
           dryRun: parsed.dryRun,
+          env: process.env,
         });
         if (parsed.json) console.log(JSON.stringify(res, null, 2));
         else if (parsed.dryRun) {
@@ -761,12 +816,15 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
             console.error("Error: --apply and --restore cannot be combined");
             return 1;
           }
-          const restored = restoreHardenedProject(directory);
+          const restored = parsed.dryRun
+            ? previewHardenRestore(directory)
+            : restoreHardenedProject(directory);
           if (parsed.json) {
             console.log(JSON.stringify(restored, null, 2));
-          } else if (restored.status === "restored") {
+          } else if (restored.status === "restored" || restored.status === "planned") {
+            const action = parsed.dryRun ? "Would restore" : "Restored";
             console.log(
-              `Restored ${restored.restored?.length ?? 0} original file(s):\n${(restored.restored ?? []).map((f) => `  ↩ ${sanitizeTerminalText(f)}`).join("\n")}`,
+              `${action} ${restored.restored?.length ?? 0} original file(s):\n${(restored.restored ?? []).map((f) => `  ↩ ${sanitizeTerminalText(f)}`).join("\n")}`,
             );
           } else if (restored.status === "nothing-to-restore") {
             console.log("Nothing to restore: no build output here currently holds applied hardened files.");
@@ -775,12 +833,12 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           }
           if (!parsed.json && (restored.removed?.length ?? 0) > 0) {
             console.log(
-              `Removed (created by apply): ${(restored.removed ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
+              `${parsed.dryRun ? "Would remove" : "Removed"} (created by apply): ${(restored.removed ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
             );
           }
           if (!parsed.json && (restored.skippedModified?.length ?? 0) > 0) {
             console.log(
-              `Left alone (changed since apply, e.g. rebuilt): ${(restored.skippedModified ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
+              `${parsed.dryRun ? "Would leave alone" : "Left alone"} (changed since apply, e.g. rebuilt): ${(restored.skippedModified ?? []).map((f) => sanitizeTerminalText(f)).join(", ")}`,
             );
           }
           return restored.status === "failed" ? 2 : 0;
@@ -1323,7 +1381,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         );
         if (parsed.json) console.log(JSON.stringify(bench, null, 2));
         else console.log(formatBenchmarkReport(bench));
-        return 0;
+        return bench.cases.some((entry) => entry.functionalCheckPassed === false) ? 2 : 0;
       }
 
       case "emit-headers": {

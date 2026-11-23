@@ -137,7 +137,7 @@ describe("read-only discover + zero-write dry-run", () => {
     expect(preview.structuredContent.status).not.toBe("confirmation_required");
     expect(preview.structuredContent.dryRun).toBe(true);
     expect(preview.structuredContent.overallSuccess).toBe(false);
-    expect(preview.structuredContent.wouldOverwrite).toEqual([out]);
+    expect(preview.structuredContent.wouldOverwrite).toEqual([out, join(root, ".bla-hardened", "bla-harden-summary.json")]);
     expect(readFileSync(out, "utf8")).toBe(hardened);
     expect(snapshot(root)).toEqual(before);
   });
@@ -165,20 +165,21 @@ describe("overwrite confirmation boundary", () => {
       confirmed: false,
     });
     const hardened = readFileSync(out, "utf8");
+    const overwritten = [out, join(root, ".bla-hardened", "bla-harden-summary.json")];
 
     const refused = await call("bla_harden", { directory: root, seed: "s2" });
     expect(refused.isError).toBe(true);
     expect(refused.structuredContent.status).toBe("confirmation_required");
-    expect(refused.structuredContent.wouldOverwrite).toEqual([out]);
+    expect(refused.structuredContent.wouldOverwrite).toEqual(overwritten);
     expect(readFileSync(out, "utf8")).toBe(hardened);
 
     const ok = await call("bla_harden", { directory: root, seed: "s2", confirm_overwrite: true });
     expect(ok.isError).toBe(false);
     expect(ok.structuredContent.hardenedCount).toBe(1);
-    expect(ok.structuredContent.wouldOverwrite).toEqual([out]);
+    expect(ok.structuredContent.wouldOverwrite).toEqual(overwritten);
     expect(ok.structuredContent.writeReceipt).toMatchObject({
       status: "written",
-      overwrote: [out],
+      overwrote: overwritten,
       confirmed: true,
     });
   });

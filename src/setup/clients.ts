@@ -39,6 +39,7 @@ export interface ConfigReadResult {
   readonly status: "valid" | "missing" | "malformed" | "invalid_entry" | "not_configured";
   readonly entry: McpServerRegistration | null;
   readonly rawEntry?: unknown;
+  readonly disabled?: true;
   readonly error?: string;
   readonly otherServersCount: number;
 }
@@ -352,6 +353,20 @@ function parseTomlStringArray(raw: string): { readonly ok: true; readonly values
   return { ok: true, values: items };
 }
 
+/** Normalize bare and quoted TOML keys while retaining literal dots inside a segment. */
+function normalizeTomlKey(key: string): string {
+  const segment = /"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+/;
+  const segments = key.match(new RegExp(segment.source, "g"));
+  if (!segments || !new RegExp(`^(?:${segment.source})(?:\\s*\\.\\s*(?:${segment.source}))*$`).test(key)) {
+    return key;
+  }
+  return segments.map((segment) => {
+    const parsed = parseTomlStringLiteral(segment);
+    const value = parsed.ok ? parsed.value : segment;
+    return /^[A-Za-z0-9_-]+$/.test(value) ? value : JSON.stringify(value);
+  }).join(".");
+}
+
 interface ParsedTomlSectionRange {
   readonly name: string;
   readonly headerLineIndex: number;
@@ -545,7 +560,7 @@ function inspectCodexTomlDocument(
         currentSection.endLineIndex = idx;
       }
       currentSection = {
-        name: tableName,
+        name: normalizeTomlKey(tableName),
         headerLineIndex: idx,
         endLineIndex: lines.length,
         assignments: new Map<string, string>(),
@@ -612,7 +627,7 @@ function inspectCodexTomlDocument(
   }
 
   // Schema check: top-level `mcp_servers` cannot be a scalar or array
-  const topLevelMcpServers = topLevelAssignments.get("mcp_servers");
+  const topLevelMcpServers = tomlAssignment(topLevelAssignments, "mcp_servers");
   if (topLevelMcpServers !== undefined && !topLevelMcpServers.startsWith("{")) {
     return {
       ok: false,
@@ -626,6 +641,32 @@ function inspectCodexTomlDocument(
     sections,
     topLevelAssignments,
   };
+}
+
+function tomlAssignment(assignments: ReadonlyMap<string, string>, key: string): string | undefined {
+  for (const [name, value] of assignments) {
+    if (normalizeTomlKey(name) === key) return value;
+  }
+  return undefined;
+}
+
+function codexUnsupportedMcpRepresentation(
+  document: Extract<ReturnType<typeof inspectCodexTomlDocument>, { ok: true }>,
+  serverName: string,
+): string | undefined {
+  if (tomlAssignment(document.topLevelAssignments, "mcp_servers") !== undefined) {
+    return "Codex mcp_servers uses an inline table. Convert it to [mcp_servers.<name>] sections before editing with BLA.";
+  }
+  const target = `mcp_servers.${serverName}`;
+  const parent = document.sections.find((section) => section.name === "mcp_servers");
+  const definesTarget = (key: string, name: string) => key === name || key.startsWith(`${name}.`);
+  if (
+    [...document.topLevelAssignments.keys()].some((key) => definesTarget(normalizeTomlKey(key), target)) ||
+    (parent && [...parent.assignments.keys()].some((key) => definesTarget(normalizeTomlKey(key), serverName)))
+  ) {
+    return `Codex ${target} uses an inline or dotted assignment. Convert it to a [${target}] section before editing with BLA.`;
+  }
+  return undefined;
 }
 
 export function readCodexTomlMcp(
@@ -642,6 +683,11 @@ export function readCodexTomlMcp(
     };
   }
 
+  const unsupported = codexUnsupportedMcpRepresentation(inspected, serverName);
+  if (unsupported) {
+    return { status: "malformed", entry: null, error: unsupported, otherServersCount: 0 };
+  }
+
   const targetTable = `mcp_servers.${serverName}`;
   let otherServersCount = 0;
   let targetSection: ParsedTomlSectionRange | undefined;
@@ -654,20 +700,13 @@ export function readCodexTomlMcp(
       if (remainder.length > 0 && !remainder.includes(".")) {
         otherServersCount++;
       }
-    } else if (sec.name === "mcp_servers") {
-      const inlineBla = sec.assignments.get(serverName);
-      if (inlineBla !== undefined && !inlineBla.startsWith("{")) {
-        return {
-          status: "malformed",
-          entry: null,
-          error: `Invalid Codex config.toml schema: '[mcp_servers].${serverName}' must be a table`,
-          otherServersCount,
-        };
-      }
     }
   }
 
   if (!targetSection) {
+    if (inspected.sections.some((section) => section.name.startsWith(`${targetTable}.`))) {
+      return { status: "invalid_entry", entry: null, error: `Codex [${targetTable}] has subtables but no command`, otherServersCount };
+    }
     return {
       status: "not_configured",
       entry: null,
@@ -675,7 +714,7 @@ export function readCodexTomlMcp(
     };
   }
 
-  const rawCommand = targetSection.assignments.get("command");
+  const rawCommand = tomlAssignment(targetSection.assignments, "command");
   if (rawCommand === undefined) {
     return {
       status: "invalid_entry",
@@ -696,7 +735,7 @@ export function readCodexTomlMcp(
   }
 
   let parsedArgs: string[] = [];
-  const rawArgs = targetSection.assignments.get("args");
+  const rawArgs = tomlAssignment(targetSection.assignments, "args");
   if (rawArgs !== undefined) {
     const arrRes = parseTomlStringArray(rawArgs);
     if (!arrRes.ok) {
@@ -710,12 +749,13 @@ export function readCodexTomlMcp(
     parsedArgs = arrRes.values;
   }
 
-  const rawEnabled = targetSection.assignments.get("enabled");
-  if (rawEnabled === "false") {
+  if (tomlAssignment(targetSection.assignments, "enabled") === "false" ||
+      tomlAssignment(targetSection.assignments, "disabled") === "true") {
     return {
       status: "invalid_entry",
       entry: null,
-      error: `Codex [${targetTable}] is explicitly disabled (enabled = false)`,
+      disabled: true,
+      error: `Codex [${targetTable}] is explicitly disabled`,
       otherServersCount,
     };
   }
@@ -742,23 +782,15 @@ export function writeCodexTomlMcp(
     if (!inspected.ok) {
       throw new Error(inspected.error);
     }
-    const targetTable = `mcp_servers.${serverName}`;
-    for (const sec of inspected.sections) {
-      if (sec.name === "mcp_servers") {
-        const inlineVal = sec.assignments.get(serverName);
-        if (inlineVal !== undefined && !inlineVal.startsWith("{")) {
-          throw new Error(
-            `Invalid Codex config.toml schema: '[mcp_servers].${serverName}' is not a table`,
-          );
-        }
-      }
-    }
+    const unsupported = codexUnsupportedMcpRepresentation(inspected, serverName);
+    if (unsupported) throw new Error(unsupported);
 
+    const targetTable = `mcp_servers.${serverName}`;
     const existingSection = inspected.sections.find((s) => s.name === targetTable);
     const preservedAssignments: string[] = [];
     if (existingSection) {
       for (const [k, v] of existingSection.assignments.entries()) {
-        if (k !== "command" && k !== "args") {
+        if (!["command", "args"].includes(normalizeTomlKey(k))) {
           preservedAssignments.push(`${k} = ${v}`);
         }
       }
@@ -787,7 +819,7 @@ export function writeCodexTomlMcp(
       const before = inspected.lines.slice(0, existingSection.headerLineIndex);
       const after = inspected.lines.slice(replaceEnd);
       const combined = [...before, ...formattedSectionLines, ...(after.length > 0 ? ["", ...after] : [])];
-      return combined.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+      return combined.join("\n").trimEnd() + "\n";
     }
 
     const trimmedExisting = existing.trimEnd();
@@ -810,15 +842,22 @@ export function removeCodexTomlMcp(
   if (!inspected.ok) {
     throw new Error(inspected.error);
   }
+  const unsupported = codexUnsupportedMcpRepresentation(inspected, serverName);
+  if (unsupported) throw new Error(unsupported);
   const targetTable = `mcp_servers.${serverName}`;
-  const existingSection = inspected.sections.find((s) => s.name === targetTable);
-  if (!existingSection) {
-    return { content: rawToml, removed: false };
-  }
+  const sections = inspected.sections.filter(
+    (section) => section.name === targetTable || section.name.startsWith(`${targetTable}.`),
+  );
+  if (sections.length === 0) return { content: rawToml, removed: false };
 
-  const before = inspected.lines.slice(0, existingSection.headerLineIndex);
-  const after = inspected.lines.slice(existingSection.endLineIndex);
-  const joined = [...before, ...after].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  const lines: string[] = [];
+  let start = 0;
+  for (const section of sections) {
+    lines.push(...inspected.lines.slice(start, section.headerLineIndex));
+    start = section.endLineIndex;
+  }
+  lines.push(...inspected.lines.slice(start));
+  const joined = lines.join("\n").trimEnd();
   return {
     content: joined.length > 0 ? `${joined}\n` : "",
     removed: true,
@@ -999,6 +1038,7 @@ function createJsonMcpServersAdapter(): ClientConfigAdapter {
           status: "invalid_entry",
           entry: null,
           rawEntry,
+          disabled: true,
           error: `MCP server entry '${serverName}' is disabled`,
           otherServersCount,
         };
@@ -1169,6 +1209,16 @@ function createJsonVscodeAdapter(): ClientConfigAdapter {
         }
         args = [...rawEntry.args];
       }
+      if (rawEntry.enabled === false || rawEntry.disabled === true) {
+        return {
+          status: "invalid_entry",
+          entry: null,
+          rawEntry,
+          disabled: true,
+          error: `VS Code MCP entry '${serverName}' is disabled`,
+          otherServersCount,
+        };
+      }
       return {
         status: "valid",
         entry: {
@@ -1338,12 +1388,13 @@ function createJsonOpencodeAdapter(): ClientConfigAdapter {
           otherServersCount,
         };
       }
-      if (rawEntry.enabled === false) {
+      if (rawEntry.enabled === false || rawEntry.disabled === true) {
         return {
           status: "invalid_entry",
           entry: null,
           rawEntry,
-          error: `OpenCode MCP entry '${serverName}' is disabled (enabled: false)`,
+          disabled: true,
+          error: `OpenCode MCP entry '${serverName}' is disabled`,
           otherServersCount,
         };
       }
@@ -1503,17 +1554,10 @@ export function readClientMcpConfig(
 export function resolveSupportedAgentClients(
   home: string = homedir(),
   platform: NodeJS.Platform = process.platform,
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
 ): readonly AgentClientDefinition[] {
-  const winAppData =
-    env?.APPDATA && env.APPDATA.trim().length > 0
-      ? env.APPDATA
-      : join(home, "AppData", "Roaming");
-
-  const xdgConfigHome =
-    env?.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim().length > 0
-      ? env.XDG_CONFIG_HOME
-      : join(home, ".config");
+  const winAppData = env.APPDATA?.trim() ? env.APPDATA : join(home, "AppData", "Roaming");
+  const xdgConfigHome = env.XDG_CONFIG_HOME?.trim() ? env.XDG_CONFIG_HOME : join(home, ".config");
 
   const claudeDesktopDir =
     platform === "darwin"
@@ -1529,6 +1573,7 @@ export function resolveSupportedAgentClients(
         ? join(winAppData, "Code", "User")
         : join(xdgConfigHome, "Code", "User");
 
+  const codexDir = env.CODEX_HOME?.trim() || join(home, ".codex");
   const opencodeDir = join(xdgConfigHome, "opencode");
 
   const rawDefs: {
@@ -1567,10 +1612,10 @@ export function resolveSupportedAgentClients(
     {
       id: "codex",
       displayName: "Codex CLI",
-      configPath: join(home, ".codex", "config.toml"),
+      configPath: join(codexDir, "config.toml"),
       format: "toml-codex",
-      probePaths: [join(home, ".codex", "config.toml"), join(home, ".codex")],
-      skillDirectory: join(home, ".codex", "skills", "blind-llm-agents"),
+      probePaths: [join(codexDir, "config.toml"), codexDir],
+      skillDirectory: join(codexDir, "skills", "blind-llm-agents"),
     },
     {
       id: "gemini_cli",

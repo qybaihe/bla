@@ -187,8 +187,9 @@ Gates close **packaging** footguns. They do **not** claim white-box secrecy agai
 2. Then: `npx bla-agents@latest doctor` (or MCP `bla_doctor`) — checks the installed
    skill bundle (this file + `references/`, including format appendices) is complete,
    flags a client still pinned to an older release (`versionSkew` → re-run `setup --yes`),
-   and with `--verify-handshake` / `verify_handshake: true` starts each registered
-   server to confirm it answers
+   and with `--verify-handshake` / `verify_handshake: true` sends an MCP initialize
+   request to the installed BLA CLI. Read `localMcpHandshake` for that self-test.
+   Client and project launchers are inspected from disk and their handshakes remain unverified.
 
 ## Write safety (principles)
 

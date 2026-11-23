@@ -142,6 +142,8 @@ export interface DoctorDiagnosticReport {
   readonly nodeVersion: string;
   readonly platform: string;
   readonly arch: string;
+  /** Initialize result from the installed CLI. Registration commands are inspected only. */
+  readonly localMcpHandshake?: "verified" | "failed";
   readonly engines: {
     readonly javascriptAstShield: EngineHealthStatus;
     readonly electronAsarPacker: EngineHealthStatus;
@@ -264,41 +266,12 @@ export function resolveHandshakeTimeoutMs(explicit?: number): number {
 }
 
 export function probeLocalMcpHandshake(
-  command: string,
-  args: readonly string[],
   timeoutMs: number = DEFAULT_HANDSHAKE_TIMEOUT_MS,
 ): boolean {
   try {
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    const distCli = resolve(thisDir, "../../dist/cli.js");
-
-    let execCmd = command;
-    let execArgs = [...args];
-
-    // Never execute arbitrary unknown commands or network `npx` downloads during doctor probes.
-    // Only allow trusted local Node/BLA invocations.
-    const baseCmd = command.split(/[/\\]/).pop() ?? "";
-    if (baseCmd === "npx" || baseCmd === "npx.cmd") {
-      const joinedArgs = args.join(" ");
-      const targetsBlaPackage =
-        joinedArgs.includes(BLA_IDENTITY.packageName) ||
-        joinedArgs.includes(BLA_IDENTITY.packageAlias);
-      const invokesMcp = args.some((a) => a === "mcp" || a === "--mcp");
-      if (!targetsBlaPackage || !invokesMcp || !existsSync(distCli)) {
-        return false;
-      }
-      execCmd = process.execPath;
-      execArgs = [distCli, "mcp"];
-    } else if (
-      baseCmd !== "node" &&
-      baseCmd !== "node.exe" &&
-      command !== process.execPath &&
-      baseCmd !== "bla" &&
-      baseCmd !== "bla-agents" &&
-      baseCmd !== "bla-shield"
-    ) {
-      return false;
-    }
+    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const distCli = join(packageRoot, "dist", "cli.js");
+    if (!existsSync(distCli)) return false;
 
     const initRequest =
       JSON.stringify({
@@ -312,14 +285,17 @@ export function probeLocalMcpHandshake(
         },
       }) + "\n";
 
-    const proc = spawnSync(execCmd, execArgs, {
+    const proc = spawnSync(process.execPath, [distCli, "mcp"], {
+      cwd: packageRoot,
+      // In particular, never inherit NODE_OPTIONS, NODE_PATH, or loader settings.
+      env: process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {},
       input: initRequest,
       encoding: "utf8",
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    if (proc.error || !proc.stdout) return false;
+    if (proc.error || proc.status !== 0 || !proc.stdout) return false;
     const lines = proc.stdout
       .split(/\r?\n/)
       .map((l) => l.trim())
@@ -330,7 +306,7 @@ export function probeLocalMcpHandshake(
         id?: number;
         result?: { serverInfo?: { name?: string } };
       };
-      if (parsed.jsonrpc === "2.0" && parsed.id === 1 && parsed.result?.serverInfo?.name === "bla") {
+      if (parsed.jsonrpc === "2.0" && parsed.id === 1 && parsed.result?.serverInfo?.name === BLA_IDENTITY.mcpServerName) {
         return true;
       }
     }
@@ -513,7 +489,7 @@ function inspectProjectRegistrations(
   userConfigPaths: ReadonlySet<string>,
   pathEnv: string,
   platform: NodeJS.Platform,
-  options: DoctorOptions,
+  verifyHandshake: boolean,
 ): DoctorProjectRegistration[] {
   const out: DoctorProjectRegistration[] = [];
   for (const candidate of PROJECT_SCOPED_MCP_CONFIGS) {
@@ -593,20 +569,8 @@ function inspectProjectRegistrations(
         `${candidate.relativePath} launches ${BLA_IDENTITY.packageName}@${pinnedVersion}, but this is ${BLA_IDENTITY.packageName} ${BLA_IDENTITY.version}; change the version in that file (setup does not rewrite project-scoped configs)`,
       );
     }
-    let handshakeStatus: DoctorHandshakeStatus = "not_checked";
-    if (options.verifyHandshake && commandResolvable && !versionSkew) {
-      handshakeStatus = probeLocalMcpHandshake(
-        command,
-        args,
-        resolveHandshakeTimeoutMs(options.handshakeTimeoutMs),
-      )
-        ? "verified"
-        : "failed";
-      if (handshakeStatus === "failed") {
-        issues.push(
-          `MCP stdio initialize handshake failed for the ${candidate.relativePath} entry`,
-        );
-      }
+    if (verifyHandshake) {
+      issues.push("Project launcher handshake unverified; doctor only self-tests the installed BLA CLI.");
     }
     out.push({
       relativePath: candidate.relativePath,
@@ -618,9 +582,8 @@ function inspectProjectRegistrations(
       commandResolvable,
       pinnedVersion,
       versionSkew,
-      handshakeStatus,
-      status:
-        !commandResolvable || handshakeStatus === "failed" ? "fail" : versionSkew ? "warn" : "pass",
+      handshakeStatus: "not_checked",
+      status: !commandResolvable ? "fail" : versionSkew ? "warn" : "pass",
       issues,
     });
   }
@@ -645,6 +608,14 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
 
   const engines = checkEngines(options.sqliteAvailableOverride);
   const globalIssues: string[] = [];
+  const localMcpHandshake = options.verifyHandshake
+    ? probeLocalMcpHandshake(resolveHandshakeTimeoutMs(options.handshakeTimeoutMs))
+      ? "verified"
+      : "failed"
+    : undefined;
+  if (localMcpHandshake === "failed") {
+    globalIssues.push("The installed BLA CLI did not pass its local MCP initialize self-test.");
+  }
 
   for (const [engineName, status] of Object.entries(engines)) {
     if (ENGINE_ALIAS_KEYS.has(engineName)) continue;
@@ -749,31 +720,10 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       }
     }
 
-    let handshakeStatus: DoctorHandshakeStatus = "not_checked";
-    let handshakeVerified = false;
-    // The probe never downloads: for an `npx` entry it starts this checkout's
-    // server instead. With another release pinned that proves nothing about
-    // what the client would launch, so it stays "not_checked".
-    if (
-      options.verifyHandshake &&
-      configured &&
-      commandResolvable &&
-      command !== null &&
-      !versionSkew
-    ) {
-      handshakeVerified = probeLocalMcpHandshake(
-        command,
-        args,
-        resolveHandshakeTimeoutMs(options.handshakeTimeoutMs),
-      );
-      handshakeStatus = handshakeVerified ? "verified" : "failed";
-      if (!handshakeVerified) {
-        clientIssues.push(`MCP stdio initialize handshake failed for ${c.displayName}`);
-      }
+    if (configured && options.verifyHandshake) {
+      clientIssues.push("Client launcher handshake unverified; doctor only self-tests the installed BLA CLI.");
     }
-
-    const mcpRegistered =
-      configured && commandResolvable && handshakeStatus !== "failed";
+    const mcpRegistered = configured && commandResolvable;
 
     let status: DoctorClientCheckState = "not_checked";
     if (configStatus === "malformed" || configStatus === "invalid_entry") {
@@ -782,8 +732,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       if (
         !commandResolvable ||
         !skillInstalled ||
-        skillMissingFiles.length > 0 ||
-        handshakeStatus === "failed"
+        skillMissingFiles.length > 0
       ) {
         status = "fail";
       } else if (skillStatus === "modified" || skillModifiedFiles.length > 0 || versionSkew) {
@@ -815,9 +764,9 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
       command_resolvable: commandResolvable,
       pinnedVersion,
       versionSkew,
-      handshakeStatus,
-      handshakeVerified,
-      handshake_verified: handshakeVerified,
+      handshakeStatus: "not_checked",
+      handshakeVerified: false,
+      handshake_verified: false,
       mcpRegistered,
       skillInstalled,
       skillStatus,
@@ -835,7 +784,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
           new Set(clients.map((c) => resolve(c.configPath))),
           pathEnv,
           platform,
-          options,
+          options.verifyHandshake === true,
         )
       : [];
   for (const reg of projectRegistrations) {
@@ -852,7 +801,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     agentStatuses.some((c) => c.status === "warn") ||
     projectRegistrations.some((r) => r.status === "warn");
 
-  const healthy = !anyEngineUnavailable && !anyClientFailed;
+  const healthy = !anyEngineUnavailable && !anyClientFailed && localMcpHandshake !== "failed";
   const overallStatus: DoctorDiagnosticReport["status"] = !healthy
     ? "fail"
     : anyClientWarn
@@ -902,7 +851,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     (configuredClients.some((c) => c.commandResolvable) || usableProjectRegistrations.length > 0)
   ) {
     nextSteps.push(
-      "Registrations were read from disk only. Pass --verify-handshake (MCP: verify_handshake: true) to also start the server and check that it answers initialize.",
+      "Registrations were read from disk only. Pass --verify-handshake (MCP: verify_handshake: true) to self-test the installed BLA CLI with an MCP initialize request.",
     );
   }
 
@@ -914,6 +863,7 @@ export function runDoctor(homeDirOrOptions?: string | DoctorOptions): DoctorDiag
     nodeVersion: process.version,
     platform: `${platform}-${process.arch}`,
     arch: process.arch,
+    ...(localMcpHandshake !== undefined ? { localMcpHandshake } : {}),
     engines,
     reaLimitsTargeted: REA_INTERNAL_LIMITS,
     agentClients: agentStatuses,

@@ -874,8 +874,9 @@ describe("Issue #11: Doctor Real Readiness Checks & Command/Config/Skill/Handsha
     expect(docHealthy.exitCode).toBe(0);
     const claudeHealthy = docHealthy.agentClients.find((c) => c.id === "claude_code")!;
     expect(claudeHealthy.status).toBe("pass");
-    expect(claudeHealthy.handshakeStatus).toBe("verified");
-    expect(claudeHealthy.handshakeVerified).toBe(true);
+    expect(docHealthy.localMcpHandshake).toBe("verified");
+    expect(claudeHealthy.handshakeStatus).toBe("not_checked");
+    expect(claudeHealthy.handshakeVerified).toBe(false);
 
     // 5. Degraded/unavailable SQLite runtime engine
     const docNoSqlite = runDoctor({

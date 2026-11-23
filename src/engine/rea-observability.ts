@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { REA_INTERNAL_LIMITS } from "../identity.js";
+import { resolveBlaStateRoot } from "../core/output-registry.js";
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 export const BLA_PACKAGE_ROOT = resolve(MODULE_DIR, "../..");
@@ -141,39 +145,265 @@ export const REDTEAM_REPORT_JSON = join(
  */
 const REDTEAM_EXIT_UNVERIFIED = 2;
 
-/**
- * A report written by a run in which a probe could not call REA says so in its
- * own `status`. Reading it back must not turn that into "available".
- */
-function describeUnmeasuredReport(report: unknown): string | null {
-  if (typeof report !== "object" || report === null) return null;
-  const record = report as { status?: unknown; harnessErrors?: unknown };
-  if (record.status !== "unverified") return null;
-  const errors = Array.isArray(record.harnessErrors) ? record.harnessErrors : [];
-  const named = errors.slice(0, 8).map((entry) => {
-    const item = (typeof entry === "object" && entry !== null ? entry : {}) as {
-      format?: unknown;
-      reason?: unknown;
-    };
-    const format = typeof item.format === "string" ? item.format : "unknown format";
-    const reason = typeof item.reason === "string" ? ` (${item.reason.slice(0, 160)})` : "";
-    return `${format}${reason}`;
-  });
-  const which = named.length > 0 ? `: ${named.join("; ")}` : "";
-  return `This report was written by a run in which the harness could not call REA for ${errors.length > 0 ? String(errors.length) : "at least one"} probe${errors.length > 1 ? "s" : ""}${which}. Those formats were not measured — their rows are not evidence about the shield.`;
+// The checked-in empirical report is about 3 MiB. Bound both the file read
+// and the size of diagnostic detail returned to the caller.
+const MAX_REDTEAM_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_REDTEAM_ROWS = 64;
+const REDTEAM_OUTCOME_STATUSES = new Set([
+  "ok", "error", "harness_error", "rejected_pre_worker", "skipped",
+  "budget_rejected", "capability_gated",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * The formats whose plant is meant to stop REA, where REA read the hardened
- * sample in the run that wrote the report (`notStopped`; that run exited 1).
- */
-function describeNotStopped(report: unknown): string | null {
-  if (typeof report !== "object" || report === null) return null;
-  const formats = (report as { notStopped?: unknown }).notStopped;
-  if (!Array.isArray(formats)) return null;
-  const named = formats.filter((format): format is string => typeof format === "string");
-  if (named.length === 0) return null;
-  return `In the run that wrote this report, REA read the hardened sample of ${named.slice(0, 8).join(", ")}, which BLA's plant is meant to stop it on (that run exited 1). Read those rows before relying on that shield.`;
+function reportText(value: string): string {
+  return value.length <= 512 ? value : `${value.slice(0, 512)}…`;
+}
+
+function readAuthorizedRedteamFile(path: string, roots: readonly string[]): string {
+  // Accept both the configured spelling and the physical spelling of each root
+  // (e.g. /var and /private/var on macOS). Reject symlinks below that root.
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    const physicalRoot = realpathSync(root);
+    for (const spelling of new Set([root, physicalRoot])) {
+      const rel = relative(spelling, path);
+      if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) continue;
+      const segments = rel.split(sep);
+      let file = physicalRoot;
+      for (const [index, part] of segments.entries()) {
+        file = join(file, part);
+        const status = lstatSync(file);
+        const expectedType = index === segments.length - 1 ? status.isFile() : status.isDirectory();
+        if (!expectedType) throw new Error("Report path must use regular files and directories without symlinks.");
+      }
+      const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      try {
+        const st = fstatSync(fd);
+        if (realpathSync(file) !== file || !st.isFile()) {
+          throw new Error("Report path must resolve to a regular file within an authorized root.");
+        }
+        const onDisk = lstatSync(file);
+        if (onDisk.dev !== st.dev || onDisk.ino !== st.ino) {
+          throw new Error("Report changed while opening it.");
+        }
+        if (st.size > MAX_REDTEAM_FILE_BYTES) throw new Error("Report exceeds the 8 MiB size limit.");
+        const buf = Buffer.alloc(st.size);
+        let offset = 0;
+        while (offset < buf.length) {
+          const count = readSync(fd, buf, offset, buf.length - offset, offset);
+          if (count === 0) throw new Error("Report changed while reading it.");
+          offset += count;
+        }
+        const after = fstatSync(fd);
+        if (after.size !== st.size || after.mtimeMs !== st.mtimeMs || after.ctimeMs !== st.ctimeMs) {
+          throw new Error("Report changed while reading it.");
+        }
+        return buf.toString("utf8");
+      } finally {
+        closeSync(fd);
+      }
+    }
+  }
+  throw new Error("Report path is outside the workspace, BLA package, and BLA state roots.");
+}
+
+function invalidRedteamSchema(): never {
+  throw new Error("Report must match the bla-redteam-rea/v1 empirical report schema.");
+}
+
+const REDTEAM_METRICS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
+  go_buildinfo: ["hasBuildInfo", "encoding", "goVersion", "moduleTextBytes"],
+  flutter_pool: [
+    "isolateBytes", "packageUriCount", "dartUriCount", "classLikeTokenCount",
+    "printableRunCount", "collectionCapped", "reportWouldCap",
+  ],
+  erlang_beam: ["chunkCount", "atomCount", "limitations"],
+  evm_bytecode: [
+    "inputBytes", "inputBytesLimit", "inputBytesLimitSource", "approachesLimit", "exceedsLimit",
+    "carrierBytes", "carrierError", "metadataError",
+  ],
+  pcap_capture: [
+    "tsharkSource", "reaRunsPcapOnThisHost", "reaTsharkFieldCount", "tsharkStatus",
+    "tsharkJsonBytes", "tsharkDnsPassJsonBytes", "tsharkFullDissectionJsonBytes", "tsharkJsonLimit",
+    "exceedsTsharkJsonBudget", "dnsPassExceedsTsharkJsonBudget", "stderrHead", "reaPacketCount",
+    "reaPartial", "reaProtocolCount", "reaHttpRequestUriCount", "reaDnsQueryCount", "reaDnsLimitations",
+  ],
+  safetensors: ["tensorCount", "metadataCount", "limitations"],
+  gguf: ["version", "tensorCount", "metadataCount", "limitations"],
+  gpu_ptx: ["entryCount", "textBytes", "note"],
+  electron_asar: ["headerBytes", "archiveBytes", "jsonBytes", "listingEntries", "listingPathBytes"],
+  wasm_module: [
+    "validates", "sectionCount", "customSectionNames", "exportNames", "exportCount", "importCount",
+    "projectedChargeBytes", "representationBudget", "descriptorCount", "exportDecoysInjected",
+    "exceedsRepresentationBudget", "wabtAvailable", "wabtValidation", "wabtExportForms", "wabtWatBytes",
+    "wabtInterfaceEntries", "wabtInterfaceState", "wabtInterfaceIssues", "wabtError", "wabtSkipped",
+    "chargeWhenTripped", "chargedBytes",
+  ],
+  sqlite_db: [
+    "blaHoneyTables", "blaTableCount", "blaProtected", "hasGeneratedTrapColumns", "blaInspectError",
+    "nodeSqliteLimits", "nodeVersion", "reaTables", "reaTableNames", "reaLimitations",
+    "reaHoneyTablesVisible", "trapColumnFailure",
+  ],
+  electron_fuses: ["sentinelCount", "sliceCount"],
+  javascript: [
+    "parseStatus", "parseErrorCount", "visitedAstNodes", "staticCoverage", "staticLimits", "semCoverage",
+    "semOmittedCount", "semLimits", "semanticResourceLimits", "unknownFindings", "referenceCount",
+    "endpointCount", "routeCount", "semBindingCount", "semCallableCount", "semReferenceCount",
+    "semExpressionFlowsTruncated", "limitations",
+  ],
+  javascript_strings: ["valuesHiddenAtDefaultBudgets", "valuesHiddenAtRaisedBudgets"],
+}));
+
+const REDTEAM_SAMPLE_FIELDS = [
+  "mappedGo", "mappedFlutter", "goTripsMax", "atomsInjected", "chunksInjected",
+  "exceedsDefaultChunkBudget", "approachesInputBudget", "afterBytes", "estimatedTsharkJsonBytes",
+  "exceedsTsharkJsonBudget", "packetsInjected", "answerFloodPackets", "entriesInjected",
+  "triggeredJsonNestingBreaker", "canaryTokensEmbedded", "error", "triggeredMetadataNestingBreaker",
+  "decoyFiles", "estimatedHeaderBytes", "exceedsDefaultAdmission", "customSectionsAdded",
+  "interfaceDescriptorsEmbedded", "projectedInterfaceChargeBytes", "exceedsRepresentationBudget",
+  "exportDecoysInjected", "honeyTablesInjected", "electronFuseSentinelsInjected",
+  "decoyFunctionsInjected", "aliasSelectionStatesCreated", "primitiveCandidateBranchesCreated",
+];
+
+function optionalReportText(value: unknown): string | undefined {
+  return typeof value === "string" ? reportText(value) : undefined;
+}
+
+type DiagnosticValue = string | number | boolean | null | readonly string[];
+
+function selectDiagnostics(input: Record<string, unknown>, keys: readonly string[]): Record<string, DiagnosticValue> {
+  const fields: Record<string, DiagnosticValue> = {};
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string") fields[key] = reportText(value);
+    else if (value === null || typeof value === "number" || typeof value === "boolean") fields[key] = value;
+    else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      fields[key] = value.slice(0, 16).map(reportText);
+    }
+  }
+  return fields;
+}
+
+function projectMetrics(value: Record<string, unknown>, format: string) {
+  const metrics = selectDiagnostics(value, REDTEAM_METRICS.get(format) ?? []);
+  const metadata = value.solidityMetadata;
+  if (format === "evm_bytecode" && isRecord(metadata)) {
+    const version = metadata.compiler_version;
+    return {
+      ...metrics,
+      solidityMetadata: {
+        ...selectDiagnostics(metadata, ["profile", "status", "bytecode_offset", "cbor_bytes", "diagnostic"]),
+        ...(isRecord(version) ? { compiler_version: selectDiagnostics(version, ["representation", "value"]) } : {}),
+      },
+    };
+  }
+  if (format === "javascript_strings" && Array.isArray(value.budgetRuns)) {
+    const budgetRuns = reportRows(value.budgetRuns).map((run) => {
+      if (!isRecord(run)) invalidRedteamSchema();
+      return {
+        ...selectDiagnostics(run, ["budgetMultiplier", "ms", "coverage", "limits"]),
+        ...(isRecord(run.recovered) ? { recovered: selectDiagnostics(run.recovered, ["endpoint", "channel", "digest"]) } : {}),
+      };
+    });
+    return { ...metrics, budgetRuns };
+  }
+  return metrics;
+}
+
+function projectOutcome(value: unknown, format: string, phase: "before" | "after") {
+  if (
+    !isRecord(value) || value.format !== format || value.phase !== phase ||
+    typeof value.status !== "string" || !REDTEAM_OUTCOME_STATUSES.has(value.status) ||
+    typeof value.inputBytes !== "number" || !Number.isSafeInteger(value.inputBytes) ||
+    value.inputBytes < 0 || typeof value.budgetHit !== "boolean" ||
+    ![value.errorName, value.errorMessage, value.budgetName, value.redactionOrAmbiguity].every(
+      (field) => field === null || typeof field === "string",
+    ) || !isRecord(value.metrics)
+  ) invalidRedteamSchema();
+  return {
+    format,
+    phase,
+    inputBytes: value.inputBytes,
+    status: value.status,
+    errorName: optionalReportText(value.errorName) ?? null,
+    errorMessage: optionalReportText(value.errorMessage) ?? null,
+    budgetHit: value.budgetHit,
+    budgetName: optionalReportText(value.budgetName) ?? null,
+    redactionOrAmbiguity: optionalReportText(value.redactionOrAmbiguity) ?? null,
+    metrics: projectMetrics(value.metrics, format),
+  };
+}
+
+function reportRows(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > MAX_REDTEAM_ROWS) invalidRedteamSchema();
+  return value;
+}
+
+function projectReportNotes(value: unknown, key: "format" | "analyzer") {
+  return reportRows(value ?? []).map((item) => {
+    if (!isRecord(item) || typeof item[key] !== "string" || typeof item.reason !== "string") {
+      invalidRedteamSchema();
+    }
+    return { [key]: reportText(item[key]), reason: reportText(item.reason) };
+  });
+}
+
+function projectRedteamReport(raw: string) {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    // JSON.parse errors can contain excerpts of the rejected file.
+    invalidRedteamSchema();
+  }
+  if (
+    !isRecord(value) || value.schema !== "bla-redteam-rea/v1" ||
+    (value.status !== "measured" && value.status !== "unverified")
+  ) invalidRedteamSchema();
+  const pairs = reportRows(value.pairs).map((pair) => {
+    if (!isRecord(pair) || typeof pair.format !== "string" || !/^[a-z][a-z0-9_]*$/.test(pair.format)) {
+      invalidRedteamSchema();
+    }
+    return {
+      format: reportText(pair.format),
+      before: projectOutcome(pair.before, pair.format, "before"),
+      after: projectOutcome(pair.after, pair.format, "after"),
+      ...(isRecord(pair.sampleMeta) ? { sampleMeta: selectDiagnostics(pair.sampleMeta, REDTEAM_SAMPLE_FIELDS) } : {}),
+      ...(isRecord(pair.blaLimits) ? { blaLimits: selectDiagnostics(pair.blaLimits, Object.keys(REA_INTERNAL_LIMITS)) } : {}),
+    };
+  });
+  const notStopped = reportRows(value.notStopped ?? []).map((format) => {
+    if (typeof format !== "string") invalidRedteamSchema();
+    return reportText(format);
+  });
+  const reaProvenance = isRecord(value.reaProvenance) ? value.reaProvenance : {};
+  const tshark = isRecord(value.tshark) ? value.tshark : {};
+  return {
+    schema: value.schema,
+    status: value.status,
+    generatedAt: optionalReportText(value.generatedAt),
+    blaVersion: optionalReportText(value.blaVersion),
+    nodeVersion: optionalReportText(value.nodeVersion),
+    intensity: optionalReportText(value.intensity),
+    reaProvenance: {
+      commit: typeof reaProvenance.commit === "string" ? reportText(reaProvenance.commit) : null,
+      date: typeof reaProvenance.date === "string" ? reportText(reaProvenance.date) : null,
+    },
+    ...(typeof tshark.available === "boolean" ? {
+      tshark: {
+        available: tshark.available,
+        version: typeof tshark.version === "string" ? reportText(tshark.version) : null,
+        source: typeof tshark.source === "string" ? reportText(tshark.source) : null,
+      },
+    } : {}),
+    pairs,
+    notStopped,
+    unverified: projectReportNotes(value.unverified, "analyzer"),
+    harnessErrors: projectReportNotes(value.harnessErrors, "format"),
+  };
 }
 
 export interface RedteamReportResult {
@@ -183,7 +413,7 @@ export interface RedteamReportResult {
   readonly blaRoot: string;
   readonly reportPath: string;
   readonly reason?: string;
-  readonly report?: unknown;
+  readonly report?: ReturnType<typeof projectRedteamReport>;
   readonly executed: boolean;
   readonly exitCode: number | null;
   readonly stdout: string;
@@ -207,7 +437,7 @@ export function getRedteamReport(options: {
 } = {}): RedteamReportResult {
   const blaRoot = BLA_PACKAGE_ROOT;
   const reaRoot = resolveReaRoot(options.reaRoot);
-  const reportPath = resolve(options.reportPath ?? REDTEAM_REPORT_JSON);
+  const reportPath = options.execute === true ? REDTEAM_REPORT_JSON : resolve(options.reportPath ?? REDTEAM_REPORT_JSON);
   const base = {
     schema: "bla-redteam-report/v1" as const,
     reaRoot,
@@ -215,6 +445,9 @@ export function getRedteamReport(options: {
     reportPath,
   };
 
+  let stdout = "";
+  let stderr = "";
+  let executed = false;
   if (options.execute === true) {
     if (!reaDistReady(reaRoot)) {
       return {
@@ -245,8 +478,8 @@ export function getRedteamReport(options: {
       env: { ...process.env, REA_ROOT: reaRoot },
       timeout: options.timeoutMs ?? 600_000,
     });
-    const stdout = clipObservabilityStream(result.stdout ?? "");
-    const stderr = clipObservabilityStream(result.stderr ?? "");
+    stdout = clipObservabilityStream(result.stdout ?? "");
+    stderr = clipObservabilityStream(result.stderr ?? "");
     if (result.error) {
       return {
         ...base,
@@ -258,12 +491,13 @@ export function getRedteamReport(options: {
         stderr,
       };
     }
+    executed = true;
     const exitCode = result.status ?? 1;
     if (exitCode === REDTEAM_EXIT_UNVERIFIED) {
       return {
         ...base,
         status: "unverified",
-        executed: true,
+        executed,
         exitCode,
         reason:
           "redteam:rea could not call REA for at least one probe (stderr names the format and the missing export or module). The harness is out of date with this REA checkout; nothing was measured for those formats, and this is not a verdict on a shield.",
@@ -275,7 +509,7 @@ export function getRedteamReport(options: {
       return {
         ...base,
         status: "fail",
-        executed: true,
+        executed,
         exitCode,
         reason:
           "redteam:rea exited non-zero: REA read a hardened sample it was expected to stop on, or the harness crashed (see stderr)",
@@ -283,61 +517,46 @@ export function getRedteamReport(options: {
         stderr,
       };
     }
-    // Fall through to read the freshly written report.
-  }
-
-  if (!existsSync(reportPath)) {
-    const reaHint = reaDistReady(reaRoot)
-      ? "REA dist is ready — pass execute:true to run the harness."
-      : `REA dist not ready at ${reaRoot}; cannot fabricate a red-team report.`;
-    return {
-      ...base,
-      status: "unverified",
-      executed: false,
-      exitCode: null,
-      reason: `No empirical report at ${reportPath}. ${reaHint}`,
-      stdout: "",
-      stderr: "",
-    };
+    // The harness also exits zero when it skips the run. Only accept output
+    // when this invocation confirmed it wrote the fixed report path.
+    if (!stdout.split(/\r?\n/).includes(`  json:   ${REDTEAM_REPORT_JSON}`)) {
+      return {
+        ...base, status: "unverified", executed, exitCode,
+        reason: "The red-team harness exited without writing a new empirical report.", stdout, stderr,
+      };
+    }
   }
 
   try {
-    const report: unknown = JSON.parse(readFileSync(reportPath, "utf8"));
-    const executed = options.execute === true;
-    const unmeasured = describeUnmeasuredReport(report);
-    if (unmeasured !== null) {
+    const roots = executed ? [blaRoot] : [process.cwd(), blaRoot, resolveBlaStateRoot()];
+    const report = projectRedteamReport(readAuthorizedRedteamFile(reportPath, roots));
+    if (report.status === "unverified") {
+      const errors = report.harnessErrors;
+      const named = errors.slice(0, 8).map((item) => `${item.format} (${item.reason.slice(0, 160)})`);
+      const which = named.length > 0 ? `: ${named.join("; ")}` : "";
       return {
-        ...base,
-        status: "unverified",
-        executed,
-        exitCode: executed ? 0 : null,
-        reason: unmeasured,
-        report,
-        stdout: "",
-        stderr: "",
+        ...base, status: "unverified", executed, exitCode: executed ? 0 : null,
+        reason: `The harness could not call REA for ${errors.length || "at least one"} probe${errors.length > 1 ? "s" : ""}${which}. Those formats were not measured.`,
+        report, stdout, stderr,
       };
     }
-    const notStopped = describeNotStopped(report);
+    const reason = report.notStopped.length > 0
+      ? `In the run that wrote this report, REA read the hardened sample of ${report.notStopped.slice(0, 8).join(", ")}, which BLA's plant is meant to stop it on (that run exited 1). Read those rows before relying on that shield.`
+      : undefined;
     return {
-      ...base,
-      // Live execute → pass; plain on-disk read → available (not a fresh REA verdict).
-      status: executed ? "pass" : "available",
-      executed,
-      exitCode: executed ? 0 : null,
-      ...(notStopped !== null ? { reason: notStopped } : {}),
-      report,
-      stdout: "",
-      stderr: "",
+      ...base, status: executed ? "pass" : "available", executed, exitCode: executed ? 0 : null,
+      ...(reason !== undefined ? { reason } : {}), report, stdout, stderr,
     };
   } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        ...base, status: "unverified", executed, exitCode: executed ? 0 : null,
+        reason: `No empirical report at ${reportPath}.`, stdout, stderr,
+      };
+    }
     return {
-      ...base,
-      status: "fail",
-      executed: options.execute === true,
-      exitCode: null,
-      reason: `Report exists but is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-      stdout: "",
-      stderr: "",
+      ...base, status: "fail", executed, exitCode: executed ? 0 : null,
+      reason: err instanceof Error ? err.message : String(err), stdout, stderr,
     };
   }
 }

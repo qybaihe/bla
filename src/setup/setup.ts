@@ -1,13 +1,21 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -39,6 +47,7 @@ export interface PlannedSetupAction {
   readonly selectionSource: ClientSelectionSource;
   readonly status: "planned" | "applied" | "error" | "conflict";
   readonly applied: boolean;
+  readonly mcpEnabled?: boolean;
   readonly error?: string;
 }
 
@@ -172,20 +181,80 @@ function isBlaOwnedMcpEntry(entry: McpServerRegistration): boolean {
   return false;
 }
 
-function writeFileAtomicSync(targetPath: string, content: string | Buffer): void {
+interface ConfigSnapshot {
+  readonly bytes: Buffer;
+  readonly stat: Stats;
+}
+
+function snapshotConfig(path: string): ConfigSnapshot | null {
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  if (!entry) return null;
+  if (!entry.isFile()) throw new Error(`Expected a regular config file at '${path}'`);
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || !sameConfigStat(entry, stat)) {
+      throw new Error(`Config changed while opening '${path}'`);
+    }
+    const bytes = readFileSync(fd);
+    if (!sameConfigStat(stat, fstatSync(fd))) {
+      throw new Error(`Config changed while reading '${path}'`);
+    }
+    return { bytes, stat };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function sameConfigStat(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode &&
+    a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+function assertConfigUnchanged(path: string, expected: ConfigSnapshot | null): void {
+  const current = snapshotConfig(path);
+  const unchanged = expected === null
+    ? current === null
+    : current !== null && sameConfigStat(current.stat, expected.stat) && current.bytes.equals(expected.bytes);
+  if (!unchanged) {
+    throw new Error(`Config changed since it was read; retry setup or uninstall for '${path}'`);
+  }
+}
+
+function writeFileAtomicSync(
+  targetPath: string,
+  content: string | Buffer,
+  options: {
+    readonly mode?: number;
+    readonly expected?: ConfigSnapshot | null;
+    readonly createOnly?: boolean;
+  } = {},
+): void {
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
+  const mode = options.mode ??
+    (lstatSync(targetPath, { throwIfNoEntry: false })?.mode ?? (0o666 & ~process.umask()));
   const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  const fd = openSync(tmpPath, "wx", 0o600);
   try {
-    writeFileSync(tmpPath, content, { flag: "wx" });
-    renameSync(tmpPath, targetPath);
+    try {
+      writeFileSync(fd, content);
+      fchmodSync(fd, mode & 0o777);
+    } finally {
+      closeSync(fd);
+    }
+    if (options.expected !== undefined) assertConfigUnchanged(targetPath, options.expected);
+    if (options.createOnly || options.expected === null) {
+      linkSync(tmpPath, targetPath);
+      unlinkSync(tmpPath);
+    } else {
+      renameSync(tmpPath, targetPath);
+    }
   } catch (err) {
     try {
-      if (existsSync(tmpPath)) {
-        unlinkSync(tmpPath);
-      }
+      unlinkSync(tmpPath);
     } catch {
-      // Ignore cleanup failure
+      // Preserve the primary error.
     }
     throw err;
   }
@@ -236,7 +305,7 @@ function writeInstallManifest(home: string, manifest: BlaInstallManifest): strin
     updatedAt: new Date().toISOString(),
     clients: manifest.clients,
   };
-  writeFileAtomicSync(manifestPath, JSON.stringify(updated, null, 2) + "\n");
+  writeFileAtomicSync(manifestPath, JSON.stringify(updated, null, 2) + "\n", { mode: 0o600 });
   return manifestPath;
 }
 
@@ -432,35 +501,37 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
     const adapter = getClientConfigAdapter(client.format);
     const skillPath = join(client.skillDirectory, "SKILL.md");
     const backupPathCandidate = `${client.configPath}.bla-backup`;
-    const configExistedBefore = existsSync(client.configPath);
     const skillDirectoryExistedBefore = existsSync(client.skillDirectory);
     const skillExistedBefore = existsSync(skillPath);
 
-    let existingRawContent: string | null = null;
-    if (configExistedBefore) {
-      try {
-        existingRawContent = readFileSync(client.configPath, "utf8");
-      } catch (err) {
-        anyError = true;
-        completedActions.push({
-          clientId: client.id,
-          displayName: client.displayName,
-          format: client.format,
-          configPath: client.configPath,
-          backupPath: null,
-          skillPath,
-          mcpCommand,
-          mcpArgs,
-          clientDetected: client.detected,
-          selectionSource,
-          status: "error",
-          applied: false,
-          error: `Permission or I/O error reading '${client.configPath}': ${err instanceof Error ? err.message : String(err)}`,
-        });
-        continue;
-      }
-
+    let configSnapshot: ConfigSnapshot | null;
+    try {
+      configSnapshot = snapshotConfig(client.configPath);
+    } catch (err) {
+      anyError = true;
+      completedActions.push({
+        clientId: client.id,
+        displayName: client.displayName,
+        format: client.format,
+        configPath: client.configPath,
+        backupPath: null,
+        skillPath,
+        mcpCommand,
+        mcpArgs,
+        clientDetected: client.detected,
+        selectionSource,
+        status: "error",
+        applied: false,
+        error: `Permission or I/O error reading '${client.configPath}': ${err instanceof Error ? err.message : String(err)}`,
+      });
+      continue;
+    }
+    const configExistedBefore = configSnapshot !== null;
+    const existingRawContent = configSnapshot?.bytes.toString("utf8") ?? null;
+    let mcpEnabled = true;
+    if (existingRawContent !== null) {
       const readRes = adapter.readServer(existingRawContent, BLA_IDENTITY.mcpServerName);
+      mcpEnabled = readRes.disabled !== true;
       if (readRes.status === "malformed") {
         anyError = true;
         completedActions.push({
@@ -498,6 +569,7 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
             selectionSource,
             status: "error",
             applied: false,
+            ...(!mcpEnabled ? { mcpEnabled } : {}),
             error:
               readRes.error ??
               `Invalid existing '${BLA_IDENTITY.mcpServerName}' MCP entry in '${client.configPath}'`,
@@ -622,20 +694,25 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
     // Non-clobbering backup: ONLY create `${configPath}.bla-backup` if it does not already exist!
     let recordedBackupPath: string | null = null;
     let recordedBackupSha256: string | null = null;
-    let configWritten = false;
+    let writtenConfig: ConfigSnapshot | null = null;
     try {
-      if (configExistedBefore && existingRawContent !== null) {
-        recordedBackupPath = backupPathCandidate;
-        if (!existsSync(backupPathCandidate)) {
-          writeFileAtomicSync(backupPathCandidate, existingRawContent);
-          recordedBackupSha256 = sha256Hex(existingRawContent);
-        } else {
-          recordedBackupSha256 = sha256Hex(readFileSync(backupPathCandidate));
+      if (configSnapshot !== null) {
+        assertConfigUnchanged(client.configPath, configSnapshot);
+        try {
+          writeFileAtomicSync(backupPathCandidate, configSnapshot.bytes, { mode: 0o600, createOnly: true });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
         }
+        const backup = snapshotConfig(backupPathCandidate);
+        if (!backup) throw new Error(`Backup disappeared at '${backupPathCandidate}'`);
+        recordedBackupPath = backupPathCandidate;
+        recordedBackupSha256 = sha256Hex(backup.bytes);
       }
 
-      writeFileAtomicSync(client.configPath, nextConfigContent);
-      configWritten = true;
+      const configMode = configSnapshot?.stat.mode ?? 0o600;
+      writeFileAtomicSync(client.configPath, nextConfigContent, { expected: configSnapshot, mode: configMode });
+      mcpEnabled = adapter.readServer(nextConfigContent, BLA_IDENTITY.mcpServerName).disabled !== true;
+      writtenConfig = snapshotConfig(client.configPath);
       writeFileAtomicSync(skillPath, skillContent);
       for (const file of supportSkillFiles) {
         writeFileAtomicSync(join(client.skillDirectory, ...file.relativePath.split("/")), file.content);
@@ -644,11 +721,15 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
       // Roll the config back when the skill write failed after a successful
       // config write — never leave a half-installed registration (config
       // pointing at BLA with no skill file).
-      if (configWritten) {
+      if (writtenConfig?.bytes.equals(Buffer.from(nextConfigContent))) {
         try {
-          if (configExistedBefore && existingRawContent !== null) {
-            writeFileAtomicSync(client.configPath, existingRawContent);
+          if (configSnapshot !== null) {
+            writeFileAtomicSync(client.configPath, configSnapshot.bytes, {
+              expected: writtenConfig,
+              mode: configSnapshot.stat.mode,
+            });
           } else {
+            assertConfigUnchanged(client.configPath, writtenConfig);
             unlinkSync(client.configPath);
           }
         } catch {
@@ -710,6 +791,7 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
       selectionSource,
       status: "applied",
       applied: true,
+      mcpEnabled,
     });
   }
 
@@ -734,6 +816,8 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
   }
 
   const appliedCount = completedActions.filter((a) => a.applied).length;
+  const disabledCount = completedActions.filter((a) => a.applied && a.mcpEnabled === false).length;
+  const activeCount = appliedCount - disabledCount;
   return {
     status: overallStatus,
     actions: completedActions,
@@ -744,7 +828,9 @@ export function runSetup(options: SetupRunOptions = {}): SetupRunResult {
     manifestPath,
     message:
       overallStatus === "applied"
-        ? `Configured BLA MCP server and skill for ${appliedCount} agent client(s). Restart your agent to load BLA tools, then run bla_harden . (or: Harden my software against REA).`
+        ? `Configured BLA MCP server and skill for ${activeCount} agent client(s).` +
+          (disabledCount > 0 ? ` Preserved ${disabledCount} disabled MCP registration(s).` : "") +
+          (activeCount > 0 ? " Restart your agent to load BLA tools, then run bla_harden ." : "")
         : `Completed setup with status '${overallStatus}' (${appliedCount}/${completedActions.length} applied).`,
   };
 }
@@ -788,56 +874,37 @@ export function runUninstall(options: UninstallRunOptions = {}): UninstallRunRes
     let errorMsg: string | undefined;
 
     // 1. Check and remove MCP registration if owned by BLA
-    if (existsSync(client.configPath)) {
-      let rawConfig: string | null = null;
-      try {
-        rawConfig = readFileSync(client.configPath, "utf8");
-      } catch (err) {
-        errorMsg = `Failed to read '${client.configPath}': ${err instanceof Error ? err.message : String(err)}`;
-      }
-
-      if (rawConfig !== null) {
-        const readRes = adapter.readServer(rawConfig, BLA_IDENTITY.mcpServerName);
-        if (readRes.status === "malformed") {
-          conflictReason =
-            readRes.error ?? `Malformed configuration at '${client.configPath}'; refusing to modify`;
-        } else if (readRes.status === "invalid_entry") {
-          if (manifestRecord || options.force) {
-            try {
-              const rem = adapter.removeServer(rawConfig, BLA_IDENTITY.mcpServerName);
-              if (rem.removed) {
-                if (!options.dryRun) {
-                  writeFileAtomicSync(client.configPath, rem.content);
-                }
-                mcpRemoved = true;
-              }
-            } catch (err) {
-              errorMsg = err instanceof Error ? err.message : String(err);
+    let configSnapshot: ConfigSnapshot | null = null;
+    try {
+      configSnapshot = snapshotConfig(client.configPath);
+    } catch (err) {
+      errorMsg = `Failed to read '${client.configPath}': ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (configSnapshot !== null) {
+      const rawConfig = configSnapshot.bytes.toString("utf8");
+      const readRes = adapter.readServer(rawConfig, BLA_IDENTITY.mcpServerName);
+      if (readRes.status === "malformed") {
+        conflictReason = readRes.error ?? `Malformed configuration at '${client.configPath}'; refusing to modify`;
+      } else if (readRes.status === "invalid_entry" && !manifestRecord && !options.force) {
+        conflictReason = readRes.error ??
+          `Invalid non-BLA entry '${BLA_IDENTITY.mcpServerName}' in '${client.configPath}'; refusing to remove`;
+      } else if (readRes.entry && !options.force &&
+        manifestRecord?.writtenEntryHash !== hashMcpEntry(readRes.entry) && !isBlaOwnedMcpEntry(readRes.entry)) {
+        conflictReason = `MCP entry '${BLA_IDENTITY.mcpServerName}' in '${client.configPath}' was not installed by BLA; preserving custom entry`;
+      } else if (readRes.status === "valid" || readRes.status === "invalid_entry") {
+        try {
+          const rem = adapter.removeServer(rawConfig, BLA_IDENTITY.mcpServerName);
+          if (rem.removed) {
+            if (!options.dryRun) {
+              writeFileAtomicSync(client.configPath, rem.content, {
+                expected: configSnapshot,
+                mode: configSnapshot.stat.mode,
+              });
             }
-          } else {
-            conflictReason =
-              readRes.error ??
-              `Invalid non-BLA entry '${BLA_IDENTITY.mcpServerName}' in '${client.configPath}'; refusing to remove`;
+            mcpRemoved = true;
           }
-        } else if (readRes.status === "valid" && readRes.entry) {
-          const entryHash = hashMcpEntry(readRes.entry);
-          const ownedByManifest = manifestRecord?.writtenEntryHash === entryHash;
-          const ownedBySignature = isBlaOwnedMcpEntry(readRes.entry);
-          if (!ownedByManifest && !ownedBySignature && !options.force) {
-            conflictReason = `MCP entry '${BLA_IDENTITY.mcpServerName}' in '${client.configPath}' was not installed by BLA; preserving custom entry`;
-          } else {
-            try {
-              const rem = adapter.removeServer(rawConfig, BLA_IDENTITY.mcpServerName);
-              if (rem.removed) {
-                if (!options.dryRun) {
-                  writeFileAtomicSync(client.configPath, rem.content);
-                }
-                mcpRemoved = true;
-              }
-            } catch (err) {
-              errorMsg = err instanceof Error ? err.message : String(err);
-            }
-          }
+        } catch (err) {
+          errorMsg = err instanceof Error ? err.message : String(err);
         }
       }
     }
