@@ -43,6 +43,8 @@ export interface OneClickDefenseOptions {
   readonly requireAgentWeave?: boolean;
   /** Opt-in self-seal / sibling-module integrity binding for JS/Node (issue #40.5). */
   readonly selfSeal?: boolean;
+  /** Development-only self-seal variant that lets a debugger attach. */
+  readonly selfSealAllowInspector?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS (issue #40). */
   readonly sidecarEntangle?: boolean;
   /** Sibling sidecar paths measured when sidecarEntangle is true. */
@@ -199,6 +201,9 @@ export function defendTarget(
       : {}),
     ...(options.selfSeal !== undefined
       ? { selfSeal: options.selfSeal }
+      : {}),
+    ...(options.selfSealAllowInspector === true
+      ? { selfSealAllowInspector: true }
       : {}),
     ...(options.wasmPreserveExports !== undefined && options.wasmPreserveExports.length > 0
       ? { wasmPreserveExports: options.wasmPreserveExports }

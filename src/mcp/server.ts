@@ -347,6 +347,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
+        self_seal_allow_inspector: {
+          type: "boolean",
+          description:
+            "Development escape hatch for self_seal: skip the inspector / NODE_OPTIONS / Function#toString fingerprint so a debugger can attach. Sibling and self-digest checks stay active. Default false.",
+        },
         sqlite_eval_trap: {
           type: "boolean",
           description:
@@ -545,6 +550,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
         },
+        self_seal_allow_inspector: {
+          type: "boolean",
+          description:
+            "Development escape hatch for self_seal: skip the inspector / NODE_OPTIONS / Function#toString fingerprint so a debugger can attach. Sibling and self-digest checks stay active. Default false.",
+        },
         sqlite_eval_trap: {
           type: "boolean",
           description:
@@ -681,6 +691,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           type: "boolean",
           description:
             "Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5). Injects a self-integrity preamble and entangles the opaque-predicate seed. For multi-artifact entitlement trees, bankrupt harden sets selfSealRecommended when this is false; enabling it auto-binds sibling JS/WASM/HTML paths. Default false — never auto-enabled for single-file trees.",
+        },
+        self_seal_allow_inspector: {
+          type: "boolean",
+          description:
+            "Development escape hatch for self_seal: skip the inspector / NODE_OPTIONS / Function#toString fingerprint so a debugger can attach. Sibling and self-digest checks stay active. Default false.",
         },
         sqlite_eval_trap: {
           type: "boolean",
@@ -1894,6 +1909,7 @@ function runDefend(handlers: McpEngineHandlers, args: Record<string, unknown>): 
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
+    selfSealAllowInspector: args.self_seal_allow_inspector === true,
     sidecarEntangle: Boolean(args.sidecar_entangle),
     ...(args.sqlite_eval_trap === true ? { sqliteEvalTrap: true } : {}),
     ...(args.require_agent_weave === true ? { requireAgentWeave: true } : {}),
@@ -1941,6 +1957,7 @@ function runProtect(handlers: McpEngineHandlers, args: Record<string, unknown>):
     llmDirectives: Boolean(args.llm_directives),
     weaveDecoys: Boolean(args.weave_decoys),
     selfSeal: Boolean(args.self_seal),
+    selfSealAllowInspector: args.self_seal_allow_inspector === true,
     sidecarEntangle: Boolean(args.sidecar_entangle),
     ...(args.sqlite_eval_trap === true ? { sqliteEvalTrap: true } : {}),
     ...(typeof args.honey_source_maps === "boolean"
@@ -2671,6 +2688,7 @@ export async function handleMcpRequest(
               ...(exclude !== undefined ? { exclude } : {}),
               ...(typeof args.self_seal === "boolean" ? { selfSeal: args.self_seal } : {}),
               ...(args.clear_stale_lock === true ? { clearStaleLock: true } : {}),
+              ...(args.self_seal_allow_inspector === true ? { selfSealAllowInspector: true } : {}),
             });
             preOverwrite = planHardenOverwrites(preview, args, applyMode, outputDirectory !== undefined);
           }
@@ -2725,6 +2743,9 @@ export async function handleMcpRequest(
                   ? { selfSeal: args.self_seal }
                   : {}),
                 ...(args.clear_stale_lock === true ? { clearStaleLock: true } : {}),
+                ...(args.self_seal_allow_inspector === true
+                  ? { selfSealAllowInspector: true }
+                  : {}),
                 ...(typeof args.sidecar_entangle === "boolean"
                   ? { sidecarEntangle: args.sidecar_entangle }
                   : {}),

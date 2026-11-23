@@ -332,6 +332,8 @@ export interface HardenProjectOptions {
   readonly selfSeal?: boolean;
   /** Apply/restore: clear a lock whose recorded owner process has exited. */
   readonly clearStaleLock?: boolean;
+  /** Development-only self-seal variant that lets a debugger attach. */
+  readonly selfSealAllowInspector?: boolean;
   /** Opt-in sidecar/entry entanglement strip⇒fail for JS/Python (issue #40). */
   readonly sidecarEntangle?: boolean;
   /** WASM public ABI export names to preserve when rename runs (issue #40.3). */
@@ -2930,6 +2932,9 @@ function hardenProjectCore(
           : {}),
         ...(options.selfSeal !== undefined
           ? { selfSeal: options.selfSeal && !browserBundles.has(artifact.path) }
+          : {}),
+        ...(options.selfSealAllowInspector === true
+          ? { selfSealAllowInspector: true }
           : {}),
         ...(options.sqliteEvalTrap === true && artifact.format === "sqlite"
           ? { sqliteEvalTrap: true }

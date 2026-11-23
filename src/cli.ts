@@ -119,6 +119,7 @@ Options:
   --weave-decoys              Opt-in structural weave decoys (Python customer-def / .pyc co_consts weave; JS AST weave already on); OFF by default
   --self-seal                 Opt-in self-seal / sibling-module integrity binding for JS/Node targets (issue #40.5); OFF by default
   --self-seal-sibling-glob <a,b>  Comma-separated globs (cwd-relative) expanded into self-seal sibling paths; requires --self-seal (protect only)
+  --self-seal-allow-inspector  Keep self-seal sibling/self-digest checks but let a debugger attach (drops the inspector fingerprint); requires --self-seal
   --sidecar-entangle          Opt-in sidecar/entry entanglement strip⇒fail for CommonJS & ESM JS/Python/ASAR + WASM/Bun/.pyc/GGUF/Safetensors notes (issue #40); ESM static imports still evaluate before the entry hook; OFF by default
   --wasm-preserve-exports <a,b>  Comma-separated WASM export names to keep as public ABI (issue #40.3)
   --exclude <a,b>             harden: comma-separated project-relative paths or globs to leave out (repeatable); for the
@@ -171,6 +172,7 @@ interface ParsedCliArgs {
   readonly llmDirectives: boolean;
   readonly weaveDecoys: boolean;
   readonly selfSeal: boolean;
+  readonly selfSealAllowInspector: boolean;
   readonly selfSealSiblingGlobs: readonly string[];
   readonly sidecarEntangle: boolean;
   readonly requireAgentWeave: boolean;
@@ -253,6 +255,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let llmDirectives = false;
   let weaveDecoys = false;
   let selfSeal = false;
+  let selfSealAllowInspector = false;
   let selfSealSiblingGlobs: string[] = [];
   let sidecarEntangle = false;
   let requireAgentWeave = false;
@@ -373,6 +376,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       weaveDecoys = true;
     } else if (arg === "--self-seal") {
       selfSeal = true;
+    } else if (arg === "--self-seal-allow-inspector") {
+      selfSealAllowInspector = true;
     } else if (arg === "--self-seal-sibling-glob") {
       const value = expandedArgs[++i];
       if (value === undefined) {
@@ -525,6 +530,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       argErrors.push("--self-seal-sibling-glob is only supported for the protect command");
     }
   }
+  if (selfSealAllowInspector && !selfSeal) {
+    argErrors.push("--self-seal-allow-inspector requires --self-seal");
+  }
 
   // protect has no manifest stage: ProtectionOptions carries no manifest field,
   // so accepting the flags here would silently produce nothing.
@@ -556,6 +564,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     llmDirectives,
     weaveDecoys,
     selfSeal,
+    selfSealAllowInspector,
     selfSealSiblingGlobs,
     sidecarEntangle,
     requireAgentWeave,
@@ -871,6 +880,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...(parsed.selfSealAllowInspector ? { selfSealAllowInspector: true } : {}),
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
             ? { requireAgentWeave: true }
@@ -951,6 +961,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...(parsed.selfSealAllowInspector ? { selfSealAllowInspector: true } : {}),
           sidecarEntangle: parsed.sidecarEntangle || loaded.config.sidecarEntangle === true,
           ...(parsed.requireAgentWeave || loaded.config.requireAgentWeave === true
             ? { requireAgentWeave: true }
@@ -1314,6 +1325,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           llmDirectives: parsed.llmDirectives || loaded.config.llmDirectives === true,
           weaveDecoys: parsed.weaveDecoys || loaded.config.weaveDecoys === true,
           selfSeal: parsed.selfSeal || loaded.config.selfSeal === true,
+          ...(parsed.selfSealAllowInspector ? { selfSealAllowInspector: true } : {}),
           ...(parsed.selfSealSiblingGlobs.length > 0
             ? {
                 selfSealSiblingPaths: resolveSelfSealSiblingPaths({

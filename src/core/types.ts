@@ -184,6 +184,12 @@ export interface ProtectionOptions {
    */
   readonly selfSeal?: boolean;
   /**
+   * Development-only self-seal variant: keep sibling and self-digest checks but
+   * drop the inspector / NODE_OPTIONS / Function#toString fingerprint so a
+   * debugger can attach. Requires `selfSeal`.
+   */
+  readonly selfSealAllowInspector?: boolean;
+  /**
    * WASM public ABI export names to keep when rename runs (issue #40.3).
    * At maximum/bankrupt every non-listed export is renamed by default —
    * preserving a stable ABI requires an explicit list.

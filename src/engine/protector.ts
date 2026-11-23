@@ -162,6 +162,7 @@ function selfSealTransformOption(
   readonly hardFailOnSiblingMismatch?: boolean;
   readonly selfDigestCheck?: boolean;
   readonly interleavedSites?: number;
+  readonly allowInspector?: boolean;
 } | undefined {
   if (options.selfSeal !== true) return undefined;
   const siblingPaths = options.selfSealSiblingPaths ?? [];
@@ -174,6 +175,7 @@ function selfSealTransformOption(
       selfDigestCheck: true,
       hardFailOnSiblingMismatch: true,
       interleavedSites: 2,
+      ...(options.selfSealAllowInspector === true ? { allowInspector: true } : {}),
     };
   }
   const base = dirname(absOutput);
@@ -193,6 +195,7 @@ function selfSealTransformOption(
   return {
     siblingPaths,
     selfDigestCheck: true,
+    ...(options.selfSealAllowInspector === true ? { allowInspector: true } : {}),
     ...(Object.keys(expectedSiblingSha256).length > 0
       ? {
           expectedSiblingSha256,
