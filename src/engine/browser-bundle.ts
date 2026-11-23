@@ -18,13 +18,14 @@
  * reported); a wrong "Node" verdict ships an application that cannot start.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface BrowserBundleCandidate {
-  /** Absolute path of the JS/TS artifact as it sits in the project. */
+  /** Absolute path of the JS/TS or HTML artifact as it sits in the project. */
   readonly path: string;
   readonly relativePath: string;
+  readonly format?: string;
 }
 
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
@@ -45,7 +46,8 @@ const NODE_MARKER_RE =
 
 function readText(path: string): string | undefined {
   try {
-    if (statSync(path).size > MAX_SCAN_BYTES) return undefined;
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > MAX_SCAN_BYTES) return undefined;
     return readFileSync(path, "utf8");
   } catch {
     return undefined;
@@ -67,9 +69,14 @@ export function classifyBrowserBundles(
 ): ReadonlyMap<string, string> {
   const verdicts = new Map<string, string>();
   if (candidates.length === 0) return verdicts;
-  const byPath = new Map(candidates.map((c) => [resolve(c.path), c]));
+  const scripts = candidates.filter((candidate) => {
+    if (candidate.format !== "html-bundle" && !/\.html?$/i.test(candidate.path)) return true;
+    verdicts.set(resolve(candidate.path), "HTML bundle");
+    return false;
+  });
+  const byPath = new Map(scripts.map((c) => [resolve(c.path), c]));
   const byBasename = new Map<string, BrowserBundleCandidate[]>();
-  for (const candidate of candidates) {
+  for (const candidate of scripts) {
     const key = basename(candidate.path);
     byBasename.set(key, [...(byBasename.get(key) ?? []), candidate]);
   }
@@ -81,12 +88,13 @@ export function classifyBrowserBundles(
     const dir = dirname(resolve(candidate.path));
     htmlDirs.add(dir);
     const parent = dirname(dir);
-    if (parent.startsWith(root)) htmlDirs.add(parent);
+    const fromRoot = relative(root, parent);
+    if (!isAbsolute(fromRoot) && fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`)) htmlDirs.add(parent);
   }
   htmlDirs.add(root);
-  const htmlFiles: string[] = [];
+  const htmlFiles = new Set(verdicts.keys());
   for (const dir of htmlDirs) {
-    if (htmlFiles.length >= MAX_HTML_FILES) break;
+    if (htmlFiles.size >= MAX_HTML_FILES) break;
     let names: string[];
     try {
       names = readdirSync(dir);
@@ -94,8 +102,8 @@ export function classifyBrowserBundles(
       continue;
     }
     for (const name of names) {
-      if (/\.html?$/i.test(name)) htmlFiles.push(join(dir, name));
-      if (htmlFiles.length >= MAX_HTML_FILES) break;
+      if (/\.html?$/i.test(name)) htmlFiles.add(join(dir, name));
+      if (htmlFiles.size >= MAX_HTML_FILES) break;
     }
   }
   const queue: string[] = [];
@@ -104,10 +112,26 @@ export function classifyBrowserBundles(
     verdicts.set(path, reason);
     queue.push(path);
   };
+  const markImports = (source: string, importer: string, reason: string): void => {
+    for (const match of source.matchAll(RELATIVE_IMPORT_RE)) {
+      const target = resolve(dirname(importer), stripQueryAndHash(match[1]!));
+      for (const path of [target, `${target}.js`, `${target}.mjs`]) {
+        if (byPath.has(path) && existsSync(path)) {
+          mark(path, reason);
+          break;
+        }
+      }
+    }
+  };
   for (const htmlPath of htmlFiles) {
     const html = readText(htmlPath);
     if (html === undefined) continue;
     const htmlDir = dirname(htmlPath);
+    for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+      const attrs = match[1]!;
+      if (/\bsrc\s*=/i.test(attrs) || !/\btype\s*=\s*(?:"module"|'module'|module(?=\s|$))/i.test(attrs)) continue;
+      markImports(match[2]!, htmlPath, `imported by an inline module in ${basename(htmlPath)}`);
+    }
     for (const match of html.matchAll(HTML_SCRIPT_REF_RE)) {
       const raw = match.slice(1).find((group) => group !== undefined);
       if (raw === undefined) continue;
@@ -134,20 +158,11 @@ export function classifyBrowserBundles(
     const current = queue.shift()!;
     const source = readText(current);
     if (source === undefined) continue;
-    for (const match of source.matchAll(RELATIVE_IMPORT_RE)) {
-      const spec = stripQueryAndHash(match[1]!);
-      const target = resolve(dirname(current), spec);
-      for (const candidatePath of [target, `${target}.js`, `${target}.mjs`]) {
-        if (byPath.has(candidatePath) && existsSync(candidatePath)) {
-          mark(candidatePath, `imported by ${basename(current)}, which a web page loads`);
-          break;
-        }
-      }
-    }
+    markImports(source, current, `imported by ${basename(current)}, which a web page loads`);
   }
 
   // 3. Browser globals and nothing Node about it.
-  for (const candidate of candidates) {
+  for (const candidate of scripts) {
     const path = resolve(candidate.path);
     if (verdicts.has(path)) continue;
     const source = readText(path);

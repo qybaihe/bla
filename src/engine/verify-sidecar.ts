@@ -72,24 +72,6 @@ export function verifySidecarTarget(
   const dir = baseDir !== undefined ? resolve(baseDir) : dirname(abs);
   const format = detectArtifactFormat(abs);
 
-  const companionPath = `${abs}${BUN_SIDECAR_COMPANION_SUFFIX}`;
-  if (existsSync(companionPath)) {
-    const result = verifyBunSidecarCompanionNote({
-      noteBytes: readFileSync(companionPath),
-      baseDir: dir,
-    });
-    return report(
-      result.ok,
-      abs,
-      format,
-      "bun-companion-note",
-      result.ok
-        ? "bun companion note intact"
-        : (result.reason ?? "bun companion note verification failed"),
-      { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
-    );
-  }
-
   switch (format) {
     case "wasm": {
       const result = verifyWasmSidecarCustomSection({ wasmBytes: bytes, baseDir: dir });
@@ -191,13 +173,34 @@ export function verifySidecarTarget(
         { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
       );
     }
-    default:
-      return report(
-        false,
-        abs,
-        format,
-        "runtime-only",
-        `no offline sidecar verifier for ${format}; strip⇒fail binding is checked at runtime`,
-      );
+    case "native-elf":
+    case "native-macho":
+    case "native-pe": {
+      const companionPath = `${abs}${BUN_SIDECAR_COMPANION_SUFFIX}`;
+      if (existsSync(companionPath)) {
+        const result = verifyBunSidecarCompanionNote({
+          noteBytes: readFileSync(companionPath),
+          baseDir: dir,
+        });
+        return report(
+          result.ok,
+          abs,
+          format,
+          "bun-companion-note",
+          result.ok
+            ? "bun companion note intact"
+            : (result.reason ?? "bun companion note verification failed"),
+          { expectedHex: result.expectedHex, measuredHex: result.measuredHex },
+        );
+      }
+      break;
+    }
   }
+  return report(
+    false,
+    abs,
+    format,
+    "runtime-only",
+    `no offline sidecar verifier for ${format}; strip⇒fail binding is checked at runtime`,
+  );
 }

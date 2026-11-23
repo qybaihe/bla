@@ -14,7 +14,7 @@ import {
 import { inspectNativeBinary } from "../shields/formats/native.js";
 import { inspectSqliteBuffer } from "../shields/formats/sqlite.js";
 import { inspectWasmBinary, readWasmCustomSectionContent } from "../shields/formats/wasm.js";
-import { verifySelfSealSelfDigest } from "../shields/runtime/self-seal.js";
+import { canonicalSelfDigest } from "../shields/runtime/self-seal.js";
 import { jsModuleHasHoistedDependencyGraph } from "../shields/javascript/ast-shield.js";
 import {
   BUN_SIDECAR_COMPANION_SUFFIX,
@@ -147,37 +147,32 @@ export function verifyTarget(
   }
 
   const autoDetect = options.autoDetectBindings === true;
-  // Self-seal detection & verification:
-  // - When `autoDetectBindings` is enabled (CLI `bla verify`), auto-detect
-  //   verified canonical self-digest markers on JS/TS & Python files.
-  // - Whenever `selfSealEnabled` is true (or `autoDetect` is true) and a
-  //   canonical self-digest marker is present on disk, verify it offline so a
-  //   tampered file can never claim self-seal.
-  let effectiveSelfSealEnabled = options.selfSealEnabled === true;
-  if (
-    targetBytes &&
-    (effectiveSelfSealEnabled || (autoDetect && options.selfSealEnabled !== false)) &&
-    (afterAudit.detectedFormat === "javascript" ||
-      afterAudit.detectedFormat === "typescript" ||
-      afterAudit.detectedFormat === "python-source")
-  ) {
-    const latin1 = targetBytes.toString("latin1");
-    if (/(?:var\s+selfExpected|self_expected)\s*=/.test(latin1)) {
-      const sealVerify = verifySelfSealSelfDigest(targetBytes);
-      if (sealVerify.verified) {
-        effectiveSelfSealEnabled = true;
-      } else {
-        effectiveSelfSealEnabled = false;
-        checks.push({
-          id: "self-seal-digest-integrity",
-          name: "Self-Seal Canonical Self-Digest Integrity",
-          targetReaComponent: "runtime/self-seal.ts",
-          passed: false,
-          details:
-            "Embedded selfExpected canonical SHA-256 digest failed offline verification (file tampered or unfinalized after self-seal)",
-        });
-      }
-    }
+  const sealRequired = options.selfSealEnabled === true;
+  const sealSupported = afterAudit.detectedFormat === "javascript" ||
+    afterAudit.detectedFormat === "typescript" || afterAudit.detectedFormat === "python-source";
+  const sealText = sealSupported && (sealRequired || (autoDetect && options.selfSealEnabled !== false))
+    ? targetBytes?.toString("latin1")
+    : undefined;
+  // A selfExpected variable in application code is not a binding. Match the
+  // emitted digest assignment and the adjacent placeholder guard together.
+  const sealMarkers = sealText === undefined ? [] : [
+    ...sealText.matchAll(/(?:\bvar\s+selfExpected|\bself_expected)\s*=\s*(["'])([^"'\r\n]*)\1;?\s*(?:var\s+)?_ph\s*=\s*["']~self-digest-["']\s*\+\s*["']pending-finalize["']/g),
+  ];
+  const sealDigests = new Set(sealMarkers.map((marker) => marker[2]!));
+  const effectiveSelfSealEnabled = targetBytes !== undefined &&
+    sealDigests.size === 1 &&
+    [...sealDigests].every((digest) =>
+      /^[a-f0-9]{64}$/.test(digest) && canonicalSelfDigest(targetBytes, digest) === digest);
+  if ((sealRequired || sealMarkers.length > 0) && !effectiveSelfSealEnabled) {
+    checks.push({
+      id: "self-seal-digest-integrity",
+      name: "Self-Seal Canonical Self-Digest Integrity",
+      targetReaComponent: "runtime/self-seal.ts",
+      passed: false,
+      details: sealMarkers.length === 0
+        ? "Required self-seal binding is absent or unsupported for this artifact"
+        : "Embedded canonical SHA-256 digest failed offline verification (file tampered or unfinalized after self-seal)",
+    });
   }
 
   const passedCount = checks.filter((c) => c.passed).length;

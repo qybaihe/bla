@@ -22,10 +22,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { SeededPrng } from "../core/prng.js";
-import { writeFileAtomicSync } from "./protector.js";
+import { writeRawFileAtomicSync } from "./protector.js";
 import {
   classifySensitiveLiteral,
-  extractStringLiterals,
   lintPlaintextSecretsSource,
 } from "./plaintext-secret-lint.js";
 
@@ -275,12 +274,17 @@ function isNonReplaceableStringPosition(path: {
   if (
     (pType === "ImportDeclaration" ||
       pType === "ExportAllDeclaration" ||
-      pType === "ExportNamedDeclaration") &&
+      pType === "ExportNamedDeclaration" ||
+      pType === "ImportExpression") &&
     parent.source === node
   ) {
     return true;
   }
-  if (pType === "ImportAttribute" || pType === "Directive") {
+  if (
+    pType === "ImportSpecifier" || pType === "ExportSpecifier" ||
+    pType === "ExportNamespaceSpecifier" || pType === "ImportAttribute" ||
+    pType === "Directive"
+  ) {
     return true;
   }
   // TypeScript literal types, enum member identifiers, or module references
@@ -324,7 +328,10 @@ function isNonReplaceableStringPosition(path: {
   return false;
 }
 
-function collectJsLiteralSpans(source: string): LiteralSpan[] {
+function collectJsLiteralSpans(source: string): {
+  spans: LiteralSpan[];
+  prologueEnd: number;
+} {
   try {
     const ast = parse(source, {
       sourceType: "unambiguous",
@@ -367,22 +374,12 @@ function collectJsLiteralSpans(source: string): LiteralSpan[] {
       },
     });
     spans.sort((a, b) => a.start - b.start);
-    return spans;
+    const prologueEnd = ast.program.directives.at(-1)?.end ?? ast.program.interpreter?.end ?? 0;
+    return { spans, prologueEnd };
   } catch {
-    // Fallback for non-standard script fragments: match quote/backtick literals while skipping comments
-    const spans: LiteralSpan[] = [];
-    const tokenRe =
-      /\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\$]|\$(?!\{))*`/g;
-    let m: RegExpExecArray | null;
-    while ((m = tokenRe.exec(source)) !== null) {
-      const raw = m[0]!;
-      if (raw.startsWith("//") || raw.startsWith("/*")) continue;
-      const [decoded] = extractStringLiterals(raw);
-      if (decoded !== undefined) {
-        spans.push({ start: m.index, end: m.index + raw.length, value: decoded });
-      }
-    }
-    return spans;
+    // Without a parse, string positions and directive boundaries cannot be
+    // determined safely. The original still goes through the post-lint.
+    return { spans: [], prologueEnd: 0 };
   }
 }
 
@@ -400,7 +397,7 @@ function transformJsSource(
     return { code: source, encrypted: [], skipped: 0 };
   }
 
-  const spans = collectJsLiteralSpans(source);
+  const { spans, prologueEnd } = collectJsLiteralSpans(source);
   const replaceable: LiteralSpan[] = [];
   const unique: string[] = [];
   const seen = new Set<string>();
@@ -447,21 +444,14 @@ function transformJsSource(
   for (const span of descending) {
     const idx = indexByLiteral.get(span.value);
     if (idx === undefined) continue;
-    const callExpr = span.wrapJsxExpr ? `{${fnName}(${idx})}` : `${fnName}(${idx})`;
+    const callExpr = span.wrapJsxExpr ? `{${fnName}(${idx})}` : `(${fnName}(${idx}))`;
     body = `${body.slice(0, span.start)}${callExpr}${body.slice(span.end)}`;
   }
 
-  // Keep shebang and module-top directives ("use strict" / "use client" / "use server") at the very top.
-  const shebangMatch = body.match(/^#![^\n]*\n/);
-  const shebang = shebangMatch ? shebangMatch[0] : "";
-  const rest = shebang ? body.slice(shebang.length) : body;
-  const directiveMatch = rest.match(
-    /^(?:[ \t]*["']use (?:strict|client|server)["'];?[ \t]*\r?\n)+/,
-  );
-  const directives = directiveMatch ? directiveMatch[0] : "";
-  const afterDirectives = directives ? rest.slice(directives.length) : rest;
+  // Keep all directives and the shebang before the helper. The newline
+  // terminates even a directive with no explicit semicolon.
   return {
-    code: shebang + directives + stub + "\n" + afterDirectives,
+    code: `${body.slice(0, prologueEnd)}\n${stub}\n${body.slice(prologueEnd)}`,
     encrypted: unique,
     skipped,
   };
@@ -555,7 +545,7 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
     if (outDir && !options.dryRun) mkdirSync(outDir, { recursive: true });
 
     const files: EncryptStringsFileResult[] = [];
-    const transformedByOutPath = new Map<string, string>();
+    let postLintClean = true;
     let totalEncrypted = 0;
 
     for (const file of targets) {
@@ -571,14 +561,15 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
         : transformJsSource(source, filePrng, includeUrls);
 
       const outPath = outDir ? join(outDir, relFromRoot) : file;
-      transformedByOutPath.set(outPath, result.code);
+      const lint = lintPlaintextSecretsSource(result.code, { path: outPath });
+      if (lint.shouldRefuseBankrupt) postLintClean = false;
       let written = false;
       if (result.encrypted.length > 0 && !options.dryRun) {
         if (outDir) mkdirSync(dirname(outPath), { recursive: true });
         // Same atomic, link-guarded writer the rest of the engine uses: an
         // outDir copy must not follow a planted symlink/hardlink, while the
         // in-place rewrite of the caller's own file keeps that opt-in.
-        writeFileAtomicSync(outPath, result.code, "utf8", {
+        writeRawFileAtomicSync(outPath, result.code, "utf8", {
           allowLinkWriteThrough: outDir === null,
         });
         written = true;
@@ -607,25 +598,12 @@ export function encryptStrings(options: EncryptStringsOptions): EncryptStringsRe
       });
     }
 
-    let postLintClean = true;
-    for (const f of files) {
-      if (f.encryptedCount === 0) continue;
-      const src = options.dryRun
-        ? (transformedByOutPath.get(f.outPath) ?? readFileSync(f.path, "utf8"))
-        : readFileSync(f.outPath, "utf8");
-      const report = lintPlaintextSecretsSource(src, { path: f.outPath });
-      if (report.shouldRefuseBankrupt) {
-        postLintClean = false;
-        break;
-      }
-    }
-
     return {
       schema: ENCRYPT_STRINGS_SCHEMA,
       seedTag: seedTag(options.seed),
       files,
       totalEncrypted,
-      postLintClean: totalEncrypted === 0 ? true : postLintClean,
+      postLintClean,
       honestyNote: HONESTY,
       status: totalEncrypted === 0 ? "noop" : "ok",
     };

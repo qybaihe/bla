@@ -3,7 +3,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -12,7 +11,7 @@ import { detectArtifactFormat, isTypeScriptDeclarationPath } from "../core/detec
 import { generateProjectSeed, loadBlaConfig, type BlaProjectConfig } from "../core/config.js";
 import { physicalPath } from "../core/output-path.js";
 import { classifyBrowserBundles } from "./browser-bundle.js";
-import { isKnownBlaOutput, registerBlaOutput } from "../core/output-registry.js";
+import { isKnownBlaOutput, registerBlaOutput, resolveBlaStateRoot } from "../core/output-registry.js";
 import { lintPlaintextSecretsFile } from "./plaintext-secret-lint.js";
 import {
   BLA_BUILD_OUTPUT_DIR_NAMES,
@@ -23,6 +22,7 @@ import {
   resolveApplyStateDirectory,
   restoreAppliedOriginals,
   suspendAppliedOutputs,
+  withApplyTransaction,
   type HardenApplyReport,
 } from "./harden-apply.js";
 import { sanitizeTerminalText } from "../core/terminal-text.js";
@@ -137,7 +137,7 @@ import {
   sha256Hex,
   withoutHostSelfCoverage,
 } from "./integrity-coverage.js";
-import { writeFileAtomicSync } from "./protector.js";
+import { lstatUnlinkedPath, realpathOnDisk, writeFileAtomicSync } from "./protector.js";
 import {
   computeHardenRunId,
   HARDEN_SUMMARY_FILE_NAME,
@@ -703,51 +703,52 @@ function isProtectableFormat(format: ArtifactFormat): boolean {
  * Prefer known build-output directories when present; otherwise walk the project
  * root. Always skips VCS/dependency caches.
  */
-function resolveSearchRoots(absRoot: string): {
+function isWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+function configuredBuildRoot(projectRoot: string, config: BlaProjectConfig | undefined): string | undefined {
+  if (!config?.input) return undefined;
+  const path = resolve(projectRoot, config.input);
+  return path !== projectRoot && isWithin(projectRoot, path) ? path : undefined;
+}
+
+function resolveSearchRoots(absRoot: string, configuredRoot?: string): {
   readonly preferred: readonly string[];
   readonly includeProjectRootSupplemental: boolean;
 } {
   const preferred: string[] = [];
-  // `release` and `Release` are one directory on a case-insensitive file
-  // system (macOS, Windows): walk it once, under the name it has on disk.
   const seenPhysical = new Set<string>();
-  const physicalRoot = realpathSync.native(absRoot);
-  /**
-   * True when `physical` is `absRoot` itself or lives under it.
-   *
-   * `walkBounded` skips symlinked directory *entries*, but it reads its own root
-   * with `readdirSync`, which follows a link. Without this check a build
-   * directory that is a symlink — or that sits behind one — would let discovery
-   * (and therefore the report and the mirror) read files from outside the
-   * project. Both sides are canonicalised first, so a case-insensitive file
-   * system cannot make a legitimate build directory look like an escape.
-   */
-  const isInsideProject = (physical: string): boolean => {
-    const rel = relative(physicalRoot, physical);
-    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
-  };
+  const physicalRoot = realpathOnDisk(absRoot);
   const addRoot = (candidate: string): void => {
+    // Reject aliases even when they resolve inside the project.
+    let stats;
     try {
-      if (!statSync(candidate).isDirectory()) return;
-      // The output of an earlier `bla harden -o ./release` is not build output.
-      if (existsSync(join(candidate, HARDEN_SUMMARY_FILE_NAME))) return;
-      const physical = realpathSync.native(candidate);
-      if (!isInsideProject(physical)) return;
-      if (seenPhysical.has(physical)) return;
-      seenPhysical.add(physical);
-      const onDiskName = basename(physical);
-      preferred.push(
-        onDiskName.toLowerCase() === basename(candidate).toLowerCase()
-          ? join(dirname(candidate), onDiskName)
-          : candidate,
-      );
-    } catch {
-      /* absent */
+      stats = lstatUnlinkedPath(candidate);
+    } catch (error) {
+      // A linked build directory is excluded from discovery. Apply preflights
+      // the same candidates explicitly so it can refuse the entire promotion.
+      if (error instanceof Error && error.message.includes("symlink or hardlinked output component")) return;
+      throw error;
     }
+    if (!stats?.isDirectory()) return;
+    if (existsSync(join(candidate, HARDEN_SUMMARY_FILE_NAME))) return;
+    const physical = realpathOnDisk(candidate);
+    if (!isWithin(physicalRoot, physical) ||
+        [...seenPhysical].some((root) => isWithin(root, physical))) return;
+    seenPhysical.add(physical);
+    const onDiskName = basename(physical);
+    preferred.push(
+      onDiskName.toLowerCase() === basename(candidate).toLowerCase()
+        ? join(dirname(candidate), onDiskName)
+        : candidate,
+    );
   };
   for (const name of BLA_BUILD_OUTPUT_DIR_NAMES) addRoot(join(absRoot, name));
-  // Rust/cargo nested release
-  addRoot(join(absRoot, "target", "release"));
+  if (configuredRoot !== undefined && configuredRoot !== absRoot && isWithin(absRoot, configuredRoot)) {
+    addRoot(configuredRoot);
+  }
   if (preferred.length === 0) {
     return { preferred: [absRoot], includeProjectRootSupplemental: false };
   }
@@ -781,7 +782,10 @@ function collectRootArtifacts(
     skipDirs,
     // A directory holding a harden summary is the output of an earlier run
     // (`bla harden . -o ./release-hardened`): never feed it back in as input.
-    skipDir: (full) => existsSync(join(full, HARDEN_SUMMARY_FILE_NAME)),
+    skipDir: (full) =>
+      full === excludeDir ||
+      !lstatUnlinkedPath(full)?.isDirectory() ||
+      existsSync(join(full, HARDEN_SUMMARY_FILE_NAME)),
     skipHiddenDirs: true,
     // Locale-independent name sort so offset paging is stable across platforms.
     sortEntries: true,
@@ -796,6 +800,7 @@ function collectRootArtifacts(
       // Ambient declarations carry no runtime logic; "protecting" one breaks
       // every TypeScript consumer of the package.
       if (isTypeScriptDeclarationPath(name)) return false;
+      if (!lstatUnlinkedPath(full)?.isFile()) return false;
       const format = detectArtifactFormat(full);
       if (!isProtectableFormat(format)) return false;
       // Skip already-shielded outputs to avoid re-hardening loops.
@@ -878,6 +883,7 @@ export function discoverHardenTargets(
     readonly outputDirectory?: string;
     /** Only walk build-output directories (no project-root supplement). */
     readonly buildOutputOnly?: boolean;
+    readonly configuredBuildRoot?: string | undefined;
     /** Per-user state root override (tests, sandboxes); see `resolveBlaStateRoot`. */
     readonly stateRoot?: string;
     /** Paths / globs to leave out (see `compileExcludeMatcher`). */
@@ -896,6 +902,7 @@ export function discoverHardenTargets(
     options.buildOutputOnly === true,
     options.stateRoot,
     compileExcludeMatcher(options.exclude),
+    options.configuredBuildRoot,
   );
   const page = all.slice(offset, offset + maxArtifacts);
   const truncated = all.length > offset + maxArtifacts;
@@ -923,21 +930,20 @@ function collectHardenableArtifacts(
   buildOutputOnly = false,
   stateRoot?: string,
   isExcluded?: (relativePath: string) => boolean,
+  configuredRoot?: string,
 ): {
   readonly artifacts: readonly DiscoveredArtifact[];
   readonly readErrors: readonly string[];
   readonly skipped: DiscoverySkipLedger;
 } {
-  if (!existsSync(abs)) {
-    throw new Error(`Path not found: ${abs}`);
-  }
+  const stats = lstatUnlinkedPath(abs);
+  if (!stats) throw new Error(`Path not found: ${abs}`);
   const skipped: DiscoverySkipLedger = {
     devTooling: [],
     sourceFiles: 0,
     hardenedOutputs: [],
     excluded: [],
   };
-  const stats = statSync(abs);
   if (stats.isFile()) {
     const format = detectArtifactFormat(abs);
     if (!isProtectableFormat(format)) {
@@ -955,7 +961,7 @@ function collectHardenableArtifacts(
 
   const readErrors: string[] = [];
   const found: DiscoveredArtifact[] = [];
-  const { preferred, includeProjectRootSupplemental } = resolveSearchRoots(abs);
+  const { preferred, includeProjectRootSupplemental } = resolveSearchRoots(abs, configuredRoot);
   const manifest = {
     toolingScripts: readPackageToolingScripts(abs, BLA_BUILD_OUTPUT_DIR_NAMES),
     runtimeEntries: readPackageRuntimeEntries(abs),
@@ -1485,7 +1491,10 @@ export function hardenProject(
   rawOptions: HardenProjectOptions = {},
 ): HardenProjectReport {
   const absDir = resolve(rawOptions.directory ?? process.cwd());
+  const projectStat = lstatUnlinkedPath(absDir);
+  lstatUnlinkedPath(resolveBlaStateRoot(rawOptions.applyStateRoot));
   const stateDirectory = resolveApplyStateDirectory(absDir, rawOptions.applyStateRoot);
+  lstatUnlinkedPath(stateDirectory);
   const dryRun = rawOptions.dryRun === true;
   const relOfProject = (abs: string): string =>
     (relative(absDir, abs) || basename(abs)).split(sep).join("/");
@@ -1493,7 +1502,7 @@ export function hardenProject(
   if (rawOptions.apply !== true) {
     // Build output that still holds the hardened bytes of an earlier `apply`
     // must not be fed to the hardener again: that hardens hardened code.
-    const stillApplied = existsSync(absDir) ? listAppliedFiles(absDir, stateDirectory) : [];
+    const stillApplied = projectStat ? listAppliedFiles(absDir, stateDirectory) : [];
     if (stillApplied.length > 0) {
       throw new Error(
         `${stillApplied.length} file(s) in ${absDir} are already hardened output promoted by an earlier apply run ` +
@@ -1510,7 +1519,56 @@ export function hardenProject(
   }
 
   // ── apply: harden build output and promote it in place ──────────────────
-  const stagingRoot = rawOptions.outputDirectory ?? join(stateDirectory, "staging");
+  if (!projectStat?.isDirectory()) {
+    throw new Error(
+      `apply needs a project or build directory, not a single file: ${absDir}. Use bla protect --in-place for one file.`,
+    );
+  }
+
+  const stagingRoot = resolve(rawOptions.outputDirectory ?? join(stateDirectory, "staging"));
+  lstatUnlinkedPath(stagingRoot);
+  const projectConfig = loadProjectConfigFor(absDir);
+  const configuredRoot = configuredBuildRoot(absDir, projectConfig);
+  const parentRoot = configuredBuildRoot(dirname(absDir), loadProjectConfigFor(dirname(absDir)));
+  const buildRoots = configuredRoot === undefined ? [] : [relOfProject(configuredRoot)];
+  const buildDirNames: readonly string[] = parentRoot === absDir
+    ? [...BLA_BUILD_OUTPUT_DIR_NAMES, basename(absDir)]
+    : BLA_BUILD_OUTPUT_DIR_NAMES;
+  const buildPaths = [...BLA_BUILD_OUTPUT_DIR_NAMES.map((name) => join(absDir, name)),
+    ...(configuredRoot === undefined ? [] : [configuredRoot])];
+  for (const buildPath of buildPaths) lstatUnlinkedPath(buildPath);
+  const protectedPaths = buildDirNames.includes(basename(absDir)) ? [absDir] : buildPaths;
+  const physicalProject = realpathOnDisk(absDir);
+  const physicalState = physicalPath(stateDirectory);
+  const physicalStaging = physicalPath(stagingRoot);
+  const overlaps = (path: string): boolean =>
+    isWithin(path, physicalStaging) || isWithin(physicalStaging, path);
+  if (isWithin(physicalStaging, physicalProject) ||
+      protectedPaths.some((path) => overlaps(physicalPath(path))) ||
+      isWithin(physicalProject, physicalState) ||
+      (rawOptions.outputDirectory !== undefined && overlaps(physicalState))) {
+    throw new Error("Apply staging and backup storage must stay separate from the build tree and from each other.");
+  }
+  const executeApply = (): HardenProjectReport =>
+    executeHardenApply({
+      absDir, stateDirectory, stagingRoot, rawOptions, projectConfig, configuredRoot, buildDirNames, buildRoots,
+    });
+  return dryRun ? executeApply() : withApplyTransaction(stateDirectory, executeApply);
+}
+
+function executeHardenApply(params: {
+  readonly absDir: string;
+  readonly stateDirectory: string;
+  readonly stagingRoot: string;
+  readonly rawOptions: HardenProjectOptions;
+  readonly projectConfig: BlaProjectConfig | undefined;
+  readonly configuredRoot: string | undefined;
+  readonly buildDirNames: readonly string[];
+  readonly buildRoots: readonly string[];
+}): HardenProjectReport {
+  const { absDir, stateDirectory, stagingRoot, rawOptions, projectConfig, configuredRoot, buildDirNames, buildRoots } = params;
+  const dryRun = rawOptions.dryRun === true;
+  const relOfProject = (path: string): string => relative(absDir, path).split(sep).join("/");
   const coreOptions: HardenProjectOptions = { ...rawOptions, outputDirectory: stagingRoot };
   const refuse = (reason: string, sourceFiles?: readonly string[]): HardenProjectReport => {
     const preview = hardenProjectCore({ ...coreOptions, dryRun: true }, { buildOutputOnly: true });
@@ -1526,12 +1584,6 @@ export function hardenProject(
       absDir,
     );
   };
-  if (!existsSync(absDir) || !statSync(absDir).isDirectory()) {
-    throw new Error(
-      `apply needs a project or build directory, not a single file: ${absDir}. Use bla protect --in-place for one file.`,
-    );
-  }
-
   // Originals first: discovery and the lints must see what the build produced,
   // not the hardened bytes of the previous promotion. `suspension.resume()`
   // puts those hardened bytes back if this run does not end in a promotion.
@@ -1540,17 +1592,23 @@ export function hardenProject(
     : suspendAppliedOutputs(absDir, stateDirectory);
   let promoted = false;
   try {
-    const applyExclude = mergedExcludeList(rawOptions, loadProjectConfigFor(absDir));
+    const applyExclude = mergedExcludeList(rawOptions, projectConfig);
     const promotable = discoverHardenTargets(absDir, {
       ...(rawOptions.maxArtifacts !== undefined ? { maxArtifacts: rawOptions.maxArtifacts } : {}),
       outputDirectory: stagingRoot,
       buildOutputOnly: true,
+      configuredBuildRoot: configuredRoot,
       ...(rawOptions.applyStateRoot !== undefined ? { stateRoot: rawOptions.applyStateRoot } : {}),
       ...(applyExclude.length > 0 ? { exclude: applyExclude } : {}),
     });
     const outside = promotable.artifacts
       .map((a) => a.relativePath.split(sep).join("/"))
-      .filter((rel) => !isInsideBuildOutput(rel, absDir, BLA_BUILD_OUTPUT_DIR_NAMES));
+      .filter((rel) => !isInsideBuildOutput(rel, absDir, buildDirNames, buildRoots));
+    const incomplete = "Apply requires a complete discovery. Raise maxArtifacts or harden a narrower build directory.";
+    const unreadable = "Apply could not read the full build tree. Resolve the discovery read errors and try again.";
+    if (!dryRun && (promotable.truncated || promotable.readErrors.length > 0)) {
+      return refuse(promotable.truncated ? incomplete : unreadable);
+    }
     if (promotable.artifacts.length === 0) {
       if (dryRun) {
         const previouslyApplied = listAppliedFiles(absDir, stateDirectory);
@@ -1604,6 +1662,7 @@ export function hardenProject(
     const everything = discoverHardenTargets(absDir, {
       ...(rawOptions.maxArtifacts !== undefined ? { maxArtifacts: rawOptions.maxArtifacts } : {}),
       outputDirectory: stagingRoot,
+      configuredBuildRoot: configuredRoot,
       ...(rawOptions.applyStateRoot !== undefined ? { stateRoot: rawOptions.applyStateRoot } : {}),
       ...(applyExclude.length > 0 ? { exclude: applyExclude } : {}),
     });
@@ -1631,11 +1690,12 @@ export function hardenProject(
     }
 
     if (rawOptions.outputDirectory === undefined) {
+      lstatUnlinkedPath(stagingRoot);
       rmSync(stagingRoot, { recursive: true, force: true });
     }
-    const startedAtMs = Date.now();
+    const writtenOutputPaths = new Set<string>();
     const report = rememberHardenedOutputs(
-      hardenProjectCore(coreOptions, { buildOutputOnly: true }),
+      hardenProjectCore(coreOptions, { buildOutputOnly: true, writtenOutputPaths }),
       rawOptions.applyStateRoot,
     );
     const base = {
@@ -1643,6 +1703,10 @@ export function hardenProject(
       wouldOverwrite: [] as readonly string[],
       ...(notPromoted.length > 0 ? { notPromoted } : {}),
     };
+    if (report.truncated) return refuse(incomplete);
+    if ((report.discoveryReadErrors?.length ?? 0) > 0) {
+      return refuse(unreadable);
+    }
     if (!report.overallSuccess) {
       return withNextSteps(
         {
@@ -1664,14 +1728,14 @@ export function hardenProject(
       projectDirectory: absDir,
       stateDirectory,
       runId: report.runId,
-      buildDirNames: BLA_BUILD_OUTPUT_DIR_NAMES,
+      buildDirNames,
+      buildRoots,
       candidates: collectApplyCandidates({
         projectDirectory: absDir,
         outputRoot: report.outputDirectory,
-        artifactOutputPaths: report.artifacts.filter((a) => a.success).map((a) => a.outputPath),
-        notBeforeMs: startedAtMs,
+        writtenOutputPaths: [...writtenOutputPaths],
       }),
-    });
+    }, true);
     promoted = applyReport.status === "applied";
     return withNextSteps(
       { ...base, overallSuccess: promoted, apply: applyReport },
@@ -1708,10 +1772,17 @@ export function restoreHardenedProject(
   options: { readonly applyStateRoot?: string } = {},
 ): HardenApplyReport {
   const absDir = resolve(directory);
-  return restoreAppliedOriginals(
-    absDir,
-    resolveApplyStateDirectory(absDir, options.applyStateRoot),
-  );
+  try {
+    return restoreAppliedOriginals(
+      absDir,
+      resolveApplyStateDirectory(absDir, options.applyStateRoot),
+    );
+  } catch (error) {
+    return {
+      status: "failed",
+      reason: `Could not restore applied outputs: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 /** One `.gitignore` pattern as a matcher for a single path (anchored) or path segment. */
@@ -1837,8 +1908,10 @@ function withNextSteps(
       'To undo: bla_harden { "directory": ".", "restore": true } (CLI: bla harden . --restore) puts the original build output back.',
     );
   } else if (report.overallSuccess) {
+    const configured = configuredBuildRoot(absDir, loadProjectConfigFor(absDir));
+    const buildRoots = configured ? [relative(absDir, configured).split(sep).join("/")] : [];
     const allInBuildOutput = report.artifacts.every((a) =>
-      isInsideBuildOutput(a.relativePath.split(sep).join("/"), absDir, BLA_BUILD_OUTPUT_DIR_NAMES),
+      isInsideBuildOutput(a.relativePath.split(sep).join("/"), absDir, BLA_BUILD_OUTPUT_DIR_NAMES, buildRoots),
     );
     steps.push(
       `Not shipped yet: ${report.outputDirectory} is a partial mirror holding only the ${report.hardenedCount} hardened file(s). The build output is unchanged and still unprotected, and the mirror cannot run on its own (untouched assets are not copied into it).`,
@@ -2020,11 +2093,14 @@ function withNextSteps(
 function loadProjectConfigFor(absDir: string): BlaProjectConfig | undefined {
   if (!existsSync(absDir)) return undefined;
   const configDir = statSync(absDir).isDirectory() ? absDir : dirname(absDir);
+  for (const name of ["bla.config.json", ".blarc.json", ".blarc", "package.json"]) {
+    lstatUnlinkedPath(join(configDir, name));
+  }
   const directLoaded = loadBlaConfig(configDir);
   if (directLoaded.sourcePath !== null) return directLoaded.config;
   if ((BLA_BUILD_OUTPUT_DIR_NAMES as readonly string[]).includes(basename(configDir))) {
-    const parentLoaded = loadBlaConfig(dirname(configDir));
-    if (parentLoaded.sourcePath !== null) return parentLoaded.config;
+    const parentLoaded = loadProjectConfigFor(dirname(configDir));
+    if (parentLoaded !== undefined) return parentLoaded;
   }
   return undefined;
 }
@@ -2039,7 +2115,7 @@ function mergedExcludeList(
 
 function hardenProjectCore(
   rawOptions: HardenProjectOptions,
-  internal: { readonly buildOutputOnly?: boolean },
+  internal: { readonly buildOutputOnly?: boolean; readonly writtenOutputPaths?: Set<string> },
 ): HardenProjectReport {
   const absDir = resolve(rawOptions.directory ?? process.cwd());
   const projectCfg = loadProjectConfigFor(absDir);
@@ -2119,6 +2195,7 @@ function hardenProjectCore(
         : join(dirname(absDir), ".bla-hardened")),
   );
 
+  lstatUnlinkedPath(outputRoot);
   if (options.outputDirectory) {
     if (existsSync(absDir)) {
       const physSrc = physicalPath(absDir);
@@ -2145,6 +2222,7 @@ function hardenProjectCore(
   const discovery = discoverHardenTargets(absDir, {
     maxArtifacts,
     outputDirectory: outputRoot,
+    configuredBuildRoot: configuredBuildRoot(absDir, projectCfg),
     ...(internal.buildOutputOnly === true ? { buildOutputOnly: true } : {}),
     ...(options.applyStateRoot !== undefined ? { stateRoot: options.applyStateRoot } : {}),
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
@@ -2197,7 +2275,7 @@ function hardenProjectCore(
   }
   let plannedOutputs = discovered.map((artifact) => {
     const outputPath = planArtifactOutputPath(artifact, outputRoot);
-    return { artifact, outputPath, outputExisted: existsSync(outputPath) };
+    return { artifact, outputPath, outputExisted: lstatUnlinkedPath(outputPath) !== undefined };
   });
   // When self-seal is on, protect non-JS bindable siblings first so JS entry
   // modules can embed expected SHA-256 hard-fail hashes (red/blue round-4).
@@ -2218,13 +2296,16 @@ function hardenProjectCore(
   const jsDiscovered = discovered.filter(
     (a) => a.format === "javascript" || a.format === "typescript",
   );
-  const browserBundles = classifyBrowserBundles(jsDiscovered, absDir);
+  const browserBundles = classifyBrowserBundles(
+    discovered.filter((a) => a.format === "javascript" || a.format === "typescript" || a.format === "html-bundle"),
+    absDir,
+  );
   const hasNodeJsHost = jsDiscovered.some((a) => !browserBundles.has(a.path));
   const integrityBindingRequested =
     options.selfSeal === true || options.sidecarEntangle === true;
   const integrityBindingSkipped: { relativePath: string; reason: string }[] = [];
   if (integrityBindingRequested) {
-    for (const a of jsDiscovered) {
+    for (const a of discovered) {
       if (!browserBundles.has(a.path)) continue;
       integrityBindingSkipped.push({
         relativePath: a.relativePath.split(sep).join("/"),
@@ -2713,11 +2794,13 @@ function hardenProjectCore(
   }
 
   if (discovered.length > 0) {
+    lstatUnlinkedPath(outputRoot);
     mkdirSync(outputRoot, { recursive: true });
   }
 
   const summaries: HardenArtifactSummary[] = [];
   const written: string[] = [];
+  const nativeSnapshotOutputs = new Set<string>();
   const total = plannedOutputs.length;
   // SHA-256 of each output as its own protect step left it; later post-passes
   // (sidecar entanglement) may rewrite the file.
@@ -2801,7 +2884,6 @@ function hardenProjectCore(
     }
     const { artifact, outputPath, outputExisted } = plannedOutputs[i]!;
     emitProgress("artifact", step, artifact.relativePath);
-    mkdirSync(dirname(outputPath), { recursive: true });
     // A renamed export breaks every caller that still uses the old name, and
     // BLA cannot rewrite those callers. So names another project file refers
     // to are kept (on top of the explicit keep-list); only exports nothing in
@@ -2817,6 +2899,7 @@ function hardenProjectCore(
     const explicitPreserve = new Set(options.wasmPreserveExports ?? []);
     const reportedAutoPreserved = autoPreserved.filter((p) => !explicitPreserve.has(p.name));
     try {
+      lstatUnlinkedPath(artifact.path);
       const report: OneClickDefenseReport = defendTarget({
         inputPath: artifact.path,
         outputPath,
@@ -2841,6 +2924,7 @@ function hardenProjectCore(
           ? { allowLaneIndependentGates: true }
           : {}),
         ...(options.allowPlaintextSeal === true ? { allowPlaintextSeal: true } : {}),
+        ...(options.allowReleaseHygieneLeak === true ? { allowReleaseHygieneLeak: true } : {}),
         ...(options.allowWasmClearParamCarriers === true
           ? { allowWasmClearParamCarriers: true }
           : {}),
@@ -2888,6 +2972,9 @@ function hardenProjectCore(
         ...(options.signManifest === true
           ? { signManifest: true, manifestSigningKeyPath: options.manifestSigningKeyPath ?? "" }
           : {}),
+      }, (path) => {
+        internal.writtenOutputPaths?.add(path);
+        if (path.endsWith(".bunfs-snapshot")) nativeSnapshotOutputs.add(path);
       });
       summaryByIndex.set(i, {
         inputPath: artifact.path,
@@ -3638,8 +3725,7 @@ function hardenProjectCore(
               ),
             });
             if (bound) {
-              const finalized = finalizeSelfSealSelfDigest(bound.code);
-              writeFileAtomicSync(entryAbs, finalized.content, "utf8", {
+              writeFileAtomicSync(entryAbs, bound.code, "utf8", {
                 allowLinkWriteThrough: false,
               });
               for (const abs of sidecarAbsPaths) sidecarBoundOutputs.add(abs);
@@ -3977,7 +4063,7 @@ function hardenProjectCore(
         for (const nativeEntry of nativeLike) {
           const entryAbs = join(outputRoot, nativeEntry.relativePath);
           const snapshotAbs = `${entryAbs}.bunfs-snapshot`;
-          if (!existsSync(entryAbs) || !existsSync(snapshotAbs)) continue;
+          if (!nativeSnapshotOutputs.has(snapshotAbs) || !lstatUnlinkedPath(snapshotAbs)?.isFile()) continue;
           const entryLabel = basename(entryAbs);
           const snapshotLabel = `${entryLabel}.bunfs-snapshot`;
           const sidecars: { pathLabel: string; bytes: Buffer }[] = [
@@ -4005,6 +4091,7 @@ function hardenProjectCore(
               "utf8",
               { allowLinkWriteThrough: false },
             );
+            internal.writtenOutputPaths?.add(`${entryAbs}${BUN_SIDECAR_COMPANION_SUFFIX}`);
           }
         }
       }
@@ -4038,11 +4125,7 @@ function hardenProjectCore(
             (m) => m.relativePath === ASAR_SIDECAR_ARCHIVE_NOTE_PATH,
           );
           let expectedHex: string | undefined;
-          let working = members.map((m) => ({
-            relativePath: m.relativePath,
-            content: m.content,
-            ...(m.executable ? { executable: true as const } : {}),
-          }));
+          let working = [...members];
           if (!hasNote) {
             const bound = entangleAsarEntryWithSidecars({
               entryPath: entryLabel,
@@ -4080,18 +4163,15 @@ function hardenProjectCore(
             );
           if (!alreadyMain) {
             const withMain = entangleAsarMainJsWithSidecars({
-              members: working,
+              members: working.filter((member) => member.link === undefined),
               entryPath: entryLabel,
               expectedHex,
               sidecarPaths: ["enclave/hardware-tee-bridge.js"],
               seedTag,
             });
             if (withMain) {
-              working = withMain.members.map((m) => ({
-                relativePath: m.relativePath,
-                content: m.content,
-                ...(m.executable ? { executable: true as const } : {}),
-              }));
+              const main = withMain.members.find((file) => file.relativePath === withMain.mainRelativePath)!;
+              working = working.map((file) => file.relativePath === main.relativePath ? main : file);
             }
           } else if (hasNote) {
             continue; // note + preamble already present

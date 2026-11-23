@@ -1,24 +1,33 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  constants,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { detectArtifactFormat, isTypeScriptDeclarationPath } from "../core/detector.js";
 import { assertSafeOutputPath } from "../core/output-path.js";
 import { withLlmDirectives } from "../core/llm-directives.js";
 import { SeededPrng } from "../core/prng.js";
 import { generateProjectSeed } from "../core/config.js";
+import { classifyBrowserBundles } from "./browser-bundle.js";
+import {
+  intensityEnforcesReleaseHygieneRefusal,
+  lintReleaseHygieneFile,
+  releaseHygieneRefuseMessage,
+} from "./release-hygiene-lint.js";
 import type {
   ProtectionMetrics,
   ProtectionOptions,
@@ -159,8 +168,7 @@ function selfSealTransformOption(
   if (siblingPaths.length === 0) {
     // Even without sibling paths (single-entry CLI or standalone JS module),
     // explicit `selfSeal: true` must activate canonical entry self-digest
-    // verification with hard-fail on tamper (browser builds still soft-skip
-    // safely inside the `require("node:crypto")` try/catch).
+    // verification with hard-fail on tamper.
     return {
       siblingPaths: [],
       selfDigestCheck: true,
@@ -174,7 +182,7 @@ function selfSealTransformOption(
     if (typeof rel !== "string" || rel.length === 0) continue;
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       expectedSiblingSha256[rel] = createHash("sha256")
         .update(readFileSync(abs))
         .digest("hex");
@@ -214,7 +222,7 @@ function applySidecarEntangleToJs(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -250,7 +258,7 @@ function applySidecarEntangleToPython(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -285,7 +293,7 @@ function applySidecarEntangleToWasm(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -363,7 +371,7 @@ function applySidecarEntangleToPyc(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -454,7 +462,7 @@ function applySidecarEntangleToGguf(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -648,7 +656,7 @@ function applySidecarEntangleToSafetensors(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -683,7 +691,7 @@ function applySidecarEntangleToDex(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -718,7 +726,7 @@ function applySidecarEntangleToSqlite(
   for (const rel of paths) {
     const abs = isAbsolute(rel) ? rel : join(base, rel);
     try {
-      if (!existsSync(abs)) continue;
+      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
       sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
     } catch {
       /* skip unreadable */
@@ -776,6 +784,52 @@ export interface AtomicWriteOptions {
    * the protected bytes onto an unrelated file.
    */
   readonly allowLinkWriteThrough?: boolean;
+  readonly mode?: number;
+}
+
+export function isMissingPath(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+export function realpathOnDisk(path: string): string {
+  return (realpathSync.native ?? realpathSync)(path);
+}
+
+/** Return the leaf's lstat after checking each existing component of the path. */
+export function lstatUnlinkedPath(path: string, allowLinkedLeaf = false): Stats | undefined {
+  const absolute = resolve(path);
+  const root = parse(absolute).root;
+  const components = relative(root, absolute).split(sep).filter(Boolean);
+  let current = root;
+  let physical = realpathOnDisk(root);
+  let state = lstatSync(root);
+  for (const component of components) {
+    current = join(current, component);
+    const last = current === absolute;
+    try {
+      state = lstatSync(current);
+    } catch (error) {
+      if (isMissingPath(error)) return undefined;
+      throw error;
+    }
+    // macOS exposes its system temp directories through these root aliases.
+    const systemAlias = state.isSymbolicLink() && process.platform === "darwin" &&
+      (current === "/var" || current === "/tmp") &&
+      realpathOnDisk(current) === `/private${current}`;
+    if (state.isSymbolicLink() && !systemAlias) {
+      if (last && allowLinkedLeaf) return state;
+      throw new Error(`Refusing path with a symlink or hardlinked output component: ${current}`);
+    }
+    const resolved = realpathOnDisk(current);
+    if (!systemAlias && relative(physical, dirname(resolved)) !== "") {
+      throw new Error(`Path component resolves outside its parent: ${current}`);
+    }
+    if (!last && !state.isDirectory() && !systemAlias) {
+      throw new Error(`Path component is not a directory: ${current}`);
+    }
+    physical = resolved;
+  }
+  return state;
 }
 
 export function writeFileAtomicSync(
@@ -784,46 +838,68 @@ export function writeFileAtomicSync(
   encoding?: BufferEncoding,
   writeOptions?: AtomicWriteOptions,
 ): void {
-  const dir = dirname(targetPath);
-  mkdirSync(dir, { recursive: true });
-  // Self-seal entry self-digest must cover the FINAL bytes — finalize here, at
-  // the single write chokepoint, after every other transform.
-  const finalizeable =
-    typeof content !== "string" || encoding === undefined || encoding === "utf8";
-  if (finalizeable) content = finalizeSelfSealSelfDigest(content).content;
-  let linkState: ReturnType<typeof lstatSync> | undefined;
-  try {
-    linkState = lstatSync(targetPath);
-  } catch {
-    /* target does not exist yet — proceed with the atomic path */
+  // Keep already-sealed callers of the shared writer working. New data writes
+  // that must preserve every byte use writeRawFileAtomicSync.
+  if (
+    (typeof content !== "string" || encoding === undefined || encoding === "utf8") &&
+    content.includes("pending-finalize")
+  ) {
+    content = finalizeSelfSealSelfDigest(content).content;
   }
-  if (linkState && (linkState.isSymbolicLink() || linkState.nlink > 1)) {
-    if (writeOptions?.allowLinkWriteThrough !== true) {
-      throw new Error(
-        `Refusing to write through a symlink or hardlinked output: ${targetPath}. ` +
-          "Pass inPlace to overwrite an aliased path explicitly.",
-      );
+  writeRawFileAtomicSync(targetPath, content, encoding, writeOptions);
+}
+
+export function writeRawFileAtomicSync(
+  targetPath: string,
+  content: string | Buffer,
+  encoding?: BufferEncoding,
+  writeOptions?: AtomicWriteOptions,
+): void {
+  const dir = dirname(targetPath);
+  const linkState = lstatUnlinkedPath(targetPath, true);
+  if (linkState && !linkState.isFile() && !linkState.isSymbolicLink()) {
+    throw new Error(`Expected a regular output file: ${targetPath}`);
+  }
+  const linked = linkState && (linkState.isSymbolicLink() || linkState.nlink > 1);
+  if (linked && writeOptions?.allowLinkWriteThrough !== true) {
+    throw new Error(
+      `Refusing to write through a symlink or hardlinked output: ${targetPath}. ` +
+        "Pass inPlace to overwrite an aliased path explicitly.",
+    );
+  }
+  mkdirSync(dir, { recursive: true });
+  if (linked) {
+    if (linkState.isSymbolicLink()) {
+      const resolved = realpathOnDisk(targetPath);
+      if (!lstatUnlinkedPath(resolved)?.isFile()) {
+        throw new Error(`Expected a regular output file: ${targetPath}`);
+      }
     }
     if (encoding) writeFileSync(targetPath, content, encoding);
     else writeFileSync(targetPath, content);
     return;
   }
   const tmpPath = `${targetPath}.bla-tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  let created = false;
   try {
     // Exclusive create: a pre-planted symlink or file at the temp path must
     // fail (EEXIST) instead of being followed.
     if (encoding) writeFileSync(tmpPath, content, { encoding, flag: "wx" });
     else writeFileSync(tmpPath, content, { flag: "wx" });
+    created = true;
     // Rewriting a file must not change who may run it: a temp file is created
     // 0644, so an executable script (0755 + shebang) would come back unable to
     // start. Carry the permission bits of the file being replaced.
-    if (linkState?.isFile() === true) {
-      chmodSync(tmpPath, Number(linkState.mode) & 0o7777);
+    const mode = writeOptions?.mode ?? (linkState?.isFile() ? linkState.mode & 0o7777 : undefined);
+    if (mode !== undefined) chmodSync(tmpPath, mode);
+    const current = lstatUnlinkedPath(targetPath);
+    if (current && (!current.isFile() || current.nlink > 1)) {
+      throw new Error(`Refusing to replace a non-regular or hardlinked output: ${targetPath}`);
     }
     renameSync(tmpPath, targetPath);
   } catch (err) {
     try {
-      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+      if (created && lstatUnlinkedPath(tmpPath)) unlinkSync(tmpPath);
     } catch {
       // Ignore cleanup failure
     }
@@ -893,14 +969,23 @@ function deriveDefaultOutputPath(inputPath: string, inPlace = false): string {
  * Protects JS/TS, Electron `.asar`, HTML Web Bundles, SourceMaps, WebAssembly `.wasm`,
  * Python `.py`/`.pyc`, Native Binaries (ELF/Mach-O/PE), ZIP/APK archives, and directories.
  */
-export function protectTarget(options: ProtectionOptions): ProtectionResult {
-  return withLlmDirectives(options.llmDirectives === true, () => protectTargetInner(options));
+export function protectTarget(
+  options: ProtectionOptions,
+  onOutput?: (path: string) => void,
+): ProtectionResult {
+  return withLlmDirectives(options.llmDirectives === true, () => protectTargetInner(options, onOutput));
 }
 
-function protectTargetInner(options: ProtectionOptions): ProtectionResult {
+function protectTargetInner(
+  options: ProtectionOptions,
+  onOutput?: (path: string) => void,
+): ProtectionResult {
   const startMs = Date.now();
   const absInput = resolve(options.inputPath);
+  const inputStat = lstatUnlinkedPath(absInput, options.inPlace === true);
+  if (!inputStat) throw new Error(`Unsupported or missing target path: ${absInput}`);
   const format = detectArtifactFormat(absInput);
+  if (format === "directory" && inputStat.isSymbolicLink()) lstatUnlinkedPath(absInput);
   if (format === "unknown") {
     throw new Error(`Unsupported or missing target path: ${absInput}`);
   }
@@ -917,6 +1002,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   const absOutput = resolve(
     options.outputPath ?? deriveDefaultOutputPath(absInput, options.inPlace),
   );
+  lstatUnlinkedPath(absOutput, true);
   assertSafeOutputPath(absInput, absOutput, format === "directory", options.inPlace);
   // Link targets are only written through when the caller explicitly asked for
   // in-place protection. Otherwise a symlink/hardlink pre-planted at an output
@@ -925,10 +1011,12 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     targetPath: string,
     content: string | Buffer,
     encoding?: BufferEncoding,
-  ): void =>
+  ): void => {
     writeFileAtomicSync(targetPath, content, encoding, {
-      allowLinkWriteThrough: options.inPlace === true,
+      allowLinkWriteThrough: options.inPlace === true && targetPath === absOutput,
     });
+    onOutput?.(targetPath);
+  };
   if (format === "archive-zip") validateZipProtectionInput(readFileSync(absInput));
   if (format === "android-apk") {
     validateZipProtectionInput(readFileSync(absInput), { allowUnsignedApk: true });
@@ -941,6 +1029,14 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
   if (format === "native-elf") validateElfLayout(readFileSync(absInput));
 
   const intensity = options.intensity ?? "balanced";
+  const enforceReleaseHygiene = intensityEnforcesReleaseHygieneRefusal(intensity) &&
+    options.allowReleaseHygieneLeak !== true;
+  const checkReleaseHygiene = (path: string): void => {
+    if (!enforceReleaseHygiene) return;
+    const report = lintReleaseHygieneFile(path);
+    if (report.shouldRefuseBankrupt) throw new Error(releaseHygieneRefuseMessage(report));
+  };
+  if (format !== "directory") checkReleaseHygiene(absInput);
   // Prefer caller/CLI/project seed; mint an ephemeral random seed only as last resort
   // (CLI resolves + persists per-project seeds via resolveProjectSeed / .blarc).
   const seed = String(options.seed ?? generateProjectSeed());
@@ -953,10 +1049,6 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     : undefined;
 
   const beforeAudit = auditTarget(absInput);
-
-  if (format !== "directory") {
-    mkdirSync(dirname(absOutput), { recursive: true });
-  }
 
   let decoyFunctionsInjected = 0;
   let fakeCrossReferencesCreated = 0;
@@ -987,6 +1079,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     options.allowPlaintextSeal !== true
   ) {
     for (const sealPath of findSiblingSealSidecars(dirname(absInput))) {
+      if (!lstatUnlinkedPath(sealPath)?.isFile()) continue;
       const sealReport = lintSealCommitmentFile(sealPath);
       if (sealReport.shouldRefuseBankrupt) {
         throw new Error(sealCommitmentRefuseMessage(sealReport, sealPath));
@@ -1034,7 +1127,9 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       }
     }
     const panelSafe = applyPanelDeriveRewrite(raw, seed, intensity, options, absInput);
-    const selfSealOpt = selfSealTransformOption(options, absOutput);
+    const browserBundle = (options.selfSeal === true || options.sidecarEntangle === true) &&
+      classifyBrowserBundles([{ path: absInput, relativePath: basename(absInput) }], dirname(absInput)).has(absInput);
+    const selfSealOpt = browserBundle ? undefined : selfSealTransformOption(options, absOutput);
     // Refine JS carrier against nearest package.json ("type": "module") BEFORE
     // running the AST shield so `.js` files inside ESM packages without static
     // import/export still get ESM `createRequire(import.meta.url)` self-seal
@@ -1066,7 +1161,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
       counteredVectors.add("sourcemap-recovery");
     }
 
-    {
+    if (!browserBundle) {
       const entangled = applySidecarEntangleToJs(
         finalCode,
         options,
@@ -1140,12 +1235,10 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
             options,
             `${absInput}#script-${currentIndex}`,
           );
-          const selfSealOpt = selfSealTransformOption(options, absOutput);
           const res = transformJavaScriptWithBlaShield(panelSafe, {
             intensity,
             seed: scriptSeed,
             sourceType: tagKind.isModule ? "module" : "script",
-            ...(selfSealOpt !== undefined ? { selfSeal: selfSealOpt } : {}),
           });
           inlineScriptsTransformed++;
           decoyFunctionsInjected += res.decoyFunctionsInjected;
@@ -1170,7 +1263,6 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         intensity,
         seed: `${seed}:html-bootstrap`,
         sourceType: "script",
-        ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
       });
       decoyFunctionsInjected += bootstrapRes.decoyFunctionsInjected;
       fakeCrossReferencesCreated += bootstrapRes.fakeCrossReferencesCreated;
@@ -1210,13 +1302,16 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     const protectedFiles: VirtualAsarFile[] = [];
 
     for (const vf of virtualFiles) {
+      if (vf.link !== undefined) {
+        protectedFiles.push(vf);
+        continue;
+      }
       const ext = extname(vf.relativePath).toLowerCase();
       if ([".js", ".mjs", ".cjs"].includes(ext)) {
         const res = transformJavaScriptWithBlaShield(vf.content.toString("utf8"), {
           intensity,
           seed: `${seed}:${vf.relativePath}`,
           filename: vf.relativePath,
-          ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
         });
         const honey = generateHoneySourceMap(
           basename(vf.relativePath),
@@ -1285,7 +1380,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         { pathLabel: "enclave/hardware-tee-bridge.js", bytes: decoyBridgeContent },
       ];
       const memberIndex = new Map(
-        protectedFiles.map((f) => [f.relativePath, f.content] as const),
+        protectedFiles.filter((f) => f.link === undefined).map((f) => [f.relativePath, f.content] as const),
       );
       for (const rel of options.sidecarEntanglePaths ?? []) {
         if (typeof rel !== "string" || rel.length === 0) continue;
@@ -1298,7 +1393,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         }
         const abs = isAbsolute(rel) ? rel : join(dirname(absOutput), rel);
         try {
-          if (!existsSync(abs)) continue;
+          if (!lstatUnlinkedPath(abs)?.isFile()) continue;
           sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
         } catch {
           /* skip unreadable */
@@ -1319,7 +1414,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         // In-archive main JS preamble: Electron fs-patched re-measure of the
         // same sidecar members (strip⇒fail at process start, not only host verify).
         const withMain = entangleAsarMainJsWithSidecars({
-          members: protectedFiles,
+          members: protectedFiles.filter((file) => file.link === undefined),
           entryPath: entryLabel,
           expectedHex: bound.digest.hex,
           sidecarPaths: sidecars.map((s) => s.pathLabel),
@@ -1327,11 +1422,12 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           softFold: options.sidecarEntangleSoftFold === true,
         });
         if (withMain) {
-          protectedFiles.length = 0;
-          protectedFiles.push(...withMain.members);
+          const main = withMain.members.find((file) => file.relativePath === withMain.mainRelativePath)!;
+          const index = protectedFiles.findIndex((file) => file.relativePath === main.relativePath);
+          protectedFiles[index] = main;
+          counteredVectors.add("asar-sidecar-entangle");
         }
         sidecarEntangleApplied = true;
-        counteredVectors.add("asar-sidecar-entangle");
       }
     }
 
@@ -1563,7 +1659,7 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
           if (rel === snapshotLabel || basename(rel) === snapshotLabel) continue;
           const abs = isAbsolute(rel) ? rel : join(base, rel);
           try {
-            if (!existsSync(abs)) continue;
+            if (!lstatUnlinkedPath(abs)?.isFile()) continue;
             sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
           } catch {
             /* skip unreadable */
@@ -1781,9 +1877,9 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
     binarySectionsPatched = res.blocksInjected;
     counteredVectors.add("uf2-firmware-inspection");
   } else if (format === "directory") {
-    const outputExistedBefore = existsSync(absOutput);
-    mkdirSync(absOutput, { recursive: true });
     const walkAndProtect = (srcDir: string, dstDir: string): void => {
+      lstatUnlinkedPath(srcDir);
+      lstatUnlinkedPath(dstDir);
       mkdirSync(dstDir, { recursive: true });
       for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
         if (
@@ -1799,108 +1895,64 @@ function protectTargetInner(options: ProtectionOptions): ProtectionResult {
         if (entry.isSymbolicLink()) continue;
         const srcFull = join(srcDir, entry.name);
         const dstFull = join(dstDir, entry.name);
+        lstatUnlinkedPath(srcFull);
         if (entry.isDirectory()) {
           walkAndProtect(srcFull, dstFull);
-        } else if (entry.isFile()) {
-          const ext = extname(entry.name).toLowerCase();
-          if (isTypeScriptDeclarationPath(entry.name)) {
-            // Ambient declarations ship byte-identical (see detector helper).
-            copyFileSync(srcFull, dstFull);
-          } else if ([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"].includes(ext)) {
-            const raw = readFileSync(srcFull, "utf8");
-            const res = transformJavaScriptWithBlaShield(raw, {
-              intensity,
-              seed: `${seed}:${entry.name}`,
-              filename: entry.name,
-              llmDirectives: options.llmDirectives,
-              ...(selfSealTransformOption(options, absOutput) !== undefined ? { selfSeal: selfSealTransformOption(options, absOutput)! } : {}),
-            });
-            const honey = generateHoneySourceMap(
-              entry.name,
-              res.code.split("\n").length,
-              prng,
-              chaffPayloads,
-            );
-            writeProtectedOutput(dstFull, `${res.code}\n${honey.inlineDirective}\n`, "utf8");
-            decoyFunctionsInjected += res.decoyFunctionsInjected;
-            fakeCrossReferencesCreated += res.fakeCrossReferencesCreated;
-            primitiveCandidateBranchesCreated += res.primitiveCandidateBranchesCreated;
-            aliasSelectionStatesCreated += res.aliasSelectionStatesCreated;
-            ipcAmbiguitySitesInjected += res.ipcAmbiguitySitesInjected;
-            decoyRoutesInjected += res.decoyRoutesInjected;
-            chaffPayloadsEmbedded += res.chaffPayloadsEmbedded;
-            honeySourceMapsGenerated++;
-          } else {
-            const childFormat = detectArtifactFormat(srcFull);
-            if (childFormat !== "unknown" && childFormat !== "directory") {
-              try {
-                const subRes = protectTarget({
-                  inputPath: srcFull,
-                  outputPath: dstFull,
-                  intensity,
-                  seed: `${seed}:${entry.name}`,
-                  honeySourceMaps: options.honeySourceMaps,
-                  llmDirectives: options.llmDirectives,
-                  weaveDecoys: options.weaveDecoys,
-                  selfSeal: options.selfSeal,
-                  sidecarEntangle: options.sidecarEntangle,
-                  wasmPreserveExports: options.wasmPreserveExports,
-                  allowLaneIndependentGates: options.allowLaneIndependentGates,
-                  allowPlaintextSeal: options.allowPlaintextSeal,
-                  allowWasmClearParamCarriers: options.allowWasmClearParamCarriers,
-                  allowStablePanelDeriveAbi: options.allowStablePanelDeriveAbi,
-                  allowJsAesUnwrap: options.allowJsAesUnwrap,
-                  allowPanelOfflineOracle: options.allowPanelOfflineOracle,
-                  allowJsWasmHydrateDump: options.allowJsWasmHydrateDump,
-                  allowWasmXorMaskSidecar: options.allowWasmXorMaskSidecar,
-                  allowWasmSealXorKnownPlaintext: options.allowWasmSealXorKnownPlaintext,
-                  selfSealSiblingPaths: options.selfSealSiblingPaths,
-                });
-                decoyFunctionsInjected += subRes.metrics.decoyFunctionsInjected;
-                fakeCrossReferencesCreated += subRes.metrics.fakeCrossReferencesCreated;
-                chaffPayloadsEmbedded += subRes.metrics.chaffPayloadsEmbedded;
-                binarySectionsPatched += subRes.metrics.binarySectionsPatched;
-                for (const v of subRes.counteredReaVectors) counteredVectors.add(v);
-              } catch (err) {
-                // A detected child artifact that failed protection must not be
-                // silently replaced by an unprotected copy: the directory report
-                // would claim success while shipping the original bytes.
-                const reason = err instanceof Error ? err.message : String(err);
-                throw new Error(
-                  `Directory protection failed for '${entry.name}': ${reason}`,
-                  { cause: err },
-                );
-              }
-            } else {
-              copyFileSync(srcFull, dstFull);
-            }
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        try {
+          const childFormat = detectArtifactFormat(srcFull);
+          if (childFormat === "unknown" || isTypeScriptDeclarationPath(entry.name)) {
+            checkReleaseHygiene(srcFull);
+            lstatUnlinkedPath(dstFull);
+            copyFileSync(srcFull, dstFull, constants.COPYFILE_EXCL);
+            onOutput?.(dstFull);
+            continue;
           }
+          const subRes = protectTarget({
+            ...options,
+            inputPath: srcFull,
+            outputPath: dstFull,
+            inPlace: false,
+            seed: `${seed}:${entry.name}`,
+          }, onOutput);
+          decoyFunctionsInjected += subRes.metrics.decoyFunctionsInjected;
+          fakeCrossReferencesCreated += subRes.metrics.fakeCrossReferencesCreated;
+          primitiveCandidateBranchesCreated += subRes.metrics.primitiveCandidateBranchesCreated;
+          aliasSelectionStatesCreated += subRes.metrics.aliasSelectionStatesCreated;
+          ipcAmbiguitySitesInjected += subRes.metrics.ipcAmbiguitySitesInjected;
+          decoyRoutesInjected += subRes.metrics.decoyRoutesInjected;
+          chaffPayloadsEmbedded += subRes.metrics.chaffPayloadsEmbedded;
+          honeySourceMapsGenerated += subRes.metrics.honeySourceMapsGenerated;
+          inlineScriptsFailed += subRes.metrics.inlineScriptsFailed;
+          binarySectionsPatched += subRes.metrics.binarySectionsPatched;
+          if (subRes.selfSeal === true) selfSealApplied = true;
+          if (subRes.sidecarEntangle === true) sidecarEntangleApplied = true;
+          for (const vector of subRes.counteredReaVectors) counteredVectors.add(vector);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`Directory protection failed for '${entry.name}': ${reason}`, { cause: error });
         }
       }
     };
     try {
       walkAndProtect(absInput, absOutput);
-    } catch (err) {
-      if (!outputExistedBefore) {
-        try {
-          rmSync(absOutput, { recursive: true, force: true });
-        } catch {
-          // Preserve the original child protection failure if cleanup fails.
-        }
+    } catch (error) {
+      try {
+        lstatUnlinkedPath(absOutput);
+        rmSync(absOutput, { recursive: true, force: true });
+      } catch {
+        // Preserve the original child protection failure if cleanup fails.
       }
-      throw err;
+      throw error;
     }
-    counteredVectors.add("js-static-semantics");
-    counteredVectors.add("electron-ipc-bridge");
-    counteredVectors.add("js-route-rpc-inventory");
-    counteredVectors.add("sourcemap-recovery");
-    counteredVectors.add("call-graph-tracing");
-    counteredVectors.add("obligation-ledger-cloning");
   }
 
   if (format !== "directory" && absOutput !== absInput) {
     try {
       const inputMode = statSync(absInput).mode & 0o777;
+      lstatUnlinkedPath(absOutput, options.inPlace === true);
       if ((inputMode & 0o111) !== 0) {
         chmodSync(absOutput, inputMode);
       }

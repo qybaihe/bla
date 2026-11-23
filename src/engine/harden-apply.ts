@@ -22,27 +22,30 @@
  *   that changed since (the project was rebuilt) is simply a new original.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
-  chmodSync,
+  constants,
   copyFileSync,
-  existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
-  statSync,
+  rmdirSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { physicalPath } from "../core/output-path.js";
 import { resolveBlaStateRoot } from "../core/output-registry.js";
-import { writeFileAtomicSync } from "./protector.js";
+import {
+  isMissingPath,
+  lstatUnlinkedPath,
+  realpathOnDisk,
+  writeRawFileAtomicSync,
+} from "./protector.js";
 
 export const HARDEN_APPLY_STATE_SCHEMA = "bla-apply-state/v1" as const;
 const STATE_FILE_NAME = "apply-state.json";
 const ORIGINALS_DIR_NAME = "originals";
-const SUSPENDED_DIR_NAME = "suspended";
+const APPLY_LOCK_NAME = "transaction.lock";
 
 /** One promoted file: what it was, and what it became. */
 export interface HardenApplyFileState {
@@ -59,6 +62,7 @@ export interface HardenApplyState {
   readonly projectDirectory: string;
   readonly runId: string;
   readonly appliedAtIso: string;
+  readonly backupGeneration?: string;
   readonly files: readonly HardenApplyFileState[];
 }
 
@@ -99,6 +103,7 @@ export interface HardenApplyCandidate {
 }
 
 function sha256OfFile(path: string): string {
+  requireFile(path);
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
@@ -115,73 +120,157 @@ export function resolveApplyStateDirectory(
   projectDirectory: string,
   stateRoot?: string,
 ): string {
-  const physical = physicalPath(resolve(projectDirectory));
+  const root = resolve(projectDirectory);
+  const physical = lstatUnlinkedPath(root) ? realpathOnDisk(root) : physicalPath(root);
   const key = createHash("sha256").update(physical).digest("hex").slice(0, 24);
   return join(resolveBlaStateRoot(stateRoot), "apply", key);
 }
 
+function validRelativePath(path: string): boolean {
+  return !/[\\:\0]/.test(path) && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+function fileAt(path: string) {
+  const stat = lstatUnlinkedPath(path);
+  if (stat && !stat.isFile()) throw new Error(`Expected a regular file: ${path}`);
+  return stat;
+}
+
+function requireFile(path: string) {
+  const stat = fileAt(path);
+  if (!stat) throw new Error(`File is missing: ${path}`);
+  return stat;
+}
+
+function destinationExists(path: string): boolean {
+  const stat = fileAt(path);
+  if (stat && stat.nlink > 1) {
+    throw new Error(`Refusing to write through a symlink or hardlinked output: ${path}`);
+  }
+  return stat !== undefined;
+}
+
+function confinedPath(root: string, rel: string): string {
+  if (!validRelativePath(rel)) throw new Error(`Path is outside its root: ${rel}`);
+  return join(root, rel);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function loadApplyState(stateDirectory: string): HardenApplyState | undefined {
+  const path = join(stateDirectory, STATE_FILE_NAME);
+  let bytes: string;
   try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(join(stateDirectory, STATE_FILE_NAME), "utf8"),
-    );
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const state = parsed as Partial<HardenApplyState>;
-    if (state.schema !== HARDEN_APPLY_STATE_SCHEMA || !Array.isArray(state.files)) {
-      return undefined;
+    if (!destinationExists(path)) return undefined;
+    bytes = readFileSync(path, "utf8");
+  } catch (error) {
+    if (isMissingPath(error)) return undefined;
+    throw error;
+  }
+
+  try {
+    const state = JSON.parse(bytes) as Partial<HardenApplyState> | null;
+    const seen = new Set<string>();
+    const isDigest = (value: unknown): value is string =>
+      typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+    if (
+      state === null ||
+      state.schema !== HARDEN_APPLY_STATE_SCHEMA ||
+      typeof state.projectDirectory !== "string" || !isAbsolute(state.projectDirectory) ||
+      typeof state.runId !== "string" || state.runId.length === 0 ||
+      typeof state.appliedAtIso !== "string" || !Number.isFinite(Date.parse(state.appliedAtIso)) ||
+      (state.backupGeneration !== undefined &&
+        (typeof state.backupGeneration !== "string" || !/^[a-f0-9]{32}$/.test(state.backupGeneration))) ||
+      !Array.isArray(state.files) ||
+      !state.files.every((file) => {
+        if (
+          file === null || typeof file !== "object" ||
+          typeof file.relativePath !== "string" || !validRelativePath(file.relativePath) ||
+          !isDigest(file.hardenedSha256) ||
+          (file.originalSha256 !== null && !isDigest(file.originalSha256)) ||
+          seen.has(file.relativePath)
+        ) return false;
+        seen.add(file.relativePath);
+        return true;
+      })
+    ) {
+      throw new Error("invalid apply-state schema");
     }
-    const files = state.files.filter(
-      (f): f is HardenApplyFileState =>
-        typeof f === "object" &&
-        f !== null &&
-        typeof f.relativePath === "string" &&
-        f.relativePath.length > 0 &&
-        !f.relativePath.split("/").includes("..") &&
-        !f.relativePath.startsWith("/") &&
-        typeof f.hardenedSha256 === "string" &&
-        (f.originalSha256 === null || typeof f.originalSha256 === "string"),
-    );
-    return {
-      schema: HARDEN_APPLY_STATE_SCHEMA,
-      projectDirectory: typeof state.projectDirectory === "string" ? state.projectDirectory : "",
-      runId: typeof state.runId === "string" ? state.runId : "",
-      appliedAtIso: typeof state.appliedAtIso === "string" ? state.appliedAtIso : "",
-      files,
-    };
-  } catch {
-    return undefined;
+    return state as HardenApplyState;
+  } catch (error) {
+    throw new Error(`Cannot use apply state at ${path}: ${errorMessage(error)}`, { cause: error });
   }
 }
 
-function writeApplyState(stateDirectory: string, state: HardenApplyState): void {
-  mkdirSync(stateDirectory, { recursive: true });
-  writeFileAtomicSync(
-    join(stateDirectory, STATE_FILE_NAME),
-    `${JSON.stringify(state, null, 2)}\n`,
-    "utf8",
-  );
+function loadProjectApplyState(root: string, stateDirectory: string): HardenApplyState | undefined {
+  lstatUnlinkedPath(root);
+  lstatUnlinkedPath(stateDirectory);
+  const rel = relative(physicalPath(root), physicalPath(resolve(stateDirectory)));
+  if (rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))) {
+    throw new Error("Apply backups must be stored outside the project.");
+  }
+  const state = loadApplyState(stateDirectory);
+  if (state) {
+    lstatUnlinkedPath(state.projectDirectory);
+    if (physicalPath(root) !== physicalPath(state.projectDirectory)) {
+      throw new Error(`Apply state belongs to a different project: ${state.projectDirectory}`);
+    }
+  }
+  return state;
 }
 
-function clearApplyState(stateDirectory: string): void {
-  rmSync(stateDirectory, { recursive: true, force: true });
+function originalsDirectory(stateDirectory: string, generation?: string): string {
+  return join(stateDirectory, generation === undefined ? ORIGINALS_DIR_NAME : `originals-${generation}`);
 }
 
-/**
- * Replace `destination` with a copy of `source` without a torn intermediate file.
- *
- * Goes through the shared `writeFileAtomicSync` rather than its own
- * `${destination}.${process.pid}.bla-tmp` copy: the shared writer refuses to write
- * through a symlink or hardlink planted at the destination and creates its temp
- * with `flag: "wx"` plus a random suffix, so a pre-planted temp path cannot be
- * followed. Promotion must keep the artifact runnable, and the writer takes the
- * permission bits of an existing destination, so the promoted file's mode is
- * carried over explicitly.
- */
+function removeTree(path: string): void {
+  if (lstatUnlinkedPath(path)) rmSync(path, { recursive: true, force: true });
+}
+
+/** Serialize apply, suspension and restore across processes sharing this state. */
+export function withApplyTransaction<T>(stateDirectory: string, action: () => T): T {
+  lstatUnlinkedPath(stateDirectory);
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const lockPath = join(stateDirectory, APPLY_LOCK_NAME);
+  lstatUnlinkedPath(lockPath);
+  try {
+    mkdirSync(lockPath, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`Another apply or restore owns ${lockPath}. If that run exited, check the saved backups before removing the stale lock.`, { cause: error });
+    }
+    throw error;
+  }
+  try {
+    return action();
+  } finally {
+    if (lstatUnlinkedPath(lockPath)?.isDirectory()) rmdirSync(lockPath);
+  }
+}
+
+function unlinkDestination(path: string): void {
+  if (destinationExists(path)) unlinkSync(path);
+}
+
+/** Copy a regular file into private backup storage. */
+function backupFile(source: string, destination: string): void {
+  requireFile(source);
+  lstatUnlinkedPath(destination);
+  mkdirSync(dirname(destination), { recursive: true });
+  copyFileSync(source, destination, constants.COPYFILE_EXCL);
+}
+
 function replaceFile(source: string, destination: string): void {
-  const content = readFileSync(source);
-  const sourceMode = statSync(source).mode & 0o7777;
-  writeFileAtomicSync(destination, content);
-  chmodSync(destination, sourceMode);
+  const { mode } = requireFile(source);
+  writeRawFileAtomicSync(destination, readFileSync(source), undefined, { mode: mode & 0o7777 });
+}
+
+function requireBackup(path: string, digest: string): void {
+  if (!fileAt(path) || sha256OfFile(path) !== digest) {
+    throw new Error(`Saved original is missing or damaged: ${path}. Rebuild the project if the backup cannot be recovered.`);
+  }
 }
 
 /**
@@ -192,19 +281,13 @@ export function listAppliedFiles(
   projectDirectory: string,
   stateDirectory: string,
 ): readonly string[] {
-  const state = loadApplyState(stateDirectory);
-  if (state === undefined) return [];
   const root = resolve(projectDirectory);
+  const state = loadProjectApplyState(root, stateDirectory);
+  if (state === undefined) return [];
   const applied: string[] = [];
   for (const file of state.files) {
-    const abs = join(root, file.relativePath);
-    try {
-      if (statSync(abs).isFile() && sha256OfFile(abs) === file.hardenedSha256) {
-        applied.push(file.relativePath);
-      }
-    } catch {
-      /* gone: nothing to protect against */
-    }
+    const abs = confinedPath(root, file.relativePath);
+    if (fileAt(abs) && sha256OfFile(abs) === file.hardenedSha256) applied.push(file.relativePath);
   }
   return applied;
 }
@@ -229,55 +312,39 @@ export function suspendAppliedOutputs(
   stateDirectory: string,
 ): AppliedOutputSuspension {
   const inactive: AppliedOutputSuspension = { active: false, resume() {}, discard() {} };
-  const state = loadApplyState(stateDirectory);
-  if (state === undefined) return inactive;
   const root = resolve(projectDirectory);
-  const originalsDir = join(stateDirectory, ORIGINALS_DIR_NAME);
-  const suspendedDir = join(stateDirectory, SUSPENDED_DIR_NAME);
-  rmSync(suspendedDir, { recursive: true, force: true });
+  const state = loadProjectApplyState(root, stateDirectory);
+  if (state === undefined) return inactive;
+  const originalsDir = originalsDirectory(stateDirectory, state.backupGeneration);
+  const suspendedDir = join(stateDirectory, `suspended-${randomBytes(16).toString("hex")}`);
   const parked: HardenApplyFileState[] = [];
   const reinstate = (): void => {
     for (const file of parked) {
-      const parkedCopy = join(suspendedDir, file.relativePath);
-      if (existsSync(parkedCopy)) replaceFile(parkedCopy, join(root, file.relativePath));
+      replaceFile(confinedPath(suspendedDir, file.relativePath), confinedPath(root, file.relativePath));
     }
-    rmSync(suspendedDir, { recursive: true, force: true });
+    removeTree(suspendedDir);
   };
   try {
     for (const file of state.files) {
-      const abs = join(root, file.relativePath);
-      let isHardened = false;
-      try {
-        isHardened = statSync(abs).isFile() && sha256OfFile(abs) === file.hardenedSha256;
-      } catch {
-        isHardened = false;
-      }
-      if (!isHardened) continue;
-      const backup = join(originalsDir, file.relativePath);
-      if (
-        file.originalSha256 !== null &&
-        (!existsSync(backup) || sha256OfFile(backup) !== file.originalSha256)
-      ) {
-        throw new Error(
-          `the saved original of ${file.relativePath} is missing or damaged, so it cannot be re-hardened from its original. Rebuild the project, then re-run.`,
-        );
-      }
-      const parkedCopy = join(suspendedDir, file.relativePath);
-      mkdirSync(dirname(parkedCopy), { recursive: true });
-      copyFileSync(abs, parkedCopy);
-      parked.push(file);
-      if (file.originalSha256 === null) unlinkSync(abs);
+      const abs = confinedPath(root, file.relativePath);
+      if (!fileAt(abs) || sha256OfFile(abs) !== file.hardenedSha256) continue;
+      destinationExists(abs);
+      const backup = confinedPath(originalsDir, file.relativePath);
+      if (file.originalSha256 !== null) requireBackup(backup, file.originalSha256);
+      backupFile(abs, confinedPath(suspendedDir, file.relativePath));
+      if (file.originalSha256 === null) unlinkDestination(abs);
       else replaceFile(backup, abs);
+      parked.push(file);
     }
-  } catch (err) {
+  } catch (error) {
     reinstate();
-    throw err;
+    throw error;
   }
   if (parked.length === 0) return inactive;
   return {
     active: true,
     resume: reinstate,
-    discard: () => rmSync(suspendedDir, { recursive: true, force: true }),
+    discard: () => removeTree(suspendedDir),
   };
 }
 
@@ -290,60 +357,75 @@ export function restoreAppliedOriginals(
   projectDirectory: string,
   stateDirectory: string,
 ): HardenApplyReport {
-  const state = loadApplyState(stateDirectory);
-  if (state === undefined || state.files.length === 0) {
-    clearApplyState(stateDirectory);
-    return { status: "nothing-to-restore" };
+  try {
+    if (loadProjectApplyState(resolve(projectDirectory), stateDirectory) === undefined) {
+      return { status: "nothing-to-restore" };
+    }
+    return withApplyTransaction(stateDirectory, () => restoreAppliedOriginalsLocked(projectDirectory, stateDirectory));
+  } catch (error) {
+    return { status: "failed", reason: `Could not restore applied outputs: ${errorMessage(error)}` };
   }
+}
+
+function restoreAppliedOriginalsLocked(
+  projectDirectory: string,
+  stateDirectory: string,
+): HardenApplyReport {
   const root = resolve(projectDirectory);
-  const originalsDir = join(stateDirectory, ORIGINALS_DIR_NAME);
+  let originalsDir: string | undefined;
   const restored: string[] = [];
   const removed: string[] = [];
   const skippedModified: string[] = [];
-  const failures: string[] = [];
-  for (const file of state.files) {
-    const abs = join(root, file.relativePath);
-    let current: string | undefined;
-    try {
-      current = statSync(abs).isFile() ? sha256OfFile(abs) : undefined;
-    } catch {
-      current = undefined;
-    }
-    if (current === undefined) continue; // deleted since: nothing to undo
-    if (file.originalSha256 !== null && current === file.originalSha256) continue; // already original
-    if (current !== file.hardenedSha256) {
-      skippedModified.push(file.relativePath);
-      continue;
-    }
-    try {
-      if (file.originalSha256 === null) {
-        unlinkSync(abs);
-        removed.push(file.relativePath);
-      } else {
-        const backup = join(originalsDir, file.relativePath);
-        if (!existsSync(backup) || sha256OfFile(backup) !== file.originalSha256) {
-          failures.push(`${file.relativePath}: backup missing or damaged`);
-          continue;
-        }
-        replaceFile(backup, abs);
-        restored.push(file.relativePath);
+  try {
+    const state = loadProjectApplyState(root, stateDirectory);
+    if (state === undefined) return { status: "nothing-to-restore" };
+    originalsDir = originalsDirectory(stateDirectory, state.backupGeneration);
+    const plan: { file: HardenApplyFileState; destination: string; backup?: string }[] = [];
+    for (const file of state.files) {
+      const destination = confinedPath(root, file.relativePath);
+      if (!fileAt(destination)) continue;
+      const current = sha256OfFile(destination);
+      if (current === file.originalSha256) continue;
+      if (current !== file.hardenedSha256) {
+        skippedModified.push(file.relativePath);
+        continue;
       }
-    } catch (err) {
-      failures.push(`${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+      destinationExists(destination);
+      if (file.originalSha256 === null) {
+        plan.push({ file, destination });
+      } else {
+        const backup = confinedPath(originalsDir, file.relativePath);
+        requireBackup(backup, file.originalSha256);
+        plan.push({ file, destination, backup });
+      }
     }
-  }
-  if (failures.length > 0) {
-    // Keep the state: the backups are still the only copy of those originals.
+    for (const step of plan) {
+      if (step.backup) {
+        replaceFile(step.backup, step.destination);
+        restored.push(step.file.relativePath);
+      } else {
+        unlinkDestination(step.destination);
+        removed.push(step.file.relativePath);
+      }
+    }
+    unlinkDestination(join(stateDirectory, STATE_FILE_NAME));
+    // The state entry is gone and all restores succeeded. Clean the committed
+    // generation without touching a custom staging directory or orphaned backups.
+    try {
+      removeTree(originalsDir);
+    } catch {
+      // Restore is committed; an undeletable backup can be reclaimed later.
+    }
+  } catch (error) {
     return {
       status: "failed",
-      reason: `Could not restore ${failures.length} file(s): ${failures.join("; ")}. Rebuild the project to regenerate them.`,
+      reason: `Could not restore applied outputs: ${errorMessage(error)}`,
       restored,
       ...(removed.length > 0 ? { removed } : {}),
       ...(skippedModified.length > 0 ? { skippedModified } : {}),
-      backupDirectory: originalsDir,
+      ...(originalsDir ? { backupDirectory: originalsDir } : {}),
     };
   }
-  clearApplyState(stateDirectory);
   return {
     status: restored.length + removed.length > 0 ? "restored" : "nothing-to-restore",
     restored,
@@ -372,76 +454,48 @@ export function isInsideBuildOutput(
   relativePath: string,
   projectDirectory: string,
   buildDirNames: readonly string[],
+  buildRoots: readonly string[] = [],
 ): boolean {
-  const names = new Set(buildDirNames);
-  const segments = relativePath.split("/").filter((s) => s.length > 0);
-  if (segments.slice(0, -1).some((segment) => names.has(segment))) return true;
-  // `bla harden dist`: the target itself is the build output.
-  return names.has(resolve(projectDirectory).split(sep).pop() ?? "");
+  if (!validRelativePath(relativePath)) return false;
+  const [topLevel, ...rest] = relativePath.split("/");
+  return (rest.length > 0 && buildDirNames.includes(topLevel!)) ||
+    buildDirNames.includes(resolve(projectDirectory).split(sep).pop() ?? "") ||
+    buildRoots.some((root) => relativePath.startsWith(`${root}/`));
 }
 
-/**
- * Hardened files under `outputRoot` that mirror a project path: the artifacts
- * themselves plus whatever this run wrote right beside one
- * (`app.js.bla-manifest.json`). Stale leftovers of earlier runs are excluded by
- * `notBeforeMs`.
- */
+/** Map only paths explicitly written by this harden run back into the project. */
 export function collectApplyCandidates(params: {
   readonly projectDirectory: string;
   readonly outputRoot: string;
-  readonly artifactOutputPaths: readonly string[];
-  readonly notBeforeMs: number;
+  readonly writtenOutputPaths: readonly string[];
 }): HardenApplyCandidate[] {
   const outputRoot = resolve(params.outputRoot);
   const projectRoot = resolve(params.projectDirectory);
-  const artifacts = new Set(params.artifactOutputPaths.map((p) => resolve(p)));
-  const candidates: HardenApplyCandidate[] = [];
-  const seen = new Set<string>();
-  const push = (outputPath: string): void => {
-    if (seen.has(outputPath)) return;
-    const rel = relative(outputRoot, outputPath);
-    if (rel.length === 0 || rel.startsWith("..")) return;
-    seen.add(outputPath);
-    candidates.push({ outputPath, destinationPath: join(projectRoot, rel) });
-  };
-  for (const artifact of artifacts) {
-    if (!existsSync(artifact)) continue;
-    push(artifact);
-    let siblings: string[];
-    try {
-      siblings = readdirSync(dirname(artifact));
-    } catch {
-      continue;
-    }
-    const prefix = `${artifact.split(sep).pop() ?? ""}.`;
-    for (const name of siblings) {
-      if (!name.startsWith(prefix)) continue;
-      const sibling = join(dirname(artifact), name);
-      if (artifacts.has(sibling)) continue;
-      try {
-        const st = statSync(sibling);
-        // 2 s of slack for coarse filesystem timestamps.
-        if (st.isFile() && st.mtimeMs >= params.notBeforeMs - 2000) push(sibling);
-      } catch {
-        /* raced away */
-      }
-    }
-  }
-  return candidates;
+  lstatUnlinkedPath(outputRoot);
+  lstatUnlinkedPath(projectRoot);
+  return [...new Set(params.writtenOutputPaths.map((path) => resolve(path)))].map((outputPath) => {
+    const rel = toPosix(relative(outputRoot, outputPath));
+    return { outputPath, destinationPath: confinedPath(projectRoot, rel) };
+  });
 }
 
-/**
- * Promote hardened files over the originals. All-or-nothing: originals are
- * backed up and the state is written before the first overwrite, and a failed
- * copy rolls back everything already promoted.
- */
+/** Promote with private backups and an atomic commit of the new backup index. */
 export function applyHardenedOutputs(params: {
   readonly projectDirectory: string;
   readonly stateDirectory: string;
   readonly runId: string;
   readonly candidates: readonly HardenApplyCandidate[];
   readonly buildDirNames: readonly string[];
-}): HardenApplyReport {
+  readonly buildRoots?: readonly string[];
+}, transactionAlreadyHeld = false): HardenApplyReport {
+  if (!transactionAlreadyHeld) {
+    try {
+      loadProjectApplyState(resolve(params.projectDirectory), params.stateDirectory);
+      return withApplyTransaction(params.stateDirectory, () => applyHardenedOutputs(params, true));
+    } catch (error) {
+      return { status: "failed", reason: `Could not start apply: ${errorMessage(error)}` };
+    }
+  }
   const projectRoot = resolve(params.projectDirectory);
   const relOf = (abs: string): string => toPosix(relative(projectRoot, abs));
 
@@ -450,108 +504,101 @@ export function applyHardenedOutputs(params: {
   }
   const sourceFiles = params.candidates
     .map((c) => relOf(c.destinationPath))
-    .filter((rel) => !isInsideBuildOutput(rel, projectRoot, params.buildDirNames));
+    .filter((rel) => !isInsideBuildOutput(rel, projectRoot, params.buildDirNames, params.buildRoots));
   if (sourceFiles.length > 0) {
     return {
       status: "refused",
-      reason:
-        `apply only promotes build output, and ${sourceFiles.length} hardened file(s) are not inside a build-output directory ` +
-        `(${params.buildDirNames.slice(0, 4).join(", ")}, …). Overwriting them would replace your source code with hardened output. ` +
-        "Build the project first and harden the build directory, or copy the project to a staging directory and overlay the hardened mirror there.",
+      reason: "Apply only promotes files under a recognized build output directory. Build the project first or choose an explicit build output directory.",
       sourceFiles,
     };
   }
 
-  const originalsDir = join(params.stateDirectory, ORIGINALS_DIR_NAME);
-  const previous = loadApplyState(params.stateDirectory);
-  const previousByPath = new Map((previous?.files ?? []).map((f) => [f.relativePath, f]));
+  if (new Set(params.candidates.map((candidate) => relOf(candidate.destinationPath))).size !== params.candidates.length) {
+    return { status: "refused", reason: "Multiple artifacts target the same apply destination." };
+  }
+
+  const generation = randomBytes(16).toString("hex");
+  const originalsDir = originalsDirectory(params.stateDirectory, generation);
+  const rollbackDir = join(params.stateDirectory, `rollback-${generation}`);
   const entries: HardenApplyFileState[] = [];
-  const plan: Array<{
-    readonly candidate: HardenApplyCandidate;
-    readonly entry: HardenApplyFileState;
-    readonly backupPath: string;
-  }> = [];
-
+  const promoted: { destination: string; rollbackPath?: string }[] = [];
+  let previousOriginals: string | undefined;
   try {
-    // 1. Back up every original before a single byte of the project changes.
-    for (const candidate of params.candidates) {
-      const rel = relOf(candidate.destinationPath);
-      const backupPath = join(originalsDir, rel);
+    const previous = loadProjectApplyState(projectRoot, params.stateDirectory);
+    previousOriginals = previous && originalsDirectory(params.stateDirectory, previous.backupGeneration);
+    const previousByPath = new Map((previous?.files ?? []).map((file) => [file.relativePath, file]));
+    const plan = params.candidates.map((candidate) => {
+      const relativePath = relOf(candidate.destinationPath);
+      const destination = confinedPath(projectRoot, relativePath);
       const hardenedSha256 = sha256OfFile(candidate.outputPath);
-      let originalSha256: string | null = null;
-      if (existsSync(candidate.destinationPath)) {
-        const currentSha = sha256OfFile(candidate.destinationPath);
-        const earlier = previousByPath.get(rel);
-        if (
-          earlier !== undefined &&
-          currentSha === earlier.hardenedSha256 &&
-          earlier.originalSha256 !== null &&
-          existsSync(backupPath) &&
-          sha256OfFile(backupPath) === earlier.originalSha256
-        ) {
-          // Still the hardened bytes of the previous promotion: the backup we
-          // already hold is the real original — never back up hardened output.
-          originalSha256 = earlier.originalSha256;
-        } else if (earlier !== undefined && currentSha === earlier.hardenedSha256) {
-          originalSha256 = earlier.originalSha256;
-        } else {
-          mkdirSync(dirname(backupPath), { recursive: true });
-          copyFileSync(candidate.destinationPath, backupPath);
-          originalSha256 = currentSha;
-        }
+      const currentSha = destinationExists(destination) ? sha256OfFile(destination) : null;
+      const earlier = previousByPath.get(relativePath);
+      const reuseOriginal = earlier !== undefined && currentSha === earlier.hardenedSha256;
+      const originalSha256 = reuseOriginal ? earlier.originalSha256 : currentSha;
+      if (originalSha256 !== null) {
+        const original = reuseOriginal ? confinedPath(previousOriginals!, relativePath) : destination;
+        if (reuseOriginal) requireBackup(original, originalSha256);
+        backupFile(original, confinedPath(originalsDir, relativePath));
       }
-      const entry: HardenApplyFileState = { relativePath: rel, hardenedSha256, originalSha256 };
-      entries.push(entry);
-      plan.push({ candidate, entry, backupPath });
-    }
-    // Keep entries of earlier promotions this run did not touch.
-    const touched = new Set(entries.map((e) => e.relativePath));
-    const carried = (previous?.files ?? []).filter((f) => !touched.has(f.relativePath));
+      let rollbackPath: string | undefined;
+      if (currentSha !== null) {
+        rollbackPath = confinedPath(rollbackDir, relativePath);
+        backupFile(destination, rollbackPath);
+      }
+      entries.push({ relativePath, hardenedSha256, originalSha256 });
+      previousByPath.delete(relativePath);
+      return { candidate, destination, rollbackPath };
+    });
 
-    // 2. Record intent, then 3. overwrite.
-    writeApplyState(params.stateDirectory, {
+    const carried = [...previousByPath.values()];
+    for (const file of carried) {
+      if (file.originalSha256 === null) continue;
+      const previousBackup = confinedPath(previousOriginals!, file.relativePath);
+      requireBackup(previousBackup, file.originalSha256);
+      backupFile(previousBackup, confinedPath(originalsDir, file.relativePath));
+    }
+
+    for (const step of plan) {
+      replaceFile(step.candidate.outputPath, step.destination);
+      promoted.push(step);
+    }
+    const state: HardenApplyState = {
       schema: HARDEN_APPLY_STATE_SCHEMA,
       projectDirectory: projectRoot,
       runId: params.runId,
       appliedAtIso: new Date().toISOString(),
+      backupGeneration: generation,
       files: [...carried, ...entries],
-    });
-  } catch (err) {
-    return {
-      status: "failed",
-      reason: `Could not back up the originals (${err instanceof Error ? err.message : String(err)}); nothing in the project was changed.`,
     };
-  }
-
-  const promoted: typeof plan = [];
-  try {
-    for (const step of plan) {
-      replaceFile(step.candidate.outputPath, step.candidate.destinationPath);
-      promoted.push(step);
-    }
-  } catch (err) {
+    writeRawFileAtomicSync(join(params.stateDirectory, STATE_FILE_NAME), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  } catch (error) {
     const rollbackFailures: string[] = [];
-    for (const step of promoted) {
+    for (const step of promoted.reverse()) {
       try {
-        if (step.entry.originalSha256 === null) unlinkSync(step.candidate.destinationPath);
-        else replaceFile(step.backupPath, step.candidate.destinationPath);
-      } catch (rollbackErr) {
-        rollbackFailures.push(
-          `${step.entry.relativePath}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
-        );
+        if (step.rollbackPath) replaceFile(step.rollbackPath, step.destination);
+        else unlinkDestination(step.destination);
+      } catch (rollbackError) {
+        rollbackFailures.push(errorMessage(rollbackError));
       }
     }
-    const message = err instanceof Error ? err.message : String(err);
+    if (rollbackFailures.length === 0) {
+      for (const dir of [originalsDir, rollbackDir]) {
+        try { removeTree(dir); } catch { /* leave uncommitted backup data intact */ }
+      }
+    }
     return {
       status: "failed",
-      reason:
-        rollbackFailures.length === 0
-          ? `Promotion failed (${message}); every file already promoted was rolled back.`
-          : `Promotion failed (${message}) and ${rollbackFailures.length} file(s) could not be rolled back: ${rollbackFailures.join("; ")}. Run restore, or rebuild the project.`,
-      backupDirectory: originalsDir,
+      reason: rollbackFailures.length === 0
+        ? `Promotion failed (${errorMessage(error)}); no promotion was committed.`
+        : `Promotion failed (${errorMessage(error)}); rollback also failed: ${rollbackFailures.join("; ")}. Pre-promotion copies are in ${rollbackDir}.`,
+      ...(previousOriginals !== undefined ? { backupDirectory: previousOriginals } : {}),
     };
   }
 
+  for (const dir of [previousOriginals, rollbackDir]) {
+    if (dir === undefined) continue;
+    try { removeTree(dir); } catch { /* new state is already committed */ }
+  }
   return {
     status: "applied",
     applied: entries.filter((e) => e.originalSha256 !== null).map((e) => e.relativePath),

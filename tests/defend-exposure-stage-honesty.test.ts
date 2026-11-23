@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { defendTarget } from "../src/engine/defender.js";
 
 describe("defendTarget stage-1 honesty", () => {
-  it("reports warn instead of passed when the release-exposure scan cannot run", () => {
+  it("refuses a symlinked directory before creating an output", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "bla-defend-stage-"));
     const real = path.join(base, "real");
     fs.mkdirSync(real);
@@ -17,18 +17,13 @@ describe("defendTarget stage-1 honesty", () => {
       return; // symlink/junction creation unavailable on this host
     }
     try {
-      const report = defendTarget({
+      expect(() => defendTarget({
         inputPath: link,
         outputPath: path.join(base, "out"),
         intensity: "balanced",
         seed: "stage-honesty-test",
-      });
-      expect(report.releaseExposure).toBeNull();
-      expect(report.stages[0]).toMatchObject({
-        stage: "1-release-exposure-scan",
-        status: "warn",
-      });
-      expect(report.stages[0]!.headline).toMatch(/could not run/);
+      })).toThrow(/symlink/);
+      expect(fs.existsSync(path.join(base, "out"))).toBe(false);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }

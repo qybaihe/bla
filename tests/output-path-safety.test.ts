@@ -71,7 +71,7 @@ describe("protectTarget output path safety", () => {
         inputPath: inputDir,
         outputPath: join(aliasParent, "out"),
       }),
-    ).toThrow(/outside the input directory/);
+    ).toThrow(/symlink/);
   });
 
   it("rejects overwriting the input file through direct, symlink, or hardlink aliases unless inPlace is true", () => {

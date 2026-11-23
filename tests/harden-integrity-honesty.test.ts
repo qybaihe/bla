@@ -262,6 +262,7 @@ describe("integrity bindings: what is checked, and what is not", () => {
         relativePath: "dist/assets/chunk.js",
         reason: expect.stringMatching(/^browser bundle \(imported by app\.js, which a web page loads\)/),
       },
+      { relativePath: "dist/index.html", reason: expect.stringMatching(/^browser bundle \(HTML bundle\)/) },
       { relativePath: "dist/data.sqlite", reason: expect.stringMatching(/^mutable data/) },
     ]);
     // Nothing hosts a check, so none is claimed.

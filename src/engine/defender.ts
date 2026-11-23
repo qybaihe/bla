@@ -12,7 +12,7 @@ import type {
 } from "../core/types.js";
 import { REA_BUDGET_BREAKER_MATRIX } from "../shields/exhaustion/index.js";
 import { auditTarget } from "./auditor.js";
-import { protectTarget, writeFileAtomicSync } from "./protector.js";
+import { lstatUnlinkedPath, protectTarget, writeFileAtomicSync } from "./protector.js";
 import { verifyTarget } from "./verifier.js";
 import {
   signManifestPayload,
@@ -138,8 +138,12 @@ export interface OneClickDefenseReport {
  *   4. Counter-REA mathematical & structural invariant verification (`verifyTarget`)
  *   5. Defense attestation manifest generation
  */
-export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseReport {
+export function defendTarget(
+  options: OneClickDefenseOptions,
+  onOutput?: (path: string) => void,
+): OneClickDefenseReport {
   const absInput = resolve(options.inputPath);
+  lstatUnlinkedPath(absInput, options.inPlace === true);
   const intensity: ProtectionIntensity = options.intensity ?? "bankrupt";
 
   // Fail closed before any pipeline work when signing is requested.
@@ -241,13 +245,14 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       ? { sidecarEntangleSoftFold: true }
       : {}),
     honeySourceMaps: options.honeySourceMaps !== false,
-  });
+  }, onOutput);
 
   // Stage 4: Verify Counter-REA Invariants
   const verification = verifyTarget(protection.outputPath, absInput, {
-    selfSealEnabled: options.selfSeal === true || protection.selfSeal === true,
-    sidecarEntangleEnabled:
-      options.sidecarEntangle === true || protection.sidecarEntangle === true,
+    // For a directory the result describes bindings on protected members,
+    // while verifyTarget operates on the directory as a single artifact.
+    selfSealEnabled: protection.detectedFormat !== "directory" && protection.selfSeal === true,
+    sidecarEntangleEnabled: protection.sidecarEntangle === true,
     wasmExportRenameApplied: protection.wasmExportRenameApplied === true,
   });
 
@@ -335,6 +340,7 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
       JSON.stringify(payloadToWrite, null, 2) + "\n",
       "utf8",
     );
+    onOutput?.(manifestPath);
     stages.push({
       stage: "5-defense-attestation-manifest",
       status: "passed",
@@ -352,8 +358,8 @@ export function defendTarget(options: OneClickDefenseOptions): OneClickDefenseRe
     outputPath: protection.outputPath,
     intensity,
     weaveDecoys: options.weaveDecoys === true,
-    selfSeal: options.selfSeal === true,
-    sidecarEntangle: options.sidecarEntangle === true,
+    selfSeal: protection.selfSeal === true,
+    sidecarEntangle: protection.sidecarEntangle === true,
     overallSuccess: verification.overallPassed,
     overallSuccessScope: "hardening-and-structural-checks",
     runtimeEquivalence: verification.runtimeEquivalence,
