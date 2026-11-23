@@ -638,7 +638,10 @@ function previewHardenRestore(directory: string): HardenApplyReport {
   const state = loadApplyState(stateDirectory);
   if (!state?.files.length) return { status: "nothing-to-restore" };
 
-  const backupDirectory = join(stateDirectory, "originals");
+  const backupDirectory = join(
+    stateDirectory,
+    state.backupGeneration === undefined ? "originals" : `originals-${state.backupGeneration}`,
+  );
   const restored: string[] = [];
   const removed: string[] = [];
   const skippedModified: string[] = [];

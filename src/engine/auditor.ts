@@ -1123,7 +1123,7 @@ export function auditTarget(targetPath: string): AuditReport {
       const isModelProtected =
         modInfo.validModel &&
         modInfo.blaProtected &&
-        modInfo.exceedsReaNestingLimit &&
+        (modInfo.format === "gguf" || modInfo.exceedsReaNestingLimit) &&
         modInfo.tensorDataAligned !== false;
       const limits: string[] = [];
       if (modInfo.validModel && modInfo.exceedsReaNestingLimit) {
@@ -1146,7 +1146,9 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: isModelProtected ? 31_000 : 950,
         estimatedCostUsd: isModelProtected ? 2.45 : 0.05,
         reason: isModelProtected
-          ? "Protected by BLA Model Shield (enclave metadata + nesting capacity breaker > 32)"
+          ? modInfo.exceedsReaNestingLimit
+            ? "Protected by BLA Model Shield (enclave metadata + nesting capacity breaker > 32)"
+            : "Protected by BLA Model Shield (enclave metadata + ggml-compatible decoy descriptors)"
           : "Model tensor shapes, dtypes, and metadata directly readable by REA",
       });
       sim = {
@@ -1296,34 +1298,53 @@ export function auditTarget(targetPath: string): AuditReport {
       const text = rawBytes.toString("utf8");
       let isProtected = false;
       let measuredDecoys = 0;
+      let hasInternalSubsetDoctype = false;
       if (isBinaryPlist) {
-        const textLatin1 = rawBytes.toString("latin1");
+        const trailerStart = rawBytes.length - 32;
         const hasBplist00Header =
-          rawBytes.length >= 96 &&
+          trailerStart > 8 &&
           rawBytes.subarray(0, 8).toString("latin1") === "bplist00";
-        const canaryMatches = textLatin1.match(
-          /PROTECTED_CANARY_CREDENTIAL=|TRANSPORT_ENDPOINT=|BLA_BPLIST_DEPTH_GUARD_132|\[[A-Za-z0-9_]+Error\]/g,
-        );
-        const matchCount = canaryMatches ? canaryMatches.length : 0;
-        isProtected =
-          hasBplist00Header &&
-          textLatin1.includes("BLA_BPLIST_DEPTH_GUARD_132") &&
-          textLatin1.includes("PROTECTED_CANARY_CREDENTIAL=") &&
-          matchCount >= 5;
-        measuredDecoys = isProtected ? matchCount : 0;
+        if (hasBplist00Header) {
+          const offsetWidth = rawBytes[trailerStart + 6]!;
+          const refWidth = rawBytes[trailerStart + 7]!;
+          const numObjects = Number(rawBytes.readBigUInt64BE(trailerStart + 8));
+          const rootId = Number(rawBytes.readBigUInt64BE(trailerStart + 16));
+          const offsetsStart = Number(rawBytes.readBigUInt64BE(trailerStart + 24));
+          const validLayout =
+            offsetWidth >= 1 &&
+            offsetWidth <= 8 &&
+            refWidth >= 1 &&
+            refWidth <= 8 &&
+            Number.isSafeInteger(numObjects) &&
+            Number.isSafeInteger(rootId) &&
+            Number.isSafeInteger(offsetsStart) &&
+            numObjects >= 1 &&
+            rootId < numObjects &&
+            offsetsStart > 8 &&
+            offsetsStart < trailerStart &&
+            offsetsStart + numObjects * offsetWidth === trailerStart;
+          if (validLayout) {
+            const objectRegion = rawBytes.subarray(8, offsetsStart).toString("latin1");
+            const blaKeys = objectRegion.match(
+              /BLAEnclaveAttestationAuthority|BLAEnclaveVsockDelegationCID|BLACanaryCredential_\d+|BLATransportEndpoint_\d+|BLASystemDiagnostic_\d+/g,
+            );
+            const matchCount = blaKeys ? blaKeys.length : 0;
+            isProtected =
+              objectRegion.includes("BLAEnclaveAttestationAuthority") &&
+              matchCount >= 4;
+            measuredDecoys = isProtected ? matchCount : 0;
+          }
+        }
       } else {
         const hasValidPlistStructure =
           /<plist\b[^>]*>[\s\S]*<dict>[\s\S]*<\/dict>[\s\S]*<\/plist>/i.test(
             text,
           );
-        const hasInternalSubsetDoctype =
+        hasInternalSubsetDoctype =
           /<!DOCTYPE\s+plist\b[^>]*\[[^\]]*\]\s*>/i.test(text);
         const blaKeys = text.match(/<key>BLA[A-Za-z0-9_]+<\/key>/g);
         const blaKeyCount = blaKeys ? blaKeys.length : 0;
-        isProtected =
-          hasValidPlistStructure &&
-          hasInternalSubsetDoctype &&
-          blaKeyCount >= 4;
+        isProtected = hasValidPlistStructure && blaKeyCount >= 4;
         measuredDecoys = isProtected ? blaKeyCount : 0;
       }
       exposedItems.push({
@@ -1336,14 +1357,18 @@ export function auditTarget(targetPath: string): AuditReport {
         estimatedTokensToReconstruct: isProtected ? 24_000 : 650,
         estimatedCostUsd: isProtected ? 1.85 : 0.03,
         reason: isProtected
-          ? "Protected by BLA Apple PropertyList Decode Budget Guard"
+          ? "Protected by BLA Apple PropertyList Enclave Entitlement Shield"
           : "Apple PropertyList keys and entitlements directly readable",
       });
       sim = {
         ...sim,
         examinationStatus: isProtected ? "limited" : "complete",
         triggeredResourceLimits: isProtected
-          ? ["plist-internal-subset-expansion (PropertyListDecodeBudgetFailure)"]
+          ? [
+              hasInternalSubsetDoctype
+                ? "plist-internal-subset-expansion (PropertyListDecodeBudgetFailure)"
+                : "apple-plist-enclave-entitlements",
+            ]
           : [],
         totalFunctions: 4,
         decoyFunctionsDetectedAsReal: measuredDecoys,
