@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { BLA_IDENTITY } from "../identity.js";
 
 export type SupportedAgentClientId =
@@ -1554,10 +1554,16 @@ export function readClientMcpConfig(
 export function resolveSupportedAgentClients(
   home: string = homedir(),
   platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
+  env?: NodeJS.ProcessEnv,
 ): readonly AgentClientDefinition[] {
-  const winAppData = env.APPDATA?.trim() ? env.APPDATA : join(home, "AppData", "Roaming");
-  const xdgConfigHome = env.XDG_CONFIG_HOME?.trim() ? env.XDG_CONFIG_HOME : join(home, ".config");
+  // Only inherit host XDG/APPDATA/CODEX_HOME defaults when targeting the real
+  // home directory (or when the caller explicitly passes `env`). Isolated
+  // `homeDir` overrides stay confined under `home` instead of leaking into the
+  // runner's real config tree.
+  const effectiveEnv =
+    env ?? (resolve(home) === resolve(homedir()) ? process.env : {});
+  const winAppData = effectiveEnv.APPDATA?.trim() ? effectiveEnv.APPDATA : join(home, "AppData", "Roaming");
+  const xdgConfigHome = effectiveEnv.XDG_CONFIG_HOME?.trim() ? effectiveEnv.XDG_CONFIG_HOME : join(home, ".config");
 
   const claudeDesktopDir =
     platform === "darwin"
@@ -1573,7 +1579,7 @@ export function resolveSupportedAgentClients(
         ? join(winAppData, "Code", "User")
         : join(xdgConfigHome, "Code", "User");
 
-  const codexDir = env.CODEX_HOME?.trim() || join(home, ".codex");
+  const codexDir = effectiveEnv.CODEX_HOME?.trim() || join(home, ".codex");
   const opencodeDir = join(xdgConfigHome, "opencode");
 
   const rawDefs: {

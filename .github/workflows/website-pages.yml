@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "scripts/verify-website.mjs"
       - ".github/workflows/website-pages.yml"
   pull_request:
     branches: [main]
     paths:
       - "website/**"
+      - "scripts/verify-website.mjs"
   workflow_dispatch:
 
 # Read-only: this workflow only checks out the tree and runs shell assertions

@@ -2,7 +2,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "@babel/parser";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -109,44 +108,184 @@ function discoverHtmlPages(absRoot) {
   return pages.sort();
 }
 
-function readLiteralObject(node, readValue) {
-  if (node.type !== "ObjectExpression") throw new Error("expected a literal object");
-  const result = Object.create(null);
-  for (const property of node.properties) {
-    if (property.type !== "ObjectProperty" || property.computed || property.shorthand) {
-      throw new Error("expected a static object property");
+/**
+ * Strict, zero-dependency static parser for `window.BLA_I18N = { ... };`.
+ * Runs without `node_modules` (Website Check CI does not run `npm ci`) and
+ * never evaluates JavaScript.
+ */
+function parseStaticI18nSource(source) {
+  const text = source.startsWith("\uFEFF") ? source.slice(1) : source;
+  let pos = 0;
+
+  const skipTrivia = () => {
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") {
+        pos++;
+        continue;
+      }
+      if (ch === "/" && text[pos + 1] === "/") {
+        pos += 2;
+        while (pos < text.length && text[pos] !== "\n" && text[pos] !== "\r") pos++;
+        continue;
+      }
+      if (ch === "/" && text[pos + 1] === "*") {
+        const end = text.indexOf("*/", pos + 2);
+        if (end === -1) throw new Error("unterminated block comment");
+        pos = end + 2;
+        continue;
+      }
+      break;
     }
-    const { key, value } = property;
-    const name = key.type === "Identifier" ? key.name : key.type === "StringLiteral" ? key.value : null;
-    if (name === null || name === "__proto__" || Object.hasOwn(result, name)) {
-      throw new Error("object keys must be unique literal names");
+  };
+
+  const expectChar = (expected) => {
+    skipTrivia();
+    if (text[pos] !== expected) {
+      throw new Error(`expected '${expected}' at offset ${pos}`);
     }
-    result[name] = readValue(value);
+    pos++;
+  };
+
+  const readIdentifier = () => {
+    skipTrivia();
+    const start = pos;
+    if (pos >= text.length || !/[A-Za-z_$]/.test(text[pos])) {
+      throw new Error(`expected identifier at offset ${pos}`);
+    }
+    pos++;
+    while (pos < text.length && /[A-Za-z0-9_$]/.test(text[pos])) pos++;
+    return text.slice(start, pos);
+  };
+
+  const readString = () => {
+    skipTrivia();
+    const quote = text[pos];
+    if (quote !== '"' && quote !== "'") {
+      throw new Error(`expected string literal at offset ${pos}`);
+    }
+    pos++;
+    let out = "";
+    while (pos < text.length) {
+      const ch = text[pos++];
+      if (ch === quote) return out;
+      if (ch === "\n" || ch === "\r") throw new Error("unterminated string literal");
+      if (ch !== "\\") {
+        out += ch;
+        continue;
+      }
+      if (pos >= text.length) throw new Error("unterminated escape sequence");
+      const esc = text[pos++];
+      switch (esc) {
+        case "\\": out += "\\"; break;
+        case '"': out += '"'; break;
+        case "'": out += "'"; break;
+        case "n": out += "\n"; break;
+        case "r": out += "\r"; break;
+        case "t": out += "\t"; break;
+        case "b": out += "\b"; break;
+        case "f": out += "\f"; break;
+        case "v": out += "\v"; break;
+        case "0":
+          if (/[0-9]/.test(text[pos] ?? "")) throw new Error("octal escape not allowed");
+          out += "\0";
+          break;
+        case "\n": break;
+        case "\r":
+          if (text[pos] === "\n") pos++;
+          break;
+        case "x": {
+          const hex = text.slice(pos, pos + 2);
+          if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw new Error("invalid hex escape");
+          pos += 2;
+          out += String.fromCharCode(Number.parseInt(hex, 16));
+          break;
+        }
+        case "u": {
+          if (text[pos] === "{") {
+            const close = text.indexOf("}", pos + 1);
+            if (close === -1) throw new Error("unterminated unicode codepoint escape");
+            const hex = text.slice(pos + 1, close);
+            if (!/^[0-9a-fA-F]{1,6}$/.test(hex)) throw new Error("invalid unicode codepoint escape");
+            const cp = Number.parseInt(hex, 16);
+            if (cp > 0x10ffff) throw new Error("unicode codepoint out of range");
+            pos = close + 1;
+            out += String.fromCodePoint(cp);
+          } else {
+            const hex = text.slice(pos, pos + 4);
+            if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw new Error("invalid unicode escape");
+            pos += 4;
+            out += String.fromCharCode(Number.parseInt(hex, 16));
+          }
+          break;
+        }
+        default:
+          out += esc;
+          break;
+      }
+    }
+    throw new Error("unterminated string literal");
+  };
+
+  const readObject = (readValue) => {
+    expectChar("{");
+    const result = Object.create(null);
+    skipTrivia();
+    while (text[pos] !== "}") {
+      const ch = text[pos];
+      let name;
+      if (ch === '"' || ch === "'") {
+        name = readString();
+      } else if (ch && /[A-Za-z_$]/.test(ch)) {
+        name = readIdentifier();
+      } else {
+        throw new Error(`expected static property key at offset ${pos}`);
+      }
+      if (name === "__proto__" || Object.hasOwn(result, name)) {
+        throw new Error("object keys must be unique literal names");
+      }
+      skipTrivia();
+      if (text[pos] !== ":") {
+        throw new Error("expected a static object property");
+      }
+      pos++;
+      result[name] = readValue();
+      skipTrivia();
+      if (text[pos] === ",") {
+        pos++;
+        skipTrivia();
+        continue;
+      }
+      if (text[pos] === "}") break;
+      throw new Error(`expected ',' or '}' at offset ${pos}`);
+    }
+    pos++;
+    return result;
+  };
+
+  if (readIdentifier() !== "window") {
+    throw new Error("expected a single static window.BLA_I18N assignment");
   }
-  return result;
+  expectChar(".");
+  if (readIdentifier() !== "BLA_I18N") {
+    throw new Error("expected a single static window.BLA_I18N assignment");
+  }
+  expectChar("=");
+  const dict = readObject(() => readObject(readString));
+  skipTrivia();
+  if (text[pos] === ";") pos++;
+  skipTrivia();
+  if (pos !== text.length) {
+    throw new Error("expected a single static window.BLA_I18N assignment");
+  }
+  return dict;
 }
 
 function loadI18nDictionary(absRoot, errors) {
   const i18nPath = resolve(absRoot, "assets/i18n.js");
   if (!existsSync(i18nPath) || !statSync(i18nPath).isFile()) return null;
   try {
-    const { body, directives } = parse(readFileSync(i18nPath, "utf8")).program;
-    const assignment = body[0]?.type === "ExpressionStatement" ? body[0].expression : null;
-    const target = assignment?.type === "AssignmentExpression" ? assignment.left : null;
-    if (
-      body.length !== 1 || directives.length !== 0 || assignment?.operator !== "=" ||
-      target?.type !== "MemberExpression" || target.computed ||
-      target.object.type !== "Identifier" || target.object.name !== "window" ||
-      target.property.type !== "Identifier" || target.property.name !== "BLA_I18N"
-    ) {
-      throw new Error("expected a single static window.BLA_I18N assignment");
-    }
-    return readLiteralObject(assignment.right, (locale) =>
-      readLiteralObject(locale, (translation) => {
-        if (translation.type !== "StringLiteral") throw new Error("translations must be string literals");
-        return translation.value;
-      }),
-    );
+    return parseStaticI18nSource(readFileSync(i18nPath, "utf8"));
   } catch (error) {
     errors.push(`assets/i18n.js: invalid static dictionary (${error.message})`);
     return null;

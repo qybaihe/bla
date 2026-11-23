@@ -550,7 +550,7 @@ describe.skipIf(!pythonAvailable)("Python runtime safety", () => {
       }];
       const tarpit = generatePythonTarpit(new SeededPrng("tarpit"), "stealth", table);
       const checks = [
-        'assert globals().get("__annotations__", {}) == {"original": int}',
+        'assert (globals()["__annotate__"](1) if "__annotate__" in globals() else globals().get("__annotations__", {})) == {"original": int}',
         rawText === undefined ? "" : `assert ${tarpit.decoyFunctionNames[0]}.__doc__ == ${JSON.stringify(rawText)}`,
         'print("entry ran")',
       ];

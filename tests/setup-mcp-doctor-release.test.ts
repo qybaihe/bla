@@ -1034,6 +1034,8 @@ describe("Issue #12: Release Version, Tag, Commit & Tarball Consistency + Dual T
           HOME: unpackDir,
           USERPROFILE: unpackDir,
           APPDATA: join(unpackDir, "AppData", "Roaming"),
+          XDG_CONFIG_HOME: join(unpackDir, ".config"),
+          CODEX_HOME: join(unpackDir, ".codex"),
         },
       });
       expect(docRun.status).toBe(0);

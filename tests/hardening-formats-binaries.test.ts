@@ -123,8 +123,8 @@ assert seen == {0x61, 0x75}
 
   it.skipIf(!PY3)("keeps the module annotation mapping or its absence intact", () => {
     for (const source of [
-      "assert '__annotations__' not in globals()\n",
-      "count: int = 7\nassert __annotations__ == {'count': int}\n",
+      "assert '__annotations__' not in globals() and '__annotate__' not in globals()\n",
+      "count: int = 7\n_ann = globals()['__annotate__'](1) if '__annotate__' in globals() else globals()['__annotations__']\nassert _ann == {'count': int}\n",
     ]) {
       const result = protectPythonSource(source, { ...options, weaveDecoys: true });
       execFileSync(PY3!, ["-I", "-c", "import sys; exec(sys.stdin.read(), {})"], { input: result.code, stdio: "pipe" });
