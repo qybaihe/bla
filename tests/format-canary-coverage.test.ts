@@ -62,32 +62,15 @@ describe("Canary + system-diagnostic coverage on remaining formats", () => {
     expect(res.buffer.toString("latin1")).toContain(`maxRepresentationBytes:${REA_MAX_MANAGED_METADATA_REPRESENTATION_BYTES}`);
   });
 
-  it("embeds canary/diagnostic UTF-8 into JVM .class constant-pool / trailer", () => {
-    // Minimal CAFEBABE header (not a full valid class — falls back to trailer path)
-    const cls = Buffer.alloc(24, 0);
-    cls.writeUInt32BE(0xcafebabe, 0);
-    cls.writeUInt16BE(0, 4); // minor
-    cls.writeUInt16BE(55, 6); // major
-    cls.writeUInt16BE(1, 8); // cp count
+  it("embeds canary/diagnostic text in a framed JVM constant pool", () => {
+    const cls = Buffer.from("cafebabe000000370003010001410700010021000200000000000000000000", "hex");
     const res = protectJvmClassBuffer(cls, { intensity: "balanced", seed: "jvm-canary" });
-    expect(res.mode).toBe("trailer");
-    expect(res.constantPoolEntriesAdded).toBe(0);
-    expect(res.customAttributesAdded).toBe(0);
+    expect(res.mode).toBe("structural");
+    expect(res.constantPoolEntriesAdded).toBeGreaterThan(0);
+    expect(res.customAttributesAdded).toBe(1);
     expect(res.canaryTokensEmbedded).toBeGreaterThan(0);
     expect(res.diagnosticsEmbedded).toBeGreaterThan(0);
     expect(res.buffer.toString("latin1")).toContain("PROTECTED_CANARY_CREDENTIAL=");
-  });
-
-  it("reports structural constant-pool injection only for a parseable class layout", () => {
-    const cls = Buffer.alloc(26, 0);
-    cls.writeUInt32BE(0xcafebabe, 0);
-    cls.writeUInt16BE(0, 4);
-    cls.writeUInt16BE(55, 6);
-    cls.writeUInt16BE(1, 8); // empty constant pool
-    const res = protectJvmClassBuffer(cls, { intensity: "balanced", seed: "jvm-structural" });
-    expect(res.mode).toBe("structural");
-    expect(res.constantPoolEntriesAdded).toBeGreaterThan(0);
-    expect(res.customAttributesAdded).toBe(0);
   });
 
   it("embeds canary decoys into ZIP members and recursively hardens nested DEX", () => {

@@ -92,15 +92,15 @@ describe("Multi-Format Shields (WASM, Python, Native ELF/Mach-O/PE, C/Rust/Go He
     expect(protectedPy.code).toContain("https:/canary_");
     // Live warm + shared slot: decoys are not empty unreferenced stubs
     expect(protectedPy.code).toMatch(/\["warm"\]\s*=/);
-    expect(protectedPy.code).toMatch(/dict\s*=\s*\{"epoch":/);
+    expect(protectedPy.code).toMatch(/^\w+\s*=\s*\{"epoch":/m);
 
-    // Test .pyc shield on a synthetic CPython 3.11 .pyc buffer
+    // CPython 3.11 marshal.dumps(compile("VALUE = 7", "fixture.py", "exec")).
     const fakePycHeader = Buffer.alloc(16);
     fakePycHeader.writeUInt16LE(3495, 0); // Python 3.11 magic
     fakePycHeader[2] = 0x0d;
     fakePycHeader[3] = 0x0a;
     const fakeMarshalPayload = Buffer.from(
-      "e30000000000000000000000000200000040000000730400000064005300",
+      "630000000000000000000000000100000000000000f30a000000970064005a00640153002902e9070000004e2901da0556414c5545a900f300000000fa0a666978747572652e7079fa083c6d6f64756c653e720600000001000000730e000000f003010101d808098005800580057204000000",
       "hex",
     );
     const rawPyc = Buffer.concat([fakePycHeader, fakeMarshalPayload]);

@@ -6,22 +6,12 @@ import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.j
 /**
  * UF2 firmware container shield — counters REA #8230
  * (`Uf2ArtifactReader` / `src/domain/firmware/uf2.ts`), which inventories and
- * extracts address-contiguous main-flash regions from Microsoft UF2 drag-and-
- * drop firmware images and reports not-main-flash / file-container / numbering
- * faults as coverage limitations.
+ * extracts address-contiguous main-flash regions from Microsoft UF2 firmware.
  *
  * Red-line contract (Microsoft UF2 spec + REA decoder):
  *  - Existing blocks are preserved **byte-exact**.
- *  - Appended decoys ALWAYS set `UF2_FLAG_NOT_MAIN_FLASH` (0x1) and/or
- *    `UF2_FLAG_FILE_CONTAINER` (0x1000). Bootloaders MUST ignore those blocks
- *    when writing flash, so the developer's real payload still flashes and
- *    runs. We never emit a plain main-flash decoy.
- *  - Partial / invalid blocks are never introduced into the original range;
- *    only well-formed 512-byte trailing blocks are appended.
- *
- * At bankrupt intensity the decoy family / numbering surface is densified so
- * REA's inventory reports many not-main-flash + file-container blocks and
- * incomplete numbering groups (coverage → unknown) without touching flash.
+ *  - Appended 512-byte comment blocks set only `UF2_FLAG_NOT_MAIN_FLASH`
+ *    (0x1), so bootloaders skip their payload when writing flash.
  */
 
 export const UF2_BLOCK_BYTES = REA_INTERNAL_LIMITS.UF2_BLOCK_BYTES;
@@ -32,15 +22,12 @@ const UF2_MAGIC_START1 = 0x9e5d_5157;
 const UF2_MAGIC_END = 0x0ab1_6f30;
 const UF2_FLAG_NOT_MAIN_FLASH = 0x0000_0001;
 const UF2_FLAG_FILE_CONTAINER = 0x0000_1000;
-const UF2_FLAG_FAMILY_ID = 0x0000_2000;
 
 /** Marker string embedded in decoy payloads (auditor / inspect). */
 export const UF2_SHIELD_MARKER = "[BLA-UF2-SHIELD]";
 
 /**
- * Subset of Microsoft uf2families.json IDs that REA names (see
- * `src/domain/firmware/uf2Families.ts`). Used as decoy family bait so REA
- * inventories named families that never write flash.
+ * Device family IDs used as text inside comment payloads.
  */
 const NAMED_DECOY_FAMILIES: readonly number[] = [
   0xe48b_ff56, // RP2040
@@ -146,8 +133,7 @@ function intensityPlan(intensity: ProtectionIntensity): {
   readonly namedFamilies: number;
   readonly unknownFamilies: number;
   readonly notMainPerFamily: number;
-  readonly fileContainers: number;
-  readonly numberingGaps: boolean;
+  readonly extraComments: number;
 } {
   switch (intensity) {
     case "stealth":
@@ -155,40 +141,35 @@ function intensityPlan(intensity: ProtectionIntensity): {
         namedFamilies: 1,
         unknownFamilies: 1,
         notMainPerFamily: 2,
-        fileContainers: 1,
-        numberingGaps: false,
+        extraComments: 1,
       };
     case "balanced":
       return {
         namedFamilies: 3,
         unknownFamilies: 2,
-        notMainPerFamily: 4,
-        fileContainers: 4,
-        numberingGaps: true,
+        notMainPerFamily: 2,
+        extraComments: 4,
       };
     case "maximum":
       return {
         namedFamilies: 6,
         unknownFamilies: 6,
-        notMainPerFamily: 8,
-        fileContainers: 12,
-        numberingGaps: true,
+        notMainPerFamily: 6,
+        extraComments: 12,
       };
     case "bankrupt":
       return {
         namedFamilies: NAMED_DECOY_FAMILIES.length,
         unknownFamilies: 16,
-        notMainPerFamily: 12,
-        fileContainers: 32,
-        numberingGaps: true,
+        notMainPerFamily: 10,
+        extraComments: 32,
       };
   }
 }
 
 /**
- * Protect a UF2 firmware image by appending well-formed not-main-flash and
- * file-container decoy blocks. Original blocks (including any real main-flash
- * payload) are never rewritten.
+ * Protect a UF2 firmware image by appending not-main-flash comment blocks.
+ * Original blocks are preserved byte-for-byte.
  */
 export function protectUf2FirmwareBuffer(
   input: Buffer,
@@ -226,10 +207,7 @@ export function protectUf2FirmwareBuffer(
   const preserved = input;
   const originalBlocksPreserved = preserved.length / UF2_BLOCK_BYTES;
 
-  const injected: Buffer[] = [];
-  let notMainFlashBlocks = 0;
-  let fileContainerBlocks = 0;
-  const familyIds = new Set<number>();
+  const comments: Buffer[] = [];
 
   const named = NAMED_DECOY_FAMILIES.slice(0, plan.namedFamilies);
   const unknown: number[] = [];
@@ -240,89 +218,33 @@ export function protectUf2FirmwareBuffer(
   const families = [...named, ...unknown];
 
   for (const familyId of families) {
-    familyIds.add(familyId);
-    const declared = plan.notMainPerFamily;
-    // Emit fewer than declared (and optionally skip block 0) so REA records
-    // absent / out-of-range numbering for this decoy family — coverage unknown.
-    const emitCount = plan.numberingGaps
-      ? Math.max(1, declared - 1 - (declared > 3 ? 1 : 0))
-      : declared;
-    const startNo = plan.numberingGaps && declared > 2 ? 1 : 0;
-    for (let i = 0; i < emitCount; i++) {
-      const record =
-        deception.textRecords[
-          (injected.length + i) % Math.max(1, deception.textRecords.length)
-        ] ?? `family=0x${familyId.toString(16)}`;
-      const payload = decoyPayload(
-        prng,
-        record,
-        `not-main-flash family=0x${familyId.toString(16)}`,
-      );
-      injected.push(
-        writeUf2Block({
-          flags: UF2_FLAG_NOT_MAIN_FLASH | UF2_FLAG_FAMILY_ID,
-          address: 0x1000_0000 + (familyId & 0xffff) * 0x1000 + i * 256,
-          payload,
-          blockNo: startNo + i,
-          numBlocks: declared,
-          familyOrSize: familyId,
-        }),
-      );
-      notMainFlashBlocks += 1;
+    for (let i = 0; i < plan.notMainPerFamily; i++) {
+      const record = deception.textRecords[comments.length % deception.textRecords.length] ?? "";
+      comments.push(decoyPayload(prng, record, `family=0x${familyId.toString(16)}`));
     }
   }
-
-  for (let i = 0; i < plan.fileContainers; i++) {
-    const familyId =
-      families[i % Math.max(1, families.length)] ?? 0xb1a00d00;
-    familyIds.add(familyId >>> 0);
-    const record =
-      deception.textRecords[i % Math.max(1, deception.textRecords.length)] ??
-      "file-container";
-    const payload = decoyPayload(
-      prng,
-      record,
-      `file-container idx=${i}`,
-    );
-    // File-container flag alone is enough; REA treats it as overriding
-    // not-main-flash. We still OR not-main-flash for belt-and-suspenders
-    // bootloader safety on idiosyncratic flashers.
-    injected.push(
-      writeUf2Block({
-        flags:
-          UF2_FLAG_FILE_CONTAINER |
-          UF2_FLAG_NOT_MAIN_FLASH |
-          UF2_FLAG_FAMILY_ID,
-        address: 0x2000_0000 + i * 512,
-        payload,
-        blockNo: i,
-        numBlocks: plan.fileContainers,
-        familyOrSize: familyId >>> 0,
-      }),
-    );
-    fileContainerBlocks += 1;
+  for (let i = 0; i < plan.extraComments; i++) {
+    const record = deception.textRecords[i % deception.textRecords.length] ?? "";
+    comments.push(decoyPayload(prng, record, `comment=${i}`));
   }
 
-  // Hard ceiling: never approach UF2_MAX_REGIONS with flash regions — we emit
-  // zero main-flash decoys. Keep total injected blocks well under staging.
-  const maxInjected = Math.min(
-    injected.length,
-    Math.floor(REA_INTERNAL_LIMITS.FIRMWARE_MAX_STAGING_BYTES / UF2_BLOCK_BYTES / 4),
-  );
-  const clipped = injected.slice(0, maxInjected);
-  // not-main blocks are emitted first; file-container blocks follow.
-  const clippedNotMain = Math.min(notMainFlashBlocks, clipped.length);
-  const clippedFile = Math.min(
-    fileContainerBlocks,
-    Math.max(0, clipped.length - clippedNotMain),
-  );
+  const maxInjected = Math.floor(REA_INTERNAL_LIMITS.FIRMWARE_MAX_STAGING_BYTES / UF2_BLOCK_BYTES / 4);
+  const clipped = comments.slice(0, maxInjected);
+  const injected = clipped.map((payload, i) => writeUf2Block({
+    flags: UF2_FLAG_NOT_MAIN_FLASH,
+    address: 0,
+    payload,
+    blockNo: originalBlocksPreserved + i,
+    numBlocks: originalBlocksPreserved + clipped.length,
+    familyOrSize: 0,
+  }));
 
   return {
-    buffer: Buffer.concat([preserved, ...clipped]),
-    blocksInjected: clipped.length,
-    notMainFlashBlocks: clippedNotMain,
-    fileContainerBlocks: clippedFile,
-    decoyFamilies: familyIds.size,
+    buffer: Buffer.concat([preserved, ...injected]),
+    blocksInjected: injected.length,
+    notMainFlashBlocks: injected.length,
+    fileContainerBlocks: 0,
+    decoyFamilies: 0,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
     originalBlocksPreserved,

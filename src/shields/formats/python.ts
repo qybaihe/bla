@@ -16,7 +16,7 @@ import {
   type PythonPrologueScan,
   type PythonToken,
 } from "./python-ast-weave.js";
-import { weavePythonPycBuffer } from "./python-pyc-weave.js";
+import { validatePythonPycRoot, weavePythonPycBuffer } from "./python-pyc-weave.js";
 import { SELF_DIGEST_PLACEHOLDER } from "../runtime/self-seal.js";
 
 export { InvalidPythonSourceError };
@@ -826,6 +826,12 @@ export function protectPythonSource(
   const prng = new SeededPrng(`${options.seed ?? "bla-python-shield-v1"}:${contentHash}`);
   const chaffPayloads = generateChaffPayloads(prng, intensity);
   const tarpit = generatePythonTarpit(prng, intensity, chaffPayloads);
+  // The shared slot is initialized at module scope. A variable annotation
+  // there would create or modify the customer's __annotations__.
+  const tarpitCode = tarpit.code.replace(
+    `${tarpit.sharedSlotName}: dict = `,
+    `${tarpit.sharedSlotName} = `,
+  );
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
@@ -840,7 +846,7 @@ export function protectPythonSource(
   // drawn from an independent substream (the tarpit / weave draws stay as they
   // were), and never a name that occurs in the customer source or the tarpit.
   const taken = collectPythonIdentifiers(customerTokens);
-  for (const name of collectPythonIdentifiers(tokenizePythonSource(tarpit.code))) {
+  for (const name of collectPythonIdentifiers(tokenizePythonSource(tarpitCode))) {
     taken.add(name);
   }
   const naming = prng.derive("python-shield-private-names");
@@ -918,7 +924,7 @@ export function protectPythonSource(
     isolateInjectedPythonCode(
       [
         ...(selfSealBlock ? [selfSealBlock] : []),
-        tarpit.code.replace(/\n+$/, ""),
+        tarpitCode.replace(/\n+$/, ""),
         deceptionBlock,
       ].join("\n\n"),
       builtinsAlias,
@@ -1043,7 +1049,7 @@ export function protectPythonPycBuffer(
     /**
      * When true, structurally weave unused decoy TYPE_CODE objects into customer
      * and module `co_consts` (append-only; preserves FLAG_REF intern indices and
-     * executed bytecode). Falls back to trailer-only honey when marshal walk fails.
+     * executed bytecode). Uses trailer-only mode for unsupported opcode versions.
      */
     readonly weaveDecoys?: boolean;
   } = {},
@@ -1056,9 +1062,7 @@ export function protectPythonPycBuffer(
   readonly decoyCodeObjectsInjected: number;
   readonly customerDefsWoven: number;
 } {
-  if (bytes.length < 16 || bytes[2] !== 0x0d || bytes[3] !== 0x0a) {
-    throw new Error("Invalid CPython .pyc header (missing 0x0d 0x0a magic marker)");
-  }
+  validatePythonPycRoot(bytes);
 
   const intensity = options.intensity ?? "balanced";
   const weaveDecoys = options.weaveDecoys === true;
@@ -1079,33 +1083,33 @@ export function protectPythonPycBuffer(
     }
   }
 
-  // Construct marshal-framed ASCII constant records (TYPE_ASCII = 0x61 + uint32LE length + utf8 bytes).
+  // Marshal string records carry a byte length followed by ASCII or UTF-8.
   // Keep distinctive prefixes within REA's PYTHON_PYC_CONST_PREVIEW_LIMIT (80) so canary tokens
   // and diagnostic errorClass/systemCode survive truncated previews.
   // Trailers sit AFTER the root marshal object so importlib stops at the woven root.
   const marshalRecords: Buffer[] = [];
-  const pushAscii = (raw: string) => {
+  const pushString = (raw: string) => {
     const strBytes = Buffer.from(raw, "utf8");
     const header = Buffer.alloc(5);
-    header[0] = 0x61; // TYPE_ASCII
+    header[0] = strBytes.length === raw.length ? 0x61 : 0x75; // TYPE_ASCII / TYPE_UNICODE
     header.writeUInt32LE(strBytes.length, 1);
     marshalRecords.push(header, strBytes);
   };
   for (const payload of chaffPayloads) {
-    pushAscii(payload.rawText);
+    pushString(payload.rawText);
   }
   for (const tok of deception.canary.syntheticCanaryTokens) {
-    pushAscii(`PROTECTED_CANARY_CREDENTIAL=${tok}`);
+    pushString(`PROTECTED_CANARY_CREDENTIAL=${tok}`);
   }
   for (const url of deception.canary.ambiguousCredentialUrls) {
-    pushAscii(`TRANSPORT_ENDPOINT=${url}`);
+    pushString(`TRANSPORT_ENDPOINT=${url}`);
   }
   for (const d of deception.diagnostics.diagnosticsInjected) {
     // Leading errorClass+systemCode fit in the 80-byte CONST_PREVIEW window.
-    pushAscii(`[${d.errorClass}] (${d.systemCode}) ${d.diagnosticMessage}`);
+    pushString(`[${d.errorClass}] (${d.systemCode}) ${d.diagnosticMessage}`);
   }
   for (const t of deception.cognitiveArmor.triggersInjected) {
-    pushAscii(`[${t.coupledAnchorSymbol}] ${t.triggerPayload.replace(/\r?\n/g, " ")}`);
+    pushString(`[${t.coupledAnchorSymbol}] ${t.triggerPayload.replace(/\r?\n/g, " ")}`);
   }
 
   return {
@@ -1113,7 +1117,7 @@ export function protectPythonPycBuffer(
     chaffPayloadsEmbedded: chaffPayloads.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,
-    weaveDecoys,
+    weaveDecoys: decoyCodeObjectsInjected > 0,
     decoyCodeObjectsInjected,
     customerDefsWoven,
   };

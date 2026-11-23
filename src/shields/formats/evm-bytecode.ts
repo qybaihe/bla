@@ -59,28 +59,74 @@ export interface EvmBytecodeInspection {
   readonly blaProtected: boolean;
 }
 
-export function inspectEvmBytecode(bytes: Buffer): EvmBytecodeInspection {
-  let hasSolidityMetadata = false;
-  let metadataBytes = 0;
-  let trailerText = "";
-  if (bytes.length >= 3) {
-    const length = bytes[bytes.length - 2]! * 256 + bytes[bytes.length - 1]!;
-    const offset = bytes.length - 2 - length;
-    if (length > 0 && offset >= 0 && bytes[offset]! >> 5 === 5) {
-      hasSolidityMetadata = true;
-      metadataBytes = length;
-      trailerText = bytes.subarray(offset, bytes.length - 2).toString("utf8");
+/** Reads the definite-length map of text keys and scalar Solidity metadata values. */
+function readTerminalMetadata(bytes: Buffer): {
+  offset: number;
+  length: number;
+  hasBlaFields: boolean;
+} | null {
+  if (bytes.length < 3) return null;
+  const end = bytes.length - 2;
+  const length = bytes.readUInt16BE(end);
+  const offset = end - length;
+  if (length === 0 || offset < 0 || bytes[offset]! >> 5 !== 5) return null;
+  let cursor = offset;
+  const readLength = (major: number): number => {
+    if (cursor >= end) throw new Error("truncated CBOR item");
+    const head = bytes[cursor++]!;
+    if (head >> 5 !== major) throw new Error("unexpected CBOR item type");
+    const size = head & 31;
+    if (size < 24) return size;
+    const width = size === 24 ? 1 : size === 25 ? 2 : size === 26 ? 4 : 0;
+    if (width === 0 || cursor + width > end) throw new Error("invalid CBOR length");
+    const value = bytes.readUIntBE(cursor, width);
+    cursor += width;
+    return value;
+  };
+  const readString = (major: number): Buffer => {
+    const size = readLength(major);
+    if (size > end - cursor) throw new Error("truncated CBOR string");
+    const value = bytes.subarray(cursor, cursor + size);
+    cursor += size;
+    return value;
+  };
+  const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const fields = new Map<string, string | Buffer | boolean>();
+  try {
+    const count = readLength(5);
+    for (let i = 0; i < count; i++) {
+      const key = utf8.decode(readString(3));
+      if (fields.has(key) || cursor >= end) return null;
+      const head = bytes[cursor]!;
+      if (head === 0xf4 || head === 0xf5) {
+        fields.set(key, head === 0xf5);
+        cursor++;
+      } else if (head >> 5 === 3) {
+        fields.set(key, utf8.decode(readString(3)));
+      } else {
+        fields.set(key, readString(2));
+      }
     }
+  } catch {
+    return null;
   }
+  if (cursor !== end) return null;
+  const canary = fields.get("bla_evm_canary");
+  return {
+    offset,
+    length,
+    hasBlaFields: fields.get("bla") === "[BLA-EVM-SHIELD]" &&
+      typeof canary === "string" && /^[0-9a-f]{16}$/.test(canary),
+  };
+}
+
+export function inspectEvmBytecode(bytes: Buffer): EvmBytecodeInspection {
+  const trailer = readTerminalMetadata(bytes);
   return {
     byteLength: bytes.length,
-    hasSolidityMetadata,
-    metadataBytes,
-    blaProtected:
-      hasSolidityMetadata &&
-      metadataBytes >= 96 &&
-      trailerText.includes("[BLA-EVM-SHIELD]") &&
-      trailerText.includes("bla_evm_canary"),
+    hasSolidityMetadata: trailer !== null,
+    metadataBytes: trailer?.length ?? 0,
+    blaProtected: trailer !== null && trailer.length >= 96 && trailer.hasBlaFields,
   };
 }
 
@@ -90,19 +136,10 @@ export function inspectEvmBytecode(bytes: Buffer): EvmBytecodeInspection {
  * never stripping original bytecode or non-BLA compiler metadata.
  */
 function stripTerminalMetadata(bytes: Buffer): Buffer {
-  if (bytes.length < 3) return bytes;
-  const length = bytes[bytes.length - 2]! * 256 + bytes[bytes.length - 1]!;
-  const offset = bytes.length - 2 - length;
-  if (length > 0 && offset > 0 && bytes[offset]! >> 5 === 5) {
-    const trailerText = bytes.subarray(offset, bytes.length - 2).toString("utf8");
-    if (
-      trailerText.includes("[BLA-EVM-SHIELD]") ||
-      trailerText.includes("bla_evm_canary")
-    ) {
-      return bytes.subarray(0, offset);
-    }
-  }
-  return bytes;
+  const trailer = readTerminalMetadata(bytes);
+  return trailer && trailer.offset > 0 && trailer.hasBlaFields
+    ? bytes.subarray(0, trailer.offset)
+    : bytes;
 }
 
 const EIP_170_MAX_CODE_BYTES = 24_576;
@@ -152,6 +189,9 @@ export function protectEvmBytecodeBuffer(
   }
 
   const metadata = buildSolidityMetadataTrailer(metaEntries);
+  if (options.enforceEip170Cap && base.length + metadata.length > EIP_170_MAX_CODE_BYTES) {
+    throw new Error("EIP-170 deployment limit (24,576 bytes) leaves insufficient room for protection metadata");
+  }
 
   let padding = Buffer.alloc(0);
   if (intensity === "bankrupt") {

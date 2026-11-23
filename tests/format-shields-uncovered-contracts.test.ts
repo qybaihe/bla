@@ -44,6 +44,8 @@ function dexFixture(size = 256): Buffer {
   const buffer = Buffer.alloc(size, 0);
   DEX_HEADER.copy(buffer, 0);
   buffer.writeUInt32LE(size, 32);
+  buffer.writeUInt32LE(112, 36);
+  buffer.writeUInt32LE(0x12345678, 40);
   return buffer;
 }
 
@@ -58,6 +60,7 @@ function pcapHeader(linkType = LINKTYPE_ETHERNET): Buffer {
   header.writeUInt32LE(PCAP_MAGIC_LE, 0);
   header.writeUInt16LE(2, 4);
   header.writeUInt16LE(4, 6);
+  header.writeUInt32LE(65535, 16);
   header.writeUInt32LE(linkType, 20);
   return header;
 }

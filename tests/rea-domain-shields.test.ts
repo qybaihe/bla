@@ -309,21 +309,19 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
     expect(res.originalBlocksPreserved).toBe(1);
     expect(res.blocksInjected).toBeGreaterThanOrEqual(8);
     expect(res.notMainFlashBlocks).toBeGreaterThan(0);
-    expect(res.fileContainerBlocks).toBeGreaterThan(0);
+    expect(res.fileContainerBlocks).toBe(0);
     expect(res.canaryTokensEmbedded).toBeGreaterThan(0);
     // Prefix byte-exact
     expect(res.buffer.subarray(0, UF2_BLOCK_BYTES).equals(real)).toBe(true);
     expect(res.buffer.includes(Buffer.from(UF2_SHIELD_MARKER, "utf8"))).toBe(true);
     expect(res.buffer.includes(Buffer.from("REAL_FLASH_PAYLOAD", "utf8"))).toBe(true);
 
-    // Every injected block must carry not-main-flash and/or file-container.
+    // Every injected block is a not-main-flash comment.
     for (let off = UF2_BLOCK_BYTES; off + UF2_BLOCK_BYTES <= res.buffer.length; off += UF2_BLOCK_BYTES) {
       expect(res.buffer.readUInt32LE(off)).toBe(0x0a324655);
       expect(res.buffer.readUInt32LE(off + 4)).toBe(0x9e5d5157);
       expect(res.buffer.readUInt32LE(off + UF2_BLOCK_BYTES - 4)).toBe(0x0ab16f30);
-      const flags = res.buffer.readUInt32LE(off + 8);
-      const safe = (flags & 0x1) !== 0 || (flags & 0x1000) !== 0;
-      expect(safe).toBe(true);
+      expect(res.buffer.readUInt32LE(off + 8)).toBe(1);
     }
 
     const after = inspectUf2Firmware(res.buffer);
@@ -337,7 +335,7 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
     fs.unlinkSync(tmp);
   });
 
-  it("plants Go buildinfo into mapped .go.buildinfo and Flutter pool into isolate region", () => {
+  it("keeps mapped Go and Flutter metadata intact and appends decoys separately", () => {
     const fixture = buildMappedGoFlutterElfFixture();
     const layoutBefore = validateElf64Layout(fixture);
     const namesBefore = resolveElf64SectionNames(fixture, layoutBefore);
@@ -350,8 +348,8 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
       intensity: "bankrupt",
       seed: "mapped-go-flutter",
     });
-    expect(res.mappedGoBuildInfoPlanted).toBe(true);
-    expect(res.mappedFlutterPoolPlanted).toBe(true);
+    expect(res.mappedGoBuildInfoPlanted).toBe(false);
+    expect(res.mappedFlutterPoolPlanted).toBe(false);
     expect(res.goBuildInfoExceedsLimit).toBe(true);
 
     // Section headers / PT_LOAD unchanged (red line)
@@ -367,20 +365,13 @@ describe("REA domain shields — Go / Flutter / BEAM / EVM / PCAP / PTX", () => 
       );
     }
 
-    // Magic sits inside the mapped .go.buildinfo file range
-    const goSlice = res.buffer.subarray(goSec.offset, goSec.offset + goSec.size);
-    expect(goSlice.includes(Buffer.from("ff20476f206275696c64696e663a", "hex"))).toBe(
-      true,
-    );
-    expect(goSlice.toString("latin1")).toContain("[BLA-GO-MAPPED]");
-
-    // Pool strings sit inside the isolate region (after preserved snapshot header)
-    const isoSlice = res.buffer.subarray(isoSec.offset, isoSec.offset + isoSec.size);
-    expect(isoSlice[0]).toBe(0xf5);
-    expect(isoSlice.toString("utf8")).toContain("package:m0/b.dart");
-    expect(isoSlice.toString("utf8")).toContain("dart:d0");
-    expect(isoSlice.toString("utf8")).toContain("Node_0_X");
-    expect(isoSlice.toString("utf8")).toContain("[BLA-FLUTTER-MAPPED]");
+    for (const sec of [goSec, isoSec]) {
+      const end = sec.offset + sec.size;
+      expect(res.buffer.subarray(sec.offset, end)).toEqual(fixture.subarray(sec.offset, end));
+    }
+    const trailer = res.buffer.subarray(fixture.length);
+    expect(trailer.includes(Buffer.from("ff20476f206275696c64696e663a", "hex"))).toBe(true);
+    expect(trailer.toString("latin1")).toContain("package:");
   });
 
   it("expands OTP28+ compact AtU8 atom tables while keeping compact encoding", () => {

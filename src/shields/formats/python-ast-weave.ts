@@ -441,10 +441,17 @@ function scanFormatSpec(
     if (c === CH_BACKSLASH) {
       if (i + 1 >= n) throw unclosedField();
       const d = source.charCodeAt(i + 1);
+      if (!raw && d === CH_UPPER_N && source.charCodeAt(i + 2) === CH_LBRACE) {
+        const close = source.indexOf("}", i + 3);
+        if (close < 0) throw unclosedField();
+        i = close + 1;
+        continue;
+      }
       i = d === CH_LBRACE || d === CH_RBRACE ? i + 1 : skipEscapedChar(source, i);
       continue;
     }
-    if (!triple && (c === CH_LF || c === CH_CR)) throw unclosedString(false);
+    // PEP 701 allows a newline inside a field's format spec, even when
+    // the outer f-string is single-quoted.
     i += 1;
   }
   throw unclosedField();

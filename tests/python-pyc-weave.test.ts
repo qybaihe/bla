@@ -128,6 +128,10 @@ describe("python-pyc-weave", () => {
       intensity: "balanced",
       seed: "pyc-weave-test",
     });
+    if (![3495, 3531].includes(raw.readUInt16LE(0))) {
+      expect(woven).toBeNull();
+      return;
+    }
     expect(woven).not.toBeNull();
     expect(woven!.customerDefsWoven).toBe(3);
     expect(woven!.decoyCodeObjectsInjected).toBeGreaterThanOrEqual(9); // 3 customer + 6 module
@@ -167,9 +171,11 @@ describe("python-pyc-weave", () => {
       seed: "pyc-full",
       weaveDecoys: true,
     });
-    expect(res.weaveDecoys).toBe(true);
-    expect(res.customerDefsWoven).toBe(3);
-    expect(res.decoyCodeObjectsInjected).toBeGreaterThanOrEqual(9);
+    const supported = [3495, 3531].includes(raw.readUInt16LE(0));
+    expect(res.weaveDecoys).toBe(supported);
+    expect(res.customerDefsWoven).toBe(supported ? 3 : 0);
+    expect(res.decoyCodeObjectsInjected).toBeGreaterThanOrEqual(supported ? 9 : 0);
+    if (!supported) expect(res.buffer.subarray(0, raw.length)).toEqual(raw);
     expect(countCodeObjects(res.buffer)).toBe(before + res.decoyCodeObjectsInjected);
     expect(res.buffer.toString("latin1")).toContain("PROTECTED_CANARY_CREDENTIAL=");
     expect(inspectPythonPyc(res.buffer).blaProtected).toBe(true);

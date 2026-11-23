@@ -98,13 +98,13 @@ export function emitCompileTimeNativeHeader(
       dataTableEntries.push(`(const void*)${rustcAnchorStem}_${idx}`);
     });
 
-    // Mutable .data shadow heap slots to defeat GDB/Rizin/Frida/WinDbg before/after memory diffing
+    // Keep an immutable template for per-call scratch slots.
     const slotInit = Array.from(
       { length: 32 },
       () => `0x${prng.hex(8)}u`,
     ).join(", ");
     lines.push(
-      `static volatile uint32_t ${shadowHeapName}[32] BLA_USED = { ${slotInit} };`,
+      `static const uint32_t ${shadowHeapName}[32] BLA_USED = { ${slotInit} };`,
     );
     dataTableEntries.push(`(const void*)${shadowHeapName}`);
     lines.push("");
@@ -140,9 +140,10 @@ export function emitCompileTimeNativeHeader(
       lines.push(`BLA_NOINLINE static uint32_t ${tarpitStem}_${i}(uint32_t seed, int depth) {`);
       lines.push(`    const char* _anchor_str = (const char*)enclave_keep_data_table[(seed + ${i}u) % ${dataTableCount}u];`);
       lines.push(`    uint32_t acc = ${mbaInit} ^ (uint32_t)(unsigned char)${chaffSym}[0] ^ (uint32_t)(unsigned char)_anchor_str[0];`);
+      lines.push(`    volatile uint32_t scratch = ${shadowHeapName}[${i % 32}];`);
       lines.push(`    for (int r = 0; r < 4; ++r) {`);
       lines.push(`        acc = (acc * 0x${mix.toString(16)}u) ^ (acc >> 13) ^ (uint32_t)r;`);
-      lines.push(`        ${shadowHeapName}[(${i} * 4 + r) & 31] ^= acc;`);
+      lines.push(`        scratch ^= acc;`);
       lines.push(`    }`);
       lines.push(`    if (depth > 0 && ${mbaPred}) {`);
       lines.push(`        enclave_tarpit_fn_t _fn_ptr = enclave_keep_fn_table[(seed ^ (uint32_t)depth) % ${decoyCount}u];`);
@@ -229,6 +230,8 @@ export function emitCompileTimeNativeHeader(
     "// Code generated for runtime attestation boundary. DO NOT EDIT.",
     "package main",
     "",
+    'import "sync/atomic"',
+    "",
     `var ShadowHeapSlots = [16]uint32{${goSlots}}`,
     "",
     "var EnclaveManifests = []string{",
@@ -252,7 +255,11 @@ export function emitCompileTimeNativeHeader(
     lines.push(`\tacc := mbaSeed ^ uint32(len(EnclaveManifests[0]))`);
     lines.push(`\tfor r := uint32(0); r < 4; r++ {`);
     lines.push(`\t\tacc = (acc * 0x${mix.toString(16)}) ^ (acc >> 13) ^ r`);
-    lines.push(`\t\tShadowHeapSlots[(${i}*4+int(r))&15] ^= acc`);
+    lines.push(`\t\tslot := &ShadowHeapSlots[(${i}*4+int(r))&15]`);
+    lines.push(`\t\tfor {`);
+    lines.push(`\t\t\tprevious := atomic.LoadUint32(slot)`);
+    lines.push(`\t\t\tif atomic.CompareAndSwapUint32(slot, previous, previous^acc) { break }`);
+    lines.push(`\t\t}`);
     lines.push(`\t}`);
     lines.push(`\tu := acc ^ seed ^ uint32(0x${predSalt.toString(16)})`);
     lines.push(`\tif depth > 0 && (u|(u-1)) < (u^(u-1)) {`);

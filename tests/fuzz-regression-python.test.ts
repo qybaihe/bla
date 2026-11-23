@@ -11,7 +11,6 @@ import {
   protectPythonPycBuffer,
   protectPythonSource,
 } from "../src/shields/formats/python.js";
-import { layoutForPycMagic } from "../src/shields/formats/python-pyc-weave.js";
 import { PY3, python3 } from "./helpers/python-interpreter.js";
 
 /**
@@ -1494,7 +1493,7 @@ describe("fuzz regression: .pyc weave keeps every constant (finding 15)", () => 
       { stdio: "pipe" },
     );
     const original = readFileSync(originalPyc);
-    const layoutKnown = layoutForPycMagic(original.readUInt16LE(0)) !== null;
+    const weavingSupported = [3495, 3531].includes(original.readUInt16LE(0));
 
     for (const intensity of ["stealth", "balanced", "maximum", "bankrupt"] as const) {
       const hardened = protectPythonPycBuffer(original, { intensity, seed: "fuzz-15", weaveDecoys: true });
@@ -1510,7 +1509,8 @@ describe("fuzz regression: .pyc weave keeps every constant (finding 15)", () => 
       expect(report.differences, intensity).toEqual([]);
       expect(report.hardened_stdout, intensity).toBe(report.original_stdout);
       expect(report.original_stdout).toContain("\\U0001f40d snake");
-      if (layoutKnown) {
+      expect(hardened.weaveDecoys, intensity).toBe(weavingSupported);
+      if (weavingSupported) {
         expect(hardened.decoyCodeObjectsInjected, intensity).toBeGreaterThan(0);
         expect(report.decoys, intensity).toBe(hardened.decoyCodeObjectsInjected);
       }

@@ -19,7 +19,7 @@
  * - Reference indices are reassigned while writing, in the order CPython's
  *   reader assigns them, so every TYPE_REF still designates the same object.
  * - Original co_code / arg counts / flags / names tables preserved.
- * - On unsupported marshal forms, abort and let caller keep trailer-only honey.
+ * - Weave bytecode only for CPython releases whose opcodes are verified.
  */
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
@@ -59,6 +59,9 @@ const TYPE_SLICE = 0x3a; // marshal version 5 (CPython 3.14 constant slices)
 
 /** Deeper nesting than any compiler output; keeps hostile input off the JS stack limit. */
 const MAX_MARSHAL_DEPTH = 400;
+// Stable CPython 3.11 and 3.12 magic numbers share RESUME, LOAD_CONST and
+// RETURN_VALUE. Marshal CODE layout compatibility alone says nothing about opcodes.
+const WEAVABLE_MAGIC = new Set([3495, 3531]);
 
 const MAGIC_LAYOUT: ReadonlyMap<number, PythonPycCodeLayout> = new Map([
   // CPython marshal CODE layout families (see Include/internal/pycore_magic_number.h).
@@ -395,30 +398,60 @@ class MarshalParser {
   }
 
   private readCode(node: MarshalNode, bodyStart: number): void {
+    const expect = (matches: (type: number) => boolean): MarshalNode => {
+      const value = resolve(this.element(node));
+      if (!matches(value.type)) throw new Error("unexpected marshal code field type");
+      return value;
+    };
+    const isBytes = (type: number): boolean => type === TYPE_BYTES;
     // argcount, [posonlyargcount], kwonlyargcount, [nlocals], stacksize, flags
     const headerInts =
       this.layout === "py37" ? 5 : this.layout === "py38" ? 6 : 5;
     this.raw(node, bodyStart, headerInts * 4);
-    this.element(node); // co_code
+    const countAt = (index: number): number => this.buf.readInt32LE(bodyStart + index * 4);
+    for (let i = 0; i < headerInts; i++) {
+      if (countAt(i) < 0) throw new Error("negative marshal code field");
+    }
+    const argCount = countAt(0);
+    const posOnly = this.layout === "py37" ? 0 : countAt(1);
+    const kwOnly = countAt(this.layout === "py37" ? 1 : 2);
+    const flags = countAt(headerInts - 1);
+    if (posOnly > argCount) throw new Error("inconsistent positional argument counts");
+    const requiredLocals = argCount + kwOnly + Number(!!(flags & 4)) + Number(!!(flags & 8));
+    const code = expect(isBytes); // co_code
+    const codeLength = this.buf.readUInt32LE(code.start + 1);
+    if (codeLength === 0 || codeLength % 2 !== 0) throw new Error("invalid co_code length");
     const consts = node.parts.length;
-    this.element(node);
-    this.element(node); // co_names
+    expect(isTupleType); // co_consts
+    expect(isTupleType); // co_names
     if (this.layout === "py311") {
-      this.element(node); // co_localsplusnames
-      this.element(node); // co_localspluskinds
+      const names = expect(isTupleType); // co_localsplusnames
+      const kinds = expect(isBytes); // co_localspluskinds
+      if (childrenOf(names).length !== this.buf.readUInt32LE(kinds.start + 1)) {
+        throw new Error("inconsistent co_localsplusnames and co_localspluskinds");
+      }
+      let locals = 0;
+      for (const kind of this.buf.subarray(kinds.start + 5, kinds.end)) {
+        if (kind & 0x20) locals++;
+      }
+      if (locals < requiredLocals) throw new Error("too few local slots for code arguments");
     } else {
-      this.element(node); // co_varnames
-      this.element(node); // co_freevars
-      this.element(node); // co_cellvars
+      const names = expect(isTupleType); // co_varnames
+      if (childrenOf(names).length !== countAt(headerInts - 3) ||
+          childrenOf(names).length < requiredLocals) {
+        throw new Error("inconsistent co_varnames and argument counts");
+      }
+      expect(isTupleType); // co_freevars
+      expect(isTupleType); // co_cellvars
     }
     const filename = node.parts.length;
-    this.element(node);
+    expect(isStringType);
     const name = node.parts.length;
-    this.element(node);
-    if (this.layout === "py311") this.element(node); // co_qualname
+    expect(isStringType);
+    if (this.layout === "py311") expect(isStringType); // co_qualname
     this.raw(node, this.offset, 4); // co_firstlineno
-    this.element(node); // co_linetable / co_lnotab
-    if (this.layout === "py311") this.element(node); // co_exceptiontable
+    expect(isBytes); // co_linetable / co_lnotab
+    if (this.layout === "py311") expect(isBytes); // co_exceptiontable
     node.code = { consts, filename, name };
   }
 }
@@ -547,8 +580,8 @@ function buildDecoyCode(
   head.push(u32(0)); // kwonlyargcount
   if (layout !== "py311") head.push(u32(0)); // nlocals
   head.push(i32(1), i32(0x40)); // stacksize, flags (CO_NOFREE)
-  // co_code: LOAD_CONST 0; RETURN_VALUE
-  head.push(Buffer.from([TYPE_BYTES]), u32(4), Buffer.from([0x64, 0x00, 0x53, 0x00]));
+  // CPython 3.11/3.12: RESUME 0; LOAD_CONST 0; RETURN_VALUE.
+  head.push(Buffer.from([TYPE_BYTES]), u32(6), Buffer.from([0x97, 0, 0x64, 0, 0x53, 0]));
   head.push(Buffer.from([TYPE_SMALL_TUPLE, 1, TYPE_NONE])); // co_consts
   head.push(emptyTuple); // co_names
   if (layout === "py311") {
@@ -722,6 +755,22 @@ function countCodeObjects(node: MarshalNode): number {
   return count;
 }
 
+/** Validate the PEP 552 header and the complete root object, allowing trailers. */
+export function validatePythonPycRoot(bytes: Buffer): void {
+  if (bytes.length < 16 || bytes[2] !== 0x0d || bytes[3] !== 0x0a ||
+      (bytes.readUInt32LE(4) & ~3) !== 0) {
+    throw new Error("Invalid CPython .pyc header (magic marker or PEP 552 flags)");
+  }
+  const layout = layoutForPycMagic(bytes.readUInt16LE(0));
+  if (!layout) throw new Error("Unsupported CPython .pyc magic; cannot validate the root code object");
+  try {
+    const root = new MarshalParser(bytes.subarray(16), layout).parse();
+    if (root.type !== TYPE_CODE) throw new Error("root marshal object is not code");
+  } catch (error) {
+    throw new Error("Invalid or truncated CPython .pyc root code object", { cause: error });
+  }
+}
+
 /**
  * Weave unused decoy CODE objects into a CPython .pyc buffer.
  * Returns null when magic/layout is unknown or the marshal stream cannot be
@@ -736,6 +785,7 @@ export function weavePythonPycBuffer(
 ): PythonPycWeaveResult | null {
   if (bytes.length < 17 || bytes[2] !== 0x0d || bytes[3] !== 0x0a) return null;
   const magic = bytes.readUInt16LE(0);
+  if (!WEAVABLE_MAGIC.has(magic)) return null;
   const layout = layoutForPycMagic(magic);
   if (!layout) return null;
 

@@ -24,7 +24,10 @@ const u32 = (n: number): Buffer => {
 };
 
 const chunk = (name: string, payload: Buffer): Buffer =>
-  Buffer.concat([Buffer.from(name, "latin1"), u32(payload.length), payload]);
+  Buffer.concat([
+    Buffer.from(name, "latin1"), u32(payload.length), payload,
+    Buffer.alloc((4 - payload.length % 4) % 4),
+  ]);
 
 function buildMinimalBeam(): Buffer {
   const atoms = ["demo_mod", "module_info"];
@@ -143,7 +146,9 @@ describe("parser shields fail closed on malformed input", () => {
   it("keeps a valid Android DEX container and header intact", () => {
     const dex = Buffer.alloc(112, 0);
     dex.write("dex\n035\0", 0, "latin1");
+    dex.writeUInt32LE(112, 32);
     dex.writeUInt32LE(112, 36);
+    dex.writeUInt32LE(0x12345678, 40);
     const out = protectAndroidDexBuffer(dex, { intensity: "balanced", seed: "dex-contract" });
     expect(out.buffer.subarray(0, 8).toString("latin1")).toBe("dex\n035\0");
     expect(out.buffer.length).toBeGreaterThan(dex.length);

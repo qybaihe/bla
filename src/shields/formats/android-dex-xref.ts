@@ -17,11 +17,20 @@
  * `archive.ts`). Header checksum / signature / file_size are recomputed so
  * any tool that validates the DEX container still accepts it.
  */
-import { createHash } from "node:crypto";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { REA_INTERNAL_LIMITS } from "../../identity.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
+
+import {
+  compareDexUtf16,
+  DEX_ENDIAN_LE,
+  DEX_HEADER_SIZE,
+  DEX_MAP_TYPE,
+  encodeDexStringData,
+  encodeUleb128,
+  recomputeDexChecksums,
+} from "./dex-layout.js";
 
 export interface AndroidDexXrefCounterResult {
   readonly dexBuffer: Buffer;
@@ -31,18 +40,6 @@ export interface AndroidDexXrefCounterResult {
   readonly externalMethodRefs: number;
   /** Marker string embedded for inspect/detect. */
   readonly marker: string;
-}
-
-function encodeUleb128(value: number): Buffer {
-  const bytes: number[] = [];
-  let v = value >>> 0;
-  do {
-    let byte = v & 0x7f;
-    v >>>= 7;
-    if (v !== 0) byte |= 0x80;
-    bytes.push(byte);
-  } while (v !== 0);
-  return Buffer.from(bytes);
 }
 
 function align4(n: number): number {
@@ -83,101 +80,45 @@ function buildExternalInvokeDex(
 ): BuiltDex {
   const marker = "BLA-DEX-XREF-V1";
 
-  // ----- string pool (order matters; indices are referenced below) -----
-  const strings: string[] = [];
-  const strIndex = new Map<string, number>();
-  const addStr = (s: string): number => {
-    const existing = strIndex.get(s);
-    if (existing !== undefined) return existing;
-    const idx = strings.length;
-    strings.push(s);
-    strIndex.set(s, idx);
-    return idx;
-  };
+  const logClass = "Landroid/util/Log;";
+  const objectClass = "Ljava/lang/Object;";
+  const stringClass = "Ljava/lang/String;";
+  const source = "BlaDexXref.java";
+  const callers = Array.from({ length: callerCount }, (_, i) =>
+    `Lcom/enclave/xref/ExternalInvokeCaller_${prng.hex(6)}_${i};`,
+  ).sort(compareDexUtf16);
+  const descriptors = ["I", logClass, ...callers, objectClass, stringClass, "V"]
+    .sort(compareDexUtf16);
+  const strings = [...new Set([
+    ...descriptors, "ILL", "d", "bait", marker, source,
+    ...extraStrings.map((text) => text.slice(0, 200)),
+  ])].sort(compareDexUtf16);
+  const stringIndexes = new Map(strings.map((text, index) => [text, index]));
+  const typeIndexes = new Map(descriptors.map((text, index) => [text, index]));
+  const stringIdx = (text: string): number => stringIndexes.get(text)!;
+  const typeIdx = (text: string): number => typeIndexes.get(text)!;
+  const types = descriptors.map(stringIdx);
+  const callerTypeIdx = callers.map(typeIdx);
 
-  // Fixed descriptor / name strings used by the external target + callers.
-  const sVoid = addStr("V");
-  const sObject = addStr("Ljava/lang/Object;");
-  const sString = addStr("Ljava/lang/String;");
-  const sLog = addStr("Landroid/util/Log;");
-  const sShortyLogD = addStr("VLL"); // return V, two reference args
-  const sShortyVoid = addStr("V");
-  const sMethodD = addStr("d");
-  const sMethodBait = addStr("bait");
-  const sMarker = addStr(marker);
-  const sSource = addStr("BlaDexXref.java");
-
-  const callerTypeStrIdx: number[] = [];
-  for (let i = 0; i < callerCount; i++) {
-    const hex = prng.hex(6);
-    callerTypeStrIdx.push(
-      addStr(`Lcom/enclave/xref/ExternalInvokeCaller_${hex}_${i};`),
-    );
-  }
-
-  for (const extra of extraStrings) {
-    // DEX MUTF-8 string_data cannot contain U+0000; keep payloads clean.
-    addStr(extra.replace(/\0/g, " ").slice(0, 200));
-  }
-
-  // ----- type_ids (index into string_ids) -----
-  const types: number[] = [];
-  const typeIndex = new Map<number, number>(); // stringIdx -> typeIdx
-  const addType = (stringIdx: number): number => {
-    const existing = typeIndex.get(stringIdx);
-    if (existing !== undefined) return existing;
-    const idx = types.length;
-    types.push(stringIdx);
-    typeIndex.set(stringIdx, idx);
-    return idx;
-  };
-
-  const tVoid = addType(sVoid);
-  const tObject = addType(sObject);
-  const tString = addType(sString);
-  const tLog = addType(sLog);
-  const callerTypeIdx: number[] = callerTypeStrIdx.map((si) => addType(si));
-  void tVoid; // referenced via proto return; kept for clarity
-
-  // ----- proto_ids -----
-  // proto 0: (Ljava/lang/String;Ljava/lang/String;)V   — Log.d
-  // proto 1: ()V                                       — bait()
-  // We write type_lists into the data section later; record placeholders.
-  interface ProtoRec {
-    shortyIdx: number;
-    returnTypeIdx: number;
-    /** 0 = no params; else offset filled after layout. */
-    paramTypeIdxs: number[];
-  }
-  const protos: ProtoRec[] = [
-    { shortyIdx: sShortyLogD, returnTypeIdx: tVoid, paramTypeIdxs: [tString, tString] },
-    { shortyIdx: sShortyVoid, returnTypeIdx: tVoid, paramTypeIdxs: [] },
+  // proto_ids are ordered by return type, then parameter list. "I" precedes "V".
+  const protos = [
+    { shortyIdx: stringIdx("ILL"), returnTypeIdx: typeIdx("I") },
+    { shortyIdx: stringIdx("V"), returnTypeIdx: typeIdx("V") },
   ];
 
-  // ----- method_ids -----
-  // method 0: Log.d (external — no class_def for Log)
-  // method 1..N: Caller_i.bait
-  interface MethodRec {
-    classIdx: number;
-    protoIdx: number;
-    nameIdx: number;
-  }
-  const methods: MethodRec[] = [
-    { classIdx: tLog, protoIdx: 0, nameIdx: sMethodD },
-  ];
-  for (let i = 0; i < callerCount; i++) {
-    methods.push({
-      classIdx: callerTypeIdx[i]!,
-      protoIdx: 1,
-      nameIdx: sMethodBait,
-    });
-  }
+  // method_ids are ordered by defining class, name, and prototype.
+  const methods = [
+    { classIdx: typeIdx(logClass), protoIdx: 0, nameIdx: stringIdx("d") },
+    ...callerTypeIdx.map((classIdx) => ({ classIdx, protoIdx: 1, nameIdx: stringIdx("bait") })),
+  ].sort((a, b) => a.classIdx - b.classIdx || a.nameIdx - b.nameIdx || a.protoIdx - b.protoIdx);
+  const methodByClass = new Map(methods.map((method, index) => [method.classIdx, index]));
+  const logMethodIdx = methodByClass.get(typeIdx(logClass))!;
 
   // ----- Lay out the data section -----
   // We'll assemble: string_data → type_list(s) → code_item(s) → class_data →
   // map_list. Offsets are relative to start of file; header + id tables come
   // first so we compute their size up front.
-  const headerSize = 0x70;
+  const headerSize = DEX_HEADER_SIZE;
   const stringIdsSize = strings.length * 4;
   const typeIdsSize = types.length * 4;
   const protoIdsSize = protos.length * 12;
@@ -210,40 +151,31 @@ function buildExternalInvokeDex(
   };
 
   // string_data_item[] — MUTF-8 with uleb128 utf16_size prefix + NUL
-  const stringDataOffs: number[] = [];
-  for (const s of strings) {
-    const utf8 = Buffer.from(s, "utf8");
-    // Approximate utf16 length as utf8 length for ASCII-heavy payloads (our
-    // strings are ASCII). Canary payloads may contain non-BMP rarely; DEX
-    // requires modified UTF-8 — for BMP-only JS strings, utf16_size === code units.
-    let utf16Size = 0;
-    for (const ch of s) {
-      const cp = ch.codePointAt(0)!;
-      utf16Size += cp > 0xffff ? 2 : 1;
-    }
-    const item = Buffer.concat([encodeUleb128(utf16Size), utf8, Buffer.from([0])]);
-    stringDataOffs.push(place(item));
-  }
+  const stringDataOffs = strings.map((text) => place(encodeDexStringData(text)));
 
   // type_list for Log.d params (String, String) — size uint32 + type_idx[] uint16, align 4
   let logParamListOff = 0;
   {
     const paramBuf = Buffer.alloc(4 + 2 * 2);
     paramBuf.writeUInt32LE(2, 0);
-    paramBuf.writeUInt16LE(tString, 4);
-    paramBuf.writeUInt16LE(tString, 6);
+    paramBuf.writeUInt16LE(typeIdx(stringClass), 4);
+    paramBuf.writeUInt16LE(typeIdx(stringClass), 6);
     logParamListOff = place(paramBuf, true);
   }
   const protoParamOffs = [logParamListOff, 0];
 
-  // code_item for bait(): invoke-static {v0,v1}, Log.d ; return-void
-  // Format 35c invoke-static: op=0x71, A=2 args, method_idx=0, regs C=0 D=1
+  // const-string v0, marker; const-string v1, source;
+  // invoke-static {v0, v1}, Log.d; return-void (the log result is unused).
   const insnBytes = Buffer.from([
-    0x71, 0x20, 0x00, 0x00, 0x10, 0x00, // invoke-static {v0, v1}, method@0 (Log.d)
-    0x0e, 0x00, // return-void
+    0x1a, 0x00, 0, 0,
+    0x1a, 0x01, 0, 0,
+    0x71, 0x20, 0, 0, 0x10, 0x00,
+    0x0e, 0x00,
   ]);
-  const codeItemSize = 16 + insnBytes.length; // header 16 + 8 insn bytes
-  const codeItemTemplate = Buffer.alloc(codeItemSize);
+  insnBytes.writeUInt16LE(stringIdx(marker), 2);
+  insnBytes.writeUInt16LE(stringIdx(source), 6);
+  insnBytes.writeUInt16LE(logMethodIdx, 10);
+  const codeItemTemplate = Buffer.alloc(16 + insnBytes.length);
   codeItemTemplate.writeUInt16LE(2, 0); // registers_size
   codeItemTemplate.writeUInt16LE(0, 2); // ins_size
   codeItemTemplate.writeUInt16LE(2, 4); // outs_size
@@ -261,9 +193,7 @@ function buildExternalInvokeDex(
   // class_data_item per caller: 0 static fields, 0 instance, 1 direct method, 0 virtual
   const classDataOffs: number[] = [];
   for (let i = 0; i < callerCount; i++) {
-    // method_idx_diff: methods[0] is Log.d; Caller_i.bait is methods[1+i]
-    // First direct method diff = (1+i) - 0 = 1+i
-    const methodIdxDiff = 1 + i;
+    const methodIdxDiff = methodByClass.get(callerTypeIdx[i]!)!;
     const accessFlags = 0x0009; // public static
     const parts = Buffer.concat([
       encodeUleb128(0), // static_fields_size
@@ -285,40 +215,27 @@ function buildExternalInvokeDex(
   }
 
   // map entries (type, unused, size, offset) — 12 bytes each, plus uint32 size header
-  // Types from dalvik docs:
-  const TYPE_HEADER_ITEM = 0x0000;
-  const TYPE_STRING_ID_ITEM = 0x0001;
-  const TYPE_TYPE_ID_ITEM = 0x0002;
-  const TYPE_PROTO_ID_ITEM = 0x0003;
-  const TYPE_METHOD_ID_ITEM = 0x0005;
-  const TYPE_CLASS_DEF_ITEM = 0x0006;
-  const TYPE_CODE_ITEM = 0x2001;
-  const TYPE_STRING_DATA_ITEM = 0x2002;
-  const TYPE_TYPE_LIST = 0x1001;
-  const TYPE_CLASS_DATA_ITEM = 0x2000;
-  const TYPE_MAP_LIST = 0x1000;
-
   const mapEntries: { type: number; size: number; offset: number }[] = [
-    { type: TYPE_HEADER_ITEM, size: 1, offset: 0 },
-    { type: TYPE_STRING_ID_ITEM, size: strings.length, offset: headerSize },
+    { type: DEX_MAP_TYPE.HEADER_ITEM, size: 1, offset: 0 },
+    { type: DEX_MAP_TYPE.STRING_ID_ITEM, size: strings.length, offset: headerSize },
     {
-      type: TYPE_TYPE_ID_ITEM,
+      type: DEX_MAP_TYPE.TYPE_ID_ITEM,
       size: types.length,
       offset: headerSize + stringIdsSize,
     },
     {
-      type: TYPE_PROTO_ID_ITEM,
+      type: DEX_MAP_TYPE.PROTO_ID_ITEM,
       size: protos.length,
       offset: headerSize + stringIdsSize + typeIdsSize,
     },
     {
-      type: TYPE_METHOD_ID_ITEM,
+      type: DEX_MAP_TYPE.METHOD_ID_ITEM,
       size: methods.length,
       offset:
         headerSize + stringIdsSize + typeIdsSize + protoIdsSize + fieldIdsSize,
     },
     {
-      type: TYPE_CLASS_DEF_ITEM,
+      type: DEX_MAP_TYPE.CLASS_DEF_ITEM,
       size: callerCount,
       offset:
         headerSize +
@@ -328,28 +245,29 @@ function buildExternalInvokeDex(
         fieldIdsSize +
         methodIdsSize,
     },
-    { type: TYPE_TYPE_LIST, size: 1, offset: logParamListOff },
+    { type: DEX_MAP_TYPE.TYPE_LIST, size: 1, offset: logParamListOff },
     {
-      type: TYPE_CODE_ITEM,
+      type: DEX_MAP_TYPE.CODE_ITEM,
       size: callerCount,
       offset: codeOffs[0]!,
     },
     {
-      type: TYPE_STRING_DATA_ITEM,
+      type: DEX_MAP_TYPE.STRING_DATA_ITEM,
       size: strings.length,
       offset: stringDataOffs[0]!,
     },
     {
-      type: TYPE_CLASS_DATA_ITEM,
+      type: DEX_MAP_TYPE.CLASS_DATA_ITEM,
       size: callerCount,
       offset: classDataOffs[0]!,
     },
   ];
 
-  const mapListSize = 4 + (mapEntries.length + 1) * 12; // +1 for MAP_LIST itself
   const mapOff = dataCursor;
-  const mapBuf = Buffer.alloc(mapListSize);
-  mapBuf.writeUInt32LE(mapEntries.length + 1, 0);
+  mapEntries.push({ type: DEX_MAP_TYPE.MAP_LIST, size: 1, offset: mapOff });
+  mapEntries.sort((a, b) => a.offset - b.offset);
+  const mapBuf = Buffer.alloc(4 + mapEntries.length * 12);
+  mapBuf.writeUInt32LE(mapEntries.length, 0);
   let mapAt = 4;
   for (const e of mapEntries) {
     mapBuf.writeUInt16LE(e.type, mapAt);
@@ -358,11 +276,6 @@ function buildExternalInvokeDex(
     mapBuf.writeUInt32LE(e.offset, mapAt + 8);
     mapAt += 12;
   }
-  // Self entry
-  mapBuf.writeUInt16LE(TYPE_MAP_LIST, mapAt);
-  mapBuf.writeUInt16LE(0, mapAt + 2);
-  mapBuf.writeUInt32LE(1, mapAt + 4);
-  mapBuf.writeUInt32LE(mapOff, mapAt + 8);
   place(mapBuf);
 
   const fileSize = dataCursor;
@@ -374,7 +287,7 @@ function buildExternalInvokeDex(
   // checksum + signature filled later
   out.writeUInt32LE(fileSize, 32);
   out.writeUInt32LE(headerSize, 36);
-  out.writeUInt32LE(0x12345678, 40); // endian_tag
+  out.writeUInt32LE(DEX_ENDIAN_LE, 40); // endian_tag
   out.writeUInt32LE(0, 44); // link_size
   out.writeUInt32LE(0, 48); // link_off
   out.writeUInt32LE(mapOff, 52);
@@ -434,9 +347,9 @@ function buildExternalInvokeDex(
   for (let i = 0; i < callerCount; i++) {
     out.writeUInt32LE(callerTypeIdx[i]!, at); // class_idx
     out.writeUInt32LE(0x0001, at + 4); // ACC_PUBLIC
-    out.writeUInt32LE(tObject, at + 8); // superclass
+    out.writeUInt32LE(typeIdx(objectClass), at + 8); // superclass
     out.writeUInt32LE(0, at + 12); // interfaces_off
-    out.writeUInt32LE(sSource, at + 16); // source_file_idx
+    out.writeUInt32LE(stringIdx(source), at + 16); // source_file_idx
     out.writeUInt32LE(0, at + 20); // annotations_off
     out.writeUInt32LE(classDataOffs[i]!, at + 24); // class_data_off
     out.writeUInt32LE(0, at + 28); // static_values_off
@@ -448,22 +361,7 @@ function buildExternalInvokeDex(
     chunk.buf.copy(out, chunk.offset);
   }
 
-  // Keep marker reachable for inspect
-  void sMarker;
-
-  // SHA-1 signature over bytes [32..end] → [12..32]
-  const sha1 = createHash("sha1").update(out.subarray(32)).digest();
-  sha1.copy(out, 12);
-  // Adler32 checksum over bytes [12..end] → [8..12]
-  let a = 1;
-  let b = 0;
-  for (let i = 12; i < out.length; i++) {
-    a = (a + out[i]!) % 65521;
-    b = (b + a) % 65521;
-  }
-  out.writeUInt32LE(((b << 16) | a) >>> 0, 8);
-
-  return { buffer: out, callerCount };
+  return { buffer: recomputeDexChecksums(out), callerCount };
 }
 
 /**

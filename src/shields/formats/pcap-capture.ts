@@ -3,10 +3,32 @@ import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
 
-/** Classic libpcap global-header magic (microsecond, little-endian host). */
-const PCAP_MAGIC_LE = 0xa1b2c3d4;
-/** Nanosecond-resolution variant, as read little-endian. */
-const PCAP_MAGIC_NS_LE = 0xa1b23c4d;
+const PCAP_MAGIC_US = 0xa1b2c3d4;
+const PCAP_MAGIC_NS = 0xa1b23c4d;
+
+interface PcapHeader {
+  readonly littleEndian: boolean;
+  readonly timestampScale: number;
+  readonly snaplen: number;
+  readonly linkType: number;
+}
+
+function readPcapHeader(bytes: Buffer): PcapHeader | null {
+  if (bytes.length < 24) return null;
+  const leMagic = bytes.readUInt32LE(0);
+  const littleEndian = leMagic === PCAP_MAGIC_US || leMagic === PCAP_MAGIC_NS;
+  const magic = littleEndian ? leMagic : bytes.readUInt32BE(0);
+  if (magic !== PCAP_MAGIC_US && magic !== PCAP_MAGIC_NS) return null;
+  const readU32 = (at: number): number =>
+    littleEndian ? bytes.readUInt32LE(at) : bytes.readUInt32BE(at);
+  return {
+    littleEndian,
+    timestampScale: magic === PCAP_MAGIC_NS ? 1000 : 1,
+    snaplen: readU32(16),
+    linkType: readU32(20) & 0xffff,
+  };
+}
+
 /** The decoys are Ethernet frames; tshark dissects them as such only here. */
 const LINKTYPE_ETHERNET = 1;
 
@@ -101,25 +123,18 @@ function ipv4Checksum(ipHeader: Buffer): number {
 }
 
 /** A record header in the capture's own byte order (the global header's magic decides it). */
-function recordWrap(
-  frame: Buffer,
-  tsSec: number,
-  tsUsec: number,
-  littleEndian: boolean,
-): Buffer {
+function recordWrap(frame: Buffer, tsSec: number, tsUsec: number, header: PcapHeader): Buffer {
   const recHdr = Buffer.alloc(16);
-  if (littleEndian) {
-    recHdr.writeUInt32LE(tsSec, 0);
-    recHdr.writeUInt32LE(tsUsec, 4);
-    recHdr.writeUInt32LE(frame.length, 8);
-    recHdr.writeUInt32LE(frame.length, 12);
-  } else {
-    recHdr.writeUInt32BE(tsSec, 0);
-    recHdr.writeUInt32BE(tsUsec, 4);
-    recHdr.writeUInt32BE(frame.length, 8);
-    recHdr.writeUInt32BE(frame.length, 12);
-  }
-  return Buffer.concat([recHdr, frame]);
+  const writeU32 = (value: number, at: number): void => {
+    if (header.littleEndian) recHdr.writeUInt32LE(value, at);
+    else recHdr.writeUInt32BE(value, at);
+  };
+  const capturedLen = Math.min(frame.length, header.snaplen);
+  writeU32(tsSec, 0);
+  writeU32(tsUsec * header.timestampScale, 4);
+  writeU32(capturedLen, 8);
+  writeU32(frame.length, 12);
+  return Buffer.concat([recHdr, frame.subarray(0, capturedLen)]);
 }
 
 /** A query goes from 10.0.0.1:1337 to the resolver 10.0.0.2:53; a response the other way. */
@@ -127,7 +142,7 @@ function buildUdpPacket(
   payload: Buffer,
   tsSec: number,
   tsUsec: number,
-  littleEndian: boolean,
+  header: PcapHeader,
   direction: "query" | "response" = "query",
 ): Buffer {
   const fromClient = direction === "query";
@@ -157,7 +172,7 @@ function buildUdpPacket(
     Buffer.concat([eth, ip, udp, payload]),
     tsSec,
     tsUsec,
-    littleEndian,
+    header,
   );
 }
 
@@ -166,7 +181,7 @@ function buildTcpHttpPacket(
   tsSec: number,
   tsUsec: number,
   seq: number,
-  littleEndian: boolean,
+  header: PcapHeader,
 ): Buffer {
   const eth = Buffer.alloc(14, 0);
   eth[12] = 0x08;
@@ -199,7 +214,7 @@ function buildTcpHttpPacket(
     Buffer.concat([eth, ip, tcp, payload]),
     tsSec,
     tsUsec,
-    littleEndian,
+    header,
   );
 }
 
@@ -288,11 +303,7 @@ function buildHttpLikePayload(prng: SeededPrng, headerCount: number): Buffer {
 }
 
 export function inspectPcapCapture(bytes: Buffer): PcapInspection {
-  const validMagic =
-    bytes.length >= 24 &&
-    (bytes.readUInt32LE(0) === PCAP_MAGIC_LE ||
-      bytes.readUInt32BE(0) === PCAP_MAGIC_LE ||
-      bytes.readUInt32LE(0) === 0xa1b23c4d);
+  const header = readPcapHeader(bytes);
   let versionMajor = 0;
   let versionMinor = 0;
   let packetCount = 0;
@@ -300,10 +311,8 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
   let answerFloodPackets = 0;
   let exactFraming = false;
   const marker = Buffer.from("[BLA-PCAP-SHIELD]", "utf8");
-  if (validMagic && bytes.length >= 24) {
-    const le =
-      bytes.readUInt32LE(0) === PCAP_MAGIC_LE ||
-      bytes.readUInt32LE(0) === 0xa1b23c4d;
+  if (header) {
+    const le = header.littleEndian;
     versionMajor = le ? bytes.readUInt16LE(4) : bytes.readUInt16BE(4);
     versionMinor = le ? bytes.readUInt16LE(6) : bytes.readUInt16BE(6);
     let at = 24;
@@ -320,7 +329,7 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
       if (frame.includes(marker)) {
         decoyPacketCount++;
       }
-      if (isAnswerFloodFrame(frame)) {
+      if (header.linkType === LINKTYPE_ETHERNET && isAnswerFloodFrame(frame)) {
         answerFloodPackets++;
       }
       at = nextAt;
@@ -330,14 +339,14 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
     exactFraming = !truncated && at === bytes.length;
   }
   return {
-    validMagic,
+    validMagic: header !== null,
     exactFraming,
     versionMajor,
     versionMinor,
     packetCount,
     decoyPacketCount,
     answerFloodPackets,
-    blaProtected: validMagic && exactFraming && decoyPacketCount >= 8,
+    blaProtected: header !== null && exactFraming && decoyPacketCount >= 8,
   };
 }
 
@@ -345,17 +354,17 @@ export function inspectPcapCapture(bytes: Buffer): PcapInspection {
  * Protects a classic libpcap capture by appending decoy packets (HTTP-like TCP
  * + deep DNS UDP) that carry canary values and diagnostic bait, preserving the
  * original global header and existing packets byte-for-byte. Appended records
- * use the capture's own byte order.
+ * use the capture's byte order and timestamp resolution.
  *
- * At `bankrupt`, an Ethernet capture also gets the answer flood (ten DNS
+ * At `bankrupt`, an Ethernet capture with sufficient snaplen also gets the answer flood (ten DNS
  * responses, see FLOOD_PACKETS), which takes REA's tshark field pass past its
  * fixed 8 MiB allowance: `inspect_pcap_capture` fails, and no REA setting
  * raises that allowance. `estimatedTsharkJsonBytes` is then a lower bound of
  * the field pass and `exceedsTsharkJsonBudget` is true. Otherwise it is an
  * upper bound for the ordinary decoys (measured against REA `05be423`: 116 KiB
  * for the 160 bankrupt ones), the claim is false, and REA reads the decoys. A
- * capture of another link type gets no flood: tshark would not dissect its
- * Ethernet frames as DNS.
+ * small snapshot length can truncate ordinary frames. Non-Ethernet captures
+ * are returned unchanged.
  */
 export function protectPcapCaptureBuffer(
   input: Buffer,
@@ -370,28 +379,28 @@ export function protectPcapCaptureBuffer(
   readonly diagnosticsEmbedded: number;
   readonly estimatedTsharkJsonBytes: number;
   readonly exceedsTsharkJsonBudget: boolean;
-  /** DNS responses planted for the answer flood (0 below bankrupt, or for another link type). */
+  /** DNS responses planted for the answer flood when link type and snaplen permit. */
   readonly answerFloodPackets: number;
 } {
+  const header = readPcapHeader(input);
+  if (!header) {
+    throw new Error("Invalid or truncated libpcap capture: expected a 24-byte global header with the pcap magic.");
+  }
+  if (header.linkType !== LINKTYPE_ETHERNET || header.snaplen === 0) {
+    return {
+      buffer: input,
+      packetsInjected: 0,
+      canaryTokensEmbedded: 0,
+      diagnosticsEmbedded: 0,
+      estimatedTsharkJsonBytes: 0,
+      exceedsTsharkJsonBudget: false,
+      answerFloodPackets: 0,
+    };
+  }
+
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-pcap-shield");
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
-
-  const hasGlobalHeader =
-    input.length >= 24 &&
-    (input.readUInt32LE(0) === PCAP_MAGIC_LE ||
-      input.readUInt32BE(0) === PCAP_MAGIC_LE ||
-      input.readUInt32LE(0) === 0xa1b23c4d);
-  if (!hasGlobalHeader) {
-    throw new Error(
-      "Invalid or truncated libpcap capture: expected a 24-byte global header with the pcap magic; refusing to synthesize a replacement capture.",
-    );
-  }
-  const base = input;
-  const littleEndian =
-    input.readUInt32LE(0) === PCAP_MAGIC_LE ||
-    input.readUInt32LE(0) === PCAP_MAGIC_NS_LE;
-  const linkType = littleEndian ? input.readUInt32LE(20) : input.readUInt32BE(20);
 
   const httpPackets =
     intensity === "bankrupt" ? 96 : intensity === "maximum" ? 24 : 4;
@@ -411,7 +420,7 @@ export function protectPcapCaptureBuffer(
         1_700_000_000 + i,
         i * 1000,
         1000 + i * 4096,
-        littleEndian,
+        header,
       ),
     );
   }
@@ -423,18 +432,18 @@ export function protectPcapCaptureBuffer(
       "utf8",
     );
     const full = Buffer.concat([payload, bait]);
-    injected.push(buildUdpPacket(full, 1_700_100_000 + i, i * 2000, littleEndian));
+    injected.push(buildUdpPacket(full, 1_700_100_000 + i, i * 2000, header));
   }
 
   // Drawn after every ordinary decoy, so those keep their bytes.
   const floodPackets =
-    intensity === "bankrupt" && linkType === LINKTYPE_ETHERNET ? FLOOD_PACKETS : 0;
+    intensity === "bankrupt" && header.snaplen >= FLOOD_MAX_FRAME_BYTES ? FLOOD_PACKETS : 0;
   let floodMinJsonBytes = 0;
   for (let i = 0; i < floodPackets; i++) {
     const flood = buildDnsAnswerFloodPayload(prng, i);
     floodMinJsonBytes += flood.answers * floodAnswerMinJsonBytes(flood.nameLength);
     injected.push(
-      buildUdpPacket(flood.payload, 1_700_200_000 + i, i * 3000, littleEndian, "response"),
+      buildUdpPacket(flood.payload, 1_700_200_000 + i, i * 3000, header, "response"),
     );
   }
 
@@ -446,7 +455,7 @@ export function protectPcapCaptureBuffer(
       : injected.length * REA_FIELD_PASS_BYTES_PER_PACKET;
 
   return {
-    buffer: Buffer.concat([base, ...injected]),
+    buffer: Buffer.concat([input, ...injected]),
     packetsInjected: injected.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,
     diagnosticsEmbedded: deception.diagnostics.diagnosticsInjected.length,

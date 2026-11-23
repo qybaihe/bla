@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 
 export const DEX_HEADER_SIZE = 0x70;
 export const DEX_ENDIAN_LE = 0x1234_5678;
+export const DEX_LEGACY_VERSIONS: ReadonlySet<string> = new Set(["035", "037", "038", "039", "040"]);
 export const DEX_SIDECAR_STRING_KEY = "bla.sidecar.v1=" as const;
 
 export const DEX_MAP_TYPE = Object.freeze({
@@ -669,7 +670,7 @@ function readIdTable<T>(
 }
 
 /**
- * Parse a little-endian DEX 035–039 container. Returns null when the file is
+ * Parse a little-endian DEX through version 040. Returns null when the file is
  * not a structurally valid DEX we can safely rewrite (header-only stubs,
  * big-endian, unsupported map types, truncated sections).
  */
@@ -682,12 +683,12 @@ export function parseDexLayout(bytes: Uint8Array): DexLayout | null {
     }
     if (buf[7] !== 0x00) return null;
     const version = buf.subarray(4, 7).toString("ascii");
-    if (!/^03[5-9]$/.test(version)) return null;
+    if (!DEX_LEGACY_VERSIONS.has(version)) return null;
     const fileSize = buf.readUInt32LE(32);
     const headerSize = buf.readUInt32LE(36);
     const endian = buf.readUInt32LE(40);
     if (headerSize !== DEX_HEADER_SIZE || endian !== DEX_ENDIAN_LE) return null;
-    if (fileSize < DEX_HEADER_SIZE || fileSize > buf.length) return null;
+    if (fileSize !== buf.length) return null;
 
     const linkSize = buf.readUInt32LE(44);
     const linkOff = buf.readUInt32LE(48);
@@ -1055,17 +1056,18 @@ export function rebuildDex(layout: DexLayout, options: RebuildDexOptions = {}): 
     });
   }
 
-  // Preserve original relative order of existing data items, then appended strings.
+  // Keep the entire string_data_item run contiguous. Preserve the relative
+  // order of the remaining data items.
   const originalOrder = new Map<string, number>();
   let order = 0;
   for (const s of kept) originalOrder.set(`string:${s.dataOff}`, order++);
+  for (const s of appended) originalOrder.set(`string-new:${s.text}`, order++);
   const dataItems = [
     ...layout.pointerItems.map((p) => ({ key: `ptr:${p.type}:${p.offset}`, offset: p.offset })),
     ...layout.codeItems.map((p) => ({ key: `code:${p.offset}`, offset: p.offset })),
     ...layout.classData.map((p) => ({ key: `classdata:${p.offset}`, offset: p.offset })),
   ].sort((a, b) => a.offset - b.offset);
   for (const item of dataItems) originalOrder.set(item.key, order++);
-  for (const s of appended) originalOrder.set(`string-new:${s.text}`, order++);
 
   planned.sort((a, b) => (originalOrder.get(a.key) ?? 1e9) - (originalOrder.get(b.key) ?? 1e9));
 
@@ -1259,7 +1261,7 @@ export function rebuildDex(layout: DexLayout, options: RebuildDexOptions = {}): 
       .map((p) => `ptr:${p.type}:${p.offset}`),
   );
   mapEntries.push({ type: DEX_MAP_TYPE.MAP_LIST, size: 1, offset: mapOff });
-  mapEntries.sort((a, b) => a.type - b.type);
+  mapEntries.sort((a, b) => a.offset - b.offset);
 
   if (mapEntries.length !== countMapEntries(layout, strings.length)) {
     throw new Error(

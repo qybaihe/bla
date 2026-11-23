@@ -1,18 +1,39 @@
-import { createHash } from "node:crypto";
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
 import { buildJniExportNames } from "./android-r8.js";
+import {
+  DEX_ENDIAN_LE,
+  DEX_HEADER_SIZE,
+  DEX_LEGACY_VERSIONS,
+  computeAdler32,
+  recomputeDexChecksums,
+} from "./dex-layout.js";
 
-function computeAdler32(bytes: Buffer): number {
-  let a = 1;
-  let b = 0;
-  for (let i = 0; i < bytes.length; i++) {
-    a = (a + bytes[i]!) % 65521;
-    b = (b + a) % 65521;
+function dexHeaderError(bytes: Buffer): string | undefined {
+  if (bytes.length < DEX_HEADER_SIZE || bytes.toString("latin1", 0, 4) !== "dex\n" || bytes[7] !== 0) {
+    return "expected a complete DEX header";
   }
-  return ((b << 16) | a) >>> 0;
+  const version = bytes.toString("latin1", 4, 7);
+  if (version === "041") return "DEX v041 container layout is unsupported";
+  if (!DEX_LEGACY_VERSIONS.has(version)) return `unsupported DEX version ${version}`;
+  if (bytes.readUInt32LE(36) !== DEX_HEADER_SIZE) return "invalid header_size";
+  if (bytes.readUInt32LE(40) !== DEX_ENDIAN_LE) return "unsupported endian_tag";
+  if (bytes.readUInt32LE(32) !== bytes.length) return "file_size does not match input length";
+  // All sizes are unsigned; use multiplication in number space to avoid wraparound.
+  for (const [at, width] of [[44, 1], [56, 4], [64, 4], [72, 12], [80, 8], [88, 8], [96, 32], [104, 1]] as const) {
+    const size = bytes.readUInt32LE(at) * width;
+    const offset = bytes.readUInt32LE(at + 4);
+    if (size > 0 && (offset < DEX_HEADER_SIZE || offset + size > bytes.length)) {
+      return `section at header offset ${at} exceeds file bounds`;
+    }
+  }
+  const mapOff = bytes.readUInt32LE(52);
+  if (mapOff !== 0 && (mapOff < DEX_HEADER_SIZE || mapOff + 4 > bytes.length ||
+      mapOff + 4 + bytes.readUInt32LE(mapOff) * 12 > bytes.length)) {
+    return "map_list exceeds file bounds";
+  }
 }
 
 /**
@@ -25,13 +46,7 @@ export function inspectAndroidDex(bytes: Buffer): {
   readonly decoyClassesCount: number;
   readonly blaProtected: boolean;
 } {
-  if (
-    bytes.length < 112 ||
-    bytes[0] !== 0x64 ||
-    bytes[1] !== 0x65 ||
-    bytes[2] !== 0x78 ||
-    bytes[3] !== 0x0a
-  ) {
+  if (dexHeaderError(bytes)) {
     return {
       validDex: false,
       version: "000",
@@ -81,17 +96,8 @@ export function protectAndroidDexBuffer(
   readonly canaryTokensEmbedded: number;
   readonly diagnosticsEmbedded: number;
 } {
-  if (
-    bytes.length < 112 ||
-    bytes[0] !== 0x64 ||
-    bytes[1] !== 0x65 ||
-    bytes[2] !== 0x78 ||
-    bytes[3] !== 0x0a
-  ) {
-    throw new Error(
-      "Invalid Android DEX container: expected a 'dex\\n' header with at least 112 bytes; refusing to synthesize a replacement container.",
-    );
-  }
+  const error = dexHeaderError(bytes);
+  if (error) throw new Error(`Invalid Android DEX container: ${error}; refusing to synthesize a replacement container.`);
   const intensity = options.intensity ?? "balanced";
   const prng = new SeededPrng(options.seed ?? "bla-dex-shield-v1");
   const chaffPayloads = generateChaffPayloads(prng, intensity);
@@ -107,8 +113,6 @@ export function protectAndroidDexBuffer(
     decoyClasses.push(`Lcom/enclave/tarpit/EnclaveStateNode_${prng.hex(6)}_${i};`);
   }
 
-  const baseDex = Buffer.from(bytes);
-
   // Trailer doubles as a string-pool pollution region for JADX/JEB string scanners
   // and plants JNI-mangled Java_* names that match the decoy .so exports (REA #7472).
   const jniNames = buildJniExportNames(prng, intensity === "stealth" ? 8 : intensity === "balanced" ? 16 : 48);
@@ -120,18 +124,11 @@ export function protectAndroidDexBuffer(
     ...deception.textRecords,
   ].join("\0") + "\0";
 
-  const outDex = Buffer.concat([baseDex, Buffer.from(trailerText, "utf8")]);
+  const outDex = Buffer.concat([bytes, Buffer.from(trailerText, "utf8")]);
   // Update file_size at offset 32
   outDex.writeUInt32LE(outDex.length, 32);
-  // Recompute SHA-1 signature over bytes [32..end] and store at [12..32]
-  const sha1 = createHash("sha1").update(outDex.subarray(32)).digest();
-  sha1.copy(outDex, 12);
-  // Recompute Adler32 checksum over bytes [12..end] and store at [8..12]
-  const adler = computeAdler32(outDex.subarray(12));
-  outDex.writeUInt32LE(adler, 8);
-
   return {
-    buffer: outDex,
+    buffer: recomputeDexChecksums(outDex),
     decoyClassesInjected: decoyClasses.length,
     chaffPayloadsEmbedded: chaffPayloads.length,
     canaryTokensEmbedded: deception.canary.syntheticCanaryTokens.length,

@@ -107,11 +107,13 @@ describe("BLA Config, SARIF 2.1.0, JVM Bytecode & 22-Format Directory Pipeline",
         `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleName</key><string>BLAApp</string></dict></plist>`,
         "utf8",
       );
-      const jvmBuf = Buffer.alloc(32, 0);
-      jvmBuf.writeUInt32BE(0xcafebabe, 0);
-      jvmBuf.writeUInt16BE(0, 4);
-      jvmBuf.writeUInt16BE(61, 6);
-      jvmBuf.writeUInt16BE(1, 8);
+      const jvmBuf = Buffer.from(
+        "cafebabe000000370005" + // Java 11, four constant pool entries
+        "010008436f726541757468070001" + // CoreAuth
+        "0100106a6176612f6c616e672f4f626a656374070003" + // java/lang/Object
+        "0021000200040000000000000000",
+        "hex",
+      );
       writeFileSync(join(srcDir, "CoreAuth.class"), jvmBuf);
 
       const report = defendTarget({

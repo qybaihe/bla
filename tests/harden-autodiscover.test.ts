@@ -63,7 +63,7 @@ describe("bla_harden auto-discovery + one-sentence UX", () => {
     const beamForm = Buffer.concat([
       Buffer.from("BEAM", "latin1"),
       Buffer.from("AtU8", "latin1"),
-      Buffer.from([0, 0, 0, 5, 0, 0, 0, 1, 1, 0x61, 0, 0]),
+      Buffer.from([0, 0, 0, 6, 0, 0, 0, 1, 1, 0x61, 0, 0]),
     ]);
     const beam = Buffer.concat([
       Buffer.from("FOR1", "latin1"),

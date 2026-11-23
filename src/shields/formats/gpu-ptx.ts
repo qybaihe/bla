@@ -65,6 +65,12 @@ export function protectGpuPtxText(
   const deception = buildCanaryAndDiagnosticPayloads(prng, intensity);
 
   const base = input.endsWith("\n") ? input : `${input}\n`;
+  // Reserve all identifier tokens, covering declarations and definitions
+  // regardless of storage class, linkage, signature, or initializer syntax.
+  const identifiers = new Set(
+    input.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\[\s\S]|[^"\\])*"/g, " ")
+      .match(/[A-Za-z_$%][A-Za-z0-9_$%]*/g) ?? [],
+  );
 
   const entryTarget =
     intensity === "bankrupt" ? 128 : intensity === "maximum" ? 48 : 16;
@@ -76,8 +82,14 @@ export function protectGpuPtxText(
   for (const rec of deception.textRecords.slice(0, 8)) {
     parts.push(`// DIAG: ${rec.replace(/\n/g, " ")}\n`);
   }
+  let nextIndex = 0;
   for (let i = 0; i < entryTarget; i++) {
-    const name = `bla_tarpit_kernel_${i}_${prng.hex(4)}`;
+    const suffix = prng.hex(4);
+    let name: string;
+    do {
+      name = `bla_tarpit_kernel_${nextIndex++}_${suffix}`;
+    } while (identifiers.has(name) || identifiers.has(`${name}_param_0`));
+    identifiers.add(name);
     parts.push(
       `.visible .entry ${name}(.param .u64 ${name}_param_0)\n`,
       `{\n`,
@@ -101,11 +113,11 @@ export function protectGpuPtxText(
  * Generic firmware images (raw flash dumps, U-Boot ITB, Android boot.img,
  * DfuSe with trailing CRC, signed ESP images, etc.) are NOT mutated by BLA:
  * boot signatures / CRCs / vendor headers would break. Microsoft UF2 is the
- * exception — see `firmware-uf2.ts` — because not-main-flash / file-container
+ * exception — see `firmware-uf2.ts` — because not-main-flash comment
  * blocks are ignored by bootloaders by spec (REA #8230).
  */
 export const FIRMWARE_HARDENING_SKIP_REASON =
-  "Generic firmware images are skipped (boot signatures/CRCs/vendor headers). UF2 is hardened separately via not-main-flash/file-container decoys (firmware-uf2).";
+  "Generic firmware images are skipped (boot signatures/CRCs/vendor headers). UF2 is hardened separately via not-main-flash comment blocks (firmware-uf2).";
 
 /**
  * SPIR-V modules, CUDA fatbinaries, and AMD GPU code objects are skipped:

@@ -130,19 +130,12 @@ describe("malformed-input coverage gaps (fail-closed contracts)", () => {
 
   it("pins the JVM class shield's fail-closed modes on malformed input", () => {
     const opts = { intensity: "balanced" as const, seed: "jvm-gap" };
-    // Non-class garbage: trailer mode (documented synthetic-stub contract),
-    // never a synthesized structural class.
-    const garbage = protectJvmClassBuffer(Buffer.from("totally not a class file"), opts);
-    expect(garbage.mode).toBe("trailer");
-    expect(garbage.constantPoolEntriesAdded).toBe(0);
-    // CAFEBABE header with a truncated constant pool: the structural walk
-    // fails and the shield falls back to the trailer instead of guessing.
+    expect(() => protectJvmClassBuffer(Buffer.from("totally not a class file"), opts))
+      .toThrow(/JVM class file header/);
     const stub = Buffer.alloc(24);
     stub.writeUInt32BE(0xcafebabe, 0);
     stub.writeUInt16BE(0x0037, 4); // major version 55
     stub.writeUInt16BE(0xffff, 8); // cpCount beyond any parsable table
-    const truncatedCp = protectJvmClassBuffer(stub, opts);
-    expect(truncatedCp.mode).toBe("trailer");
-    expect(truncatedCp.constantPoolEntriesAdded).toBe(0);
+    expect(() => protectJvmClassBuffer(stub, opts)).toThrow(/JVM constant pool/);
   });
 });

@@ -64,9 +64,7 @@ function buildSyntheticGoDepTable(prng: SeededPrng, minBytes: number): Buffer {
  * Bankrupt/maximum pad the module past `MAX_BUILD_INFO_BYTES` (1 MiB) using
  * realistic Go module dependency lines rather than constant-byte padding.
  *
- * Trailer placement poisons whole-file scanners. Prefer
- * {@link buildMappedGoBuildInfoPlant} inside a real `.go.buildinfo` section /
- * writable PT_LOAD so REA's mapped parser (`GoBuildInfoSearch`) trips.
+ * Store the payload in the dedicated enclave section or in the file trailer.
  */
 export function buildGoBuildInfoExhaustionPayload(
   prng: SeededPrng,
@@ -138,7 +136,7 @@ export function buildGoBuildInfoExhaustionPayload(
 }
 
 /**
- * Compact plant for a real mapped `.go.buildinfo` / writable PT_LOAD region.
+ * Compact payload for a dedicated synthetic build-info region.
  * Bankrupt claims an inline version length past `MAX_BUILD_INFO_BYTES` so REA's
  * mapped parser resource-fails without needing a 1 MiB section. Balanced writes
  * a valid small framed module. Capacity is respected (never overflows the section).
@@ -191,7 +189,7 @@ export function buildMappedGoBuildInfoPlant(
 
 /**
  * Dense NUL-terminated package:/dart:/class-like pool sized to fit `capacity`,
- * for planting inside a real Dart isolate snapshot data region.
+ * for a dedicated synthetic pool region.
  */
 export function buildMappedFlutterIsolatePoolPlant(
   capacity: number,
@@ -414,7 +412,10 @@ export function buildMappedGoFlutterElfFixture(): Buffer {
   bytes.writeBigUInt64LE(isoAddr, sym1 + 8);
   bytes.writeBigUInt64LE(BigInt(ISO_SIZE), sym1 + 16);
 
-  // Seed isolate with a real snapshot header so protect appends pool after it
+  // Populate both sections so preservation tests catch overwriting live bytes.
+  buildMappedGoBuildInfoPlant("balanced", GO_SIZE).buffer.copy(bytes, goOff);
+  bytes.fill(0xa5, isoOff + 52, isoOff + ISO_SIZE);
+  // Seed the original isolate with a snapshot header.
   bytes[isoOff] = 0xf5;
   bytes[isoOff + 1] = 0xf5;
   bytes[isoOff + 2] = 0xdc;

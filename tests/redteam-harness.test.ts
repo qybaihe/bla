@@ -88,20 +88,21 @@ describe("mapped Go/Flutter plants vs REA pool caps", () => {
     expect(text).toContain("Node_0_X");
   });
 
-  it("protectNativeBinary on mapped fixture plants pool past REA report caps", async () => {
+  it("protectNativeBinary carries its pool separately from the mapped fixture", async () => {
     const { projectStringPoolReaFaithful } = await import(probesPath);
     const fixture = buildMappedGoFlutterElfFixture();
     const res = protectNativeBinary(fixture, {
       intensity: "bankrupt",
       seed: "redteam-mapped-caps",
     });
-    expect(res.mappedFlutterPoolPlanted).toBe(true);
+    expect(res.mappedFlutterPoolPlanted).toBe(false);
     expect(res.goBuildInfoExceedsLimit).toBe(true);
     const layout = validateElf64Layout(res.buffer);
     const names = resolveElf64SectionNames(res.buffer, layout);
     const iso = names.get(".isolate")!;
-    const section = res.buffer.subarray(iso.offset, iso.offset + iso.size);
-    const pool = projectStringPoolReaFaithful(section, REA_INTERNAL_LIMITS);
+    const end = iso.offset + iso.size;
+    expect(res.buffer.subarray(iso.offset, end)).toEqual(fixture.subarray(iso.offset, end));
+    const pool = projectStringPoolReaFaithful(res.buffer.subarray(fixture.length), REA_INTERNAL_LIMITS);
     expect(pool.reportWouldCap).toBe(true);
     expect(pool.packageUriCount).toBeGreaterThan(
       REA_INTERNAL_LIMITS.DART_MAX_POOL_URIS,

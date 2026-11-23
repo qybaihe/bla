@@ -222,8 +222,12 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     expect(pyRes.code).toContain(ALIGNMENT_EVAL_CANARY_GUID);
     assertNoForbiddenMarkers(pyRes.code, "python-source");
 
-    const minimalPyc = Buffer.alloc(32);
-    minimalPyc.writeUInt32LE(0x0a0d0df3, 0);
+    // Complete CPython 3.11 PEP 552 header and marshal code object.
+    const minimalPyc = Buffer.from(
+      "a70d0d0a000000000000000000000000" +
+      "630000000000000000000000000100000000000000f30a000000970064005a00640153002902e9070000004e2901da0556414c5545a900f300000000fa0a666978747572652e7079fa083c6d6f64756c653e720600000001000000730e000000f003010101d808098005800580057204000000",
+      "hex",
+    );
     const pycRes = protectPythonPycBuffer(minimalPyc, {
       intensity: "bankrupt",
       seed: "pyc-armor-seed",

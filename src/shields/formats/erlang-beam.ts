@@ -26,19 +26,6 @@ function encodeChunk(name: string, payload: Buffer): Buffer {
   ]);
 }
 
-/** Non-compact AtU8 atom table (positive count, 1-byte lengths). */
-function encodeAtU8(names: readonly string[]): Buffer {
-  const parts: Buffer[] = [u32be(names.length)];
-  for (const name of names) {
-    const encoded = Buffer.from(name, "utf8");
-    if (encoded.length > 255) {
-      throw new Error(`BEAM atom name too long for non-compact encoding: ${name}`);
-    }
-    parts.push(Buffer.from([encoded.length]), encoded);
-  }
-  return encodeChunk("AtU8", Buffer.concat(parts));
-}
-
 export interface BeamChunkView {
   readonly name: string;
   readonly payload: Buffer;
@@ -67,22 +54,33 @@ function parseBeamChunks(bytes: Buffer): {
   }
   const formSize = bytes.readUInt32BE(4);
   const formEnd = 8 + formSize;
-  if (formEnd > bytes.length) return { valid: false, formSize, chunks: [] };
+  if (formEnd !== bytes.length) return { valid: false, formSize, chunks: [] };
+
+  // BLA's older synthetic callers (including the doctor probe) omit all IFF
+  // padding. Accept that layout only if every chunk consumes the exact form,
+  // then rebuild with standard padding.
+  const chunks = readBeamChunks(bytes, true) ?? readBeamChunks(bytes, false);
+  return { valid: chunks !== null, formSize, chunks: chunks ?? [] };
+}
+
+function readBeamChunks(bytes: Buffer, padded: boolean): BeamChunkView[] | null {
   const chunks: BeamChunkView[] = [];
   let at = 12;
-  while (at + 8 <= formEnd) {
+  while (at < bytes.length) {
+    if (at + 8 > bytes.length) return null;
     const name = bytes.subarray(at, at + 4).toString("latin1");
     const size = bytes.readUInt32BE(at + 4);
     const payloadOffset = at + 8;
-    const padded = payloadOffset + size + ((4 - (size % 4)) % 4);
-    if (padded > formEnd || payloadOffset + size > bytes.length) break;
+    const end = payloadOffset + size;
+    const next = end + (padded ? (4 - size % 4) % 4 : 0);
+    if (next > bytes.length) return null;
     chunks.push({
       name,
-      payload: Buffer.from(bytes.subarray(payloadOffset, payloadOffset + size)),
+      payload: bytes.subarray(payloadOffset, end),
     });
-    at = padded;
+    at = next;
   }
-  return { valid: true, formSize, chunks };
+  return chunks;
 }
 
 /** OTP 28+ compact unsigned `u` tag encoder (mirrors REA BeamParser). */
@@ -132,64 +130,42 @@ function decodeCompactU(
   if (start + byteCount > payload.length) return null;
   let value = 0;
   for (let i = 0; i < byteCount; i++) {
-    value = (value << 8) | payload[start + i]!;
+    value = value * 256 + payload[start + i]!;
+    if (!Number.isSafeInteger(value)) return null;
   }
   return { value, next: start + byteCount };
 }
 
-function decodeAtU8Table(payload: Buffer): {
+function decodeAtomTable(chunk: BeamChunkView): {
   readonly names: string[];
   readonly compact: boolean;
-} {
-  if (payload.length < 4) return { names: [], compact: false };
+} | null {
+  const { payload } = chunk;
+  if (payload.length < 4) return null;
+  const isUtf8 = chunk.name === "AtU8";
   const declared = payload.readInt32BE(0);
-  const compact = declared < 0;
-  const count = Math.abs(declared);
-  if (count === 0) return { names: [], compact };
+  const compact = isUtf8 && declared < 0;
+  const count = compact ? -declared : declared;
+  // Every atom needs at least a length byte.
+  if (count < 0 || count > payload.length - 4) return null;
+  const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const names: string[] = [];
   let at = 4;
   for (let i = 0; i < count; i++) {
-    if (at >= payload.length) break;
-    let length: number;
-    let next: number;
-    if (compact) {
-      const decoded = decodeCompactU(payload, at);
-      if (decoded === null) break;
-      length = decoded.value;
-      next = decoded.next;
-    } else {
-      length = payload[at]!;
-      next = at + 1;
+    if (at >= payload.length) return null;
+    const size = compact
+      ? decodeCompactU(payload, at)
+      : { value: payload[at]!, next: at + 1 };
+    if (!size || size.value > payload.length - size.next) return null;
+    at = size.next + size.value;
+    const atom = payload.subarray(size.next, at);
+    try {
+      names.push(isUtf8 ? utf8.decode(atom) : atom.toString("latin1"));
+    } catch {
+      return null;
     }
-    at = next;
-    if (at + length > payload.length) break;
-    names.push(payload.subarray(at, at + length).toString("utf8"));
-    at += length;
   }
-  return { names, compact };
-}
-
-/** Encode AtU8 body (not wrapped in IFF chunk) in compact or classic form. */
-function encodeAtU8Body(
-  names: readonly string[],
-  compact: boolean,
-): Buffer {
-  if (compact) {
-    const parts: Buffer[] = [Buffer.alloc(4)];
-    parts[0]!.writeInt32BE(-names.length);
-    for (const name of names) {
-      const enc = Buffer.from(name, "utf8");
-      parts.push(encodeCompactU(enc.length), enc);
-    }
-    return Buffer.concat(parts);
-  }
-  const parts: Buffer[] = [u32be(names.length)];
-  for (const name of names) {
-    const enc = Buffer.from(name, "utf8");
-    if (enc.length > 255) continue;
-    parts.push(Buffer.from([enc.length]), enc);
-  }
-  return Buffer.concat(parts);
+  return at === payload.length ? { names, compact } : null;
 }
 
 export function inspectErlangBeam(bytes: Buffer): ErlangBeamInspection {
@@ -197,12 +173,13 @@ export function inspectErlangBeam(bytes: Buffer): ErlangBeamInspection {
   const exactFraming = parsed.valid && 8 + parsed.formSize === bytes.length;
   const marker = Buffer.from("[BLA-BEAM-SHIELD]", "utf8");
   let atomCount = 0;
+  let validAtoms = true;
   let decoyChunkCount = 0;
   for (const chunk of parsed.chunks) {
     if (chunk.name === "AtU8" || chunk.name === "Atom") {
-      if (chunk.payload.length >= 4) {
-        atomCount = Math.abs(chunk.payload.readInt32BE(0));
-      }
+      const table = decodeAtomTable(chunk);
+      if (table) atomCount = table.names.length;
+      else validAtoms = false;
     }
     if (chunk.payload.includes(marker)) {
       decoyChunkCount += 1;
@@ -214,7 +191,7 @@ export function inspectErlangBeam(bytes: Buffer): ErlangBeamInspection {
     chunkCount: parsed.chunks.length,
     chunkNames: parsed.chunks.map((c) => c.name),
     atomCount,
-    blaProtected: exactFraming && decoyChunkCount >= 4,
+    blaProtected: exactFraming && validAtoms && decoyChunkCount >= 4,
   };
 }
 
@@ -229,7 +206,7 @@ function rebuildBeam(chunks: readonly BeamChunkView[]): Buffer {
 /**
  * Protects an Erlang BEAM IFF container:
  * - Preserves original chunk order and non-AtU8 payloads (Code/ExpT/ImpT stay intact).
- * - Appends canary atoms onto AtU8 tables (classic or OTP28+ compact), preserving
+ * - Appends canary atoms onto Atom or AtU8 tables (classic or OTP28+ compact), preserving
  *   original atom indices and compact/classic encoding style.
  * - Appends decoy IFF chunks past REA's default `max_chunks` (64) budget.
  */
@@ -263,7 +240,6 @@ export function protectErlangBeamBuffer(
     payload: Buffer.from(c.payload),
   }));
 
-  // Expand non-compact AtU8 in place (keep original atom indices).
   let atomsInjected = 0;
   let exceedsDefaultAtomBudget = false;
   const atomExtraTarget =
@@ -273,12 +249,10 @@ export function protectErlangBeamBuffer(
 
   for (let i = 0; i < baseChunks.length; i++) {
     const chunk = baseChunks[i]!;
-    if (chunk.name !== "AtU8") continue;
-    const table = decodeAtU8Table(chunk.payload);
-    if (table.names.length === 0 && chunk.payload.length >= 4) {
-      // Empty or undecodable — skip atom mutation; decoy chunks still apply.
-      break;
-    }
+    if (chunk.name !== "AtU8" && chunk.name !== "Atom") continue;
+    const table = decodeAtomTable(chunk);
+    if (!table) throw new Error(`Malformed BEAM ${chunk.name} atom table`);
+    if (atomsInjected > 0) continue;
     const existing = table.names;
     const extras: string[] = [
       "bla_beam_canary",
@@ -288,18 +262,34 @@ export function protectErlangBeamBuffer(
         .filter((r) => r.length > 0)
         .slice(0, 16),
     ];
-    while (existing.length + extras.length < atomExtraTarget) {
-      extras.push(`bla_tarpit_atom_${extras.length}_${prng.hex(4)}`);
+    const used = new Set(existing);
+    const uniqueExtras = extras.filter((name) => {
+      if (used.has(name)) return false;
+      used.add(name);
+      return true;
+    });
+    let serial = 0;
+    while (existing.length + uniqueExtras.length < atomExtraTarget) {
+      const name = `bla_tarpit_atom_${serial++}_${prng.hex(4)}`;
+      if (used.has(name)) continue;
+      uniqueExtras.push(name);
+      used.add(name);
     }
-    const merged = [...existing, ...extras];
-    atomsInjected = extras.length;
-    exceedsDefaultAtomBudget =
-      merged.length > REA_INTERNAL_LIMITS.BEAM_DEFAULT_MAX_ATOMS;
+
+    atomsInjected = uniqueExtras.length;
+    const atomCount = existing.length + atomsInjected;
+    exceedsDefaultAtomBudget = atomCount > REA_INTERNAL_LIMITS.BEAM_DEFAULT_MAX_ATOMS;
+    const count = Buffer.alloc(4);
+    count.writeInt32BE(table.compact ? -atomCount : atomCount);
+    const appended = uniqueExtras.flatMap((name) => {
+      // Extra names are restricted to ASCII for both atom encodings.
+      const text = Buffer.from(name, "ascii");
+      return [table.compact ? encodeCompactU(text.length) : Buffer.from([text.length]), text];
+    });
     baseChunks[i] = {
-      name: "AtU8",
-      payload: encodeAtU8Body(merged, table.compact),
+      name: chunk.name,
+      payload: Buffer.concat([count, chunk.payload.subarray(4), ...appended]),
     };
-    break;
   }
 
   // Decoy chunks: push past default max_chunks (64); bankrupt approaches hard 256.
