@@ -131,9 +131,18 @@ assert seen == {0x61, 0x75}
     }
   });
 
-  const pep701 = pythonForMinor(12) ?? pythonForMinor(13);
+  // CPython 3.13 still rejects a newline inside a single-quoted f-string format
+  // spec, so select an interpreter that actually parses the fixture instead of
+  // assuming every 3.12+ build does.
+  const PEP701_NEWLINE = String.fromCharCode(10);
+  const pep701Source = `def render():${PEP701_NEWLINE}    return f"{7:${PEP701_NEWLINE}    {3}}"${PEP701_NEWLINE}assert render() == "  7"${PEP701_NEWLINE}`;
+  const pep701Accepts = (candidate: string): boolean =>
+    spawnSync(candidate, ["-I", "-c", pep701Source], { stdio: "pipe" }).status === 0;
+  const pep701 = [12, 13, 14, 15]
+    .map((minor) => pythonForMinor(minor))
+    .find((candidate): candidate is string => candidate !== undefined && pep701Accepts(candidate));
   it.skipIf(!pep701)("accepts multiline single-quoted PEP 701 format fields", () => {
-    const source = 'def render():\n    return f"{7:\n    {3}}"\nassert render() == "  7"\n';
+    const source = pep701Source;
     const output = protectPythonSource(source, { ...options, weaveDecoys: true });
     expect(output.customerDefsWoven).toBe(1);
     execFileSync(pep701!, ["-I", "-"], { input: output.code, stdio: "pipe" });
