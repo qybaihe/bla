@@ -44,6 +44,16 @@ describe("CLI flag validation", () => {
     await expect(runCli([])).resolves.toBe(0);
   });
 
+  it("rejects unknown --client ids instead of silently configuring zero clients", () => {
+    const bad = parseCliArgs(["setup", "--client", "nope"]);
+    expect(bad.argErrors.join(" ")).toMatch(/unknown client 'nope'/);
+    expect(bad.clients).toEqual([]);
+
+    const alias = parseCliArgs(["setup", "--client", "claude-code"]);
+    expect(alias.argErrors).toEqual([]);
+    expect(alias.clients).toEqual(["claude_code"]);
+  });
+
   it("rejects invalid flags passed to mcp before starting the server", async () => {
     await expect(runCli(["mcp", "--bogus"])).resolves.toBe(1);
   });
