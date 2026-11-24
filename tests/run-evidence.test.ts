@@ -88,6 +88,22 @@ describe("harden run evidence (C1)", () => {
     expect(byDir.runId).toBe(report.runId);
     expect(byDir.summaryPath).toContain(HARDEN_SUMMARY_FILE_NAME);
 
+    const blockedDir = mkdtempSync(join(tmpdir(), "bla-run-blocked-"));
+    tempDirs.push(blockedDir);
+    mkdirSync(join(blockedDir, "dist"));
+    writeFileSync(join(blockedDir, "dist", "app.js"), JS, "utf8");
+    const blockedSummary = join(blockedDir, ".bla-hardened", HARDEN_SUMMARY_FILE_NAME);
+    mkdirSync(blockedSummary, { recursive: true });
+    const blocked = hardenProject({
+      directory: blockedDir,
+      seed: "run-ev-blocked",
+      intensity: "stealth",
+    });
+    expect(blocked.summaryPath).toBeUndefined();
+    expect(blocked.summaryWriteFailure?.path).toBe(blockedSummary);
+    expect(blocked.summaryWriteFailure?.error).toBeTruthy();
+    expect(blocked.nextSteps?.join("\n")).toMatch(/run summary was not written/i);
+
     // Dry-run still gets a runId (same planned work → same id) but no summary file.
     const dry = hardenProject({
       directory: dir,
