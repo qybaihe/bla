@@ -142,6 +142,8 @@ Options:
   --apply                     harden: overwrite the build output with the hardened files (originals are backed up
                               outside the project; source files are never overwritten); re-runs re-harden from the originals
   --restore                   harden: undo --apply and put the original build output back
+  --clear-stale-lock          apply/restore: remove a lock whose recorded owner process has exited
+                              (a live owner is never cleared)
   --dry-run                   Preview planned setup/uninstall/harden changes without writing files
   -y, --yes                   Approve setup actions without interactive confirmation
   --json                      Emit structured JSON output
@@ -197,6 +199,7 @@ interface ParsedCliArgs {
   readonly dryRun: boolean;
   readonly apply: boolean;
   readonly restore: boolean;
+  readonly clearStaleLock: boolean;
   readonly verifyHandshake: boolean;
   readonly yes: boolean;
   readonly json: boolean;
@@ -278,6 +281,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let dryRun = false;
   let apply = false;
   let restore = false;
+  let clearStaleLock = false;
   let verifyHandshake = false;
   let yes = false;
   let json = false;
@@ -325,6 +329,8 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       apply = true;
     } else if (arg === "--restore") {
       restore = true;
+    } else if (arg === "--clear-stale-lock") {
+      clearStaleLock = true;
     } else if (arg === "--verify-handshake") {
       verifyHandshake = true;
     } else if (arg === "--all-detected") {
@@ -577,6 +583,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     dryRun,
     apply,
     restore,
+    clearStaleLock,
     verifyHandshake,
     yes,
     json,
@@ -821,7 +828,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           }
           const restored = parsed.dryRun
             ? previewHardenRestore(directory)
-            : restoreHardenedProject(directory);
+            : restoreHardenedProject(directory, { clearStaleLock: parsed.clearStaleLock });
           if (parsed.json) {
             console.log(JSON.stringify(restored, null, 2));
           } else if (restored.status === "restored" || restored.status === "planned") {
@@ -852,6 +859,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         const report = hardenProject({
           directory,
           ...(parsed.apply ? { apply: true } : {}),
+          ...(parsed.clearStaleLock ? { clearStaleLock: true } : {}),
           ...(parsed.exclude.length > 0 ? { exclude: parsed.exclude } : {}),
           intensity: explicitIntensity,
           ...(seed !== undefined ? { seed } : {}),

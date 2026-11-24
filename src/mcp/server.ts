@@ -459,6 +459,11 @@ const RAW_BLA_MCP_TOOLS: readonly McpToolDefinition[] = [
           description:
             "Undo a previous apply: put the original build output back and harden nothing (CLI --restore). Files that changed since the apply (for example after a rebuild) are left alone. Needs confirm_overwrite:true.",
         },
+        clear_stale_lock: {
+          type: "boolean",
+          description:
+            "Apply/restore only: remove a transaction lock left by an exited BLA process when its recorded PID is no longer running. A live owner or a lock without an owner record is never cleared. Default false.",
+        },
       },
       additionalProperties: false,
     },
@@ -2647,7 +2652,9 @@ export async function handleMcpRequest(
             } else if (dryRun) {
               payload = { status: "planned", restored: pending };
             } else {
-              const restored = restoreHardenedProject(hardenRoot);
+              const restored = restoreHardenedProject(hardenRoot, {
+                clearStaleLock: args.clear_stale_lock === true,
+              });
               refused = restored.status === "failed";
               payload = restored;
             }
@@ -2663,6 +2670,7 @@ export async function handleMcpRequest(
               ...(outputDirectory !== undefined ? { outputDirectory } : {}),
               ...(exclude !== undefined ? { exclude } : {}),
               ...(typeof args.self_seal === "boolean" ? { selfSeal: args.self_seal } : {}),
+              ...(args.clear_stale_lock === true ? { clearStaleLock: true } : {}),
             });
             preOverwrite = planHardenOverwrites(preview, args, applyMode, outputDirectory !== undefined);
           }
@@ -2716,6 +2724,7 @@ export async function handleMcpRequest(
                 ...(typeof args.self_seal === "boolean"
                   ? { selfSeal: args.self_seal }
                   : {}),
+                ...(args.clear_stale_lock === true ? { clearStaleLock: true } : {}),
                 ...(typeof args.sidecar_entangle === "boolean"
                   ? { sidecarEntangle: args.sidecar_entangle }
                   : {}),
