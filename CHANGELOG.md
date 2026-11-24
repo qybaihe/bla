@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-11-24
+
+Operational recovery, developer ergonomics, and audit/reporting honesty release (223 test suites / 1,590 tests passing).
+
+### Added
+- **Stale apply/restore lock recovery (`--clear-stale-lock` / `clear_stale_lock`, #291):** Transaction locks now record owning PID and timestamp in `owner.json`; explicit `--clear-stale-lock` clears a lock only when its recorded owner process has exited (`ESRCH`) and refuses live owners or locks without an owner record (`src/engine/harden-apply.ts`, `src/engine/harden.ts`, `src/cli.ts`, `src/mcp/server.ts`).
+- **Build-time self-seal inspector escape hatch (`--self-seal-allow-inspector` / `self_seal_allow_inspector`, #290):** Opt-in build-time flag (requires `--self-seal`, default `false`, no runtime env bypass) that drops only the `--inspect`/`NODE_OPTIONS`/`Function#toString` environment fingerprint while keeping sibling hash binding and self-digest hard-fail active (`src/shields/runtime/self-seal.ts`, `src/engine/*`, `src/cli.ts`, `src/mcp/server.ts`).
+- **Direct module contract test coverage (#293):** Adds 36 direct-import contract tests in `tests/untested-modules-contract.test.ts` covering `terminal-text`, `release-hygiene-lint`, six deception generators, and two exhaustion generators.
+
+### Security
+- **Structural WASM shield payload validation (#275):** `auditTarget` now parses and validates the JSON payloads of `bla.enclave.manifest`, `bla.canary.credentials`, and `bla.wasm.interface.exhaustion` before reporting `BLA_PROTECTED`, preventing empty or foreign marker sections from passing audit/verify (`src/engine/auditor.ts`).
+- **PCAP record-table completeness check (#282):** `protectPcapCaptureBuffer` validates that every record tiles the file cleanly and refuses truncated or trailing-fragment captures before appending decoys (`src/shields/formats/pcap-capture.ts`).
+- **CLI argv error sanitization (#279):** Routes `parsed.argErrors` and unknown-command diagnostics through `sanitizeTerminalText` to strip terminal control sequences (`src/cli.ts`).
+
+### Fixed
+- **Reporting & lint honesty (#277, #283, #286, #287, #288):** `auditTarget` publishes the middle `PARTIALLY_SHIELDED` band only when real decoys/chaff exist rather than syntactic shape alone; `lintPlaintextSecretsSource` discloses when the 800k-char scan window truncates a large file (`plaintext-scan-truncated`); Apple plists whose root is not a dictionary report `protectionSkipped` with zero planted metrics instead of constant decoy counts; `.pyc` versions without a bytecode weaver report `weaveSkipReason`; failed `bla-harden-summary.json` writes disclose `summaryWriteFailure` and a `nextSteps` warning instead of silently dropping `summaryPath`.
+- **Docs & test reliability (#285, #289, #292):** Fixes the Vite plugin option name (`honeySourceMap`) across `examples/vite-config-example.ts`, `README.md`, and 22 localized READMEs; removes drifted hardcoded `16-vector` / `16x–51x` claims from docs and `bla_defend`; probes PEP 701 interpreter acceptance dynamically in `tests/hardening-formats-binaries.test.ts`.
+
 ## [3.5.9] — 2026-11-24
 
 Cross-platform CI & release verification fix for `3.5.8` (which was not published): makes `scripts/verify-website.mjs` zero-dependency (static parser without `node_modules` or `node:vm`), keeps isolated `homeDir` overrides in `resolveSupportedAgentClients` hermetic from host `XDG_CONFIG_HOME`/`APPDATA`/`CODEX_HOME`, and adds Python 3.14 PEP 649 `__annotate__` test compatibility. All 4 CI platforms (Ubuntu Node 24/22.23.4, macOS Node 24, Windows Node 24) and Website Check verified green.
