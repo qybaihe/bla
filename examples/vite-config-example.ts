@@ -5,7 +5,7 @@ export default {
     blaVitePlugin({
       intensity: "bankrupt",
       seed: "enterprise-release-2026",
-      enableHoneySourceMaps: true,
+      honeySourceMap: true,
     }),
   ],
 };

@@ -105,7 +105,7 @@ import { defineConfig } from "vite";
 import { blaVitePlugin } from "bla-agents/bundler";
 
 export default defineConfig({
-  plugins: [blaVitePlugin({ intensity: "bankrupt", enableHoneySourceMaps: true })],
+  plugins: [blaVitePlugin({ intensity: "bankrupt", honeySourceMap: true })],
 });
 ```
 
