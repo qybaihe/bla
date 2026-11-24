@@ -3430,7 +3430,25 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
 /**
  * Starts the BLA MCP server over stdio (supporting newline-delimited and Content-Length JSON-RPC 2.0).
  */
-export function startMcpStdioServer(): void {
+export function startMcpStdioServer(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): void {
+  const maxPendingRequests = 16;
+  const maxPendingBytes = 4 * 1024 * 1024;
+  let pendingRequests = 0;
+  let pendingBytes = 0;
+  let waitingForDrain = false;
+  function writeResponse(data: string): void {
+    if (!output.write(data) && !waitingForDrain) {
+      waitingForDrain = true;
+      input.pause();
+      output.once("drain", () => {
+        waitingForDrain = false;
+        input.resume();
+      });
+    }
+  }
   let processingQueue = Promise.resolve();
   const queuedRequests = new Map<string | number, { cancelled: boolean; reason?: string }>();
   const processor = createStdioLineProcessor({
@@ -3449,11 +3467,11 @@ export function startMcpStdioServer(): void {
             message: "Parse error",
           },
         };
-        process.stdout.write(JSON.stringify(parseErr) + "\n");
+        writeResponse(JSON.stringify(parseErr) + "\n");
         return;
       }
       if (!isJsonRpcRequest(req)) {
-        process.stdout.write(JSON.stringify(invalidRequest(req)) + "\n");
+        writeResponse(JSON.stringify(invalidRequest(req)) + "\n");
         return;
       }
       if (req.method === "notifications/cancelled" && req.id === undefined) {
@@ -3468,6 +3486,18 @@ export function startMcpStdioServer(): void {
         }
         return;
       }
+      const requestBytes = Buffer.byteLength(line, "utf8");
+      if (pendingRequests >= maxPendingRequests || pendingBytes + requestBytes > maxPendingBytes) {
+        if (req.id !== undefined) {
+          writeResponse(JSON.stringify({
+            jsonrpc: "2.0", id: req.id,
+            error: { code: -32000, message: "Server busy; retry later." },
+          }) + "\n");
+        }
+        return;
+      }
+      pendingRequests++;
+      pendingBytes += requestBytes;
       const reqId = req.method === "tools/call" && isPlainObject(req.params) &&
         req.params.name === "bla_harden" && isRequestId(req.id) ? req.id : undefined;
       if (reqId !== undefined) {
@@ -3486,7 +3516,7 @@ export function startMcpStdioServer(): void {
         try {
           const res = await handleMcpRequest(req);
           if (res !== null) {
-            process.stdout.write(JSON.stringify(res) + "\n");
+            writeResponse(JSON.stringify(res) + "\n");
           }
         } catch {
           const parseErr: JsonRpcResponse = {
@@ -3497,8 +3527,10 @@ export function startMcpStdioServer(): void {
               message: "Parse error",
             },
           };
-          process.stdout.write(JSON.stringify(parseErr) + "\n");
+          writeResponse(JSON.stringify(parseErr) + "\n");
         } finally {
+          pendingRequests--;
+          pendingBytes -= requestBytes;
           if (reqId !== undefined) {
             preAbortedHardenRequests.delete(reqId);
           }
@@ -3514,9 +3546,9 @@ export function startMcpStdioServer(): void {
           message: `Parse error: line exceeds ${MAX_STDIO_LINE_CHARS} character limit`,
         },
       };
-      process.stdout.write(JSON.stringify(parseErr) + "\n");
+      writeResponse(JSON.stringify(parseErr) + "\n");
     },
   });
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk: string) => processor.push(chunk));
+  input.setEncoding("utf8");
+  input.on("data", (chunk: string) => processor.push(chunk));
 }

@@ -1,5 +1,6 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { createStdioLineProcessor, MAX_STDIO_LINE_CHARS } from "../src/mcp/server.js";
+import { createStdioLineProcessor, MAX_STDIO_LINE_CHARS, startMcpStdioServer } from "../src/mcp/server.js";
 
 function collect() {
   const lines: string[] = [];
@@ -54,5 +55,33 @@ describe("MCP stdio line processor", () => {
     expect(oversizedCount()).toBe(0);
     processor.push('"method":"ping"}\n');
     expect(lines).toEqual(['{"jsonrpc":"2.0","id":5,"method":"ping"}']);
+  });
+});
+
+describe("MCP stdio queue", () => {
+  it.each([
+    { accepted: 16, padding: "" },
+    // Three bytes per character: two such requests exceed the aggregate byte budget.
+    { accepted: 1, padding: "雪".repeat(720_000) },
+  ])("rejects overflow and recovers after $accepted requests", async ({ accepted, padding }) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const responses = new Map<number, { result?: unknown; error?: { code: number } }>();
+    output.on("data", (chunk: Buffer) => {
+      const response = JSON.parse(chunk.toString());
+      responses.set(response.id, response);
+    });
+    startMcpStdioServer(input, output);
+    const ping = (id: number) => JSON.stringify({
+      jsonrpc: "2.0", method: "ping", id, params: { padding },
+    }) + "\n";
+    for (let id = 0; id <= accepted; id++) input.write(ping(id));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(responses.size).toBe(accepted + 1);
+    for (let id = 0; id < accepted; id++) expect(responses.get(id)?.result).toEqual({});
+    expect(responses.get(accepted)?.error?.code).toBe(-32000);
+    input.end(ping(accepted + 1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(responses.get(accepted + 1)?.result).toEqual({});
   });
 });
