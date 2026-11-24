@@ -133,7 +133,7 @@ export interface OneClickDefenseReport {
  * Designed so that once an AI Coding Agent attaches BLA via `npx bla-agents@latest setup`,
  * a single command or MCP tool invocation runs the entire 5-stage Counter-REA defense loop:
  *   1. Read-only source-map & symbol exposure check (`inspectReleaseExposure`)
- *   2. Pre-flight 16-vector REA vulnerability & token-cost audit (`auditTarget`)
+ *   2. Pre-flight multi-vector REA vulnerability & token-cost audit (`auditTarget`)
  *   3. Maximum/Bankrupt Resource-Exhaustion + Model-Misjudgment shield injection (`protectTarget`)
  *   4. Counter-REA mathematical & structural invariant verification (`verifyTarget`)
  *   5. Defense attestation manifest generation

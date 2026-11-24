@@ -16,7 +16,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | `npx bla-agents harden . --exclude <a,b>` | Leaves the named paths / globs out (repeatable; also `"exclude"` in `.blarc`). For the one file that breaks or slows the program when hardened — everything else is still protected and the report lists what ships as it was. |
 | `npx bla-agents harden . --sqlite-eval-trap` | SQLite only, opt-in (also `defend` / `protect`, `"sqliteEvalTrap"` in `.blarc`). The honey tables' generated columns call a function no stock connection has, so an inspector's row read of those tables fails — and so do `PRAGMA integrity_check`, `VACUUM` and a dump/restore in the application, unless it registers a function named `enclave_unseal_payload` itself. Without the flag the decoy columns are plain SQL and the database works everywhere. Either way the application's own tables are stored as before: BLA does not encrypt a database. |
 | `npx bla-agents inspect-release <target>` | Read-only local scan for embedded `.map` (`sourcesContent`) and sourceMappingURL references. |
-| `npx bla-agents audit <target>` | Pre-flight 16-vector REA vulnerability & token-cost audit. |
+| `npx bla-agents audit <target>` | Pre-flight multi-vector REA vulnerability & token-cost audit. |
 | `npx bla-agents protect <target> [-o <out>] [--weave-decoys]` | Injects BLA's Resource-Exhaustion and Model-Misjudgment shield (`stealth`, `balanced`, `maximum`, `bankrupt`). Opt-in `--weave-decoys` for structural Python customer-def weave. |
 | `npx bla-agents verify <target> [original]` | Verifies Counter-REA invariants and calculates token/cost amplification. |
 | `npx bla-agents benchmark` | Runs the 14-target Counter-REA Showcase Benchmark suite. |

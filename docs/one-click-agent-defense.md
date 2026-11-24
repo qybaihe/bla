@@ -82,9 +82,9 @@ See [`weave-decoy-mcp.md`](./weave-decoy-mcp.md). Do **not** add dismissible
 ## What the pipeline executes
 
 1. **Stage 1 (`inspect-release`)**: Read-only scan for accidental `.map` (`sourcesContent`) and symbol leaks.
-2. **Stage 2 (`audit`)**: 16-vector REA vulnerability & Claude Opus 4 / Sonnet 4 / o3 token-cost simulation.
+2. **Stage 2 (`audit`)**: multi-vector REA vulnerability & Claude Opus 4 / Sonnet 4 / o3 token-cost simulation.
 3. **Stage 3 (`protect --intensity bankrupt`)**: Injects both the **Resource-Exhaustion Suite** and the **Model-Misjudgment Induction Suite**.
-4. **Stage 4 (`verify`)**: Verifies all Counter-REA mathematical invariants and confirms `16x–51x` token/cost bankruptcy amplification.
+4. **Stage 4 (`verify`)**: Verifies all Counter-REA mathematical invariants, including the token/cost bankruptcy amplification check (passes at >= 10x, or >= 80,000 protected tokens; the ratio is measured against the supplied original and otherwise against a disclosed assumed baseline).
 5. **Stage 5 (`manifest`)** (opt-in): Emits `<output>.bla-manifest.json` attesting to the hardened build.
 
 ## Related
