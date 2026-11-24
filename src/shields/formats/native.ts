@@ -85,6 +85,8 @@ export interface NativeBinaryInspection {
   readonly nativeMappedSectionInjected?: boolean;
   readonly extractedStringsCount: number;
   readonly blaProtected: boolean;
+  /** True when a 32-bit ELF header failed validation and inspection fell back. */
+  readonly elf32ValidationFailed?: boolean;
 }
 
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -425,6 +427,7 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
   let format: NativeBinaryInspection["format"] = "unknown";
   let bits: 32 | 64 = 64;
   let architecture = "unknown";
+  let elf32ValidationFailed = false;
 
   if (
     bytes.length >= 20 &&
@@ -571,7 +574,9 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
       }
       elfItaniumRttiClassesCount = itaniumMatches.size;
     } catch {
-      // Truncated / synthetic ELF32 headers fall back to unmapped inspection
+      // Truncated / synthetic ELF32 headers fall back to unmapped inspection,
+      // but the report must not imply the layout was validated.
+      elf32ValidationFailed = true;
     }
   }
   const nativeMappedSectionInjected = Boolean(
@@ -651,6 +656,7 @@ export function inspectNativeBinary(bytes: Buffer): NativeBinaryInspection {
     elfMappedSectionInjected,
     elfItaniumRttiClassesCount,
     nativeMappedSectionInjected,
+    ...(elf32ValidationFailed ? { elf32ValidationFailed } : {}),
     extractedStringsCount: printableMatches.length,
     blaProtected,
   };
