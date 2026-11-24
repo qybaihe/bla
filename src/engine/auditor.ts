@@ -522,8 +522,17 @@ function wasmEnclaveShieldIsStructural(bytes: Buffer): boolean {
   );
 }
 
+/** Upper bound on a single-file audit read; the directory walk uses 2 MiB per file. */
+export const MAX_SINGLE_FILE_AUDIT_BYTES = 64 * 1024 * 1024;
+
 export function auditTarget(targetPath: string): AuditReport {
   const absPath = resolve(targetPath);
+  const singleStat = statSync(absPath, { throwIfNoEntry: false });
+  if (singleStat?.isFile() && singleStat.size > MAX_SINGLE_FILE_AUDIT_BYTES) {
+    throw new Error(
+      `Refusing to audit ${absPath}: ${singleStat.size} bytes exceeds the ${MAX_SINGLE_FILE_AUDIT_BYTES}-byte single-file audit bound.`,
+    );
+  }
   const format = detectArtifactFormat(absPath);
 
   if (format === "unknown") {
