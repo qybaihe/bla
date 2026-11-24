@@ -332,6 +332,11 @@ node scripts/verify-website.mjs
 - 🎯 **[Public BLA CrackMe Arena (`challenge/v6` – `v9`)](challenge/v6/README.md)**
 - 💬 **[LINUX DO (`linux.do`)](https://linux.do/)** — 新的理想型社区
 
+## 🧩 More Projects by [@qybaihe](https://github.com/qybaihe)
+
+- 🤖 **[BotArk](https://github.com/qybaihe/botark)** — Native macOS, Windows, iOS & Android workspace unifying **Grok Bot**, **Google Antigravity**, **ChatGPT Dot**, **Meta Muse**, **Hark**, **Cue**, and **Hermes** with multi-agent collaboration rooms, per-account proxy isolation, and approval-gated local MCP.
+- 🧠 **[mu (μ)](https://github.com/qybaihe/mu)** — Coding agent harness with a tiny judgment kernel (`+9.5pp` on Terminal-Bench 2.1).
+
 ## 📄 License
 
 [MIT](LICENSE)

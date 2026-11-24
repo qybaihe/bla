@@ -273,6 +273,11 @@ flowchart LR
 - [🔬 真机 REA 对抗验证报告](../redteam/empirical-rea-validation.md)
 - 💬 **[LINUX DO (`linux.do`)](https://linux.do/)** — 新的理想型社区
 
+## 🧩 作者的更多开源项目
+
+- 🤖 **[BotArk](https://github.com/qybaihe/botark)** — 把 **Grok Bot**、**Google Antigravity**、**ChatGPT Dot**、**Meta Muse**、**Hark**、**Cue** 与开源 **Hermes** 收进同一个 macOS / Windows / iOS / Android 原生工作台，支持跨平台多 Agent 协作室、单账号独立代理隔离与受控本地 MCP。
+- 🧠 **[mu (μ)](https://github.com/qybaihe/mu)** — 带轻量裁决内核的 Coding Agent Harness（Terminal-Bench 2.1 通过率 `+9.5pp`）。
+
 ## 📄 开源协议
 
 [MIT](../../LICENSE)
