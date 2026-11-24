@@ -19,7 +19,7 @@ For coding agents, the **[`blind-llm-agents` skill](../.agents/skills/blind-llm-
 | `npx bla-agents audit <target>` | Pre-flight multi-vector REA vulnerability & token-cost audit. |
 | `npx bla-agents protect <target> [-o <out>] [--weave-decoys]` | Injects BLA's Resource-Exhaustion and Model-Misjudgment shield (`stealth`, `balanced`, `maximum`, `bankrupt`). Opt-in `--weave-decoys` for structural Python customer-def weave. |
 | `npx bla-agents verify <target> [original]` | Verifies Counter-REA invariants and calculates token/cost amplification. |
-| `npx bla-agents benchmark` | Runs the 14-target Counter-REA Showcase Benchmark suite. |
+| `npx bla-agents benchmark` | Runs the 16-target Counter-REA Showcase Benchmark suite. |
 | `npx bla-agents emit-headers --lang <c\|rust\|go>` | Emits compile-time native defense headers (`bla_shield.h`, `bla_shield.rs`, `bla_shield.go`). |
 | `npx bla-agents doctor [--verify-handshake]` | Checks readiness of all BLA protection engines and agent MCP registrations — per-user client configs and the MCP config files of the project it is run in (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `.codex/config.toml`, `opencode.json`) — flags an entry pinned to another release (`versionSkew`), and prints what to run to repair it. `--verify-handshake` also starts each registered server and checks that it answers `initialize`. |
 
@@ -87,7 +87,7 @@ Argument bounds are enforced before any tool runs: count arguments (`max_artifac
 - `bla_rea_drift`: Thin wrapper over `npm run verify:rea` / `scripts/verify-rea-constants.mjs`. Absent sibling REA → `status: unverified` (not red-team evidence).
 - `bla_redteam_report`: Read (or `execute:true` re-run) `docs/redteam/empirical-rea-validation.json`. On-disk read → `status: available` (not a live REA verdict); `execute:true` → `pass`/`fail`; missing report / unready REA → `status: unverified`. Also `unverified` when the harness could not call the REA checkout for a probe (REA renamed or moved something): nothing was measured for that format, which is the harness being out of date, not REA reading a hardened sample (`fail`).
 - `bla_polymorph_report`: Compare two hardened directories (`dir_a`, `dir_b`, optional thresholds) and report structural drift (export-name Jaccard, export-order Kendall-tau, byte-diff ratio, identifier overlap, aggregate `driftScore`). Drift is a stability signal, not a cracking-resistance proof.
-- `bla_benchmark`: Runs the 14-target showcase benchmark suite.
+- `bla_benchmark`: Runs the 16-target showcase benchmark suite.
 - `bla_emit_headers`: Generates C/C++, Rust, or Go defense headers (`language`, `intensity`).
 - `bla_bind_scope`: Optional honest code-lock — write public `bind-scope.json` (domains / validFrom / validUntil) and inject `BLA_BIND_SCOPE_CHECK` into the license entry. Default OFF; never a covert backdoor. In-place runs require `confirm_overwrite` (see write-safety below).
 - `bla_encrypt_strings`: Encrypt sensitive literals in `panel.html` / `license.cjs` with a seed-derived XOR keystream plus a runtime decrypt stub (`path`, `seed`, optional `out_dir`, `include_urls`, `dry_run`, `confirm_overwrite`). Raises static-grep cost only — not white-box AES.
