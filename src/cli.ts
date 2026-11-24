@@ -702,7 +702,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   }
 
   if (parsed.argErrors.length > 0) {
-    for (const message of parsed.argErrors) console.error(`Error: ${message}`);
+    for (const message of parsed.argErrors) console.error(`Error: ${sanitizeTerminalText(message)}`);
     return 1;
   }
 
@@ -1467,7 +1467,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       }
 
       default:
-        console.error(`Unknown command: ${parsed.command}. Run "bla --help" for available commands.`);
+        console.error(`Unknown command: ${sanitizeTerminalText(parsed.command)}. Run "bla --help" for available commands.`);
         return 1;
     }
   } catch (err) {
