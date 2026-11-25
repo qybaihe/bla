@@ -149,6 +149,35 @@ Heuristic **lane-independence lint** (issue #40.1 / red-blue round-1): CLI `bla 
 
 Heuristic **seal-commitment lint** (red-blue round-2): CLI `bla lint-seal <file>` and MCP `bla_lint_seal` flag plaintext seal/entitlement JSON and reversible public commitments (`scheduleSalt`+`rounds`+`revision` without a one-way algorithm). Severity **error** findings make **bankrupt** harden/protect **refuse** unless CLI `--allow-plaintext-seal` / MCP `allow_plaintext_seal` / `.blarc` `"allowPlaintextSeal": true`. One-way SHA-256/HMAC digests pass. Full seal-encrypt/bind remains a follow-up; refusal closes the round-2 footgun by default.
 
+### CLI vs MCP coverage
+
+The MCP server and the CLI are deliberately **not** a 1:1 mirror. Every MCP
+tool has an agent-facing purpose, and the CLI keeps the admin commands an agent
+should not run unattended.
+
+MCP-only tools (no `bla <command>` equivalent):
+
+| MCP tool | Purpose |
+| :--- | :--- |
+| `bla_discover` | Read-only inventory of protectable artifacts under a directory. |
+| `bla_run_lookup` | Look up a previous run's evidence/receipt by id. |
+| `bla_rea_drift` | REA constant drift check against a sibling checkout. |
+| `bla_polymorph_report` | Seeded polymorphism / diff-noise report between two artifacts. |
+| `bla_encrypt_strings` | XOR-hide sensitive string literals in place (opt-in). |
+| `bla_bind_scope` | Write the public domain/date code-lock contract. |
+| `bla_lint_plaintext_secrets` | Plaintext-secret lint as a standalone tool. |
+| `bla_lint_bind_scope` | Bind-scope contract lint as a standalone tool. |
+| `bla_lint_integrity_coverage` | Interleaved integrity-coverage matrix lint. |
+| `bla_redteam_report` | Red-team/red-blue evidence report. |
+
+CLI-only commands (no MCP tool): `setup`, `update`, `uninstall`,
+`verify-manifest`, `verify-sidecar` — install/config and offline verification
+steps that a human runs, not an agent.
+
+The parity regression test (`tests/mcp-engine-capability-parity.test.ts`)
+asserts this is intentional: it checks the MCP tool schemas and annotations, not
+a full CLI mirror.
+
 ### MCP Resources
 
 - `bla://skill/SKILL.md` — the full agent guide (the `blind-llm-agents` skill), for a client that registered the server but has no skill installed (a checked-in `.mcp.json`, for example).
