@@ -45,7 +45,7 @@ import {
   emitCompileTimeNativeHeader,
   type NativeHeaderLanguage,
 } from "./shields/formats/headers.js";
-import { type SupportedAgentClientId } from "./setup/clients.js";
+import { normalizeClientId, type SupportedAgentClientId } from "./setup/clients.js";
 import { runSetup, runUninstall } from "./setup/setup.js";
 import { runDoctor } from "./setup/doctor.js";
 import { startMcpStdioServer } from "./mcp/server.js";
@@ -495,8 +495,18 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       }
     } else if (arg === "--client") {
       const value = expandedArgs[++i];
-      if (value === undefined) argErrors.push("--client requires a value");
-      else clients.push(value as SupportedAgentClientId);
+      if (value === undefined) {
+        argErrors.push("--client requires a value");
+      } else {
+        const normalized = normalizeClientId(value);
+        if (normalized === null) {
+          argErrors.push(
+            `unknown client '${value}'; expected one of claude_code, claude_desktop, cursor, codex, gemini_cli, windsurf, antigravity, vscode, opencode, copilot_cli`,
+          );
+        } else if (!clients.includes(normalized)) {
+          clients.push(normalized);
+        }
+      }
     } else if (!arg.startsWith("-")) {
       if (!command) command = arg;
       else positionals.push(arg);
