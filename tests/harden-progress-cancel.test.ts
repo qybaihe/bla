@@ -5,6 +5,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +26,7 @@ import { emitCompileTimeNativeHeader } from "../src/shields/formats/headers.js";
 import { runDoctor } from "../src/setup/doctor.js";
 import {
   handleMcpRequest,
+  startMcpStdioServer,
   type McpEngineHandlers,
 } from "../src/mcp/server.js";
 
@@ -172,6 +175,37 @@ describe("bla_harden progress + cooperative cancel (#75)", () => {
     expect(structured.written?.length).toBe(1);
   });
 
+  it("writes progress and the final reply to the same stdio transport", async () => {
+    const root = createTempDir();
+    writeTinyJsTree(root, ["a.js"]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const reader = createInterface({ input: output });
+    const lines = reader[Symbol.asyncIterator]();
+    startMcpStdioServer(input, output);
+    try {
+      input.end(JSON.stringify({
+        jsonrpc: "2.0", method: "tools/call", id: 1,
+        params: { name: "bla_harden", arguments: { directory: root }, _meta: { progressToken: "test" } },
+      }) + "\n");
+      const notes = [];
+      for await (const line of lines) {
+        const message = JSON.parse(line);
+        if (message.id === 1) {
+          expect(message.result?.structuredContent?.overallSuccess).toBe(true);
+          break;
+        }
+        notes.push(message);
+      }
+      expect(notes).toContainEqual(expect.objectContaining({
+        method: "notifications/progress", params: expect.objectContaining({ progressToken: "test", message: "done" }),
+      }));
+    } finally {
+      reader.close();
+      input.destroy();
+      output.destroy();
+    }
+  });
   it("notifications/cancelled without id returns null and is a no-op when idle", async () => {
     const res = await handleMcpRequest({
       jsonrpc: "2.0",

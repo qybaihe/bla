@@ -1,6 +1,8 @@
-import { PassThrough } from "node:stream";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
+import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { createStdioLineProcessor, MAX_STDIO_LINE_CHARS, startMcpStdioServer } from "../src/mcp/server.js";
+import { createStdioLineProcessor, MAX_STDIO_LINE_CHARS, MAX_STDIO_PENDING_BYTES, MAX_STDIO_PENDING_REQUESTS, startMcpStdioServer } from "../src/mcp/server.js";
 
 function collect() {
   const lines: string[] = [];
@@ -60,28 +62,51 @@ describe("MCP stdio line processor", () => {
 
 describe("MCP stdio queue", () => {
   it.each([
-    { accepted: 16, padding: "" },
-    // Three bytes per character: two such requests exceed the aggregate byte budget.
-    { accepted: 1, padding: "雪".repeat(720_000) },
+    { accepted: MAX_STDIO_PENDING_REQUESTS, padding: "" },
+    // Each UTF-8 payload uses just over half the byte budget.
+    { accepted: 1, padding: "雪".repeat(Math.ceil(MAX_STDIO_PENDING_BYTES / 6)) },
   ])("rejects overflow and recovers after $accepted requests", async ({ accepted, padding }) => {
     const input = new PassThrough();
     const output = new PassThrough();
-    const responses = new Map<number, { result?: unknown; error?: { code: number } }>();
-    output.on("data", (chunk: Buffer) => {
-      const response = JSON.parse(chunk.toString());
-      responses.set(response.id, response);
-    });
+    const reader = createInterface({ input: output });
+    const lines = reader[Symbol.asyncIterator]();
     startMcpStdioServer(input, output);
     const ping = (id: number) => JSON.stringify({
       jsonrpc: "2.0", method: "ping", id, params: { padding },
     }) + "\n";
-    for (let id = 0; id <= accepted; id++) input.write(ping(id));
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(responses.size).toBe(accepted + 1);
-    for (let id = 0; id < accepted; id++) expect(responses.get(id)?.result).toEqual({});
-    expect(responses.get(accepted)?.error?.code).toBe(-32000);
-    input.end(ping(accepted + 1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(responses.get(accepted + 1)?.result).toEqual({});
+    try {
+      // One synchronous in-memory delivery admits the entire batch before any
+      // queued dispatch microtask can run, independent of OS pipe scheduling.
+      input.write(Array.from({ length: accepted + 1 }, (_, id) => ping(id)).join(""));
+      const responses = new Map();
+      for (let i = 0; i <= accepted; i++) {
+        const response = JSON.parse((await lines.next()).value!);
+        responses.set(response.id, response);
+      }
+      for (let id = 0; id < accepted; id++) expect(responses.get(id)?.result).toEqual({});
+      expect(responses.get(accepted)?.error?.code).toBe(-32000);
+      input.end(ping(accepted + 1));
+      expect(JSON.parse((await lines.next()).value!)).toMatchObject({ id: accepted + 1, result: {} });
+    } finally {
+      reader.close();
+      input.destroy();
+      output.destroy();
+    }
+  });
+
+  it.each(["close", "error"])("releases paused input when output emits %s", async (event) => {
+    const input = new PassThrough();
+    const output = new Writable({ highWaterMark: 1, write() { /* Hold the write until teardown. */ } });
+    startMcpStdioServer(input, output);
+    const paused = once(input, "pause");
+    input.write('{"jsonrpc":"2.0","method":"ping","id":1}\n');
+    await paused;
+    const closed = new Promise<void>((resolve) => output.once("close", resolve));
+    output.destroy(event === "error" ? new Error("output disconnected") : undefined);
+    await closed;
+    expect(input.isPaused()).toBe(false);
+    expect(input.listenerCount("data")).toBe(0);
+    expect(output.listenerCount("drain")).toBe(0);
+    input.destroy();
   });
 });

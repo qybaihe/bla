@@ -249,9 +249,7 @@ describe("MCP framing and tool verdicts", () => {
       harden(1), cancel("1.0", { requestId: 1 }),
       cancel("2.0", { requestId: 1, reason: {} }),
       cancel("2.0", { requestId: 1 }, 8),
-      harden(2),
-      ...Array.from({ length: 14 }, (_, i) => ({ jsonrpc: "2.0", id: 20 + i, method: "ping" })),
-      cancel("2.0", { requestId: 2, reason: "valid cancellation" }),
+      harden(2), cancel("2.0", { requestId: 2, reason: "valid cancellation" }),
     ];
     const result = runBuiltCli(["mcp"], { input: requests.map((value) => JSON.stringify(value)).join("\n") + "\n" });
     expect(result.status).toBe(0);
@@ -259,7 +257,6 @@ describe("MCP framing and tool verdicts", () => {
     expect(messages.find(({ id }) => id === 1)?.result?.structuredContent).toMatchObject({ overallSuccess: true });
     expect(messages.find(({ id }) => id === 2)?.result?.structuredContent).toMatchObject({ cancelled: true });
     expect(messages.find(({ id }) => id === 8)?.error?.code).toBe(-32600);
-    expect(messages.find(({ id }) => id === 33)?.error?.code).toBe(-32000);
   });
 
   it("sets isError on structural verification and defense failures and enforces pinned verification", async () => {
