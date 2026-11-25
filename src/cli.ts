@@ -93,7 +93,7 @@ Commands:
   verify <target> [original]  Verify Counter-REA defense invariants & token amplification
   weave-plan <target>         Emit AST-level surgical weave workorder (bla-weave-plan/v1)
   verify-weave <target>       Verify Agent-authored source weave & return agentActions (exit 2 on fail)
-  benchmark                   Run the 14-target Counter-REA Showcase Benchmark suite
+  benchmark                   Run the 16-target Counter-REA Showcase Benchmark suite
   emit-headers                Generate compile-time C/C++, Rust, or Go defense headers
   verify-manifest <file>      Verify a signed .bla-manifest.json (exit 2 when invalid)
   verify-sidecar <entry>      Offline strip⇒fail sidecar check (exit 2 when invalid or runtime-only)

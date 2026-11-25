@@ -15,6 +15,7 @@ import { inspectErlangBeam } from "../shields/formats/erlang-beam.js";
 import { inspectEvmBytecode } from "../shields/formats/evm-bytecode.js";
 import { inspectPcapCapture } from "../shields/formats/pcap-capture.js";
 import { inspectGpuPtx } from "../shields/formats/gpu-ptx.js";
+import { parseGgufLayout, readGgufStringKv } from "../shields/formats/gguf-layout.js";
 import { auditTarget } from "./auditor.js";
 import { protectTarget } from "./protector.js";
 
@@ -97,6 +98,24 @@ function validateEnterpriseLicense(serialKey, productCode, expectedChecksum) {
 }
 
 module.exports = { computeLicenseChecksum, validateEnterpriseLicense };
+`;
+
+/**
+ * Showcase 4b: entitlement string table — the JavaScript-strings profile REA
+ * charges through `primitive-bytes`, `primitive-candidates`, `alias-selections`
+ * and `getter-expansion`.
+ */
+const JS_STRINGS_SOURCE = `
+const ENTITLEMENT_LABELS = Object.freeze(${JSON.stringify(
+  Array.from({ length: 64 }, (_, i) => `entitlement_pro_${i}_${"x".repeat(24)}`),
+)});
+
+function resolveEntitlement(code) {
+  const idx = ((code | 0) >>> 0) % ENTITLEMENT_LABELS.length;
+  return ENTITLEMENT_LABELS[idx];
+}
+
+module.exports = { resolveEntitlement, labelCount: ENTITLEMENT_LABELS.length };
 `;
 
 /**
@@ -751,6 +770,48 @@ export async function runShowcaseBenchmark(
         ptxInfo.blaProtected &&
         protPtx.startsWith(origPtx);
       cases.push(buildCaseResult("gpu-ptx", "NVIDIA PTX Text Module (.ptx)", "REA inspect_gpu_artifact (PTX)", res, functionalOk));
+    }
+
+    // 15. JavaScript entitlement string table
+    {
+      const stringsPath = join(tempDir, "entitlement-labels.js");
+      const outStringsPath = join(tempDir, "entitlement-labels.shielded.js");
+      writeFileSync(stringsPath, JS_STRINGS_SOURCE, "utf8");
+      const res = protectTarget({ inputPath: stringsPath, outputPath: outStringsPath, intensity: "bankrupt", seed });
+      const expected = runCommonJsModule(JS_STRINGS_SOURCE) as {
+        resolveEntitlement: (code: number) => string;
+        labelCount: number;
+      };
+      const actual = runCommonJsModule(readFileSync(outStringsPath, "utf8")) as typeof expected;
+      const probes = [0, 1, 7, 31, 63, 64, 4095];
+      const functionalOk =
+        expected.labelCount === 64 &&
+        actual.labelCount === expected.labelCount &&
+        probes.every((code) => actual.resolveEntitlement(code) === expected.resolveEntitlement(code));
+      cases.push(buildCaseResult("javascript-strings", "JavaScript Entitlement String Table (.js)", "REA primitive-bytes / alias-selections", res, functionalOk));
+    }
+
+    // 16. GGUF model metadata
+    {
+      const ggufPath = join(tempDir, "tensorless.gguf");
+      const outGgufPath = join(tempDir, "tensorless.shielded.gguf");
+      const gguf = Buffer.alloc(24);
+      gguf.write("GGUF", 0, "ascii");
+      gguf.writeUInt32LE(3, 4);
+      gguf.writeBigUInt64LE(0n, 8);
+      gguf.writeBigUInt64LE(0n, 16);
+      writeFileSync(ggufPath, gguf);
+      const res = protectTarget({ inputPath: ggufPath, outputPath: outGgufPath, intensity: "bankrupt", seed });
+      const protectedGguf = readFileSync(outGgufPath);
+      const layout = parseGgufLayout(protectedGguf);
+      const description = layout ? readGgufStringKv(protectedGguf, layout, "general.description") : null;
+      const functionalOk =
+        layout !== null &&
+        layout.tensorCount === 0n &&
+        layout.kvCount > 0n &&
+        typeof description === "string" &&
+        description.startsWith("[BLA-MODEL-SHIELD]");
+      cases.push(buildCaseResult("gguf-model", "GGUF Model Metadata (.gguf)", "REA inspect_model_artifact (GGUF)", res, functionalOk));
     }
 
   } finally {

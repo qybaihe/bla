@@ -10,7 +10,7 @@
 
 ### **Poison → Exhaust → Hallucinate. Make Reverse Engineering Bankrupt Again.**
 
-**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 14 showcase benchmark targets.**
+**The open-source Counter-REA Blue Defense MCP & CLI that protects software releases against AI reverse-engineering agents (`morluto/rea`, autonomous decompilers, and LLM recon pipelines) — verified across 16 showcase benchmark targets.**
 
 [![npm version](https://img.shields.io/badge/npm-bla--agents_v3.6.0-2563eb?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/bla-agents)
 [![GitHub Trending](https://img.shields.io/badge/GitHub_Trending-%235_Daily-7c3aed?style=for-the-badge&logo=github&logoColor=white)](https://trendshift.io/repositories/323569)
@@ -27,7 +27,7 @@
 
 **[🌐 Official Website](https://bla.tools/) · [📖 Defense Guides](https://bla.tools/guides/) · [📊 Live Benchmarks](https://bla.tools/showcase/) · [🎯 CrackMe Arena](https://bla.tools/crackme/) · [🏢 Enterprise](https://bla.tools/enterprise/) · [⚖️ Disclaimer](DISCLAIMER.md)**
 
-[Quick Start](#-30-second-quick-start) · [How It Works](#-how-bla-works-agent-driven-closed-loop) · [Empirical Results](#empirical-results-vs-real-rea) · [Format Coverage](#format-coverage) · [14-Target Benchmark](#benchmark-14-targets-internal-estimates) · [CrackMe Arena](#-red-vs-blue-crackme-arena) · [FAQ](#faq)
+[Quick Start](#-30-second-quick-start) · [How It Works](#-how-bla-works-agent-driven-closed-loop) · [Empirical Results](#empirical-results-vs-real-rea) · [Format Coverage](#format-coverage) · [16-Target Benchmark](#benchmark-16-targets-internal-estimates) · [CrackMe Arena](#-red-vs-blue-crackme-arena) · [FAQ](#faq)
 
 </div>
 
@@ -60,7 +60,7 @@ REA's default pass stops on its own resource budgets (`primitive-candidates > 25
 <td width="33%" valign="top">
 
 ### ⚡ Runtime-Equivalent by Design
-Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **14/14 bundled benchmark targets** pass input/output equivalence tests (`bla verify` checks Counter-REA structural gates; run your project's test suite for custom artifacts).
+Exhaustion graphs and decoy payloads sit behind $O(1)$ number-theoretic opaque predicates ($7x^2 - 1 \neq y^2 \pmod 7$) or inert format sections. **16/16 bundled benchmark targets** pass input/output equivalence tests (`bla verify` checks Counter-REA structural gates; run your project's test suite for custom artifacts).
 
 </td>
 </tr>
@@ -228,9 +228,9 @@ All 26 format shields are built directly into `bla-agents` with zero external pa
 
 ---
 
-## 📊 Benchmark (14 Targets, Internal Estimates)
+## 📊 Benchmark (16 Targets, Internal Estimates)
 
-Run `npx bla-agents benchmark` to execute the 14-target showcase locally:
+Run `npx bla-agents benchmark` to execute the 16-target showcase locally:
 
 ```bash
 npx bla-agents benchmark
@@ -238,7 +238,7 @@ npx bla-agents benchmark
 
 > **Note:** Token and USD columns below are **internal estimates** derived from BLA's catalog of REA limits to illustrate relative amplification across formats — for actual process-level REA errors, see the [Empirical Results](#empirical-results-vs-real-rea) table above.
 
-**Aggregate Showcase Result (modeled):** **~1,195.9×** modeled token amplification · **~563.7×** modeled cost amplification · **14/14 bundled showcase targets** passed runtime-equivalence checks. Figures are internal estimator projections on the benchmark fixtures, not metered live agent billing.
+**Aggregate Showcase Result (modeled):** **~1,293.6×** modeled token amplification · **~600.3×** modeled cost amplification · **16/16 bundled showcase targets** passed runtime-equivalence checks. Figures are internal estimator projections on the benchmark fixtures, not metered live agent billing.
 
 | Target Artifact | Unprotected Baseline (est.) | BLA Protected (est.) | Token Multiplier | Runtime Equivalence |
 | :--- | :--- | :--- | ---: | :---: |
@@ -256,6 +256,8 @@ npx bla-agents benchmark
 | **Apple binary plist (`.plist`)** | 81/100 · 6,440 tok · $0.26 | 8/100 · 1.79M tok · $29.54 · `LIMITED` | **277.6×** | ✅ 100% |
 | **SQLite entitlement DB (`.sqlite`)** | 81/100 · 10,568 tok · $0.29 | 7/100 · 1.71M tok · $28.39 · `LIMITED` | **162.1×** | ✅ 100% |
 | **Native ELF64 (Rust/Go/Fuse/Dart)** | 81/100 · 35,222 tok · $0.73 | 2/100 · 3.72M tok · $60.03 · `LIMITED` | **105.6×** | ✅ 100% |
+| **JavaScript entitlement string table (`.js`)** | 81/100 · 4,964 tok · $0.19 | 2/100 · 23.1M tok · $358.71 · `LIMITED` | **4,658.5×** | ✅ 100% |
+| **GGUF model metadata (`.gguf`)** | 81/100 · 4,800 tok · $0.20 | 8/100 · 1.65M tok · $27.39 · `LIMITED` | **344.4×** | ✅ 100% |
 
 ---
 
