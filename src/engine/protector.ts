@@ -208,30 +208,42 @@ function selfSealTransformOption(
 }
 
 
+function collectSidecarBindings(
+  paths: readonly string[],
+  base: string,
+): { readonly bindings: { pathLabel: string; bytes: Buffer }[]; readonly skipped: string[] } {
+  const bindings: { pathLabel: string; bytes: Buffer }[] = [];
+  const skipped: string[] = [];
+  for (const rel of paths) {
+    const abs = isAbsolute(rel) ? rel : join(base, rel);
+    try {
+      if (!lstatUnlinkedPath(abs)?.isFile()) {
+        skipped.push(rel);
+        continue;
+      }
+      bindings.push({ pathLabel: rel, bytes: readFileSync(abs) });
+    } catch {
+      skipped.push(rel);
+    }
+  }
+  return { bindings, skipped };
+}
+
 function applySidecarEntangleToJs(
   source: string,
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
   carrier: "module" | "script" | "commonjs",
-): { code: string; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { code: source, applied: false };
+): { code: string; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { code: source, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { code: source, applied: false };
+  if (paths.length === 0) return { code: source, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { code: source, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { code: source, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleJsEntryWithSidecars({
     entryPath: entryLabel,
@@ -241,8 +253,8 @@ function applySidecarEntangleToJs(
     softFold: options.sidecarEntangleSoftFold === true,
     carrier,
   });
-  if (!bound) return { code: source, applied: false };
-  return { code: bound.code, applied: true };
+  if (!bound) return { code: source, applied: false, skipped };
+  return { code: bound.code, applied: true, skipped };
 }
 
 function applySidecarEntangleToPython(
@@ -250,24 +262,15 @@ function applySidecarEntangleToPython(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { code: string; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { code: source, applied: false };
+): { code: string; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { code: source, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { code: source, applied: false };
+  if (paths.length === 0) return { code: source, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { code: source, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { code: source, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entanglePythonEntryWithSidecars({
     entryPath: entryLabel,
@@ -276,8 +279,8 @@ function applySidecarEntangleToPython(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { code: source, applied: false };
-  return { code: bound.code, applied: true };
+  if (!bound) return { code: source, applied: false, skipped };
+  return { code: bound.code, applied: true, skipped };
 }
 
 function applySidecarEntangleToWasm(
@@ -285,24 +288,15 @@ function applySidecarEntangleToWasm(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: wasmBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: wasmBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: wasmBytes, applied: false };
+  if (paths.length === 0) return { buffer: wasmBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: wasmBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: wasmBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleWasmEntryWithSidecars({
     entryPath: entryLabel,
@@ -311,8 +305,8 @@ function applySidecarEntangleToWasm(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: wasmBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: wasmBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 function applySidecarWasmLoaderAutoWire(options: {
@@ -363,24 +357,15 @@ function applySidecarEntangleToPyc(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: pycBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: pycBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: pycBytes, applied: false };
+  if (paths.length === 0) return { buffer: pycBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: pycBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: pycBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entanglePycEntryWithSidecars({
     entryPath: entryLabel,
@@ -389,8 +374,8 @@ function applySidecarEntangleToPyc(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: pycBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: pycBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 
@@ -454,24 +439,15 @@ function applySidecarEntangleToGguf(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: ggufBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: ggufBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: ggufBytes, applied: false };
+  if (paths.length === 0) return { buffer: ggufBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: ggufBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: ggufBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleGgufEntryWithSidecars({
     entryPath: entryLabel,
@@ -480,8 +456,8 @@ function applySidecarEntangleToGguf(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: ggufBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: ggufBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 function applySidecarGgufLoaderAutoWire(options: {
@@ -648,24 +624,15 @@ function applySidecarEntangleToSafetensors(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: safetensorsBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: safetensorsBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: safetensorsBytes, applied: false };
+  if (paths.length === 0) return { buffer: safetensorsBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: safetensorsBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: safetensorsBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleSafetensorsEntryWithSidecars({
     entryPath: entryLabel,
@@ -674,8 +641,8 @@ function applySidecarEntangleToSafetensors(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: safetensorsBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: safetensorsBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 function applySidecarEntangleToDex(
@@ -683,24 +650,15 @@ function applySidecarEntangleToDex(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: dexBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: dexBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: dexBytes, applied: false };
+  if (paths.length === 0) return { buffer: dexBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: dexBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: dexBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleDexEntryWithSidecars({
     entryPath: entryLabel,
@@ -709,8 +667,8 @@ function applySidecarEntangleToDex(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: dexBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: dexBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 function applySidecarEntangleToSqlite(
@@ -718,24 +676,15 @@ function applySidecarEntangleToSqlite(
   options: ProtectionOptions,
   absOutput: string,
   seed: string,
-): { buffer: Buffer; applied: boolean } {
-  if (options.sidecarEntangle !== true) return { buffer: sqliteBytes, applied: false };
+): { buffer: Buffer; applied: boolean; skipped: readonly string[] } {
+  if (options.sidecarEntangle !== true) return { buffer: sqliteBytes, applied: false, skipped: [] };
   const paths = (options.sidecarEntanglePaths ?? []).filter(
     (p) => typeof p === "string" && p.length > 0,
   );
-  if (paths.length === 0) return { buffer: sqliteBytes, applied: false };
+  if (paths.length === 0) return { buffer: sqliteBytes, applied: false, skipped: [] };
   const base = dirname(absOutput);
-  const sidecars: { pathLabel: string; bytes: Uint8Array }[] = [];
-  for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(base, rel);
-    try {
-      if (!lstatUnlinkedPath(abs)?.isFile()) continue;
-      sidecars.push({ pathLabel: rel, bytes: readFileSync(abs) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  if (sidecars.length === 0) return { buffer: sqliteBytes, applied: false };
+  const { bindings: sidecars, skipped } = collectSidecarBindings(paths, base);
+  if (sidecars.length === 0) return { buffer: sqliteBytes, applied: false, skipped };
   const entryLabel = basename(absOutput);
   const bound = entangleSqliteEntryWithSidecars({
     entryPath: entryLabel,
@@ -744,8 +693,8 @@ function applySidecarEntangleToSqlite(
     seedTag: derivePublicSidecarSeedTag(String(seed)),
     softFold: options.sidecarEntangleSoftFold === true,
   });
-  if (!bound) return { buffer: sqliteBytes, applied: false };
-  return { buffer: bound.bytes, applied: true };
+  if (!bound) return { buffer: sqliteBytes, applied: false, skipped };
+  return { buffer: bound.bytes, applied: true, skipped };
 }
 
 
@@ -1072,6 +1021,10 @@ function protectTargetInner(
   let inlineScriptsFailed = 0;
   let selfSealApplied = false;
   let sidecarEntangleApplied = false;
+  const sidecarEntangleSkipped = new Set<string>();
+  const noteSidecarSkips = (skipped: readonly string[]): void => {
+    for (const p of skipped) sidecarEntangleSkipped.add(p);
+  };
   let wasmSidecarLoaderHookApplied = false;
   let pycSidecarLoaderHookApplied = false;
   let ggufSidecarLoaderHookApplied = false;
@@ -1175,6 +1128,7 @@ function protectTargetInner(
         refineJsCarrierForRuntimePaths(transformed.carrierType, [absOutput, absInput]),
       );
       finalCode = entangled.code;
+      noteSidecarSkips(entangled.skipped);
       if (entangled.applied) sidecarEntangleApplied = true;
     }
 
@@ -1507,6 +1461,7 @@ function protectTargetInner(
         if (hook.applied) wasmSidecarLoaderHookApplied = true;
       }
       const entangled = applySidecarEntangleToWasm(finalWasm, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalWasm = entangled.buffer;
       if (entangled.applied) sidecarEntangleApplied = true;
       // Only record the load-time vector when the section was planted AND
@@ -1547,6 +1502,7 @@ function protectTargetInner(
     let finalPy = res.code;
     {
       const entangled = applySidecarEntangleToPython(finalPy, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalPy = entangled.code;
       if (entangled.applied) sidecarEntangleApplied = true;
     }
@@ -1587,6 +1543,7 @@ function protectTargetInner(
         if (hook.applied) pycSidecarLoaderHookApplied = true;
       }
       const entangled = applySidecarEntangleToPyc(finalPyc, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalPyc = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
@@ -1698,6 +1655,7 @@ function protectTargetInner(
     let finalSqlite = res.buffer;
     {
       const entangled = applySidecarEntangleToSqlite(finalSqlite, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalSqlite = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
@@ -1729,6 +1687,7 @@ function protectTargetInner(
         absOutput,
         seed,
       );
+      noteSidecarSkips(entangled.skipped);
       finalSafetensors = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
@@ -1755,6 +1714,7 @@ function protectTargetInner(
     let finalGguf = res.buffer;
     {
       const entangled = applySidecarEntangleToGguf(finalGguf, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalGguf = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
@@ -1782,6 +1742,7 @@ function protectTargetInner(
     let finalDex = res.buffer;
     {
       const entangled = applySidecarEntangleToDex(finalDex, options, absOutput, seed);
+      noteSidecarSkips(entangled.skipped);
       finalDex = entangled.buffer;
       if (entangled.applied) {
         sidecarEntangleApplied = true;
@@ -1999,6 +1960,9 @@ function protectTargetInner(
     ...(weaveSkipReason ? { weaveSkipReason } : {}),
     ...(selfSealApplied ? { selfSeal: true as const } : {}),
     ...(sidecarEntangleApplied ? { sidecarEntangle: true as const } : {}),
+    ...(sidecarEntangleSkipped.size > 0
+      ? { sidecarEntangleSkipped: [...sidecarEntangleSkipped].sort() }
+      : {}),
     ...(wasmSidecarLoaderHookApplied ? { wasmSidecarLoaderHookApplied: true as const } : {}),
     ...(pycSidecarLoaderHookApplied ? { pycSidecarLoaderHookApplied: true as const } : {}),
     ...(ggufSidecarLoaderHookApplied ? { ggufSidecarLoaderHookApplied: true as const } : {}),
