@@ -122,11 +122,20 @@ describe("REA report admission", () => {
     const valid = write(join(state, "valid.json"), JSON.stringify(redteamFixture));
     const oversize = write(join(state, "large.json"), "{}");
     truncateSync(oversize, 9 * 1024 * 1024);
-    symlinkSync(valid, join(state, "link.json"));
-    symlinkSync(outside, join(state, "linked-directory"), "dir");
+    // Windows without Developer Mode refuses file symlinks (EPERM); the FIFO
+    // case below is skipped on win32 for the same reason. Keep the symlink
+    // admissions where the platform can create them.
+    const symlinkPaths: string[] = [];
+    try {
+      symlinkSync(valid, join(state, "link.json"));
+      symlinkSync(outside, join(state, "linked-directory"), "dir");
+      symlinkPaths.push(join(state, "link.json"), join(state, "linked-directory", "report.json"));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EACCES") throw err;
+    }
 
-    for (const reportPath of [outsideReport, secret, malformed, oversize, join(state, "link.json"),
-      join(state, "linked-directory", "report.json"), state]) {
+    for (const reportPath of [outsideReport, secret, malformed, oversize, ...symlinkPaths, state]) {
       const result = await call("bla_redteam_report", { report_path: reportPath });
       expect(result.isError, reportPath).toBe(true);
       expect(result.structuredContent.report).toBeUndefined();
