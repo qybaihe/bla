@@ -147,7 +147,7 @@ import { buffer } from "node:stream/consumers";
 const reader = new BunStandaloneArtifactReader(${JSON.stringify(decoy)});
 const entries = [];
 for await (const e of reader.entries()) entries.push(e);
-const limited = entries.filter((e) => JSON.stringify(e).includes("logical path allowance")).length;
+const limited = entries.filter((e) => Array.isArray(e.limitations) && e.limitations.length > 0).length;
 const indexed = entries.filter((e) => String(e.path).startsWith("bun-modules/")).length;
 const first = (await buffer(await reader.open(entries[0]))).toString();
 await reader.close();
