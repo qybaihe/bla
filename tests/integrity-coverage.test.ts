@@ -8,6 +8,7 @@ import { SeededPrng } from "../src/core/prng.js";
 import {
   INTEGRITY_COVERAGE_SCHEMA,
   buildInterleavedCoverageMatrix,
+  discoverAndLintIntegrityCoverage,
   evaluateCoverageMatrix,
   finalizeCoverageMatrixHashes,
 } from "../src/engine/integrity-coverage.js";
@@ -153,5 +154,15 @@ describe("integrity coverage matrix (Direction-3)", () => {
     const ev = evaluateCoverageMatrix(broken);
     expect(ev.ok).toBe(false);
     expect(ev.reasons.length).toBeGreaterThan(0);
+  });
+
+  it("reports unreadable JSON as parse-error, not invalid-hash", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bla-integrity-parse-"));
+    writeFileSync(join(dir, "integrity-coverage.json"), '{"schema":', "utf8");
+    const [report] = discoverAndLintIntegrityCoverage(dir);
+    expect(report).toBeDefined();
+    expect(report!.reasons).toEqual(["parse-error"]);
+    expect(report!.shouldRefuseBankrupt).toBe(true);
+    expect(report!.parseError).toBeTruthy();
   });
 });

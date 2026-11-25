@@ -29,6 +29,7 @@ export type CoverageRefuseReason =
   | "checker-not-covered"
   | "missing-hash"
   | "invalid-hash"
+  | "parse-error"
   | "disconnected"
   | "no-checkers";
 
@@ -336,7 +337,7 @@ export function discoverAndLintIntegrityCoverage(
           schema: INTEGRITY_COVERAGE_SCHEMA,
           ok: false,
           shouldRefuseBankrupt: true,
-          reasons: ["invalid-hash"],
+          reasons: ["parse-error"],
           uncoveredNodes: [],
           uncoveredCheckers: [],
           missingHashNodes: [],
