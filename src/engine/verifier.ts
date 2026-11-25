@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
   VerificationAgentAction,
@@ -48,6 +48,14 @@ export interface VerifyTargetOptions {
  * Verifies a protected artifact against REA's analysis invariants (`bla verify`).
  * `defenseScore` is soft-capped when known product gaps still apply (issue #40.6).
  */
+/**
+ * Cap on an auto-detected `integrity-coverage.json`. It is a JSON coverage
+ * matrix used only to decide whether a sibling pins this artifact, not an
+ * artifact itself, so an implausibly large or symlinked file is ignored rather
+ * than read into memory.
+ */
+const MAX_AUTODETECT_COVERAGE_BYTES = 8 * 1024 * 1024;
+
 export function verifyTarget(
   targetPath: string,
   originalPath?: string,
@@ -310,7 +318,10 @@ export function verifyTarget(
         let dir = dirname(absTarget);
         for (let depth = 0; depth < 3; depth++) {
           const covPath = join(dir, "integrity-coverage.json");
-          if (existsSync(covPath)) {
+          const covStat = lstatSync(covPath, { throwIfNoEntry: false });
+          // `lstatSync` reports a symlink as itself, so a linked matrix is not
+          // followed out of the tree, and the size cap bounds the read.
+          if (covStat?.isFile() && covStat.size <= MAX_AUTODETECT_COVERAGE_BYTES) {
             const cov = JSON.parse(readFileSync(covPath, "utf8")) as {
               readonly expectedSha256?: Record<string, string>;
               readonly checks?: readonly { readonly target?: string; readonly expectedSha256?: string }[];
