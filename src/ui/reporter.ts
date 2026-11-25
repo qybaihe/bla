@@ -1,5 +1,6 @@
 import { BLA_IDENTITY } from "../identity.js";
 import { sanitizeTerminalText } from "../core/terminal-text.js";
+import { leadingAgentEstimate } from "../core/token-estimator.js";
 import type {
   AuditReport,
   BenchmarkReport,
@@ -47,7 +48,7 @@ export function formatAuditReport(report: AuditReport): string {
         ? ANSI.yellow
         : ANSI.red;
 
-  const est = report.agentEstimates[0]!;
+  const est = leadingAgentEstimate(report.agentEstimates);
   const lines: string[] = [
     formatBanner(),
     "",
@@ -113,8 +114,8 @@ export function formatAuditReport(report: AuditReport): string {
 }
 
 export function formatProtectionResult(res: ProtectionResult): string {
-  const bEst = res.beforeAudit.agentEstimates[0]!;
-  const aEst = res.afterAudit.agentEstimates[0]!;
+  const bEst = leadingAgentEstimate(res.beforeAudit.agentEstimates);
+  const aEst = leadingAgentEstimate(res.afterAudit.agentEstimates);
   const tokenMult = (aEst.estimatedInputTokens / Math.max(1, bEst.estimatedInputTokens)).toFixed(1);
   const costMult = (aEst.estimatedCostUsd / Math.max(0.01, bEst.estimatedCostUsd)).toFixed(1);
 

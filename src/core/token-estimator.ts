@@ -40,6 +40,20 @@ const AGENT_MODELS: readonly AgentModelPricing[] = [
  * 4. Retrying unresolved dynamic/ambiguous IPC channels & semantic resource-limit bailouts
  * 5. Accumulating context window history across every MCP tool call turn (`O(N^2)` cumulative input tokens)
  */
+/**
+ * Leading (Claude Opus) agent estimate. `estimateAgentReverseEngineeringCosts`
+ * always returns one entry per model, so an empty array is a programming error
+ * rather than a runtime condition — fail loudly instead of dereferencing
+ * `undefined` through a non-null assertion.
+ */
+export function leadingAgentEstimate(
+  estimates: readonly AgentCostEstimate[],
+): AgentCostEstimate {
+  const first = estimates[0];
+  if (first === undefined) throw new Error("Agent cost estimator returned no estimates");
+  return first;
+}
+
 export function estimateAgentReverseEngineeringCosts(
   sim: ReaSemanticSimulationResult,
   byteSize: number,
