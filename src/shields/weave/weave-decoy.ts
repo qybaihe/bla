@@ -238,6 +238,8 @@ export interface WeaveFileVerification {
   readonly unreferencedFunctions: readonly string[];
   readonly sharedStateVars: readonly string[];
   readonly syntaxValid?: boolean;
+  /** Crown-jewel checks skipped because the file already looks post-harden. */
+  readonly exemptedChecks?: readonly string[];
   /** Set by `verifyWeaveTarget`: does this file count toward `overallPassed`? */
   readonly scope?: WeaveFileScope;
   /** Why the file is `required` (empty for advisory files). */
@@ -3211,6 +3213,15 @@ function verifyJsWeaveFile(
     ((blaShieldedTagCount >= 8 &&
       (hasPostHardenInterlock || source.includes("Math.imul("))) ||
       (hasPostHardenInterlock && source.includes("Math.imul(")));
+  const exemptedChecks: string[] = isPostHardenLabyrinth
+    ? [
+        "lane-independence",
+        "raw-boolean-return",
+        "cleartext-secret-compare",
+        "algebraic-noop-weave",
+        "cosmetic-gate-entanglement",
+      ]
+    : [];
   const laneLint = isPostHardenLabyrinth
     ? { looksLaneIndependent: false, findings: [] as const }
     : lintLaneIndependence(source);
@@ -3276,7 +3287,9 @@ function verifyJsWeaveFile(
     passed: crownJewelDefects.length === 0,
     evidence:
       crownJewelDefects.length === 0
-        ? "0 raw boolean gates, 0 cleartext secret compares, 0 lane-independent byte oracles, and gate outputs are data-coupled to shared state/helpers"
+        ? exemptedChecks.length > 0
+          ? `Post-harden labyrinth: skipped ${exemptedChecks.join(", ")}; remaining crown-jewel checks passed`
+          : "0 raw boolean gates, 0 cleartext secret compares, 0 lane-independent byte oracles, and gate outputs are data-coupled to shared state/helpers"
         : `Crown-jewel weaknesses remaining: ${crownJewelDefects.join("; ")}`,
     ...(crownJewelDefects.length > 0
       ? {
@@ -3326,6 +3339,7 @@ function verifyJsWeaveFile(
       reachableFunctions: [...reachable],
       unreferencedFunctions,
       sharedStateVars: [...moduleStateVars],
+      ...(exemptedChecks.length > 0 ? { exemptedChecks } : {}),
     },
     actions,
   };
