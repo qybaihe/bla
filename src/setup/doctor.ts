@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDatabaseSyncClass } from "../core/sqlite-runtime.js";
+import { SeededPrng } from "../core/prng.js";
 import { BLA_IDENTITY, REA_INTERNAL_LIMITS } from "../identity.js";
 import { protectZipOrApkBuffer } from "../shields/formats/archive.js";
 import { generateAndroidR8Counter } from "../shields/formats/android-r8.js";
@@ -324,6 +325,39 @@ const ENGINE_ALIAS_KEYS: ReadonlySet<string> = new Set([
   "nativeBinary",
 ]);
 
+/** Minimal ELF64 header: enough for the native shield to emit a decoy trailer. */
+function minimalElf64Probe(): Buffer {
+  const b = Buffer.alloc(64);
+  b[0] = 0x7f;
+  b[1] = 0x45;
+  b[2] = 0x4c;
+  b[3] = 0x46;
+  b[4] = 2; // ELFCLASS64
+  b[5] = 1; // ELFDATA2LSB
+  b[6] = 1; // EV_CURRENT
+  b.writeUInt16LE(2, 16); // ET_EXEC
+  b.writeUInt16LE(0x3e, 18); // EM_X86_64
+  b.writeUInt32LE(1, 20);
+  b.writeUInt16LE(64, 52); // e_ehsize
+  b.writeUInt16LE(56, 54); // e_phentsize
+  b.writeUInt16LE(64, 58); // e_shentsize
+  return b;
+}
+
+/** Minimal DEX header (magic + header_size + endian_tag, no map). */
+function minimalDexProbe(): Buffer {
+  const d = Buffer.alloc(112);
+  Buffer.from("dex\n035\0", "latin1").copy(d, 0);
+  d.writeUInt32LE(112, 32); // file_size
+  d.writeUInt32LE(112, 36); // header_size
+  d.writeUInt32LE(0x12345678, 40); // endian_tag
+  d.writeUInt32LE(0, 52); // map_off
+  return d;
+}
+
+/** 22-byte ZIP end-of-central-directory record: an empty but valid archive. */
+const EMPTY_ZIP_PROBE = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
+
 function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines"] {
   let javascriptAstShield: EngineHealthStatus = "ready";
   try {
@@ -338,8 +372,15 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
     javascriptAstShield = "unavailable";
   }
 
-  const electronAsarPacker: EngineHealthStatus =
-    typeof packAsarBuffer === "function" ? "ready" : "unavailable";
+  let electronAsarPacker: EngineHealthStatus = "ready";
+  try {
+    const packedAsar = packAsarBuffer([]);
+    if (!Buffer.isBuffer(packedAsar) || packedAsar.byteLength === 0) {
+      electronAsarPacker = "unavailable";
+    }
+  } catch {
+    electronAsarPacker = "unavailable";
+  }
 
   let wasmBinaryShield: EngineHealthStatus = "ready";
   try {
@@ -365,16 +406,43 @@ function checkEngines(sqliteOverride?: boolean): DoctorDiagnosticReport["engines
     pythonPycMarshalShield = "unavailable";
   }
 
-  const nativeElfMachoPeShield: EngineHealthStatus =
-    typeof protectNativeBinary === "function" ? "ready" : "unavailable";
+  let nativeElfMachoPeShield: EngineHealthStatus = "ready";
+  try {
+    const nativeOut = protectNativeBinary(minimalElf64Probe());
+    if (!nativeOut || nativeOut.buffer.byteLength === 0) {
+      nativeElfMachoPeShield = "unavailable";
+    }
+  } catch {
+    nativeElfMachoPeShield = "unavailable";
+  }
 
-  const zipApkArchiveShield: EngineHealthStatus =
-    typeof protectZipOrApkBuffer === "function" ? "ready" : "unavailable";
-  const androidDexR8Shield: EngineHealthStatus =
-    typeof protectAndroidDexBuffer === "function" &&
-    typeof generateAndroidR8Counter === "function"
-      ? "ready"
-      : "unavailable";
+  let zipApkArchiveShield: EngineHealthStatus = "ready";
+  try {
+    const zipOut = protectZipOrApkBuffer(EMPTY_ZIP_PROBE, {
+      intensity: "stealth",
+      seed: "doctor-probe",
+      isApk: false,
+    });
+    if (!zipOut || zipOut.buffer.byteLength === 0) {
+      zipApkArchiveShield = "unavailable";
+    }
+  } catch {
+    zipApkArchiveShield = "unavailable";
+  }
+
+  let androidDexR8Shield: EngineHealthStatus = "ready";
+  try {
+    const dexOut = protectAndroidDexBuffer(minimalDexProbe(), {
+      intensity: "stealth",
+      seed: "doctor-probe",
+    });
+    const r8Out = generateAndroidR8Counter(new SeededPrng("doctor-probe"), "stealth");
+    if (!dexOut || dexOut.buffer.byteLength === 0 || r8Out.mappingText.length === 0) {
+      androidDexR8Shield = "unavailable";
+    }
+  } catch {
+    androidDexR8Shield = "unavailable";
+  }
 
   let aiModelShield: EngineHealthStatus = "ready";
   try {
