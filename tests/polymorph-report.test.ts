@@ -126,6 +126,35 @@ describe("polymorph-report (seeded polymorphism)", () => {
     expect(result.structuredContent.reproducible).toBe(true);
   });
 
+  it("reports a bounded walk instead of silently dropping files", () => {
+    const root = mkdtempSync(join(tmpdir(), "bla-poly-cap-"));
+    tempDirs.push(root);
+    for (const side of ["a", "b"]) {
+      const dir = join(root, side);
+      mkdirSync(dir, { recursive: true });
+      for (let i = 0; i < 6; i += 1) {
+        writeFileSync(join(dir, `m${i}.js`), `export const v${i} = ${i};\n`, "utf8");
+      }
+    }
+
+    const capped = comparePolymorphArtifacts({
+      dirA: join(root, "a"),
+      dirB: join(root, "b"),
+      maxFiles: 4,
+    });
+    expect(capped.truncated).toBe(true);
+    expect(capped.pairedFileCount).toBeLessThanOrEqual(4);
+    expect(capped.summary).toMatch(/truncated/i);
+
+    const full = comparePolymorphArtifacts({
+      dirA: join(root, "a"),
+      dirB: join(root, "b"),
+      maxFiles: 10,
+    });
+    expect(full.truncated).toBe(false);
+    expect(full.pairedFileCount).toBe(6);
+  });
+
   it("bundler-style deriveSeedLabel keeps chunk streams independent but stable", () => {
     const root = "build-root";
     const s1 = deriveSeedLabel(root, "chunk-a.js");

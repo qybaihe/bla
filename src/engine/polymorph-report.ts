@@ -64,6 +64,11 @@ export interface PolymorphReportOptions {
   readonly expect?: PolymorphExpectMode;
   readonly sameThreshold?: number;
   readonly differentThreshold?: number;
+  /**
+   * Comparable files inspected per side (default 4096). A walk that hits the
+   * cap sets `truncated`, so a partial comparison is never reported as whole.
+   */
+  readonly maxFiles?: number;
 }
 
 
@@ -87,6 +92,8 @@ export interface PolymorphReport {
   readonly reproducible: boolean;
   readonly polymorphic: boolean;
   readonly pairedFileCount: number;
+  /** `true` when either walk hit `maxFiles`; the comparison is partial. */
+  readonly truncated: boolean;
   readonly onlyInA: readonly string[];
   readonly onlyInB: readonly string[];
   readonly files: readonly FilePairMetric[];
@@ -94,10 +101,13 @@ export interface PolymorphReport {
   readonly oneLineAdvice: string;
 }
 
-function walkFiles(root: string, maxDepth = 8): string[] {
+/** Comparable files inspected per side before the walk is reported as partial. */
+export const DEFAULT_MAX_PAIR_FILES = 4096;
+
+function walkFiles(root: string, maxFiles: number, maxDepth = 8): string[] {
   return walkBounded(resolve(root), {
     maxDepth,
-    maxFiles: Number.MAX_SAFE_INTEGER,
+    maxFiles,
     skipDirs: SKIP_DIR_NAMES,
     skipHiddenDirs: true,
     descendAtMaxDepth: false,
@@ -329,8 +339,10 @@ export function comparePolymorphArtifacts(
     return errorReport(dirA, dirB, expect, `dirB is not a directory: ${dirB}`);
   }
 
-  const filesA = walkFiles(dirA);
-  const filesB = walkFiles(dirB);
+  const maxFiles = options.maxFiles ?? DEFAULT_MAX_PAIR_FILES;
+  const filesA = walkFiles(dirA, maxFiles);
+  const filesB = walkFiles(dirB, maxFiles);
+  const truncated = filesA.length >= maxFiles || filesB.length >= maxFiles;
   const mapA = new Map(filesA.map((f) => [relKey(dirA, f), f]));
   const mapB = new Map(filesB.map((f) => [relKey(dirB, f), f]));
   const onlyInA = [...mapA.keys()].filter((k) => !mapB.has(k)).sort();
@@ -363,7 +375,10 @@ export function comparePolymorphArtifacts(
   const summary =
     `driftScore=${driftScore.toFixed(4)} paired=${files.length} ` +
     `onlyA=${onlyInA.length} onlyB=${onlyInB.length} ` +
-    `reproducible=${reproducible} polymorphic=${polymorphic}`;
+    `reproducible=${reproducible} polymorphic=${polymorphic}` +
+    (truncated
+      ? ` truncated=true (compared at most ${maxFiles} files per side; the rest were not inspected)`
+      : "");
 
   return {
     schema: POLYMORPH_REPORT_SCHEMA,
@@ -375,6 +390,7 @@ export function comparePolymorphArtifacts(
     reproducible,
     polymorphic,
     pairedFileCount: files.length,
+    truncated,
     onlyInA,
     onlyInB,
     files,
@@ -400,6 +416,7 @@ function errorReport(
     reproducible: false,
     polymorphic: false,
     pairedFileCount: 0,
+    truncated: false,
     onlyInA: [],
     onlyInB: [],
     files: [],
