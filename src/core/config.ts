@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync,
-  openSync, readFileSync, renameSync, rmSync, writeFileSync,
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdtempSync,
+  openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
   type Stats,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -239,7 +239,12 @@ export function loadBlaConfig(
   }
 
   const pkgPath = join(root, "package.json");
-  if (existsSync(pkgPath)) {
+  // The 64 KiB config cap applies to this fallback too. Reading a manifest
+  // bigger than a config is a memory amplifier, and such a file is not a config
+  // BLA can trust. Skipping keeps the fallback best effort: a large but
+  // legitimate package.json without a `bla` field behaves exactly as before.
+  const pkgStats = statSync(pkgPath, { throwIfNoEntry: false });
+  if (pkgStats?.isFile() === true && pkgStats.size <= MAX_CONFIG_BYTES) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
         bla?: unknown;
