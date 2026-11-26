@@ -1,7 +1,14 @@
 import { createHash, createPublicKey } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { verifyManifestSignature } from "./manifest-signing.js";
+
+/**
+ * A signed manifest is a few kilobytes. Anything past this is not a manifest we
+ * can afford to parse on someone else's say-so (`statSync` guarantees it before
+ * the read, so a multi-gigabyte file is never loaded).
+ */
+const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 
 export interface ManifestVerifyResult {
   /** Signature bytes (and artifact digest, when checked) are valid. */
@@ -41,6 +48,16 @@ export function verifyManifestFile(
   const absManifest = resolve(manifestPath);
   let manifest: Record<string, unknown>;
   try {
+    const manifestStats = statSync(absManifest, { throwIfNoEntry: false });
+    if (manifestStats !== undefined && manifestStats.size > MAX_MANIFEST_BYTES) {
+      return {
+        ok: false,
+        signed: false,
+        pinned: false,
+        artifactVerified: false,
+        reason: `manifest is ${manifestStats.size} bytes (limit ${MAX_MANIFEST_BYTES}); refusing to parse it`,
+      };
+    }
     const parsed: unknown = JSON.parse(readFileSync(absManifest, "utf8"));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
@@ -147,7 +164,10 @@ export function verifyManifestFile(
   ) {
     const adjacent = absManifest.slice(0, -".bla-manifest.json".length);
     try {
-      if (existsSync(adjacent) && statSync(adjacent).isFile()) {
+      // lstat, not stat: a link placed beside the manifest is not the artifact
+      // it points at, and auto-discovering it would hash bytes outside the tree.
+      const adjacentStats = lstatSync(adjacent, { throwIfNoEntry: false });
+      if (adjacentStats?.isFile() === true) {
         resolvedArtifactPath = adjacent;
       }
     } catch {

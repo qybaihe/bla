@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -148,5 +149,51 @@ describe("bla verify-manifest", () => {
     await expect(
       runCli(["verify-manifest", manifestPath, "--public-key", publicKeyPath, "--require-artifact"]),
     ).resolves.toBe(2);
+  });
+
+  it("refuses to parse a manifest larger than the size cap", () => {
+    const dir = createTempDir();
+    const manifestPath = join(dir, "huge.bla-manifest.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ schema: "s", blaVersion: "3.6.1", padding: "x".repeat(3 * 1024 * 1024) }),
+      "utf8",
+    );
+
+    const result = verifyManifestFile(manifestPath);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/limit/i);
+  });
+
+  it("does not follow a symlinked adjacent artifact", () => {
+    const dir = createTempDir();
+    const outside = join(dir, "outside.bin");
+    writeFileSync(outside, "outside bytes\n", "utf8");
+    const artifactPath = join(dir, "app.bin");
+    try {
+      symlinkSync(outside, artifactPath);
+    } catch {
+      // Windows without developer mode cannot create symlinks; nothing to test.
+      return;
+    }
+
+    const pair = generateManifestSigningKeyPair();
+    const digest = createHash("sha256").update("outside bytes\n").digest("hex");
+    const manifestPath = join(dir, "app.bin.bla-manifest.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(
+        signManifestPayload(
+          { schema: "s", blaVersion: "3.6.1", detectedFormat: "native", protectedSha256: digest },
+          pair.privateKeyPem,
+        ),
+      ),
+      "utf8",
+    );
+
+    // The manifest is beside a link, not beside the bytes it names: the link is
+    // not a regular file, so it must not be hashed as the artifact.
+    const result = verifyManifestFile(manifestPath);
+    expect(result.artifactVerified).toBe(false);
   });
 });
