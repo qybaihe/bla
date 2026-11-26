@@ -31,6 +31,23 @@ describe(".blarc/config validation", () => {
     expect(loaded.config.emitManifest).toBe(true);
   });
 
+  it("does not read an oversized package.json for the bla fallback", () => {
+    const dir = createTempDir();
+    // Valid JSON with the bla field first, padded well past the 64 KiB config cap.
+    const head = JSON.stringify({ bla: { intensity: "stealth" } }).slice(0, -1);
+    writeFileSync(
+      join(dir, "package.json"),
+      `${head}, "padding": "${"x".repeat(70_000)}"}`,
+      "utf8",
+    );
+
+    const loaded = loadBlaConfig(dir);
+    // A manifest bigger than a config is not one BLA can trust; the fallback
+    // stays best effort instead of reading the file whole.
+    expect(loaded.sourcePath).toBeNull();
+    expect(loaded.config.intensity).toBe("bankrupt");
+  });
+
   it("fails loudly on malformed JSON instead of silently falling back", () => {
     const dir = createTempDir();
     writeFileSync(join(dir, ".blarc"), "{ not json", "utf8");
