@@ -25,9 +25,10 @@ export type LaneIndependenceFindingId =
   | "indexed-lane-oracle-loop"
   | "per-byte-wasm-lane-oracle"
   | "chained-per-index-compare"
-  | "split-segment-lane-compare";
+  | "split-segment-lane-compare"
+  | "lane-scan-truncated";
 
-export type LaneIndependenceSeverity = "error";
+export type LaneIndependenceSeverity = "error" | "warning";
 
 export interface LaneIndependenceFinding {
   readonly id: LaneIndependenceFindingId;
@@ -36,10 +37,23 @@ export interface LaneIndependenceFinding {
   readonly evidence: string;
 }
 
+/**
+ * Characters inspected per file. The lint is a refuse gate, so a gate past this
+ * offset cannot be claimed either way; the report names the window instead of
+ * hiding it (same contract as `plaintext-scan-truncated`).
+ */
+export const MAX_SCAN_CHARS = 400_000;
+
 export interface LaneIndependenceReport {
   readonly schema: typeof LANE_INDEPENDENCE_SCHEMA;
   readonly findings: readonly LaneIndependenceFinding[];
   readonly looksLaneIndependent: boolean;
+  /** Characters actually inspected. */
+  readonly scannedChars: number;
+  /** Characters in the source handed to the lint. */
+  readonly sourceChars: number;
+  /** `true` when the tail past `MAX_SCAN_CHARS` was not inspected. */
+  readonly truncated: boolean;
   readonly oneLineAdvice: string;
 }
 
@@ -283,9 +297,14 @@ const CHAINED_PER_INDEX_COMPARE = new RegExp(
  * (e.g. `const parts = key.split("-"); return parts[0] === "AAAA" && parts[1] === "BBBB"`).
  * The value being split has to be secret-named: `version.split(".")` followed
  * by `parts[0] === "1" && parts[1] === "2"` is not a licence gate.
+ *
+ * The leading `(?<![\w$])` matters: without it the identifier alternative is
+ * retried at every offset inside a long run of word characters and backtracks
+ * to the end each time, which made the whole lint quadratic on minified code
+ * (measured 23 s on an 80k-character run, minutes at the 400k scan window).
  */
 const SPLIT_SEGMENT_LANE_COMPARE =
-  /([A-Za-z_$][\w$]*)\s*(?:\)\s*)?\.\s*split\s*\(\s*['"][^'"]+['"]\s*\)[\s\S]{0,300}?\b(\w+)\s*\[\s*0\s*\]\s*===?\s*['"][^'"]+['"]\s*(?:&&|\band\b)[\s\S]{0,160}?\b\2\s*\[\s*1\s*\]\s*===?\s*['"][^'"]+['"]/gi;
+  /(?<![\w$])([A-Za-z_$][\w$]*)\s*(?:\)\s*)?\.\s*split\s*\(\s*['"][^'"]+['"]\s*\)[\s\S]{0,300}?\b(\w+)\s*\[\s*0\s*\]\s*===?\s*['"][^'"]+['"]\s*(?:&&|\band\b)[\s\S]{0,160}?\b\2\s*\[\s*1\s*\]\s*===?\s*['"][^'"]+['"]/gi;
 
 function findSplitSegmentCompare(text: string): string | undefined {
   SPLIT_SEGMENT_LANE_COMPARE.lastIndex = 0;
@@ -313,11 +332,26 @@ function finding(
 
 /**
  * Scan UTF-8 source (JS/TS/Python-like) for lane-independence footguns.
- * Findings are severity "error" — callers decide whether to refuse (harden) or exit 2 (CLI).
+ * Footgun findings are severity "error" — callers decide whether to refuse
+ * (harden) or exit 2 (CLI). A source longer than `MAX_SCAN_CHARS` also yields a
+ * "warning" finding that names the unscanned tail; a warning never refuses.
  */
 export function lintLaneIndependence(source: string): LaneIndependenceReport {
   const findings: LaneIndependenceFinding[] = [];
-  const text = source.length > 400_000 ? source.slice(0, 400_000) : source;
+  const sourceChars = source.length;
+  const truncated = sourceChars > MAX_SCAN_CHARS;
+  const text = truncated ? source.slice(0, MAX_SCAN_CHARS) : source;
+
+  // A tail nobody inspected is a blind spot on a refuse gate, so the report has
+  // to name it rather than let the file look clean.
+  if (truncated) {
+    findings.push({
+      id: "lane-scan-truncated",
+      severity: "warning",
+      summary: `Lane-independence scan truncated: only the first ${MAX_SCAN_CHARS} of ${sourceChars} characters were scanned; the tail was not inspected.`,
+      evidence: `scanned 0..${MAX_SCAN_CHARS} of ${sourceChars} chars`,
+    });
+  }
 
   const compareTable = findPerLaneCompareTable(text);
   if (compareTable !== undefined) {
@@ -385,14 +419,23 @@ export function lintLaneIndependence(source: string): LaneIndependenceReport {
     );
   }
 
+  const errorFindings = findings.filter((f) => f.severity === "error");
+  const baseAdvice =
+    errorFindings.length === 0
+      ? "No lane-independence footgun pattern detected (heuristic)."
+      : "ERROR: Prefer whole-key chained mixing (no per-lane oracle). Harden refuses this gate unless allowLaneIndependentGates / --allow-lane-independent / allow_lane_independent. See issue #40.1 / Meridian DESIGN — defensive guidance only.";
+
   return {
     schema: LANE_INDEPENDENCE_SCHEMA,
     findings,
-    looksLaneIndependent: findings.length > 0,
-    oneLineAdvice:
-      findings.length === 0
-        ? "No lane-independence footgun pattern detected (heuristic)."
-        : "ERROR: Prefer whole-key chained mixing (no per-lane oracle). Harden refuses this gate unless allowLaneIndependentGates / --allow-lane-independent / allow_lane_independent. See issue #40.1 / Meridian DESIGN — defensive guidance only.",
+    // A truncation warning alone is not a finding of a footgun.
+    looksLaneIndependent: errorFindings.length > 0,
+    scannedChars: Math.min(sourceChars, MAX_SCAN_CHARS),
+    sourceChars,
+    truncated,
+    oneLineAdvice: truncated
+      ? `${baseAdvice} NOTE: only the first ${MAX_SCAN_CHARS} of ${sourceChars} characters were scanned; the tail was not inspected.`
+      : baseAdvice,
   };
 }
 
@@ -410,7 +453,10 @@ export function laneIndependenceRefuseMessage(
   report: LaneIndependenceReport,
   inputPath: string,
 ): string {
-  const ids = report.findings.map((f) => f.id).join(", ");
+  const ids = report.findings
+    .filter((f) => f.severity === "error")
+    .map((f) => f.id)
+    .join(", ");
   return (
     `Refusing lane-independent gate at ${inputPath} [${ids}]. ` +
     `Prefer whole-key chained mixing. To override (intentional footgun / teaching fixture), ` +
