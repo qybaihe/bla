@@ -5,6 +5,7 @@ import {
   lintLaneIndependence,
   formatSupportsLaneIndependenceLint,
   laneIndependenceRefuseMessage,
+  MAX_SCAN_CHARS,
 } from "../src/engine/lane-independence-lint.js";
 
 describe("lane-independence footgun lint (#40.1 / red-blue round-1)", () => {
@@ -103,4 +104,53 @@ describe("lane-independence footgun lint (#40.1 / red-blue round-1)", () => {
     expect(formatSupportsLaneIndependenceLint("wasm")).toBe(false);
     expect(formatSupportsLaneIndependenceLint("html-bundle")).toBe(false);
   });
+
+  it("names the scan window instead of hiding a truncated scan", () => {
+    // The lint is a refuse gate, so a gate past the window would otherwise look
+    // like a clean file. The report has to say the tail was not inspected.
+    const gate = 'const lanes = [0x41, 0x42, 0x43, 0x44, 0x45];\n'
+      + 'function check(key) { return key.split("").every((ch, i) => ch.charCodeAt(0) === lanes[i]); }\n';
+    const padded = `// ${"x".repeat(MAX_SCAN_CHARS)}\n${gate}`;
+    const report = lintLaneIndependence(padded);
+
+    expect(report.truncated).toBe(true);
+    expect(report.scannedChars).toBe(MAX_SCAN_CHARS);
+    expect(report.sourceChars).toBe(padded.length);
+
+    const truncatedFinding = report.findings.find((f) => f.id === "lane-scan-truncated");
+    expect(truncatedFinding).toBeDefined();
+    expect(truncatedFinding!.severity).toBe("warning");
+    expect(truncatedFinding!.summary).toMatch(/tail was not inspected/i);
+
+    // The real gate sits past the window, so it was not seen and must not be
+    // claimed; a warning alone must not refuse a harden run.
+    expect(report.looksLaneIndependent).toBe(false);
+    expect(report.findings.filter((f) => f.severity === "error")).toHaveLength(0);
+    expect(report.oneLineAdvice).toMatch(/tail was not inspected/i);
+  });
+
+  it("keeps the refuse message about the errors when a scan was also truncated", () => {
+    const gate = 'const lanes = [0x41, 0x42, 0x43, 0x44, 0x45];\n'
+      + 'function check(key) { return key.split("").every((ch, i) => ch.charCodeAt(0) === lanes[i]); }\n';
+    const padded = gate + `// ${"x".repeat(MAX_SCAN_CHARS)}\n`;
+    const report = lintLaneIndependence(padded);
+
+    expect(report.truncated).toBe(true);
+    expect(report.looksLaneIndependent).toBe(true);
+    const message = laneIndependenceRefuseMessage(report, "/tmp/gate.cjs");
+    expect(message).toMatch(/per-lane-byte-compare-array/);
+    expect(message).not.toMatch(/lane-scan-truncated/);
+  });
+
+  it("scans a full window of minified text in linear time", () => {
+    // A long run of word characters used to drive the split-segment rule into
+    // quadratic backtracking (23 s per 80k characters, minutes at the window).
+    const startedAt = performance.now();
+    const report = lintLaneIndependence("x".repeat(MAX_SCAN_CHARS));
+    const elapsed = performance.now() - startedAt;
+
+    expect(report.truncated).toBe(false);
+    expect(report.findings).toHaveLength(0);
+    expect(elapsed).toBeLessThan(3000);
+  }, 15000);
 });

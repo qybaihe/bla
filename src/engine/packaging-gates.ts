@@ -622,14 +622,19 @@ export function scanPackagingGates(
     });
   }
   for (const r of lanes) {
-    if (!r.looksLaneIndependent) continue;
+    // A truncated scan is surfaced even when no footgun was found inside the
+    // window, so the tail is never silently assumed clean. A warning alone does
+    // not refuse a harden run.
+    if (!r.looksLaneIndependent && !r.truncated) continue;
     counts["lane-independence"] += 1;
     findings.push({
       gate: "lane-independence",
       path: r.path,
       relativePath: relPath(absDir, r.path),
-      shouldRefuseBankrupt: true,
-      refuseMessage: laneIndependenceRefuseMessage(r, r.path),
+      shouldRefuseBankrupt: r.looksLaneIndependent,
+      refuseMessage: r.looksLaneIndependent
+        ? laneIndependenceRefuseMessage(r, r.path)
+        : undefined,
       oneLineAdvice: r.oneLineAdvice,
       findingCount: r.findings.length,
       ...(() => {
