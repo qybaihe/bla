@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { leadingAgentEstimate } from "../core/token-estimator.js";
 import type {
   VerificationAgentAction,
   VerificationCheck,
@@ -125,10 +126,10 @@ export function verifyTarget(
   }
 
   // Check 5: Token & Cost Bankruptcy Amplification
-  const afterEst = afterAudit.agentEstimates[0]!;
+  const afterEst = leadingAgentEstimate(afterAudit.agentEstimates);
   const baselineSource: "measured" | "assumed" = beforeAudit ? "measured" : "assumed";
-  const beforeTokens = beforeAudit ? beforeAudit.agentEstimates[0]!.estimatedInputTokens : 3_200;
-  const beforeCost = beforeAudit ? beforeAudit.agentEstimates[0]!.estimatedCostUsd : 0.12;
+  const beforeTokens = beforeAudit ? leadingAgentEstimate(beforeAudit.agentEstimates).estimatedInputTokens : 3_200;
+  const beforeCost = beforeAudit ? leadingAgentEstimate(beforeAudit.agentEstimates).estimatedCostUsd : 0.12;
   const beforeNodes = beforeAudit ? Math.max(1, beforeAudit.reaSimulation.obligationLedgerNodes) : 3;
 
   const tokenAmp = Number((afterEst.estimatedInputTokens / Math.max(1, beforeTokens)).toFixed(1));

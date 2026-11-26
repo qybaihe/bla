@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
+import { leadingAgentEstimate } from "../core/token-estimator.js";
 import { BLA_IDENTITY } from "../identity.js";
 import type { BenchmarkReport, ShowcaseCaseResult } from "../core/types.js";
 import { getDatabaseSyncClass, isNodeSqliteAvailable } from "../core/sqlite-runtime.js";
@@ -839,8 +840,8 @@ function buildCaseResult(
   res: ReturnType<typeof protectTarget>,
   functionalCheckPassed: boolean,
 ): ShowcaseCaseResult {
-  const bEst = res.beforeAudit.agentEstimates[0]!;
-  const aEst = res.afterAudit.agentEstimates[0]!;
+  const bEst = leadingAgentEstimate(res.beforeAudit.agentEstimates);
+  const aEst = leadingAgentEstimate(res.afterAudit.agentEstimates);
   return {
     id,
     title,

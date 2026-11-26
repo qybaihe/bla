@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { leadingAgentEstimate } from "../core/token-estimator.js";
 import { BLA_IDENTITY } from "../identity.js";
 import {
   inspectReleaseExposure,
@@ -261,7 +262,7 @@ export function defendTarget(
     wasmExportRenameApplied: protection.wasmExportRenameApplied === true,
   });
 
-  const afterEst = protection.afterAudit.agentEstimates[0]!;
+  const afterEst = leadingAgentEstimate(protection.afterAudit.agentEstimates);
   const exhaustionSummary = {
     reaBudgetsTripped: protection.afterAudit.reaSimulation.triggeredResourceLimits,
     obligationLedgerNodesBefore:

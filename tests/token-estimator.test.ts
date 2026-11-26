@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateAgentReverseEngineeringCosts } from "../src/core/token-estimator.js";
+import { estimateAgentReverseEngineeringCosts, leadingAgentEstimate } from "../src/core/token-estimator.js";
 import type { ReaSemanticSimulationResult } from "../src/core/types.js";
 
 function unprotectedResult(): ReaSemanticSimulationResult {
@@ -95,5 +95,16 @@ describe("token-estimator", () => {
         "AGENT_HALLUCINATION_AND_BANKRUPTCY",
       ]).toContain(e.outcomeVerdict);
     }
+  });
+});
+
+describe("leadingAgentEstimate", () => {
+  it("returns the first (Claude Opus) estimate", () => {
+    const estimates = estimateAgentReverseEngineeringCosts(unprotectedResult(), 2_000);
+    expect(leadingAgentEstimate(estimates)).toBe(estimates[0]);
+  });
+
+  it("throws instead of dereferencing nothing when the estimator is empty", () => {
+    expect(() => leadingAgentEstimate([])).toThrow(/no estimates/i);
   });
 });

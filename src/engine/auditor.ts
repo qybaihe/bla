@@ -6,7 +6,7 @@ import _traverse from "@babel/traverse";
 import * as t from "@babel/types";
 import { detectArtifactFormat } from "../core/detector.js";
 import { buildDefenseCoverageContract } from "../core/coverage-contract.js";
-import { estimateAgentReverseEngineeringCosts } from "../core/token-estimator.js";
+import { estimateAgentReverseEngineeringCosts, leadingAgentEstimate } from "../core/token-estimator.js";
 import type {
   ArtifactFormat,
   AuditReport,
@@ -1704,7 +1704,7 @@ export function auditTarget(targetPath: string): AuditReport {
         : "UNPROTECTED";
 
   const agentEstimates = estimateAgentReverseEngineeringCosts(sim, byteSize);
-  const primaryEstimate = agentEstimates[0]!;
+  const primaryEstimate = leadingAgentEstimate(agentEstimates);
   const primaryModule = exposedItems[0]?.name ?? basename(absPath);
 
   const recommendedCommand = `npx bla-agents protect ${targetPath}`;
