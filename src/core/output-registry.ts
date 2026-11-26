@@ -27,7 +27,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   readdirSync,
   rmSync,
   statSync,
@@ -66,10 +66,29 @@ export function resolveBlaStateRoot(stateRoot?: string): string {
 const hashCache = new Map<string, { size: number; mtimeMs: number; sha256: string }>();
 const HASH_CACHE_LIMIT = 4096;
 
+/** Hash in bounded chunks: a project may contain a file far larger than RAM. */
+const HASH_CHUNK_BYTES = 1024 * 1024;
+
+function sha256OfFile(path: string): string {
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+    for (;;) {
+      const read = readSync(fd, chunk, 0, HASH_CHUNK_BYTES, null);
+      if (read === 0) break;
+      hash.update(chunk.subarray(0, read));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
 function sha256Cached(path: string, size: number, mtimeMs: number): string {
   const hit = hashCache.get(path);
   if (hit !== undefined && hit.size === size && hit.mtimeMs === mtimeMs) return hit.sha256;
-  const sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+  const sha256 = sha256OfFile(path);
   if (hashCache.size >= HASH_CACHE_LIMIT) hashCache.clear();
   hashCache.set(path, { size, mtimeMs, sha256 });
   return sha256;

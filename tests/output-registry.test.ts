@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -209,4 +209,21 @@ describe("registry of files BLA wrote", () => {
     const explicit = scanPackagingGates({ directory: gate });
     expect(explicit.gateCounts["lane-independence"]).toBe(1);
   });
+
+  it("hashes a large file without holding it in memory", () => {
+    const stateRoot = tempDir("bla-registry-state-");
+    const dir = tempDir("bla-registry-files-");
+    const file = join(dir, "huge.bin");
+    writeFileSync(file, "", "utf8");
+    truncateSync(file, 128 * 1024 * 1024); // sparse: logical size only
+
+    const before = process.memoryUsage().rss;
+    registerBlaOutput(file, stateRoot);
+    const growth = process.memoryUsage().rss - before;
+
+    // The file is still recognised ...
+    expect(isKnownBlaOutput(file, stateRoot)).toBe(true);
+    // ... and the digest was computed in chunks instead of a whole-file buffer.
+    expect(growth).toBeLessThan(48 * 1024 * 1024);
+  }, 60000);
 });
