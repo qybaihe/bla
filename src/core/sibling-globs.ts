@@ -18,16 +18,22 @@ export function globToRegExp(pattern: string): RegExp {
   for (let i = 0; i < pattern.length; i += 1) {
     const ch = pattern[i]!;
     if (ch === "*") {
-      if (pattern[i + 1] === "*") {
-        if (pattern[i + 2] === "/") {
+      // Consume the whole run first. Emitting one fragment per `*` chains
+      // nested quantifiers, and `**********x` then backtracks exponentially on
+      // a name that does not match.
+      let end = i;
+      while (pattern[end] === "*") end += 1;
+      if (end - i >= 2) {
+        if (pattern[end] === "/") {
           out += "(?:.*/)?";
-          i += 2;
+          i = end;
         } else {
           out += ".*";
-          i += 1;
+          i = end - 1;
         }
       } else {
         out += "[^/]*";
+        i = end - 1;
       }
       continue;
     }

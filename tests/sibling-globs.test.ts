@@ -32,6 +32,20 @@ describe("globToRegExp", () => {
     expect(re.test("dist/nested/extra.wasm")).toBe(false);
   });
 
+  it("collapses a run of stars into one wildcard", () => {
+    // `****…x` used to compile to `.*` followed by one `[^/]*` per extra star,
+    // which backtracks exponentially on a name that does not match.
+    const re = globToRegExp(`${"*".repeat(20)}x`);
+    const quantifiers = re.source.match(/\[\^\/\]\*|\.\*/g) ?? [];
+    expect(quantifiers).toHaveLength(1);
+
+    // Collapsing must not change what the pattern matches.
+    expect(globToRegExp("***x").test("x")).toBe(true);
+    expect(globToRegExp("***x").test("a/bx")).toBe(true);
+    expect(globToRegExp("***/x").test("a/b/x")).toBe(true);
+    expect(globToRegExp("**/*.wasm").test("dist/nested/extra.wasm")).toBe(true);
+  });
+
   it("supports ** across segments, including zero segments", () => {
     const re = globToRegExp("**/*.wasm");
     expect(re.test("core.wasm")).toBe(true);
