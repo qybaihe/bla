@@ -276,6 +276,43 @@ describe("Audit & Subagent Red-Team Reinforcements", () => {
     });
   });
 
+  it("does not claim self-verified coverage when the matrix cannot be written", () => {
+    const root = mkdtempSync(join(tmpdir(), "bla-coverage-write-failure-"));
+    try {
+      const srcDir = join(root, "app");
+      mkdirSync(srcDir, { recursive: true });
+      writeFileSync(
+        join(srcDir, "cli.cjs"),
+        '"use strict";\nmodule.exports = { answer: () => 42 };\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(srcDir, "package.json"),
+        JSON.stringify({ name: "coverage-write-failure", version: "1.0.0", main: "cli.cjs" }),
+        "utf8",
+      );
+
+      const outDir = join(root, "hardened");
+      // A directory where the matrix has to be written makes that write fail
+      // (the atomic writer refuses to replace a non-regular path).
+      mkdirSync(join(outDir, "integrity-coverage.json"), { recursive: true });
+
+      const report = hardenProject({
+        directory: srcDir,
+        outputDirectory: outDir,
+        intensity: "balanced",
+        seed: "coverage-write-failure",
+        selfSeal: true,
+      });
+
+      // No matrix on disk means no self-verified coverage claim in the report.
+      expect(report.integrityCoveragePath).toBeUndefined();
+      expect(report.integrityCoverageSelfVerified).not.toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+
   it("keeps STATE.md version synced with BLA_IDENTITY.version after build", () => {
     const stateMd = readFileSync(join(__dirname, "..", "STATE.md"), "utf8");
     expect(stateMd).toContain(`**Version:** ${BLA_IDENTITY.version}`);
