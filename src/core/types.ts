@@ -294,6 +294,13 @@ export interface ProtectionResult {
   readonly selfSeal?: boolean;
   /** Present when protect applied sidecar entry entanglement (strip⇒fail preamble). */
   readonly sidecarEntangle?: boolean;
+  /**
+   * Requested `sidecarEntanglePaths` entries that could not be bound (missing,
+   * not a regular file, or unreadable). Their bytes were NOT folded into the
+   * strip⇒fail digest, so the applied entanglement covers fewer siblings than
+   * were requested. Absent when every requested path was bound.
+   */
+  readonly sidecarEntangleSkipped?: readonly string[];
   /** Present when a same-directory Node CJS or ESM WASM loader was auto-wired with the load-time hook. */
   readonly wasmSidecarLoaderHookApplied?: boolean;
   /** Present when a same-directory Python loader was auto-wired with the `.pyc` import-time hook. */
