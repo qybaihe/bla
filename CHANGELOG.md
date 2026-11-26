@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.1] — 2026-11-26
+
+MCP stdio transport hardening, real doctor engine probes, expanded 16-target showcase benchmark, and reporting/symlink safety improvements (227 test suites / 1,611 tests passing).
+
+### Added
+- **16-target showcase benchmark (#301):** Expands `bla benchmark` from 14 to 16 targets by adding a JavaScript entitlement string table (`javascript-strings`, with CJS runtime equivalence verification) and a minimal v3 GGUF model (`gguf-model`, with `parseGgufLayout`/`readGgufStringKv` structural verification), updating CLI help, READMEs, and website showcase copy (`src/engine/benchmark.ts`, `src/cli.ts`, `README.md`, `website/*`).
+- **Real smoke probes in `bla doctor` (#309):** Upgrades `electronAsarPacker`, `nativeElfMachoPeShield`, `zipApkArchiveShield`, and `androidDexR8Shield` in `checkEngines` from `typeof fn === "function"` checks to real smoke calls over minimal valid ASAR, ELF64, ZIP EOCD, and DEX/R8 fixtures (`src/setup/doctor.ts`).
+- **CLI vs. MCP parity note & reporter branch tests (#302, #308):** Documents the intentional 10 MCP-only tools and 5 CLI-only admin/offline commands in `docs/cli-and-mcp.md`, and adds `tests/reporter-branches.test.ts` covering partial-audit, honesty-cap, benchmark-failure, and setup edge branches.
+
+### Security
+- **Bounded MCP stdio request queue & output backpressure (#304):** Caps pending stdio requests at `MAX_STDIO_PENDING_REQUESTS` (16) and `MAX_STDIO_PENDING_BYTES` (4 MiB UTF-8), returning JSON-RPC `-32000` (`Server busy; retry later.`) on overflow while keeping `notifications/cancelled` ahead of admission; routes `emitMcpProgress` through the injected transport writer with `drain` backpressure and clean teardown on output `close`/`error` (`src/mcp/server.ts`).
+- **No-follow & bounded `integrity-coverage.json` reads (#306):** Switches `verifyTarget` auto-detection and `discoverAndLintIntegrityCoverage` to `lstatSync` (ignoring symlinked matrices/directories outside the tree) and caps matrix reads at 8 MiB, reporting oversized matrices as `parse-error` (`matrix-too-large`) (`src/engine/integrity-coverage.ts`, `src/engine/verifier.ts`).
+
+### Fixed
+- **Reporting & CLI honesty (#294, #296, #297, #305):** Discloses requested `sidecarEntanglePaths` that could not be bound via `ProtectionResult.sidecarEntangleSkipped` while deduplicating all eight sidecar path loops into `collectSidecarBindings` (`src/engine/protector.ts`, `src/core/types.ts`); discloses crown-jewel checks skipped on post-harden output via `WeaveFileVerification.exemptedChecks` (`src/shields/weave/weave-decoy.ts`); rejects unknown `--client` IDs in `parseCliArgs` with canonical normalization and deduplication (`src/cli.ts`); reports unreadable `integrity-coverage.json` as `"parse-error"` instead of `"invalid-hash"` (`src/engine/integrity-coverage.ts`).
+- **Guarded estimator access & cross-platform test stability (#299, #300, #307):** Replaces all nine `agentEstimates[0]!` non-null assertions with `leadingAgentEstimate` (`src/core/token-estimator.ts`, `src/engine/*`, `src/ui/reporter.ts`); makes Bun REA limitation assertions structural and skips symlink-only admissions when Windows refuses symlink creation.
+
 ## [3.6.0] — 2026-11-24
 
 Operational recovery, developer ergonomics, and audit/reporting honesty release (223 test suites / 1,590 tests passing).
