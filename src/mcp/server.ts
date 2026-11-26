@@ -109,6 +109,7 @@ function progressTokenOf(req: JsonRpcRequest): string | number | undefined {
 }
 
 function emitMcpProgress(
+  write: (data: string) => void,
   token: string | number,
   progress: number,
   total: number,
@@ -124,7 +125,7 @@ function emitMcpProgress(
       message,
     },
   };
-  process.stdout.write(JSON.stringify(note) + "\n");
+  write(JSON.stringify(note) + "\n");
 }
 
 export interface JsonRpcRequest {
@@ -2346,6 +2347,7 @@ function cancellationOf(req: JsonRpcRequest): { requestId: string | number; reas
 export async function handleMcpRequest(
   req: unknown,
   handlers: McpEngineHandlers = DEFAULT_ENGINE_HANDLERS,
+  write: (data: string) => void = (data) => process.stdout.write(data),
 ): Promise<JsonRpcResponse | null> {
   if (!isJsonRpcRequest(req)) return invalidRequest(req);
 
@@ -2786,6 +2788,7 @@ export async function handleMcpRequest(
                   if (progressToken === undefined) return;
                   if (ev.phase === "artifact") {
                     emitMcpProgress(
+                      write,
                       progressToken,
                       ev.index + 1,
                       ev.total,
@@ -2793,6 +2796,7 @@ export async function handleMcpRequest(
                     );
                   } else if (ev.phase === "cancelled") {
                     emitMcpProgress(
+                      write,
                       progressToken,
                       ev.written.length,
                       ev.total,
@@ -2800,6 +2804,7 @@ export async function handleMcpRequest(
                     );
                   } else if (ev.phase === "done") {
                     emitMcpProgress(
+                      write,
                       progressToken,
                       ev.total,
                       ev.total,
@@ -3329,6 +3334,8 @@ const preAbortedHardenRequests = new Map<string | number, AbortController>();
  * JavaScript reports as a string's "characters"), not bytes.
  */
 export const MAX_STDIO_LINE_CHARS = 1_048_576;
+export const MAX_STDIO_PENDING_REQUESTS = 16;
+export const MAX_STDIO_PENDING_BYTES = 4 * 1024 * 1024;
 
 export interface StdioLineProcessorHooks {
   readonly onLine: (line: string) => void;
@@ -3430,7 +3437,35 @@ export function createStdioLineProcessor(hooks: StdioLineProcessorHooks): StdioL
 /**
  * Starts the BLA MCP server over stdio (supporting newline-delimited and Content-Length JSON-RPC 2.0).
  */
-export function startMcpStdioServer(): void {
+export function startMcpStdioServer(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): void {
+  let pendingRequests = 0;
+  let pendingBytes = 0;
+  let waitingForDrain = false;
+  let outputClosed = false;
+  function resumeInput(): void {
+    if (!waitingForDrain) return;
+    waitingForDrain = false;
+    output.off("drain", resumeInput);
+    input.resume();
+  }
+  function stopReading(): void {
+    outputClosed = true;
+    output.off("error", stopReading);
+    output.off("close", stopReading);
+    input.off("data", onData);
+    resumeInput();
+  }
+  function writeResponse(data: string): void {
+    if (outputClosed) return;
+    if (!output.write(data) && !outputClosed && !waitingForDrain) {
+      waitingForDrain = true;
+      input.pause();
+      output.once("drain", resumeInput);
+    }
+  }
   let processingQueue = Promise.resolve();
   const queuedRequests = new Map<string | number, { cancelled: boolean; reason?: string }>();
   const processor = createStdioLineProcessor({
@@ -3449,11 +3484,11 @@ export function startMcpStdioServer(): void {
             message: "Parse error",
           },
         };
-        process.stdout.write(JSON.stringify(parseErr) + "\n");
+        writeResponse(JSON.stringify(parseErr) + "\n");
         return;
       }
       if (!isJsonRpcRequest(req)) {
-        process.stdout.write(JSON.stringify(invalidRequest(req)) + "\n");
+        writeResponse(JSON.stringify(invalidRequest(req)) + "\n");
         return;
       }
       if (req.method === "notifications/cancelled" && req.id === undefined) {
@@ -3468,6 +3503,18 @@ export function startMcpStdioServer(): void {
         }
         return;
       }
+      const requestBytes = Buffer.byteLength(line, "utf8");
+      if (pendingRequests >= MAX_STDIO_PENDING_REQUESTS || pendingBytes + requestBytes > MAX_STDIO_PENDING_BYTES) {
+        if (req.id !== undefined) {
+          writeResponse(JSON.stringify({
+            jsonrpc: "2.0", id: req.id,
+            error: { code: -32000, message: "Server busy; retry later." },
+          }) + "\n");
+        }
+        return;
+      }
+      pendingRequests++;
+      pendingBytes += requestBytes;
       const reqId = req.method === "tools/call" && isPlainObject(req.params) &&
         req.params.name === "bla_harden" && isRequestId(req.id) ? req.id : undefined;
       if (reqId !== undefined) {
@@ -3484,9 +3531,10 @@ export function startMcpStdioServer(): void {
           }
         }
         try {
-          const res = await handleMcpRequest(req);
+          if (outputClosed) return;
+          const res = await handleMcpRequest(req, DEFAULT_ENGINE_HANDLERS, writeResponse);
           if (res !== null) {
-            process.stdout.write(JSON.stringify(res) + "\n");
+            writeResponse(JSON.stringify(res) + "\n");
           }
         } catch {
           const parseErr: JsonRpcResponse = {
@@ -3497,8 +3545,10 @@ export function startMcpStdioServer(): void {
               message: "Parse error",
             },
           };
-          process.stdout.write(JSON.stringify(parseErr) + "\n");
+          writeResponse(JSON.stringify(parseErr) + "\n");
         } finally {
+          pendingRequests--;
+          pendingBytes -= requestBytes;
           if (reqId !== undefined) {
             preAbortedHardenRequests.delete(reqId);
           }
@@ -3514,9 +3564,14 @@ export function startMcpStdioServer(): void {
           message: `Parse error: line exceeds ${MAX_STDIO_LINE_CHARS} character limit`,
         },
       };
-      process.stdout.write(JSON.stringify(parseErr) + "\n");
+      writeResponse(JSON.stringify(parseErr) + "\n");
     },
   });
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk: string) => processor.push(chunk));
+  input.setEncoding("utf8");
+  function onData(chunk: string): void {
+    processor.push(chunk);
+  }
+  output.once("error", stopReading);
+  output.once("close", stopReading);
+  input.on("data", onData);
 }
