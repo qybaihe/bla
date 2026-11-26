@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const INTEGRITY_COVERAGE_SCHEMA = "bla-integrity-coverage/v1" as const;
@@ -281,6 +281,9 @@ export function finalizeCoverageMatrixHashes(
 
 
 
+/** Cap on a matrix file read during discovery — it is JSON, not an artifact. */
+const MAX_COVERAGE_MATRIX_BYTES = 8 * 1024 * 1024;
+
 const MATRIX_NAMES = new Set([
   "integrity-coverage.json",
   ".bla-integrity-coverage.json",
@@ -318,7 +321,7 @@ export function discoverAndLintIntegrityCoverage(
       const full = join(dir, name);
       let st;
       try {
-        st = statSync(full);
+        st = lstatSync(full);
       } catch {
         continue;
       }
@@ -326,8 +329,28 @@ export function discoverAndLintIntegrityCoverage(
         stack.push({ dir: full, depth: depth + 1 });
         continue;
       }
-      if (!MATRIX_NAMES.has(name)) continue;
+      // `lstatSync` reports a symlink as itself, so a symlinked matrix is not
+      // read out of the tree; require a real regular file within the size cap.
+      if (!st.isFile() || !MATRIX_NAMES.has(name)) continue;
       files += 1;
+      if (st.size > MAX_COVERAGE_MATRIX_BYTES) {
+        out.push({
+          schema: INTEGRITY_COVERAGE_SCHEMA,
+          ok: false,
+          shouldRefuseBankrupt: true,
+          reasons: ["parse-error"],
+          uncoveredNodes: [],
+          uncoveredCheckers: [],
+          missingHashNodes: [],
+          invalidHashNodes: [],
+          checkerCount: 0,
+          oneLineAdvice: `ERROR: integrity-coverage.json exceeds the ${MAX_COVERAGE_MATRIX_BYTES}-byte read cap and was not parsed.`,
+          path: full,
+          matrix: null,
+          parseError: "matrix-too-large",
+        });
+        continue;
+      }
       try {
         const raw = JSON.parse(readFileSync(full, "utf8")) as CoverageMatrix;
         const ev = evaluateCoverageMatrix(raw);
