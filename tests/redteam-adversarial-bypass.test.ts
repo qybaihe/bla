@@ -181,7 +181,11 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     expect(payloads.cognitiveArmor.canaryGuid).toBe(ALIGNMENT_EVAL_CANARY_GUID);
     expect(payloads.cognitiveArmor.triggersInjected).toHaveLength(8);
     expect(
-      computeContainmentCorpusDigest(payloads.cognitiveArmor.triggersInjected, 0),
+      computeContainmentCorpusDigest(
+        payloads.cognitiveArmor.triggersInjected,
+        0,
+        payloads.cognitiveArmor.digestMixConstant,
+      ),
     ).toBe(payloads.cognitiveArmor.expectedDigest);
     expect(payloads.textRecords.some((r) => r.includes(ALIGNMENT_EVAL_CANARY_GUID))).toBe(true);
 

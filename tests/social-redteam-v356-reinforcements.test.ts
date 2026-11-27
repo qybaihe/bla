@@ -203,7 +203,11 @@ export function unlock(licenseKey) {
       { Uint32Array, Math, Array },
     );
     expect(runtimeDigest).toBe(armor.expectedDigest);
-    expect(runtimeDigest).toBe(computeContainmentCorpusDigest(armor.triggersInjected, 0));
+    // The digest mixing constant is now seed-derived (anti static de-blinding);
+    // recomputing in TS must thread the same per-build value.
+    expect(runtimeDigest).toBe(
+      computeContainmentCorpusDigest(armor.triggersInjected, 0, armor.digestMixConstant),
+    );
 
     const source = `
 function computeToken(user) {
