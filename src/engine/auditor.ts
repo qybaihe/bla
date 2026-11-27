@@ -16,6 +16,10 @@ import type {
 } from "../core/types.js";
 import { unpackAsarBuffer } from "../shields/formats/asar.js";
 import { inspectWasmBinary, readWasmCustomSectionContent } from "../shields/formats/wasm.js";
+import {
+  containsHoneySourceMap,
+  isHoneySourceMapObject,
+} from "../shields/formats/honey-sourcemap-shape.js";
 import { lintWasmParamCarrierBuffer } from "./wasm-param-carrier-lint.js";
 import { lintPanelDeriveAbiSource } from "./panel-derive-abi-lint.js";
 import { lintJsAesUnwrapSource } from "./js-aes-unwrap-lint.js";
@@ -424,7 +428,11 @@ function analyzeJsSourceForAudit(
 
   if (source.includes("sourceMappingURL=")) {
     vectors.add("sourcemap-recovery");
-    const isHoneyMap = source.includes("enclave://tee-runtime/") || source.includes("aGFyZHdhcmUtdHBtMi1icmlkZ2U");
+    // Structural recognition (anti static de-blinding): the honey map's
+    // sourceRoot / decoy stems / canary GUID are now seed-derived, so decode any
+    // inline base64 source map and test its shape rather than matching fixed
+    // literals a stripper could also key on. See honey-sourcemap-shape.ts.
+    const isHoneyMap = containsHoneySourceMap(source);
     if (!isHoneyMap) {
       exposed.push({
         id: `sourcemap_${fileLabel}`,
@@ -1297,18 +1305,12 @@ export function auditTarget(targetPath: string): AuditReport {
       try {
         const parsed = JSON.parse(text) as Record<string, unknown>;
         const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
-        const sourcesContent = Array.isArray(parsed.sourcesContent)
-          ? parsed.sourcesContent
-          : [];
         const names = Array.isArray(parsed.names) ? parsed.names : [];
-        if (
-          parsed.version === 3 &&
-          parsed.sourceRoot === "enclave://tee-runtime/" &&
-          sources.length >= 3 &&
-          sourcesContent.length >= 3 &&
-          typeof parsed.mappings === "string" &&
-          parsed.mappings.length >= 4
-        ) {
+        // Structural recognition (anti static de-blinding): match the honey
+        // map's shape (custom scheme://host/ sourceRoot + enclave-flavoured decoy
+        // sources + >=3 sourcesContent + degenerate mappings) rather than the old
+        // fixed `enclave://tee-runtime/` literal. See honey-sourcemap-shape.ts.
+        if (isHoneySourceMapObject(parsed)) {
           isProtected = true;
           measuredDecoys = sources.length + names.length;
         }

@@ -22,6 +22,7 @@ import {
 } from "../src/shields/formats/python.js";
 import { protectNativeBinary } from "../src/shields/formats/native.js";
 import { generateHoneySourceMap } from "../src/shields/formats/sourcemap.js";
+import { isHoneySourceMapObject } from "../src/shields/formats/honey-sourcemap-shape.js";
 import { generateChaffPayloads } from "../src/shields/chaff/chaff-generator.js";
 
 function runCjsModule(code: string): Record<string, (...args: unknown[]) => unknown> {
@@ -256,7 +257,11 @@ describe("Red-Team vs. Blue-Team Adversarial Bypass & Cognitive-Armor Coupling",
     // 5. Honey SourceMap (.map)
     const chaff = generateChaffPayloads(prng, "bankrupt");
     const smap = generateHoneySourceMap("bundle.js", 25, prng, chaff);
-    expect(smap.jsonString).toContain(ALIGNMENT_EVAL_CANARY_GUID);
+    // The honey map's canary GUID / sourceRoot / decoy stems are now seed-derived
+    // (anti static de-blinding); assert the structural honey shape rather than a
+    // fixed literal. (The famous canary GUID remains in the tripwire-locked
+    // cognitive-armor JS head, verified elsewhere in this file.)
+    expect(isHoneySourceMapObject(JSON.parse(smap.jsonString))).toBe(true);
 
     // 6. Direct Cognitive-Armor generator
     const directArmor = generateCognitiveArmorTrigger(prng, "bankrupt");

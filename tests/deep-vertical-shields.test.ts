@@ -284,9 +284,12 @@ describe("Deep Vertical Shields (Runtime Deception, Electron Fuses, SQLite, AI M
     const chunk = { type: "chunk" as const, fileName: "assets/index-abc123.js", ...chunkOut! };
     const emitFile = vi.fn(() => "map");
     vitePlugin.generateBundle.call({ emitFile }, undefined, { [chunk.fileName]: chunk });
+    // Honey-map sourceRoot is now seed-derived (anti static de-blinding): assert
+    // the structural signal (a v3 map with a custom scheme://host/ sourceRoot)
+    // instead of the old fixed `enclave://tee-runtime/` literal.
     expect(emitFile).toHaveBeenCalledWith(expect.objectContaining({
       fileName: "assets/index-abc123.js.map",
-      source: expect.stringContaining("enclave://tee-runtime/"),
+      source: expect.stringMatching(/"version":\s*3[\s\S]*"sourceRoot":\s*"[a-z][a-z0-9.+-]*:\/\/[a-z0-9._-]+\/"/),
     }));
 
     // Test Webpack plugin asset update hook
