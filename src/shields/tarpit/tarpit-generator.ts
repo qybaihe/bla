@@ -1,6 +1,7 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import type { ChaffPayload } from "../chaff/chaff-generator.js";
+import { deriveAttestationBanner } from "../deception/comment-scramble.js";
 import {
   generateJsOpaqueFalseExpression,
   generatePythonOpaqueFalseExpression,
@@ -104,7 +105,7 @@ export function generateJsTarpitAndBudgetBreaker(
 
   const lines: string[] = [];
   const stateVar = prng.identifier({ style: "privateCamel", hint: "runtimeState", entropy: 4 });
-  lines.push(`/* runtime attestation boundary */`);
+  lines.push(`/* ${deriveAttestationBanner(prng)} */`);
   lines.push(`const ${stateVar} = 0x${prng.derive("js-tarpit-state").hex(2)} | 1;`);
 
   // 1. REA Semantic Budget Breaker #1: `alias-selections` + `returned-reference-widening`
@@ -253,7 +254,10 @@ export function generatePythonTarpit(
   }
 
   const lines: string[] = [];
-  // Keep auditor phrase "runtime attestation boundary" but drop greppable BLA-SHIELD.
+  // Emit a seed-derived attestation banner (anti static de-blinding) that BLA's
+  // own recognizers (pyc chaff / weave probe) match via looksLikeAttestationBanner,
+  // while dropping greppable BLA-SHIELD / the fixed legacy phrase LASIK keys on.
+  const attestationBanner = deriveAttestationBanner(prng);
   const stateVar = prng
     .identifier({ style: "snake", hint: "runtimeState", entropy: 4 })
     .toUpperCase();
@@ -269,7 +273,7 @@ export function generatePythonTarpit(
     entropy: 4,
   });
 
-  lines.push(`# runtime attestation boundary`);
+  lines.push(`# ${attestationBanner}`);
   lines.push(`${stateVar} = 0x${prng.hex(6)} | 1`);
   lines.push(`${slotVar} = {"epoch": 0, "peer": 0, "tag": 0}`);
   lines.push(`${manifestsVar} = (`);

@@ -1,6 +1,7 @@
 import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import { deriveAttestationBanner } from "../deception/comment-scramble.js";
 import {
   deriveParameterizedMbaParams,
   formatCParameterizedMbaExpr,
@@ -227,7 +228,7 @@ export function emitCompileTimeNativeHeader(
   // Go (`bla_shield.go`)
   const goSlots = Array.from({ length: 16 }, () => `0x${prng.hex(8)}`).join(", ");
   const lines: string[] = [
-    "// Code generated for runtime attestation boundary. DO NOT EDIT.",
+    `// Code generated for ${deriveAttestationBanner(prng)}. DO NOT EDIT.`,
     "package main",
     "",
     'import "sync/atomic"',

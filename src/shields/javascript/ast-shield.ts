@@ -9,6 +9,7 @@ import { SeededPrng, deriveSeedLabel } from "../../core/prng.js";
 import { assertNoForbiddenMarkers } from "../../core/identifiers.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import { scrambleCommentText } from "../deception/comment-scramble.js";
 import {
   buildParameterizedMbaBinaryAst,
   deriveParameterizedMbaParams,
@@ -3382,17 +3383,11 @@ export function transformJavaScriptWithBlaShield(
       if (isLegalNoticeComment(c)) continue;
       // Relocate + scramble: destroy verbatim original comments (incl. Chinese docs)
       // while preserving that a comment existed (so AST shape stays similar).
-      const theme = prng.pick([
-        "reconcile session epoch",
-        "derive ledger digest",
-        "normalize envelope frame",
-        "hydrate runtime cache",
-        "project quota policy",
-      ]);
-      const scrambled = prng.hex(6);
-      c.value = c.type === "CommentBlock"
-        ? ` ${theme} (${scrambled}) `
-        : ` ${theme} (${scrambled})`;
+      // The replacement is a seed-derived, plausible developer comment (anti
+      // static de-blinding) — no fixed phrase + `(hex6)` shape for LASIK's
+      // SCRAMBLED_COMMENT to match, and indistinguishable from a real comment.
+      const scrambled = scrambleCommentText(prng);
+      c.value = c.type === "CommentBlock" ? ` ${scrambled} ` : ` ${scrambled}`;
     }
   }
 

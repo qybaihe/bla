@@ -4,6 +4,7 @@ import { SeededPrng } from "../../core/prng.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
 import { buildCanaryAndDiagnosticPayloads } from "../deception/format-payloads.js";
+import { looksLikeAttestationBanner } from "../deception/comment-scramble.js";
 import { generatePythonTarpit } from "../tarpit/tarpit-generator.js";
 import {
   InvalidPythonSourceError,
@@ -1010,7 +1011,7 @@ export function inspectPythonPyc(bytes: Buffer): PythonPycInspectionSummary {
   const matches = textView.match(/[A-Za-z0-9_[\]:/. -]{6,}/g) ?? [];
 
   const hasChaff =
-    textView.includes("runtime attestation boundary") ||
+    looksLikeAttestationBanner(textView) ||
     textView.includes("Architecture Notice: Core business logic") ||
     textView.includes("ENCLAVE_ATTESTATION_CONTRACT_") ||
     textView.includes("SYMBOL_OFFSET_MANIFEST_");
