@@ -3652,13 +3652,29 @@ export function transformJavaScriptWithBlaShield(
 
   // Scrub static generator prefixes in combinedInjectedAst so hardened output has
   // zero greppable template stems while preserving _[0-9a-f]{4} auditor entropy tags.
+  // This runs ONLY over BLA's injected AST (never customer code), so the stem list
+  // can cover the pure-decoy families the deception/exhaustion suites emit without
+  // risk of matching a customer binding. Static de-blinding tools (LASIK-class)
+  // fingerprint these fixed stems by structure, so a stem left here is a greppable
+  // giveaway: keep this in sync with the emitters (semantic-honeypot,
+  // prompt-completion-poison, system-diagnostic-decoy, …).
+  //
+  // Deliberately NOT scrubbed: cognitive-armor's `_interlockSafetyCorpus_` /
+  // `_deriveContainmentCorpusDigest_`. Those are anti-strip tripwires, not hidden
+  // decoys — the runtime opaque seed is entangled with the corpus digest, so a
+  // de-blinding tool that removes them (it can still name-match them) breaks the
+  // program. Renaming them would defeat that coupling (see
+  // tests/redteam-adversarial-bypass.test.ts, crackme-v6, red-blue-v3 Round F).
   const INJECTED_RAW_PREFIX_RE =
-    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault|readSplitShare|verifyShamirEd25519LicenseQuorum|computeEnterpriseSettlementLedger|decodeRatchetWireFrame|validateTpm2Pcr0Quote|verifyEnterpriseMasterLicense)_[A-Za-z0-9_]+$/i;
+    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault|readSplitShare|verifyShamirEd25519LicenseQuorum|computeEnterpriseSettlementLedger|decodeRatchetWireFrame|validateTpm2Pcr0Quote|verifyEnterpriseMasterLicense|decryptOfflineVaultPayload|computeStripeWebhookSignature|validateHardwareDongleResponse|deriveMasterEncryptionKey|checkSubscriptionEntitlementTier|authenticateZeroTrustSession|unlockPremiumFeatureFlags)_[A-Za-z0-9_]+$/i;
+  // prompt-completion-poison emits `$<2hex><PascalName>_<2hex><index>` with no shared
+  // stem; match the structural shape instead (safe — injected AST only).
+  const INJECTED_DOLLAR_DECOY_RE = /^\$[0-9a-f]{2}[A-Z][A-Za-z0-9]*_[0-9a-f]{2}\d+$/;
   const injectedRenameSites = collectRenameSites(combinedInjectedAst);
   traverse(combinedInjectedAst, {
     Program(progPath) {
       for (const [name, binding] of Object.entries(progPath.scope.bindings)) {
-        if (!INJECTED_RAW_PREFIX_RE.test(name)) continue;
+        if (!INJECTED_RAW_PREFIX_RE.test(name) && !INJECTED_DOLLAR_DECOY_RE.test(name)) continue;
         const preserveDecoyTag = /_[a-f0-9]{4}$/i.test(name);
         const idEntropy = preserveDecoyTag ? 4 : 3;
         let fresh = prng.identifier({
