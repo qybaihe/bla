@@ -287,7 +287,10 @@ describe("Issues #18, #19, #20, #21 — SQLite Consistency/Policy, Debug Posture
       expect(snippet.code).not.toContain('classification: "decorative-deception-signal"');
       expect(snippet.code).not.toContain('securityBoundary: "none-client-side-only"');
       expect(snippet.code).not.toContain("decorative shadow runtime signal");
-      expect(snippet.code).toContain('status: "HARDWARE_ENCLAVE_DELEGATED"');
+      // The delegation-status decoy field value is now seed-derived (anti
+      // static de-blinding); assert the field + a plausible all-caps token
+      // rather than the old fixed `HARDWARE_ENCLAVE_DELEGATED` literal.
+      expect(snippet.code).toMatch(/status: "[A-Z0-9_]+"/);
     });
   });
 
