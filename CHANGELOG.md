@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Structural polymorphism for the string-decrypt stub (anti static de-blinding):** The runtime decoder emitted by `encrypt-strings.ts` no longer carries a build-invariant arithmetic signature. Before this change the decode loop baked in fixed mixing constants (`i*31`, `i*7+(j>>2)`, `ks+i*73+j*19`), so the whole function body was identical across every build apart from its (already seeded) identifier names — exactly the shape a static de-blinding tool that recognizes BLA "by structure, not by name" (LASIK-class strippers) keys on to locate and excise the string shield. The per-entry keystream mixing constants are now seed-derived (`deriveDecoderMix`), and one of several arithmetically-equivalent decoder *shapes* is selected per file, so no single structural pattern matches every build. The emitter and the JS AST shield's marker recognizer are generated from one shared source (`src/engine/string-decoder-stub.ts`), so marker scrubbing can never drift from whatever the emitter produces; the standalone `deriveEntryKeystream` export stays backward-compatible (legacy constants by default). Output remains deterministic per seed and runtime-equivalent, proven by executing the hardened output for both shapes (`src/engine/encrypt-strings.ts`, `src/shields/javascript/ast-shield.ts`, `tests/encrypt-strings-polymorphism.test.ts`).
+
 ## [3.6.1] — 2026-11-26
 
 MCP stdio transport hardening, real doctor engine probes, expanded 16-target showcase benchmark, and reporting/symlink safety improvements (227 test suites / 1,611 tests passing).

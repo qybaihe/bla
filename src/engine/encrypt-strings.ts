@@ -22,6 +22,13 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { SeededPrng } from "../core/prng.js";
+import {
+  type DecoderMix,
+  LEGACY_DECODER_MIX,
+  deriveDecoderMix,
+  entryPadByte,
+  renderDecoderFunction,
+} from "./string-decoder-stub.js";
 import { writeRawFileAtomicSync } from "./protector.js";
 import {
   classifySensitiveLiteral,
@@ -190,14 +197,12 @@ export function deriveEntryKeystream(
   keystream: Buffer,
   entryIndex: number,
   byteLength: number,
+  mix: DecoderMix = LEGACY_DECODER_MIX,
 ): Buffer {
   const len = Math.max(1, byteLength);
   const out = Buffer.alloc(len);
-  const kLen = keystream.length;
   for (let j = 0; j < len; j++) {
-    const kBase = keystream[(j + entryIndex * 31) % kLen]!;
-    const kSalt = keystream[(entryIndex * 7 + (j >> 2)) % kLen]!;
-    out[j] = (kBase ^ ((kSalt + entryIndex * 73 + j * 19) & 0xff)) & 0xff;
+    out[j] = entryPadByte(keystream, entryIndex, j, mix);
   }
   return out;
 }
@@ -214,6 +219,7 @@ function buildRuntimeStub(
   fnName: string,
   tableName: string,
   ksName: string,
+  mix: DecoderMix,
 ): string {
   const parse = 'split(",").map(Number)';
   const tableLit =
@@ -224,16 +230,7 @@ function buildRuntimeStub(
   return (
     `var ${tableName}=${tableLit};` +
     `var ${ksName}=${ksLit};` +
-    `function ${fnName}(i){` +
-    `var e=${tableName}[i],k=${ksName},kl=k.length,o=new Uint8Array(e.length);` +
-    `for(var j=0;j<e.length;j++){` +
-    `var kb=k[(j+i*31)%kl],ks=k[(i*7+(j>>2))%kl];` +
-    `o[j]=(e[j]^(kb^((ks+i*73+j*19)&255)))&255;` +
-    `}` +
-    `return typeof Buffer!=="undefined"?Buffer.from(o).toString("utf8"):` +
-    `(typeof TextDecoder!=="undefined"?new TextDecoder().decode(o):` +
-    `String.fromCharCode.apply(null,Array.from(o)));` +
-    `}` +
+    renderDecoderFunction({ fnName, tableName, ksName }, mix) +
     `var _blaS=${fnName};var _blaT=${tableName};`
   );
 }
@@ -421,17 +418,22 @@ function transformJsSource(
     ...unique.map((u) => Buffer.byteLength(u, "utf8")),
     32,
   );
+  // Seed-derived mixing constants + decoder shape (drawn from an independent
+  // substream so the keystream bytes and decoy identifiers below stay
+  // reproducible). This removes the build-invariant arithmetic signature a
+  // structural de-blinding tool would key on.
+  const mix = deriveDecoderMix(prng);
   const keystream = buildKeystream(prng, Math.max(64, maxLen));
   const table = unique.map((u, idx) =>
     xorEncodeToBytes(
       u,
-      deriveEntryKeystream(keystream, idx, Buffer.byteLength(u, "utf8")),
+      deriveEntryKeystream(keystream, idx, Buffer.byteLength(u, "utf8"), mix),
     ),
   );
   const fnName = prng.identifier({ style: "camel", hint: "resolveBundleSlot", entropy: 3 });
   const tableName = prng.identifier({ style: "camel", hint: "catalogFrameTable", entropy: 3 });
   const ksName = prng.identifier({ style: "camel", hint: "sessionKeyMask", entropy: 3 });
-  const stub = buildRuntimeStub(table, keystream, fnName, tableName, ksName);
+  const stub = buildRuntimeStub(table, keystream, fnName, tableName, ksName, mix);
 
   const indexByLiteral = new Map<string, number>();
   unique.forEach((lit, i) => {
