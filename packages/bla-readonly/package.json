@@ -1,0 +1,16 @@
+{
+  "name": "bla-readonly",
+  "version": "0.1.0-rc.1",
+  "description": "Offline source-map exposure audits and pinned artifact verification",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "bla-readonly": "./dist/cli.mjs" },
+  "files": ["dist/cli.mjs", "README.md", "LICENSE"],
+  "engines": { "node": "^22.23.4 || >=24.0.0" },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "npm run build && node --test test/cli.test.mjs",
+    "check:pack": "node test/check-pack.mjs"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}
