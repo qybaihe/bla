@@ -18,6 +18,16 @@ describe("reporter terminal hygiene", () => {
     expect(cleaned).toContain("\t");
   });
 
+  it("strips carriage returns so a name cannot rewrite the line", () => {
+    // CR returns the cursor to column 0: a hostile artifact name could overwrite
+    // the warning the operator is reading. POSIX filenames and ASAR directory
+    // keys can carry one. Newline and tab stay for readability.
+    const cleaned = sanitizeTerminalText("safe\rOVERWRITE");
+    expect(cleaned).not.toContain("\r");
+    expect(cleaned).toBe("safe?OVERWRITE");
+    expect(sanitizeTerminalText("a\nb\tc")).toBe("a\nb\tc");
+  });
+
   it("does not forward control characters from a target path into the report", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-report-injection-"));
     try {
