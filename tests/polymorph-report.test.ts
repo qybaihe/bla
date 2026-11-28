@@ -7,7 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { comparePolymorphArtifacts } from "../src/engine/polymorph-report.js";
+import { comparePolymorphArtifacts, kendallTauDistance } from "../src/engine/polymorph-report.js";
 import { protectTarget } from "../src/engine/protector.js";
 import { handleMcpRequest } from "../src/mcp/server.js";
 import { deriveSeedLabel, SeededPrng } from "../src/core/prng.js";
@@ -125,6 +125,27 @@ describe("polymorph-report (seeded polymorphism)", () => {
     expect(result.structuredContent.status).toBe("ok");
     expect(result.structuredContent.reproducible).toBe(true);
   });
+
+  it("counts order inversions without comparing every pair", () => {
+    // Shared names keep orderA's order, so a discordant pair is an inversion in
+    // the positions taken from orderB. Comparing every pair is quadratic.
+    expect(kendallTauDistance(["a", "b", "c"], ["a", "b", "c"])).toBe(0);
+    expect(kendallTauDistance(["a", "b", "c"], ["c", "b", "a"])).toBe(1);
+    expect(kendallTauDistance(["a", "b", "c"], ["b", "a", "c"])).toBeCloseTo(1 / 3);
+    expect(kendallTauDistance(["a", "x", "b"], ["b", "a"])).toBe(1);
+    expect(kendallTauDistance(["a"], ["a"])).toBe(0);
+    expect(kendallTauDistance([], [])).toBe(0);
+
+    const n = 40000;
+    const forward = Array.from({ length: n }, (_, i) => `m${i}`);
+    const backward = [...forward].reverse();
+    const startedAt = performance.now();
+    const distance = kendallTauDistance(forward, backward);
+    const elapsed = performance.now() - startedAt;
+
+    expect(distance).toBe(1);
+    expect(elapsed).toBeLessThan(1000);
+  }, 30000);
 
   it("bundler-style deriveSeedLabel keeps chunk streams independent but stable", () => {
     const root = "build-root";

@@ -126,29 +126,44 @@ function jaccard(a: readonly string[], b: readonly string[]): number {
  * Kendall-tau distance normalized to [0,1] over the intersection order.
  * 0 = identical order among shared names; 1 = fully reversed (or no shared).
  */
-function kendallTauDistance(
+export function kendallTauDistance(
   orderA: readonly string[],
   orderB: readonly string[],
 ): number {
   const posB = new Map(orderB.map((n, i) => [n, i]));
-  const shared = orderA.filter((n) => posB.has(n));
-  const n = shared.length;
-  if (n <= 1) return 0;
-  let discordant = 0;
-  let pairs = 0;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      pairs++;
-      const ai = i;
-      const aj = j;
-      const bi = posB.get(shared[i]!)!;
-      const bj = posB.get(shared[j]!)!;
-      const orderALess = ai < aj;
-      const orderBLess = bi < bj;
-      if (orderALess !== orderBLess) discordant++;
-    }
+  // Shared names keep orderA's order, so a discordant pair is exactly an
+  // inversion in the positions taken from orderB. Count inversions with a
+  // merge sort instead of comparing every pair (n² grew to minutes at 40k).
+  const ranks: number[] = [];
+  for (const name of orderA) {
+    const at = posB.get(name);
+    if (at !== undefined) ranks.push(at);
   }
-  return pairs === 0 ? 0 : discordant / pairs;
+  const n = ranks.length;
+  if (n <= 1) return 0;
+  const scratch = new Array<number>(n);
+  const countInversions = (lo: number, hi: number): number => {
+    if (hi - lo <= 1) return 0;
+    const mid = (lo + hi) >> 1;
+    let count = countInversions(lo, mid) + countInversions(mid, hi);
+    let i = lo;
+    let j = mid;
+    let k = lo;
+    while (i < mid && j < hi) {
+      if (ranks[i]! <= ranks[j]!) {
+        scratch[k++] = ranks[i++]!;
+      } else {
+        scratch[k++] = ranks[j++]!;
+        count += mid - i;
+      }
+    }
+    while (i < mid) scratch[k++] = ranks[i++]!;
+    while (j < hi) scratch[k++] = ranks[j++]!;
+    for (let t = lo; t < hi; t += 1) ranks[t] = scratch[t]!;
+    return count;
+  };
+  const pairs = (n * (n - 1)) / 2;
+  return pairs === 0 ? 0 : countInversions(0, n) / pairs;
 }
 
 function byteDiffRatio(a: Buffer, b: Buffer): number {
