@@ -14,7 +14,7 @@ npm run build
 # Run the Vitest test suite
 npm test
 
-# Run the empirical Counter-REA benchmark
+# Run the local showcase (token and cost figures are estimates, not metered usage)
 node dist/cli.js benchmark
 ```
 

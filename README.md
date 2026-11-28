@@ -240,6 +240,8 @@ npx bla-agents benchmark
 
 **Aggregate Showcase Result (modeled):** **~1,293.6×** modeled token amplification · **~600.3×** modeled cost amplification · **16/16 bundled showcase targets** passed runtime-equivalence checks. Figures are internal estimator projections on the benchmark fixtures, not metered live agent billing.
 
+**What did a shell-capable agent actually use?** An [independent experiment on BLA v3.6.0](https://github.com/qybaihe/bla/issues/319) reported **1.86×–3.58×** baseline-adjusted median input tokens on the four targets that passed the default score gate (**1.18×** on the fifth, SQLite, which did not). The agent's reconstruction passed all 12 functional checks in each of the 15 hardened runs. That measures one shell-enabled agent setup, three runs per target, and Stage 1 only. It is neither a calibration of the 16-target estimator nor a guarantee for other programs.
+
 | Target Artifact | Unprotected Baseline (est.) | BLA Protected (est.) | Token Multiplier | Runtime Equivalence |
 | :--- | :--- | :--- | ---: | :---: |
 | **DX-Ball sound-pan (`.js`)** | 84/100 · 4,800 tok · $0.20 | 2/100 · 15.2M tok · $238.02 · `LIMITED` | **3,172.7×** | ✅ 100% |
