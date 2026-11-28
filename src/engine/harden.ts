@@ -4367,6 +4367,9 @@ function hardenProjectCore(
       }
     } catch {
       integrityCoveragePath = undefined;
+      // The matrix is the evidence. Without it on disk there is nothing to be
+      // self-verified, so the flag must not survive a failed write.
+      integrityCoverageSelfVerified = undefined;
     }
   }
 
