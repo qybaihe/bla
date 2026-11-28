@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as vm from "node:vm";
 import { transformJavaScriptWithBlaShield } from "../src/shields/javascript/ast-shield.js";
 import { generateHoneySourceMap } from "../src/shields/formats/sourcemap.js";
+import { isHoneySourceMapObject } from "../src/shields/formats/honey-sourcemap-shape.js";
 import { packAsarBuffer, unpackAsarBuffer } from "../src/shields/formats/asar.js";
 import { SeededPrng } from "../src/core/prng.js";
 import { generateChaffPayloads } from "../src/shields/chaff/chaff-generator.js";
@@ -188,11 +189,15 @@ describe("JavaScript, TypeScript & Electron AST Shield", () => {
     const generated = generateHoneySourceMap("bundle.bla.js", 60, prng, chaff);
 
     expect(generated.mapObject.version).toBe(3);
-    expect(generated.mapObject.sourceRoot).toBe("enclave://tee-runtime/");
+    // sourceRoot / decoy stems are seed-derived (anti static de-blinding); assert
+    // the structural honey shape (custom scheme://host/ sourceRoot, enclave-
+    // flavoured decoy sources) instead of fixed literals.
+    expect(generated.mapObject.sourceRoot).toMatch(/^[a-z][a-z0-9.+-]*:\/\/[a-z0-9._-]+\/$/);
     expect(generated.mapObject.sources.length).toBe(3);
-    expect(generated.mapObject.sources[0]).toContain("src/enclave/");
+    expect(generated.mapObject.sources[0]).toMatch(/^src\//);
     expect(generated.mapObject.sourcesContent.length).toBe(3);
     expect(generated.mapObject.mappings).toContain(";");
     expect(generated.inlineDirective).toContain("sourceMappingURL=data:application/json");
+    expect(isHoneySourceMapObject(generated.mapObject)).toBe(true);
   });
 });

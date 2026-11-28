@@ -157,7 +157,10 @@ describe("v3.2.3 Counter-Critique Reinforcements & Issue #157 PE Hardening", () 
     expect(snippet.code).not.toContain("decorative-deception-signal");
     expect(snippet.code).not.toContain("none-client-side-only");
     expect(snippet.code).not.toContain("decorative shadow runtime signal");
-    expect(snippet.code).toContain("RING0_SEALED");
+    // The attestation-state decoy field is still emitted, but its value is now
+    // seed-derived (anti static de-blinding), so assert the field + a plausible
+    // all-caps token rather than the old fixed `RING0_SEALED` literal.
+    expect(snippet.code).toMatch(/attestationState: "[A-Z0-9_]+"/);
   });
 
   it("Critique 6: entangles injected decoy functions into opaque-predicate seedVarName by default so stripping decoys breaks execution", () => {

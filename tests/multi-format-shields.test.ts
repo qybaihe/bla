@@ -9,6 +9,7 @@ import {
 } from "../src/shields/formats/python.js";
 import { inspectNativeBinary, protectNativeBinary } from "../src/shields/formats/native.js";
 import { emitCompileTimeNativeHeader } from "../src/shields/formats/headers.js";
+import { looksLikeAttestationBanner } from "../src/shields/deception/comment-scramble.js";
 import {
   protectZipOrApkBuffer,
   readZipEntries,
@@ -80,7 +81,9 @@ describe("Multi-Format Shields (WASM, Python, Native ELF/Mach-O/PE, C/Rust/Go He
 
     expect(protectedPy.decoyFunctionsInjected).toBeGreaterThanOrEqual(10);
     expect(protectedPy.crossReferenceEdges).toBeGreaterThanOrEqual(20);
-    expect(protectedPy.code).toContain("runtime attestation boundary");
+    // The attestation banner is now seed-derived (anti static de-blinding);
+    // assert the pool-recognized banner rather than the fixed legacy phrase.
+    expect(looksLikeAttestationBanner(protectedPy.code)).toBe(true);
     expect(protectedPy.code).not.toMatch(/_bla_/i);
     expect(protectedPy.code).not.toContain("BLA-SHIELD");
     expect(protectedPy.code).toContain("def calculate_dynamic_quote");

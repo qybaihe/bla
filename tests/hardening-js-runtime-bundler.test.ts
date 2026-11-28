@@ -10,6 +10,7 @@ import { type PluginBuild, build as esbuild, transform as esbuildTransform } fro
 import { rollup } from "rollup";
 import { afterEach, describe, expect, it } from "vitest";
 import { BlaWebpackPlugin, blaEsbuildPlugin, blaRollupPlugin } from "../src/bundler/index.js";
+import { isHoneySourceMapObject } from "../src/shields/formats/honey-sourcemap-shape.js";
 import { SeededPrng } from "../src/core/prng.js";
 import { encryptStrings } from "../src/engine/encrypt-strings.js";
 import { protectTarget } from "../src/engine/protector.js";
@@ -93,7 +94,16 @@ describe("bundler output and JavaScript transform metadata", () => {
         });
         const testedChunks = output.filter((item) => item.type === "chunk" && !item.name.startsWith("ignored"));
         expect(testedChunks).toHaveLength(2);
-        expect(output.filter((item) => item.type === "asset" && String(item.source).includes("enclave://tee-runtime/"))).toHaveLength(2);
+        expect(
+          output.filter((item) => {
+            if (item.type !== "asset") return false;
+            try {
+              return isHoneySourceMapObject(JSON.parse(String(item.source)));
+            } catch {
+              return false;
+            }
+          }),
+        ).toHaveLength(2);
         for (const chunk of testedChunks) {
           if (chunk.type !== "chunk") throw new Error("expected a chunk");
           expect(chunk.map).toBeNull();
@@ -157,7 +167,9 @@ describe("bundler output and JavaScript transform metadata", () => {
       expect(js).not.toMatch(/source(?:Mapping)?URL\s*=|private-source/);
       expect(require(put(dir, name, js))).toBe(value);
       if (honeySourceMap) {
-        expect(assets[`${name}.map`]!.source()).toContain("enclave://tee-runtime/");
+        expect(isHoneySourceMapObject(JSON.parse(String(assets[`${name}.map`]!.source())))).toBe(
+          true,
+        );
         expect(assets[`${name}.map`]!.source()).not.toContain(marker);
       } else {
         expect(assets[`${name}.map`]).toBeUndefined();

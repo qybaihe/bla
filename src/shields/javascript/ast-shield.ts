@@ -9,6 +9,7 @@ import { SeededPrng, deriveSeedLabel } from "../../core/prng.js";
 import { assertNoForbiddenMarkers } from "../../core/identifiers.js";
 import type { ProtectionIntensity } from "../../core/types.js";
 import { generateChaffPayloads } from "../chaff/chaff-generator.js";
+import { scrambleCommentText } from "../deception/comment-scramble.js";
 import {
   buildParameterizedMbaBinaryAst,
   deriveParameterizedMbaParams,
@@ -27,6 +28,7 @@ import {
 import { generateCounterReaExhaustionSuite } from "../exhaustion/index.js";
 import { generateCounterReaDeceptionSuite } from "../deception/index.js";
 import { isShippedSecretLiteral, regexPatternSecretRuns } from "../../engine/plaintext-secret-lint.js";
+import { matchesDecoderFunction } from "../../engine/string-decoder-stub.js";
 
 // Handle ESM/CJS default export interop in NodeNext (Babel 7 & Babel 8)
 type UnwrapDefault<T> = T extends { readonly default: infer D } ? D : T;
@@ -1548,18 +1550,18 @@ function stageTwoMarkerAliases(program: t.Program, source: string): readonly t.V
     !t.isIdentifier(tableAlias.id, { name: "_blaT" }) ||
     !t.isIdentifier(tableAlias.init, { name: tableDecl.id.name })
   ) return [];
-  // Match the exact serialized decoder emitted by encrypt-strings.ts.
-  const expectedDecoder =
-    `function ${decoder.id.name}(i){` +
-    `var e=${tableDecl.id.name}[i],k=${keyDecl.id.name},kl=k.length,o=new Uint8Array(e.length);` +
-    `for(var j=0;j<e.length;j++){` +
-    `var kb=k[(j+i*31)%kl],ks=k[(i*7+(j>>2))%kl];` +
-    `o[j]=(e[j]^(kb^((ks+i*73+j*19)&255)))&255;` +
-    `}` +
-    `return typeof Buffer!=="undefined"?Buffer.from(o).toString("utf8"):` +
-    `(typeof TextDecoder!=="undefined"?new TextDecoder().decode(o):` +
-    `String.fromCharCode.apply(null,Array.from(o)));}`;
-  return source.slice(decoder.start, decoder.end) === expectedDecoder ? [decoderAlias, tableAlias] : [];
+  // Recognize the serialized decoder emitted by encrypt-strings.ts. Its mixing
+  // constants are seed-derived and its shape varies per build (structural
+  // polymorphism), so match structurally — with the constants wildcarded —
+  // rather than against one byte-exact template.
+  const decoderSource = source.slice(decoder.start, decoder.end);
+  return matchesDecoderFunction(decoderSource, {
+    fnName: decoder.id.name,
+    tableName: tableDecl.id.name,
+    ksName: keyDecl.id.name,
+  })
+    ? [decoderAlias, tableAlias]
+    : [];
 }
 
 /**
@@ -3381,17 +3383,11 @@ export function transformJavaScriptWithBlaShield(
       if (isLegalNoticeComment(c)) continue;
       // Relocate + scramble: destroy verbatim original comments (incl. Chinese docs)
       // while preserving that a comment existed (so AST shape stays similar).
-      const theme = prng.pick([
-        "reconcile session epoch",
-        "derive ledger digest",
-        "normalize envelope frame",
-        "hydrate runtime cache",
-        "project quota policy",
-      ]);
-      const scrambled = prng.hex(6);
-      c.value = c.type === "CommentBlock"
-        ? ` ${theme} (${scrambled}) `
-        : ` ${theme} (${scrambled})`;
+      // The replacement is a seed-derived, plausible developer comment (anti
+      // static de-blinding) — no fixed phrase + `(hex6)` shape for LASIK's
+      // SCRAMBLED_COMMENT to match, and indistinguishable from a real comment.
+      const scrambled = scrambleCommentText(prng);
+      c.value = c.type === "CommentBlock" ? ` ${scrambled} ` : ` ${scrambled}`;
     }
   }
 
@@ -3651,13 +3647,29 @@ export function transformJavaScriptWithBlaShield(
 
   // Scrub static generator prefixes in combinedInjectedAst so hardened output has
   // zero greppable template stems while preserving _[0-9a-f]{4} auditor entropy tags.
+  // This runs ONLY over BLA's injected AST (never customer code), so the stem list
+  // can cover the pure-decoy families the deception/exhaustion suites emit without
+  // risk of matching a customer binding. Static de-blinding tools (LASIK-class)
+  // fingerprint these fixed stems by structure, so a stem left here is a greppable
+  // giveaway: keep this in sync with the emitters (semantic-honeypot,
+  // prompt-completion-poison, system-diagnostic-decoy, …).
+  //
+  // Deliberately NOT scrubbed: cognitive-armor's `_interlockSafetyCorpus_` /
+  // `_deriveContainmentCorpusDigest_`. Those are anti-strip tripwires, not hidden
+  // decoys — the runtime opaque seed is entangled with the corpus digest, so a
+  // de-blinding tool that removes them (it can still name-match them) breaks the
+  // program. Renaming them would defeat that coupling (see
+  // tests/redteam-adversarial-bypass.test.ts, crackme-v6, red-blue-v3 Round F).
   const INJECTED_RAW_PREFIX_RE =
-    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault|readSplitShare|verifyShamirEd25519LicenseQuorum|computeEnterpriseSettlementLedger|decodeRatchetWireFrame|validateTpm2Pcr0Quote|verifyEnterpriseMasterLicense)_[A-Za-z0-9_]+$/i;
+    /^(?:obligationFlood|scc|labyrinthDispatch|cdpShapeBudgetGuard|fridaCaptureSaturator|fridaRealmRing|regexSearchMagnet|bpeSink|tokenSink|localeCollation|collationSlot|aliasedBufferIllusion|diffFrontier|crashSignalHandler|canaryCredentialHoneypot|probeCanaryHoneypot|collectEnvironmentDiagnostics|systemDiagnosticLog|grpcServiceMirage|evidenceLedger|_shadowVault|readSplitShare|verifyShamirEd25519LicenseQuorum|computeEnterpriseSettlementLedger|decodeRatchetWireFrame|validateTpm2Pcr0Quote|verifyEnterpriseMasterLicense|decryptOfflineVaultPayload|computeStripeWebhookSignature|validateHardwareDongleResponse|deriveMasterEncryptionKey|checkSubscriptionEntitlementTier|authenticateZeroTrustSession|unlockPremiumFeatureFlags)_[A-Za-z0-9_]+$/i;
+  // prompt-completion-poison emits `$<2hex><PascalName>_<2hex><index>` with no shared
+  // stem; match the structural shape instead (safe — injected AST only).
+  const INJECTED_DOLLAR_DECOY_RE = /^\$[0-9a-f]{2}[A-Z][A-Za-z0-9]*_[0-9a-f]{2}\d+$/;
   const injectedRenameSites = collectRenameSites(combinedInjectedAst);
   traverse(combinedInjectedAst, {
     Program(progPath) {
       for (const [name, binding] of Object.entries(progPath.scope.bindings)) {
-        if (!INJECTED_RAW_PREFIX_RE.test(name)) continue;
+        if (!INJECTED_RAW_PREFIX_RE.test(name) && !INJECTED_DOLLAR_DECOY_RE.test(name)) continue;
         const preserveDecoyTag = /_[a-f0-9]{4}$/i.test(name);
         const idEntropy = preserveDecoyTag ? 4 : 3;
         let fresh = prng.identifier({

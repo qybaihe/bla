@@ -18,6 +18,7 @@ import {
   isTypeScriptDeclarationPath,
 } from "../../core/detector.js";
 import { isDevToolingFile, readPackageToolingScripts } from "../../core/dev-tooling.js";
+import { looksLikeAttestationBanner } from "../deception/comment-scramble.js";
 import type { ArtifactFormat } from "../../core/types.js";
 import { lintLaneIndependence } from "../../engine/lane-independence-lint.js";
 
@@ -2196,7 +2197,7 @@ export function inspectWeaveHints(source: string, format: ArtifactFormat): {
     if (/\["warm"\]\s*=/.test(source) || /warm_runtime|warmRuntime/i.test(source)) {
       hints.push("python-warm-init");
     }
-    if (/runtime attestation boundary/.test(source)) {
+    if (looksLikeAttestationBanner(source)) {
       hints.push("python-tarpit-banner-phrase");
     }
     if (/hash\(\w+\.__name__\)/.test(source) && /\["epoch"\]/.test(source)) {
