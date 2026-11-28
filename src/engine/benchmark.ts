@@ -21,6 +21,13 @@ import { auditTarget } from "./auditor.js";
 import { protectTarget } from "./protector.js";
 
 /**
+ * Solidity dispatcher runtime bytecode used by showcase #12. Kept at module scope so a test can
+ * check that every taken JUMP/JUMPI lands on a JUMPDEST instead of a PUSH immediate.
+ */
+export const EVM_DISPATCHER_RUNTIME_HEX =
+  "60806040523615601a5760003560e01c806367e408a714601c575b005b602a60005260206000f3";
+
+/**
  * Showcase 1: DX-Ball Sound-Pan Calculation (Directly countering REA's #1 README Showcase!)
  */
 const DX_BALL_SOURCE = `
@@ -685,14 +692,12 @@ export async function runShowcaseBenchmark(
     {
       const evmPath = join(tempDir, "Vault.evm");
       const outEvmPath = join(tempDir, "Vault.shielded.evm");
-      // Realistic Solidity dispatcher runtime bytecode:
-      // PUSH1 0x80 PUSH1 0x40 MSTORE CALLDATASIZE ISZERO PUSH1 0x1b JUMPI
-      // PUSH1 0x00 CALLDATALOAD PUSH1 0xe0 SHR DUP1 PUSH4 0x67e408a7 EQ PUSH1 0x20 JUMPI
+      // Realistic Solidity dispatcher runtime bytecode. Both jump targets point at the
+      // JUMPDEST of their branch: 0x1a for the empty-calldata stop, 0x1c for return 42.
+      // PUSH1 0x80 PUSH1 0x40 MSTORE CALLDATASIZE ISZERO PUSH1 0x1a JUMPI
+      // PUSH1 0x00 CALLDATALOAD PUSH1 0xe0 SHR DUP1 PUSH4 0x67e408a7 EQ PUSH1 0x1c JUMPI
       // JUMPDEST STOP JUMPDEST PUSH1 0x2a PUSH1 0x00 MSTORE PUSH1 0x20 PUSH1 0x00 RETURN
-      const origEvm = Buffer.from(
-        "60806040523615601b5760003560e01c806367e408a7146020575b005b602a60005260206000f3",
-        "hex",
-      );
+      const origEvm = Buffer.from(EVM_DISPATCHER_RUNTIME_HEX, "hex");
       writeFileSync(evmPath, origEvm);
       const res = protectTarget({ inputPath: evmPath, outputPath: outEvmPath, intensity: "bankrupt", seed });
       const protEvm = readFileSync(outEvmPath);
